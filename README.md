@@ -50,7 +50,7 @@ cp .env.example .env
 python run.py
 ```
 
-访问 `http://localhost:8000/docs` 查看 Swagger 交互式文档。
+访问 `http://127.0.0.1:8000/docs` 查看 Swagger 交互式文档。
 
 ---
 
@@ -80,7 +80,7 @@ backend/
 
 ### 基础信息
 
-- **Base URL**: `http://localhost:8000/api/v1`
+- **Base URL**: `http://127.0.0.1:8000/api/v1`
 - **Content-Type**: `application/json`
 - **响应编码**: UTF-8
 
