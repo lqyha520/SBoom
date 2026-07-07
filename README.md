@@ -666,8 +666,8 @@ while (true) {
 ```ini
 # LLM 服务（必填）
 LLM_API_KEY=sk-your-key           # API 密钥，必须配置
-LLM_BASE_URL=https://api.deepseek.com/v1
-LLM_MODEL=deepseek-chat
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-v4-pro
 
 # 生成参数
 LLM_TEMPERATURE=0.4               # 0-1，越低越稳定
