@@ -53,6 +53,7 @@ function migrateMyTemplates(raw: any[]): MyTemplate[] {
       difficulty: (t.difficulty || 'medium') as Difficulty,
       templateId: t.templateId || 'exam',
       style: t.style || undefined,
+      hiddenElements: t.hiddenElements || [],
       cards: (t.cards || []).map((c: any) => ({
         type: c.type,
         count: c.count ?? 1,
@@ -165,6 +166,8 @@ export const useExamStore = defineStore('exam', {
       selectedTags: [] as string[],
       title: '',
       difficulty: 'medium' as Difficulty,
+      /** 搭建态预览中被删除的卷头/卷尾元素（notice/inforow/footer/reward/title/subline/banner） */
+      hiddenElements: [] as string[],
 
       /* 搭建区 */
       sections: [] as Section[],
@@ -404,7 +407,8 @@ export const useExamStore = defineStore('exam', {
               _sid: s.id,
             })),
             day: nPapers > 1 ? k + 1 : undefined,
-          })
+            hiddenElements: [...this.hiddenElements],
+          } as PaperData)
         }
         this.papers = papers
         this.showAnswers = false
@@ -414,6 +418,13 @@ export const useExamStore = defineStore('exam', {
       } finally {
         this.generating = false
       }
+    },
+
+    /** 卷头/卷尾元素删除切换（搭建态） */
+    toggleHiddenElement(key: string) {
+      const i = this.hiddenElements.indexOf(key)
+      if (i >= 0) this.hiddenElements.splice(i, 1)
+      else this.hiddenElements.push(key)
     },
 
     /** 结果视图 → 回到搭建 */
@@ -498,6 +509,7 @@ export const useExamStore = defineStore('exam', {
         difficulty: this.difficulty,
         templateId: this.templateId,
         style: { ...this.style },
+        hiddenElements: [...this.hiddenElements],
         cards: this.sections.map(s => ({ type: s.type, count: s.count, layout: { ...s.layout } })),
         // 完整数据：含每题编辑后的文字与富文本（加粗/字号/颜色），恢复时原样还原
         sections: JSON.parse(JSON.stringify(this.sections)).map((s: any) => ({
@@ -526,6 +538,7 @@ export const useExamStore = defineStore('exam', {
       this.templateId = tpl.templateId
       this.title = tpl.title || ''
       if (tpl.style) this.setStyle(tpl.style)
+      this.hiddenElements = [...(tpl.hiddenElements || [])]
 
       if (tpl.sections?.length) {
         // V2：完整还原（每题文字、版式、数量都在）

@@ -62,6 +62,24 @@ function onFooterBlur(e: FocusEvent) {
   if (!props.editable) return
   ;(props.paper as any).footerOverride = (e.target as HTMLElement).innerText.trim()
 }
+
+/* ── 卷头/卷尾元素单独删除（排版能力，随 paper 数据持久化） ── */
+const emit = defineEmits<{ (e: 'toggle-element', key: string): void }>()
+const hiddenList = computed<string[]>(() => (props.paper as any).hiddenElements || [])
+function isHidden(key: string): boolean {
+  return hiddenList.value.includes(key)
+}
+function toggleHidden(key: string) {
+  // 结果页：paper 是 store 里的对象，直接改（响应式生效）
+  // 搭建预览：paper 是 computed 快照，通过 emit 让父级回写 store
+  const p = props.paper as any
+  const list: string[] = [...(p.hiddenElements || [])]
+  const i = list.indexOf(key)
+  if (i >= 0) list.splice(i, 1)
+  else list.push(key)
+  p.hiddenElements = list
+  emit('toggle-element', key)
+}
 </script>
 
 <template>
@@ -84,19 +102,26 @@ function onFooterBlur(e: FocusEvent) {
     <div class="exam">
       <!-- 卷头 -->
       <div class="pv-head">
-        <div class="exam-head" :data-plain="style.banner ? '0' : '1'">
-          <h1 class="can-edit" :contenteditable="editable" spellcheck="false" @blur="onTitleBlur">
+        <div v-if="!isHidden('banner')" class="exam-head" :data-plain="style.banner ? '0' : '1'">
+          <span v-if="editable" class="el-del" title="删除整个卷头" @click="toggleHidden('banner')">✕</span>
+          <h1 v-if="!isHidden('title')" class="can-edit" :contenteditable="editable" spellcheck="false" @blur="onTitleBlur" style="position: relative;">
+            <span v-if="editable" class="el-del" title="删除标题" @click.stop="toggleHidden('title')">✕</span>
             {{ paperTitle }}<template v-if="paper.day && addDay">（第{{ paper.day }}天）</template>
           </h1>
-          <div class="sub-line">{{ subParts.join(' ｜ ') }}</div>
-          <div v-if="template.showInfoRow" class="info-row">
+          <div v-if="!isHidden('subline')" class="sub-line can-edit" :contenteditable="editable" spellcheck="false" style="position: relative;">
+            <span v-if="editable" class="el-del" title="删除副标题行" @click="toggleHidden('subline')">✕</span>
+            {{ subParts.join(' ｜ ') }}
+          </div>
+          <div v-if="template.showInfoRow && !isHidden('inforow')" class="info-row can-edit" :contenteditable="editable" spellcheck="false" style="position: relative;">
+            <span v-if="editable" class="el-del" title="删除姓名班级栏" @click="toggleHidden('inforow')">✕</span>
             <div>姓名：<span>&nbsp;</span></div>
             <div>班级：<span>&nbsp;</span></div>
             <div>学号：<span>&nbsp;</span></div>
             <div>得分：<span>&nbsp;</span></div>
           </div>
         </div>
-        <div v-if="template.showNotice" class="notice">
+        <div v-if="template.showNotice && !isHidden('notice')" class="notice can-edit" :contenteditable="editable" spellcheck="false" style="position: relative;">
+          <span v-if="editable" class="el-del" title="删除注意事项" @click="toggleHidden('notice')">✕</span>
           <b>注意事项：</b>① 答题前请将姓名、班级填写清楚；② 选择题答案填入答题卡；③ 保持卷面整洁，字迹工整。
         </div>
       </div>
@@ -117,12 +142,14 @@ function onFooterBlur(e: FocusEvent) {
 
       <!-- 卷尾 -->
       <div v-if="isLast" class="pv-tail">
-        <div v-if="style.reward" class="reward-box">
+        <div v-if="style.reward && !isHidden('reward')" class="reward-box" style="position: relative;">
+          <span v-if="editable" class="el-del" title="删除奖励区" @click="toggleHidden('reward')">✕</span>
           <span class="reward-title">今天的表现：</span>
           <span class="reward-stars">☆ ☆ ☆</span>
           <span class="reward-msg">老师给你涂星星～</span>
         </div>
-        <div class="footer-note can-edit" :contenteditable="editable" spellcheck="false" @blur="onFooterBlur">
+        <div v-if="!isHidden('footer')" class="footer-note can-edit" :contenteditable="editable" spellcheck="false" @blur="onFooterBlur" style="position: relative;">
+          <span v-if="editable" class="el-del" title="删除页脚" @click="toggleHidden('footer')">✕</span>
           {{ (paper as any).footerOverride ?? template.footer }}
         </div>
       </div>
@@ -132,4 +159,24 @@ function onFooterBlur(e: FocusEvent) {
 
 <style scoped>
 .pv-head, .pv-tail { display: flow-root; }
+.el-del {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  width: 17px;
+  height: 17px;
+  line-height: 17px;
+  text-align: center;
+  font-size: 10px;
+  color: #bbb;
+  cursor: pointer;
+  border-radius: 50%;
+  z-index: 5;
+  background: #fff;
+  opacity: 0;
+  transition: opacity .12s;
+  user-select: none;
+}
+.can-edit:hover .el-del, .exam-head:hover > .el-del, .reward-box:hover .el-del, .el-del:hover { opacity: 1; }
+.el-del:hover { color: var(--red); background: var(--red-light); }
 </style>

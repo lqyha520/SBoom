@@ -145,6 +145,8 @@ export interface MyTemplate {
   templateId: string
   /** 卷面装饰风格（背景/边框/字号等），恢复时原样应用 */
   style?: PaperStyle
+  /** 已删除的卷头/卷尾元素 */
+  hiddenElements?: string[]
   cards: { type: string; count: number; layout: SecLayout }[]
   /** 完整数据（V2）：每题编辑后的文字/答案/版式，恢复时原样还原 */
   sections?: { type: string; count: number; layout: SecLayout; data: GameData }[]

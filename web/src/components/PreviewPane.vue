@@ -21,7 +21,8 @@ const previewPaper = computed<PaperData>(() => ({
     layout: s.layout,
     _sid: s.id,
   })),
-}))
+  hiddenElements: [...store.hiddenElements],
+} as PaperData))
 
 const previewBox = ref<HTMLElement | null>(null)
 const paperViewEl = ref<InstanceType<typeof PaperView> | null>(null)
@@ -83,6 +84,7 @@ function cancelLayout() {
         :editable="true"
         :layout-mode="layoutMode"
         :zoom="zoom"
+        @toggle-element="store.toggleHiddenElement($event)"
       />
     </div>
   </div>

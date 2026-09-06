@@ -7,6 +7,17 @@ import type { Difficulty } from '../types'
 const store = useExamStore()
 
 const grades = computed(() => Object.keys(store.available))
+
+const EL_NAMES: Record<string, string> = {
+  banner: '卷头横幅',
+  title: '标题',
+  subline: '副标题行',
+  inforow: '姓名班级栏',
+  notice: '注意事项',
+  reward: '奖励区',
+  footer: '页脚',
+}
+const elName = (key: string) => EL_NAMES[key] || key
 </script>
 
 <template>
@@ -106,6 +117,21 @@ const grades = computed(() => Object.keys(store.available))
             <div v-else class="scope-empty">暂无知识点清单，可直接输入关键词</div>
           </div>
         </template>
+      </div>
+
+      <!-- 已删卷面元素恢复 -->
+      <div v-if="store.hiddenElements.length" class="fgroup" style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border2);">
+        <div class="fgroup-label" style="font-size: 12px;">已从卷面删除的元素</div>
+        <div class="pill-row">
+          <button
+            v-for="key in store.hiddenElements"
+            :key="key"
+            class="pill"
+            style="font-size: 12px; padding: 4px 10px;"
+            :title="'点击恢复' + elName(key)"
+            @click="store.toggleHiddenElement(key)"
+          >↩ 恢复{{ elName(key) }}</button>
+        </div>
       </div>
     </div>
   </div>
