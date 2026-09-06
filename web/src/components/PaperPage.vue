@@ -46,8 +46,11 @@ const subParts = computed(() => {
 function onTitleBlur(e: FocusEvent) {
   if (!props.editable) return
   const el = e.target as HTMLElement
-  props.paper.title = el.innerText.trim()
-  ;(props.paper as any).titleHtml = el.innerHTML
+  // innerHTML 会包含 ✕ 删除按钮，克隆后剔除再存
+  const clone = el.cloneNode(true) as HTMLElement
+  clone.querySelectorAll('.el-del').forEach(n => n.remove())
+  props.paper.title = clone.innerText.trim()
+  ;(props.paper as any).titleHtml = clone.innerHTML
   emit('title-edited', props.paper.title, (props.paper as any).titleHtml)
 }
 function onFooterBlur(e: FocusEvent) {
