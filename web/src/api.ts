@@ -101,6 +101,10 @@ export async function saveLlmConfig(cfg: LlmConfig): Promise<{ message: string }
   })
 }
 
-export async function testLlm(): Promise<{ reply: string }> {
-  return request<{ reply: string }>('/api/v1/test-llm', { method: 'POST' })
+export async function testLlm(cfg?: Partial<LlmConfig>): Promise<{ reply: string }> {
+  return request<{ reply: string }>('/api/v1/test-llm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg ? { baseUrl: cfg.baseUrl, model: cfg.model, apiKey: cfg.apiKey } : {}),
+  })
 }

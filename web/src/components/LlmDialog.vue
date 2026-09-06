@@ -45,7 +45,12 @@ async function test() {
   msg.value = { text: '', ok: true }
   try {
     const { testLlm } = await import('../api')
-    const d = await testLlm()
+    // 直接用表单里填的配置测试（不必先保存）
+    const d = await testLlm({
+      baseUrl: baseUrl.value.trim() || LLM_DEFAULTS.baseUrl,
+      model: model.value.trim() || LLM_DEFAULTS.model,
+      apiKey: apiKey.value.trim() || undefined,
+    })
     msg.value = { text: '连接成功！模型回复：' + d.reply, ok: true }
   } catch (e: any) {
     msg.value = { text: '连接失败：' + (e?.message || e), ok: false }

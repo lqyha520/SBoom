@@ -31,13 +31,19 @@ settings = get_settings()
 
 
 def _extract_json(text: str) -> dict:
-    """从 LLM 返回的文本中提取 JSON，处理可能的 markdown 包裹"""
+    """从 LLM 返回的文本中提取 JSON，处理思考标签/markdown 包裹等干扰"""
     text = text.strip()
+
+    # 剥掉推理模型的 <think>...</think> 思考过程
+    import re
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    # 未闭合的 <think>（输出被截断）：取 </think> 之后 / 或最后一个 { 开始
+    if "<think>" in text and "</think>" not in text:
+        text = text.split("<think>")[0]
 
     # 去掉可能的 ```json ... ``` 包裹
     if text.startswith("```"):
         lines = text.split("\n")
-        # 去掉首尾 ```
         if lines[0].startswith("```"):
             lines = lines[1:]
         if lines and lines[-1].startswith("```"):
@@ -50,7 +56,39 @@ def _extract_json(text: str) -> dict:
     if start != -1 and end > start:
         text = text[start:end]
 
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # JSON 内部有杂质（如 "Extra data"）：用 JSONDecoder 逐段解析取第一个完整对象
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(text)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+        # 括号配平修复：从第一个 { 起逐字符配平，截取完整对象
+        depth = 0
+        in_str = False
+        esc = False
+        for i, ch in enumerate(text):
+            if esc:
+                esc = False
+                continue
+            if ch == "\\":
+                esc = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return json.loads(text[: i + 1])
+        raise
 
 
 async def _call_llm_and_parse(
@@ -408,17 +446,34 @@ async def submit_feedback(request: FeedbackRequest):
 
 # ─── LLM 连接测试 ───
 
+from pydantic import BaseModel as _BaseModel
+
+class TestLlmRequest(_BaseModel):
+    """可选传入待测配置；不传则用后端当前生效配置"""
+    baseUrl: Optional[str] = None
+    model: Optional[str] = None
+    apiKey: Optional[str] = None
+
 @router.post(
     "/test-llm",
     summary="测试 LLM 连接",
-    description="发送一条短消息给 LLM，验证配置是否有效",
+    description="发送一条短消息给 LLM，验证配置是否有效；可传入待测配置，不传则用当前生效配置",
 )
-async def test_llm():
-    """用极简消息测试 LLM 能否连通"""
+async def test_llm(req: Optional[TestLlmRequest] = None):
+    """用极简消息测试 LLM 能否连通（优先用请求里带的配置）"""
     try:
+        kwargs = {}
+        if req:
+            if req.baseUrl:
+                kwargs["base_url"] = req.baseUrl.rstrip("/")
+            if req.model:
+                kwargs["model"] = req.model
+            if req.apiKey:
+                kwargs["api_key"] = req.apiKey
         resp = await llm_client.chat(
             [{"role": "user", "content": "回复：ok"}],
             max_tokens=5,
+            **kwargs,
         )
         return {"status": "ok", "reply": resp.strip()}
     except Exception as e:
