@@ -13,6 +13,14 @@ const stackEl = ref<HTMLElement | null>(null)
 const paperViewEl = ref<InstanceType<typeof PaperView> | null>(null)
 const { zoom } = useFitZoom(stackEl)
 
+/** 结果页标题编辑 → 同步回 store（保存模板读 store.titleHtml） */
+function onTitleEdited(title: string, html: string) {
+  store.title = title
+  store.titleHtml = html
+  // paper 是 store.papers[0] 的引用，titleHtml 已在 PaperPage 内写入；标题文字同步各份
+  if (paper.value) paper.value.title = title
+}
+
 const paper = computed(() => store.papers[0])
 const summary = computed(() => (paper.value ? summaryText(paper.value.grade, paper.value.subject, paper.value.keyword, paper.value.sections) : ''))
 
@@ -137,6 +145,7 @@ function cancelLayout() {
         :layout-mode="store.layoutMode"
         :add-day="store.addDayLabel"
         :zoom="zoom"
+        @title-edited="onTitleEdited"
       />
     </div>
   </div>
