@@ -50,6 +50,7 @@ function migrateMyTemplates(raw: any[]): MyTemplate[] {
       subject: t.subject || '',
       keyword: t.keyword || '',
       title: t.title || '',
+      titleHtml: t.titleHtml || undefined,
       difficulty: (t.difficulty || 'medium') as Difficulty,
       templateId: t.templateId || 'exam',
       style: t.style || undefined,
@@ -59,6 +60,8 @@ function migrateMyTemplates(raw: any[]): MyTemplate[] {
         count: c.count ?? 1,
         layout: { ...DEFAULT_LAYOUT, ...(c.layout || c._layout || {}) },
       })),
+      // V2 完整数据原样保留（含每题富文本）
+      sections: t.sections || undefined,
       paperSnapshot: t.paperSnapshot || undefined,
     }))
 }
