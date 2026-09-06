@@ -34,7 +34,7 @@ const { zoom, manual, setManual } = useFitZoom(previewBox)
       <span style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
         <button class="btn mini" :class="{ 'btn-primary-on': manual === 0 }" title="缩放到容器宽度" @click="setManual(0)">适应</button>
         <input
-          type="range" min="25" max="180" step="5"
+          type="range" min="25" max="100" step="5"
           :value="manual > 0 ? manual * 100 : Math.round(zoom * 100)"
           @input="setManual(parseInt(($event.target as HTMLInputElement).value) / 100)"
           style="width: 90px; accent-color: var(--primary);"
