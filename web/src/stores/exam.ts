@@ -49,8 +49,10 @@ function migrateMyTemplates(raw: any[]): MyTemplate[] {
       grade: t.grade || '',
       subject: t.subject || '',
       keyword: t.keyword || '',
+      title: t.title || '',
       difficulty: (t.difficulty || 'medium') as Difficulty,
       templateId: t.templateId || 'exam',
+      style: t.style || undefined,
       cards: (t.cards || []).map((c: any) => ({
         type: c.type,
         count: c.count ?? 1,
@@ -492,10 +494,12 @@ export const useExamStore = defineStore('exam', {
         grade: this.grade,
         subject: this.subject,
         keyword: this.keyword,
+        title: this.title,
         difficulty: this.difficulty,
         templateId: this.templateId,
+        style: { ...this.style },
         cards: this.sections.map(s => ({ type: s.type, count: s.count, layout: { ...s.layout } })),
-        // 完整数据：含每题编辑后的文字，恢复时原样还原
+        // 完整数据：含每题编辑后的文字与富文本（加粗/字号/颜色），恢复时原样还原
         sections: JSON.parse(JSON.stringify(this.sections)).map((s: any) => ({
           type: s.type,
           count: s.count,
@@ -520,6 +524,8 @@ export const useExamStore = defineStore('exam', {
       this.selectedTags = []
       this.difficulty = tpl.difficulty
       this.templateId = tpl.templateId
+      this.title = tpl.title || ''
+      if (tpl.style) this.setStyle(tpl.style)
 
       if (tpl.sections?.length) {
         // V2：完整还原（每题文字、版式、数量都在）

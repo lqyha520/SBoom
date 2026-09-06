@@ -63,6 +63,11 @@ export function answerOf(q: Question): string {
   return a
 }
 
+/* ── HTML 转义（v-html 渲染纯文本用） ── */
+export function escHtml(s: unknown): string {
+  return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
+}
+
 /* ── 稳定 uid ── */
 let _uidSeq = 0
 export function uid(prefix = 'u'): string {

@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useExamStore } from '../stores/exam'
 import type { PaperData } from '../types'
 import PaperView from './PaperView.vue'
+import FormatBar from './FormatBar.vue'
 import { useFitZoom } from '../useFitZoom'
 
 const store = useExamStore()
@@ -52,6 +53,7 @@ function cancelLayout() {
 
       <template v-if="!layoutMode">
         <span style="font-size: 12px; color: var(--ink3); flex: none;">纸面文字可直接点击修改</span>
+        <FormatBar />
         <span style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
           <button class="btn mini" :class="{ 'btn-primary-on': manual === 0 }" title="缩放到容器宽度" @click="setManual(0)">适应</button>
           <input

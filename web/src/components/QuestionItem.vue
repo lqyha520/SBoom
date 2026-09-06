@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Question, SecLayout } from '../types'
-import { answerOf, cirNum, isBlankVal, stripOptPrefix, tfStem } from '../utils'
+import { answerOf, cirNum, escHtml, isBlankVal, stripOptPrefix, tfStem } from '../utils'
 
 const props = defineProps<{
   q: Question
@@ -25,20 +25,31 @@ const noTag = computed(() => (props.layout.showNo === false ? '' : cirNum(props.
 const lvTag = computed(() => (props.q.difficulty_level ? `[第${props.q.difficulty_level}关] ` : ''))
 const fs = computed(() => (props.layout.fontSize ? { fontSize: props.layout.fontSize } : {}))
 
-/* ── 编辑回写 ── */
+/* ── 富文本渲染：有编辑缓存用缓存，否则转义纯文本 ── */
+const stemHtml = computed(() => (props.q._stemHtml ?? escHtml(lvTag.value + stemText.value)))
+function optHtml(j: number): string {
+  const cached = props.q._optsHtml?.[j]
+  if (cached != null) return cached
+  return `${String.fromCharCode(65 + j)}. ${escHtml(stripOptPrefix(props.q.options?.[j] ?? ''))}`
+}
+
+/* ── 编辑回写（同时捕获富文本 HTML 和纯文本） ── */
 function stripPrefix(text: string, re: RegExp): string {
   const m = text.trim().match(re)
   return (m ? m[1] : text).trim()
 }
 function onStemBlur(e: FocusEvent) {
   if (!props.editable) return
-  const t = (e.target as HTMLElement).innerText
-  props.q.stem = stripPrefix(stripPrefix(t, /^[①-⑳]\s*/), /^\[第\d+关\]\s*/)
+  const el = e.target as HTMLElement
+  props.q._stemHtml = el.innerHTML.replace(/^[①-⑳]\s*/, '')
+  props.q.stem = stripPrefix(stripPrefix(el.innerText, /^[①-⑳]\s*/), /^\[第\d+关\]\s*/)
 }
 function onOptBlur(e: FocusEvent, j: number) {
   if (!props.editable || !props.q.options) return
-  const t = (e.target as HTMLElement).innerText
-  props.q.options[j] = stripPrefix(t, /^[A-H][.、：:．]\s*/)
+  const el = e.target as HTMLElement
+  if (!props.q._optsHtml) props.q._optsHtml = []
+  props.q._optsHtml[j] = el.innerHTML.replace(/^[A-H][.、：:．]\s*/, '')
+  props.q.options[j] = stripPrefix(el.innerText, /^[A-H][.、：:．]\s*/)
 }
 function onMatchBlur(e: FocusEvent, side: 'left' | 'right', i: number) {
   if (!props.editable) return
@@ -88,7 +99,7 @@ function onExprBlur(e: FocusEvent, field: 'left_expr' | 'right_expr') {
 
     <!-- 常规题 -->
     <template v-else>
-      <div data-e="stem" :contenteditable="editable" spellcheck="false" @blur="onStemBlur($event)">{{ noTag }}{{ lvTag }}{{ stemText }}</div>
+      <div data-e="stem" :contenteditable="editable" spellcheck="false" @blur="onStemBlur($event)" v-html="noTag + stemHtml"></div>
       <div
         v-if="q.options"
         class="opts"
@@ -101,7 +112,8 @@ function onExprBlur(e: FocusEvent, field: 'left_expr' | 'right_expr') {
           :contenteditable="editable"
           spellcheck="false"
           @blur="onOptBlur($event, j)"
-        >{{ String.fromCharCode(65 + j) }}. {{ stripOptPrefix(o) }}</div>
+          v-html="optHtml(j)"
+        ></div>
       </div>
       <table v-else-if="q.left_items" class="match-table" data-e="match">
         <tr><th style="width:50%">左栏</th><th style="width:50%">右栏</th></tr>

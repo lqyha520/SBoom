@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useExamStore } from '../stores/exam'
 import { summaryText } from '../utils'
 import PaperView from './PaperView.vue'
+import FormatBar from './FormatBar.vue'
 import * as exporter from '../exporter'
 import { useFitZoom } from '../useFitZoom'
 
@@ -91,6 +92,7 @@ function cancelLayout() {
         <button class="btn" @click="store.showAnswers = !store.showAnswers">
           {{ store.showAnswers ? '隐藏答案' : '预览答案' }}
         </button>
+        <FormatBar />
         <button class="btn" :disabled="!!exporting" @click="exportPdf('answersOnly')">导出答案 PDF</button>
         <span class="sep"></span>
         <template v-if="!store.layoutMode">

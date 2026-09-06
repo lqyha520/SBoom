@@ -25,6 +25,9 @@ export interface Question {
   right_expr?: string
   /** 前端运行时标记（稳定 uid，供排版模式回写） */
   _qid?: string
+  /** 富文本编辑缓存（排版模式 B/字号/颜色 的结果，v-html 原样渲染） */
+  _stemHtml?: string
+  _optsHtml?: string[]
 }
 
 /** 一个大题的生成数据 */
@@ -137,8 +140,11 @@ export interface MyTemplate {
   grade: string
   subject: string
   keyword: string
+  title: string
   difficulty: Difficulty
   templateId: string
+  /** 卷面装饰风格（背景/边框/字号等），恢复时原样应用 */
+  style?: PaperStyle
   cards: { type: string; count: number; layout: SecLayout }[]
   /** 完整数据（V2）：每题编辑后的文字/答案/版式，恢复时原样还原 */
   sections?: { type: string; count: number; layout: SecLayout; data: GameData }[]
