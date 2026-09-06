@@ -360,26 +360,44 @@ defineExpose({
 
 /** 分页是否已完成至少一次（导出等待用） */
 const measured = ref(false)
+
+/** stack 实际高度（缩放占位补偿用） */
+const stackH = ref(0)
+async function measureStackH() {
+  await nextTick()
+  if (stackEl.value) stackH.value = stackEl.value.offsetHeight
+}
+watch(() => pages.value, () => measureStackH(), { deep: true })
+onMounted(() => measureStackH())
 </script>
 
 <template>
-  <div ref="stackEl" class="paper-stack" :style="{ zoom: zoom ?? 1 }">
-    <PaperPage
-      v-for="(pg, i) in pages"
-      :key="i"
-      :paper="paper"
-      :idxs="pg"
-      :template="template"
-      :style="style"
-      :kid-on="kidOn"
-      :show-answers="!!showAnswers"
-      :editable="!!editable"
-      :is-last="i === pages.length - 1"
-      :add-day="addDay"
-      :scores="scores"
-      @toggle-element="(k: string) => emit('toggle-element', k)"
-      @title-edited="(t: string, h: string) => emit('title-edited', t, h)"
-    />
+  <!-- 预览缩放：transform:scale（纯视觉，不影响 mm 布局；zoom 会改 mm→px 换算压扁纸面）
+       wrapper 的高度用 scale 后的值占位，避免滚动区留白/裁切 -->
+  <div
+    class="paper-scaler-wrap"
+    :style="{ width: `210mm`, margin: '0 auto', height: stackH > 0 ? `${Math.round(stackH * (zoom ?? 1))}px` : undefined }"
+  >
+    <div :style="{ transform: `scale(${zoom ?? 1})`, transformOrigin: 'top center' }">
+      <div ref="stackEl" class="paper-stack">
+      <PaperPage
+        v-for="(pg, i) in pages"
+        :key="i"
+        :paper="paper"
+        :idxs="pg"
+        :template="template"
+        :style="style"
+        :kid-on="kidOn"
+        :show-answers="!!showAnswers"
+        :editable="!!editable"
+        :is-last="i === pages.length - 1"
+        :add-day="addDay"
+        :scores="scores"
+        @toggle-element="(k: string) => emit('toggle-element', k)"
+        @title-edited="(t: string, h: string) => emit('title-edited', t, h)"
+      />
+    </div>
+  </div>
   </div>
   <!-- 离屏测量纸 -->
   <div ref="measureEl" class="offscreen" aria-hidden="true">
