@@ -25,7 +25,7 @@ const props = defineProps<{
   zoom?: number
 }>()
 
-const emit = defineEmits<{ (e: 'layout-done'): void; (e: 'toggle-element', key: string): void }>()
+const emit = defineEmits<{ (e: 'layout-done'): void; (e: 'toggle-element', key: string): void; (e: 'title-edited', title: string, html: string): void }>()
 
 const stackEl = ref<HTMLElement | null>(null)
 const measureEl = ref<HTMLElement | null>(null)
@@ -359,6 +359,7 @@ defineExpose({ applyLayout, repaginate: () => { measureTick.value++ } })
       :add-day="addDay"
       :scores="scores"
       @toggle-element="(k: string) => emit('toggle-element', k)"
+      @title-edited="(t: string, h: string) => emit('title-edited', t, h)"
     />
   </div>
   <!-- 离屏测量纸 -->

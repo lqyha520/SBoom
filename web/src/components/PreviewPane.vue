@@ -14,6 +14,7 @@ const previewPaper = computed<PaperData>(() => ({
   subject: store.subject,
   keyword: store.keyword,
   title: store.title,
+  titleHtml: store.titleHtml || undefined,
   difficulty: store.difficulty,
   sections: store.sections.map(s => ({
     type: s.type,
@@ -30,8 +31,6 @@ const { zoom, manual, setManual } = useFitZoom(previewBox)
 
 /* ── 排版模式 ── */
 const layoutMode = ref(false)
-const showSaveTpl = ref(false)
-const saveName = ref('')
 
 function toggleLayout() {
   if (layoutMode.value) {
@@ -39,8 +38,6 @@ function toggleLayout() {
     const newSections = paperViewEl.value?.applyLayout()
     if (newSections?.length) store.syncSections(newSections)
     layoutMode.value = false
-    // 排版成果值得留存：询问是否保存为模板
-    showSaveTpl.value = true
   } else {
     layoutMode.value = true
   }
@@ -50,11 +47,24 @@ function cancelLayout() {
   paperViewEl.value?.repaginate()
 }
 
+/* ── 保存模板（独立按钮） ── */
+const showSaveTpl = ref(false)
+const saveName = ref('')
+function openSave() {
+  if (!store.sections.length) return
+  saveName.value = ''
+  showSaveTpl.value = true
+}
 function confirmSaveTpl() {
   const name = saveName.value.trim()
-  if (name) store.saveMyTemplate(name)
-  saveName.value = ''
-  showSaveTpl.value = false
+  if (name) {
+    store.saveMyTemplate(name)
+    showSaveTpl.value = false
+  }
+}
+function onTitleEdited(title: string, html: string) {
+  store.title = title
+  store.titleHtml = html
 }
 </script>
 
@@ -77,6 +87,7 @@ function confirmSaveTpl() {
           >
           <span style="font-size: 11px; color: var(--ink3); width: 36px;">{{ Math.round(zoom * 100) }}%</span>
           <button class="btn mini" @click="toggleLayout">✏️ 排版模式</button>
+          <button class="btn mini primary" title="把当前卷面（排版/样式/装饰）保存为模板" @click="openSave">💾 保存模板</button>
         </span>
       </template>
 
@@ -96,27 +107,27 @@ function confirmSaveTpl() {
         :layout-mode="layoutMode"
         :zoom="zoom"
         @toggle-element="store.toggleHiddenElement($event)"
+        @title-edited="onTitleEdited"
       />
     </div>
 
-    <!-- 完成排版后：保存为模板询问 -->
+    <!-- 保存模板 -->
     <teleport to="body">
       <div v-if="showSaveTpl" class="modal-mask" @click.self="showSaveTpl = false">
         <div class="modal" style="width: 400px;">
           <div class="modal-head">
-            <h3>排版已应用</h3>
+            <h3>保存为模板</h3>
             <button class="x-btn" @click="showSaveTpl = false">✕</button>
           </div>
           <div class="modal-body">
-            <p style="font-size: 13px; color: var(--ink2); margin-bottom: 12px; line-height: 1.7;">
-              排版结果已同步到卷面。要不要把这套<b>排版 + 题目样式 + 装饰风格</b>保存为模板？<br>
-              <span style="font-size: 12px; color: var(--ink3);">下次从「我的模板」一键导入，原样恢复。</span>
+            <p style="font-size: 12px; color: var(--ink3); margin-bottom: 12px; line-height: 1.7;">
+              将保存：题目文字与富文本样式、大题版式、装饰风格、已删元素。<br>同名保存会覆盖旧版本。
             </p>
             <input class="input" v-model="saveName" maxlength="20" placeholder="模板名称，如：三年级口算每日一练" @keyup.enter="confirmSaveTpl">
           </div>
           <div class="modal-foot">
-            <button class="btn" @click="showSaveTpl = false">暂不保存</button>
-            <button class="btn primary" :disabled="!saveName.trim()" @click="confirmSaveTpl">保存模板</button>
+            <button class="btn" @click="showSaveTpl = false">取消</button>
+            <button class="btn primary" :disabled="!saveName.trim()" @click="confirmSaveTpl">保存</button>
           </div>
         </div>
       </div>

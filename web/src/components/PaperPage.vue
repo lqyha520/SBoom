@@ -56,7 +56,10 @@ const subParts = computed(() => {
 
 function onTitleBlur(e: FocusEvent) {
   if (!props.editable) return
-  props.paper.title = (e.target as HTMLElement).innerText.trim()
+  const el = e.target as HTMLElement
+  props.paper.title = el.innerText.trim()
+  ;(props.paper as any).titleHtml = el.innerHTML
+  emit('title-edited', props.paper.title, (props.paper as any).titleHtml)
 }
 function onFooterBlur(e: FocusEvent) {
   if (!props.editable) return
@@ -64,7 +67,7 @@ function onFooterBlur(e: FocusEvent) {
 }
 
 /* ── 卷头/卷尾元素单独删除（排版能力，随 paper 数据持久化） ── */
-const emit = defineEmits<{ (e: 'toggle-element', key: string): void }>()
+const emit = defineEmits<{ (e: 'toggle-element', key: string): void; (e: 'title-edited', title: string, html: string): void }>()
 const hiddenList = computed<string[]>(() => (props.paper as any).hiddenElements || [])
 function isHidden(key: string): boolean {
   return hiddenList.value.includes(key)
@@ -106,7 +109,9 @@ function toggleHidden(key: string) {
           <span v-if="editable" class="el-del" title="删除整个卷头" @click="toggleHidden('banner')">✕</span>
           <h1 v-if="!isHidden('title')" class="can-edit" :contenteditable="editable" spellcheck="false" @blur="onTitleBlur" style="position: relative;">
             <span v-if="editable" class="el-del" title="删除标题" @click.stop="toggleHidden('title')">✕</span>
-            {{ paperTitle }}<template v-if="paper.day && addDay">（第{{ paper.day }}天）</template>
+            <!-- eslint-disable-next-line vue/no-v-html -->
+            <span v-if="(paper as any).titleHtml" v-html="(paper as any).titleHtml"></span>
+            <template v-else>{{ paperTitle }}<template v-if="paper.day && addDay">（第{{ paper.day }}天）</template></template>
           </h1>
           <div v-if="!isHidden('subline')" class="sub-line can-edit" :contenteditable="editable" spellcheck="false" style="position: relative;">
             <span v-if="editable" class="el-del" title="删除副标题行" @click="toggleHidden('subline')">✕</span>

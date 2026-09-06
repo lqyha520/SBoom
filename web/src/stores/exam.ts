@@ -165,6 +165,8 @@ export const useExamStore = defineStore('exam', {
       keyword: '',
       selectedTags: [] as string[],
       title: '',
+      /** 标题富文本（排版模式改色/加粗后缓存，改标题文字时清空） */
+      titleHtml: '' as string,
       difficulty: 'medium' as Difficulty,
       /** 搭建态预览中被删除的卷头/卷尾元素（notice/inforow/footer/reward/title/subline/banner） */
       hiddenElements: [] as string[],
@@ -399,6 +401,7 @@ export const useExamStore = defineStore('exam', {
             subject: this.subject,
             keyword: this.keyword,
             title: this.title,
+            titleHtml: this.titleHtml || undefined,
             difficulty: this.difficulty,
             sections: this.sections.map(s => ({
               type: s.type,
@@ -425,6 +428,12 @@ export const useExamStore = defineStore('exam', {
       const i = this.hiddenElements.indexOf(key)
       if (i >= 0) this.hiddenElements.splice(i, 1)
       else this.hiddenElements.push(key)
+    },
+
+    /** 左栏直接改标题文字：清掉富文本缓存 */
+    setTitle(t: string) {
+      this.title = t
+      this.titleHtml = ''
     },
 
     /** 结果视图 → 回到搭建 */
@@ -506,6 +515,7 @@ export const useExamStore = defineStore('exam', {
         subject: this.subject,
         keyword: this.keyword,
         title: this.title,
+        titleHtml: this.titleHtml || undefined,
         difficulty: this.difficulty,
         templateId: this.templateId,
         style: { ...this.style },
@@ -537,6 +547,7 @@ export const useExamStore = defineStore('exam', {
       this.difficulty = tpl.difficulty
       this.templateId = tpl.templateId
       this.title = tpl.title || ''
+      this.titleHtml = (tpl as any).titleHtml || ''
       if (tpl.style) this.setStyle(tpl.style)
       this.hiddenElements = [...(tpl.hiddenElements || [])]
 

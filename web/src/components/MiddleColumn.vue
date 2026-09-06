@@ -114,7 +114,7 @@ const readyHint = computed(() => {
     <div style="padding: 12px 14px 4px; flex: none;">
       <div class="fgroup-label" style="margin-bottom: 8px;">卷面</div>
       <div class="form-row" style="margin-bottom: 8px;">
-        <input class="input" maxlength="40" placeholder="试卷标题（可选，不填自动生成）" v-model="store.title">
+        <input class="input" maxlength="40" placeholder="试卷标题（可选，不填自动生成）" :value="store.title" @input="store.setTitle(($event.target as HTMLInputElement).value)">
       </div>
       <div style="display: flex; gap: 6px;">
         <select class="input" :value="store.templateId" @change="pickTemplate(($event.target as HTMLSelectElement).value)">

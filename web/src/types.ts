@@ -77,6 +77,8 @@ export interface PaperData {
   subject: string
   keyword: string
   title: string
+  /** 标题富文本（排版模式改色/加粗缓存） */
+  titleHtml?: string
   difficulty: string
   sections: PaperSection[]
   /** 第几份（1 起，多份生成时） */
@@ -141,6 +143,8 @@ export interface MyTemplate {
   subject: string
   keyword: string
   title: string
+  /** 标题富文本 */
+  titleHtml?: string
   difficulty: Difficulty
   templateId: string
   /** 卷面装饰风格（背景/边框/字号等），恢复时原样应用 */
