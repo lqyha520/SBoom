@@ -41,8 +41,8 @@ function stripPrefix(text: string, re: RegExp): string {
 function onStemBlur(e: FocusEvent) {
   if (!props.editable) return
   const el = e.target as HTMLElement
-  props.q._stemHtml = el.innerHTML.replace(/^[①-⑳]\s*/, '')
-  props.q.stem = stripPrefix(stripPrefix(el.innerText, /^[①-⑳]\s*/), /^\[第\d+关\]\s*/)
+  props.q._stemHtml = el.innerHTML.replace(/^[①-㊿]\s*/, '')
+  props.q.stem = stripPrefix(stripPrefix(el.innerText, /^[①-㊿]\s*/), /^\[第\d+关\]\s*/)
 }
 function onOptBlur(e: FocusEvent, j: number) {
   if (!props.editable || !props.q.options) return

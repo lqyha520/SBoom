@@ -14,10 +14,14 @@ export function gradeNumOf(g: string): number {
   return m ? CN_GRADE_NUM[m[0]] || 0 : 0
 }
 
-/* ── 圈号 ── */
+/* ── 圈号（①~㊿ 完整 Unicode 序列，50 以上退回数字） ── */
+const CIRCLES = (
+  '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳' + // 1-20  U+2460-
+  '㉑㉒㉓㉔㉕㉖㉗㉘㉙㉚㉛㉜㉝㉞㉟㊱㊲㊳㊴㊵㊶㊷㊸㊹㊺' + // 21-45 U+3251-
+  '㊻㊼㊽㊾㊿' // 46-50 U+32B1-
+)
 export function cirNum(n: number): string {
-  const c = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳'
-  return n <= 20 ? c[n - 1] : `${n}.`
+  return n >= 1 && n <= 50 ? CIRCLES[n - 1] : `${n}.`
 }
 
 /* ── 判断题题干格式化：去末尾句号，补（　） ── */

@@ -78,7 +78,7 @@ function applyOldSnapshot(cards: { type: string; count: number; data: GameData }
         const stemEl = qEl.querySelector('[data-e="stem"]')
         if (stemEl && q.stem != null) {
           const t = stemEl.textContent || ''
-            .replace(/^[①-⑳]\s*/, '')
+            .replace(/^[①-㊿]\s*/, '')
             .replace(/^\[第\d+关\]\s*/, '')
             .trim()
           if (t) q.stem = t
