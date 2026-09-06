@@ -412,7 +412,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 300px 290px minmax(0, 1fr);
+  grid-template-columns: 280px 330px minmax(0, 1fr);
   gap: 14px;
 }
 .workbench.result-only { grid-template-columns: minmax(0, 1fr); }

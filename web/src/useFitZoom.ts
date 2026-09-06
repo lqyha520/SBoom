@@ -1,8 +1,8 @@
 import { onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 
 /**
- * 容器宽度自适应缩放：A4 纸缩到容器宽度放得下，高度不限（滚动浏览）。
- * 用户可通过 slider 覆盖（0 = 自动）。
+ * 容器宽度自适应缩放：A4 纸缩放至正好填满容器宽度（可放大到 180%），
+ * 高度不限（滚动浏览）。用户可通过 slider 覆盖（0 = 自动）。
  */
 export function useFitZoom(container: Ref<HTMLElement | null>) {
   const auto = ref(1)
@@ -13,11 +13,12 @@ export function useFitZoom(container: Ref<HTMLElement | null>) {
 
   // A4 纸宽度约 794px + 边距
   const PAPER_W = 810
+  const MAX = 1.8
 
   function update() {
     const el = container.value
     if (!el) return
-    auto.value = Math.min(1, Math.max(0.25, (el.clientWidth - 24) / PAPER_W))
+    auto.value = Math.min(MAX, Math.max(0.25, (el.clientWidth - 20) / PAPER_W))
     apply()
   }
 

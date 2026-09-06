@@ -1,43 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useExamStore } from '../stores/exam'
-import { DIFF_NAME, TEMPLATES } from '../constants'
+import { DIFF_NAME } from '../constants'
 import type { Difficulty } from '../types'
 
 const store = useExamStore()
 
 const grades = computed(() => Object.keys(store.available))
-const customTpl = TEMPLATES.find(t => t.id === 'custom')!
-
-const showCustomCfg = ref(false)
-const cfg = ref({
-  titlePrefix: customTpl.titlePrefix,
-  titleSuffix: customTpl.titleSuffix,
-  footer: customTpl.footer,
-  showInfoRow: customTpl.showInfoRow,
-  showNotice: customTpl.showNotice,
-  showScore: customTpl.showScore,
-})
-
-function pickTemplate(id: string) {
-  store.setTemplate(id)
-  if (id === 'custom') {
-    cfg.value = {
-      titlePrefix: customTpl.titlePrefix,
-      titleSuffix: customTpl.titleSuffix,
-      footer: customTpl.footer,
-      showInfoRow: customTpl.showInfoRow,
-      showNotice: customTpl.showNotice,
-      showScore: customTpl.showScore,
-    }
-    showCustomCfg.value = true
-  }
-}
-
-function applyCustom() {
-  store.saveCustomTemplate({ ...cfg.value })
-  showCustomCfg.value = false
-}
 </script>
 
 <template>
@@ -138,44 +107,7 @@ function applyCustom() {
           </div>
         </template>
       </div>
-
-      <!-- 标题 + 模板 -->
-      <div class="fgroup" style="margin-bottom: 0;">
-        <div class="fgroup-label">卷面</div>
-        <div class="form-row">
-          <input class="input" maxlength="40" placeholder="试卷标题（可选，不填自动生成）" v-model="store.title">
-        </div>
-        <div style="display: flex; gap: 8px;">
-          <select class="input" :value="store.templateId" @change="pickTemplate(($event.target as HTMLSelectElement).value)">
-            <option v-for="t in TEMPLATES" :key="t.id" :value="t.id">{{ t.name }}（{{ t.tag }}）</option>
-          </select>
-          <button v-if="store.templateId === 'custom'" class="btn mini" style="flex: none;" @click="showCustomCfg = true">配置</button>
-        </div>
-      </div>
     </div>
-
-    <!-- 自定义模板配置 -->
-    <teleport to="body">
-      <div v-if="showCustomCfg" class="modal-mask" @click.self="showCustomCfg = false">
-        <div class="modal">
-          <div class="modal-head"><h3>自定义模板</h3><button class="x-btn" @click="showCustomCfg = false">✕</button></div>
-          <div class="modal-body">
-            <div class="form-row"><label>标题前缀</label><input class="input" v-model="cfg.titlePrefix" maxlength="20" placeholder="如：每日一练"></div>
-            <div class="form-row"><label>标题后缀</label><input class="input" v-model="cfg.titleSuffix" maxlength="20" placeholder="如：测试卷"></div>
-            <div class="form-row"><label>页脚文字</label><input class="input" v-model="cfg.footer" maxlength="40"></div>
-            <div class="form-row" style="display: flex; gap: 18px; flex-wrap: wrap;">
-              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink2); cursor: pointer;"><input type="checkbox" v-model="cfg.showInfoRow"> 信息栏</label>
-              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink2); cursor: pointer;"><input type="checkbox" v-model="cfg.showNotice"> 注意事项</label>
-              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink2); cursor: pointer;"><input type="checkbox" v-model="cfg.showScore"> 分数</label>
-            </div>
-          </div>
-          <div class="modal-foot">
-            <button class="btn" @click="showCustomCfg = false">取消</button>
-            <button class="btn primary" @click="applyCustom">应用</button>
-          </div>
-        </div>
-      </div>
-    </teleport>
   </div>
 </template>
 
