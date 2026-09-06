@@ -7,7 +7,7 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Sortable from 'sortablejs'
-import type { PaperData, PaperStyle, PaperTemplate } from '../types'
+import type { PaperData, PaperSection, PaperStyle, PaperTemplate } from '../types'
 import { computeScores, gradeNumOf } from '../utils'
 import PaperPage from './PaperPage.vue'
 
@@ -198,18 +198,18 @@ function teardownLayout() {
   stack.querySelectorAll('.q-tools, .sec-tools, .cell-resizer, .col-resizer, .row-resizer').forEach(el => el.remove())
 }
 
-/** 排版模式完成：DOM 顺序/删除回写数据 */
-async function applyLayout() {
+/** 排版模式完成：DOM 顺序/删除回写数据，返回新 sections（供调用方同步外部状态） */
+function applyLayout(): PaperSection[] | null {
   const stack = stackEl.value
-  if (!stack) return
+  if (!stack) return null
   const paperEl = stack.querySelector('.paper')
-  if (!paperEl) return
+  if (!paperEl) return null
 
   const paper = props.paper
   const qMap = new Map<string, any>()
   paper.sections.forEach(s => (s.data.questions || []).forEach(q => { if (q._qid) qMap.set(q._qid, q) }))
 
-  const newSections: typeof paper.sections = []
+  const newSections: PaperSection[] = []
   paperEl.querySelectorAll('.sec-block').forEach(block => {
     const sid = block.getAttribute('data-sid') || ''
     const orig = paper.sections.find(s => s._sid === sid)
@@ -224,6 +224,7 @@ async function applyLayout() {
   paper.sections = newSections
   teardownLayout()
   emit('layout-done')
+  return newSections
 }
 
 /* ── 题目自由移动（拖拽空白处） ── */

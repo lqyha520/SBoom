@@ -19,6 +19,7 @@ import type {
   PaperStyle,
   PaperTemplate,
   ScopeData,
+  SecLayout,
   Section,
 } from '../types'
 import { ensureQids, gradeNumOf, mockQuestions, uid } from '../utils'
@@ -414,6 +415,31 @@ export const useExamStore = defineStore('exam', {
     /** 结果视图 → 回到搭建 */
     backToBuild() {
       this.view = 'build'
+    },
+
+    /** 搭建态排版模式完成后：把纸面回写结果同步回 sections */
+    syncSections(newSections: { type: string; _sid?: string; count?: number; data: GameData; layout: SecLayout }[]) {
+      const byId = new Map(this.sections.map(s => [s.id, s]))
+      const out: Section[] = []
+      newSections.forEach(ns => {
+        const orig = ns._sid ? byId.get(ns._sid) : undefined
+        if (orig) {
+          // 保留原卡片身份，替换题目数据
+          orig.data = ns.data
+          orig.count = (ns.data.questions || []).length
+          out.push(orig)
+        } else {
+          out.push({
+            id: uid('s'),
+            type: ns.type,
+            count: (ns.data.questions || []).length,
+            status: 'ready' as const,
+            data: ns.data,
+            layout: ns.layout || { ...DEFAULT_LAYOUT },
+          })
+        }
+      })
+      this.sections = out
     },
 
     /** 用当前搭建区再来一批（题目不同） */

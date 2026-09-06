@@ -13,11 +13,13 @@
   position: relative;
   z-index: 1;
   font-family: var(--font-body);
+  display: flex;
+  flex-direction: column;
 }
 .paper + .paper { margin-top: 18px; }
 
 /* 测量用的纸（不限高） */
-.paper.measure { height: auto; overflow: visible; }
+.paper.measure { height: auto; overflow: visible; display: block; }
 
 /* 卷面编辑提示 */
 .can-edit { outline: 2px dashed transparent; outline-offset: 2px; transition: outline-color .15s; border-radius: 2px; }

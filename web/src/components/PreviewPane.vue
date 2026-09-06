@@ -23,28 +23,65 @@ const previewPaper = computed<PaperData>(() => ({
 }))
 
 const previewBox = ref<HTMLElement | null>(null)
+const paperViewEl = ref<InstanceType<typeof PaperView> | null>(null)
 const { zoom, manual, setManual } = useFitZoom(previewBox)
+
+/* ── 排版模式 ── */
+const layoutMode = ref(false)
+
+function toggleLayout() {
+  if (layoutMode.value) {
+    // 完成：DOM 顺序/删除/编辑回写，并同步回 store（previewPaper 是 computed 快照）
+    const newSections = paperViewEl.value?.applyLayout()
+    if (newSections?.length) store.syncSections(newSections)
+    layoutMode.value = false
+  } else {
+    layoutMode.value = true
+  }
+}
+function cancelLayout() {
+  layoutMode.value = false
+  paperViewEl.value?.repaginate()
+}
 </script>
 
 <template>
   <div class="card preview-pane">
     <div class="card-head" style="flex: none; flex-wrap: wrap; gap: 8px;">
-      <h2>实时预览</h2>
-      <span style="font-size: 12px; color: var(--ink3);">纸面文字可直接点击修改</span>
-      <span style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
-        <button class="btn mini" :class="{ 'btn-primary-on': manual === 0 }" title="缩放到容器宽度" @click="setManual(0)">适应</button>
-        <input
-          type="range" min="25" max="100" step="5"
-          :value="manual > 0 ? manual * 100 : Math.round(zoom * 100)"
-          @input="setManual(parseInt(($event.target as HTMLInputElement).value) / 100)"
-          style="width: 90px; accent-color: var(--primary);"
-          title="缩放比例"
-        >
-        <span style="font-size: 11px; color: var(--ink3); width: 34px;">{{ Math.round(zoom * 100) }}%</span>
-      </span>
+      <h2 style="flex: none;">实时预览</h2>
+
+      <template v-if="!layoutMode">
+        <span style="font-size: 12px; color: var(--ink3); flex: none;">纸面文字可直接点击修改</span>
+        <span style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+          <button class="btn mini" :class="{ 'btn-primary-on': manual === 0 }" title="缩放到容器宽度" @click="setManual(0)">适应</button>
+          <input
+            type="range" min="25" max="100" step="5"
+            :value="manual > 0 ? manual * 100 : Math.round(zoom * 100)"
+            @input="setManual(parseInt(($event.target as HTMLInputElement).value) / 100)"
+            style="width: 90px; accent-color: var(--primary);"
+            title="缩放比例"
+          >
+          <span style="font-size: 11px; color: var(--ink3); width: 36px;">{{ Math.round(zoom * 100) }}%</span>
+          <button class="btn mini" @click="toggleLayout">✏️ 排版模式</button>
+        </span>
+      </template>
+
+      <template v-else>
+        <span style="font-size: 12px; color: var(--amber); flex: 1;">⠿ 拖动排序 · 点击编辑 · ✕ 删除 · ⤡ 调整大小</span>
+        <button class="btn mini primary" @click="toggleLayout">✓ 完成排版</button>
+        <button class="btn mini" @click="cancelLayout">取消</button>
+      </template>
     </div>
     <div ref="previewBox" class="preview-fill">
-      <PaperView :paper="previewPaper" :template="store.template" :style="store.style" :editable="true" :zoom="zoom" />
+      <PaperView
+        ref="paperViewEl"
+        :paper="previewPaper"
+        :template="store.template"
+        :style="store.style"
+        :editable="true"
+        :layout-mode="layoutMode"
+        :zoom="zoom"
+      />
     </div>
   </div>
 </template>
