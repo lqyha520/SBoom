@@ -1,0 +1,144 @@
+/* ── 领域类型定义 ── */
+
+/** 题目（各题型字段的超集，按形状判别渲染） */
+export interface Question {
+  id?: number
+  type?: string
+  stem?: string
+  options?: string[]
+  /** 选择题为索引；填空/口算为文字或数字；连线为 [leftIdx, rightIdx][] */
+  answer?: number | string | [number, number][]
+  acceptable_answers?: string[]
+  analysis?: string
+  tags?: string[]
+  difficulty_level?: number
+  expected_time_seconds?: number
+  /** 连线题 */
+  left_items?: string[]
+  right_items?: string[]
+  /** 数的分成 */
+  top?: string | number
+  left?: string | number
+  right?: string | number
+  /** 比大小 */
+  left_expr?: string
+  right_expr?: string
+  /** 前端运行时标记（稳定 uid，供排版模式回写） */
+  _qid?: string
+}
+
+/** 一个大题的生成数据 */
+export interface GameData {
+  questions: Question[]
+  passage?: string
+  topic?: string
+  difficulty?: string
+  grade?: string
+  subject?: string
+  [k: string]: unknown
+}
+
+/** 大题卡片排版配置 */
+export interface SecLayout {
+  qCols: number
+  optCols: number
+  tableBorder: 'none' | 'solid' | 'dashed'
+  fontSize: string
+  showNo: boolean
+}
+
+/** 搭建区的大题卡片 */
+export interface Section {
+  id: string
+  /** 实际请求后端的 game_type */
+  type: string
+  count: number
+  status: 'loading' | 'ready' | 'error'
+  data: GameData | null
+  layout: SecLayout
+  error?: string
+}
+
+/** 结果卷中的大题 */
+export interface PaperSection {
+  type: string
+  data: GameData
+  layout: SecLayout
+  /** 稳定 id（排版模式 DOM 回写用） */
+  _sid?: string
+}
+
+/** 一份完整试卷 */
+export interface PaperData {
+  grade: string
+  subject: string
+  keyword: string
+  title: string
+  difficulty: string
+  sections: PaperSection[]
+  /** 第几份（1 起，多份生成时） */
+  day?: number
+}
+
+/** 自定义题型 */
+export interface CustomType {
+  id: string
+  name: string
+  baseType: string
+  defaultCount: number
+}
+
+/** 卷面模板（卷头/信息栏/注意事项等开关） */
+export interface PaperTemplate {
+  id: string
+  name: string
+  tag: string
+  showInfoRow: boolean
+  showNotice: boolean
+  showScore: boolean
+  titlePrefix: string
+  titleSuffix: string
+  footer: string
+  headerExtra: string
+}
+
+/** 卷面装饰风格（彩色 + 童趣合并） */
+export interface PaperStyle {
+  bg: 'none' | 'dots' | 'grid' | 'stars' | 'clouds' | 'rainbow'
+  bgOpacity: number
+  banner: boolean
+  secColor: boolean
+  frame: 'none' | 'rainbow' | 'stars' | 'crayon' | 'dots'
+  encourage: boolean
+  reward: boolean
+  /** auto=低年级自动放大 / on / off */
+  kidFont: 'auto' | 'on' | 'off'
+  exportBg: boolean
+}
+
+export interface LlmConfig {
+  baseUrl: string
+  model: string
+  apiKey: string
+  timeout: number
+}
+
+export type Difficulty = 'easy' | 'medium' | 'hard'
+
+/** 知识点范围（含学期分组） */
+export interface ScopeData {
+  allowed: string[]
+  semesters?: Record<'上册' | '下册', string[]>
+}
+
+/** 我保存的卷面模板 */
+export interface MyTemplate {
+  name: string
+  grade: string
+  subject: string
+  keyword: string
+  difficulty: Difficulty
+  templateId: string
+  customTemplate?: Partial<PaperTemplate>
+  cards: { type: string; count: number; layout: SecLayout }[]
+}

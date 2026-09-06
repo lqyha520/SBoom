@@ -1,0 +1,214 @@
+/* ═══════════ A4 纸（试卷排版核心样式 —— 打印效果，勿随意改动） ═══════════ */
+
+.paper {
+  background: #fff;
+  width: 210mm;
+  max-width: 210mm;
+  height: 297mm;
+  overflow: hidden;
+  margin: 0 auto;
+  padding: 15mm 16mm;
+  border: 1px solid #e5e7eb;
+  box-shadow: var(--shadow-md);
+  position: relative;
+  z-index: 1;
+  font-family: var(--font-body);
+}
+.paper + .paper { margin-top: 18px; }
+
+/* 测量用的纸（不限高） */
+.paper.measure { height: auto; overflow: visible; }
+
+/* 卷面编辑提示 */
+.can-edit { outline: 2px dashed transparent; outline-offset: 2px; transition: outline-color .15s; border-radius: 2px; }
+.can-edit:hover { outline-color: rgba(37, 99, 235, .25); }
+.can-edit:focus { outline-color: var(--primary); }
+
+/* 拖拽/缩放手柄 */
+.col-resizer { position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; background: transparent; z-index: 3; }
+.col-resizer:hover { background: rgba(37, 99, 235, .12); }
+.row-resizer { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; cursor: row-resize; background: transparent; z-index: 3; }
+.row-resizer:hover { background: rgba(37, 99, 235, .12); }
+.cell-resizer {
+  position: absolute; right: 0; bottom: 0;
+  width: 15px; height: 15px;
+  line-height: 15px; text-align: center;
+  font-size: 11px; color: #999;
+  cursor: nwse-resize;
+  opacity: 0; transition: opacity .12s;
+  z-index: 3; user-select: none;
+}
+.q-grid .q:hover .cell-resizer { opacity: 1; }
+.cell-resizer:hover { color: var(--primary); background: rgba(37, 99, 235, .1); border-radius: 4px 0 0 0; }
+
+.sort-handle { cursor: grab; color: #bbb; margin-left: 4px; user-select: none; }
+.sortable-ghost { opacity: .35; outline: 2px dashed var(--primary); }
+.q-tools, .sec-tools { position: absolute; right: 2px; top: -10px; z-index: 6; display: flex; gap: 4px; }
+.tool-btn {
+  font-size: 11px; padding: 1px 8px; border-radius: 4px;
+  background: #fff; border: 1px solid var(--border2); color: var(--ink2);
+  cursor: pointer; box-shadow: var(--shadow-xs);
+}
+.tool-btn.del:hover { color: var(--red); border-color: var(--red); }
+
+/* ── 试卷内容 ── */
+.exam { position: relative; z-index: 1; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.exam h1 { text-align: center; font-size: 22pt; font-family: 'SimHei', 'Microsoft YaHei', sans-serif; letter-spacing: 2px; line-height: 1.4; }
+.exam .sub-line { text-align: center; font-size: 11pt; color: #555; margin-bottom: 4mm; }
+.exam .info-row { display: flex; justify-content: space-between; font-size: 10pt; border-bottom: 1px solid #000; padding-bottom: 2mm; margin-bottom: 4mm; }
+.exam h2.sec { font-size: 13pt; font-family: 'SimHei', 'Microsoft YaHei', sans-serif; display: flex; justify-content: space-between; align-items: center; margin: 5mm 0 2mm; }
+.exam .score-box { font-size: 10pt; font-weight: 400; color: #555; }
+.exam .notice { font-size: 9pt; color: #666; margin-bottom: 4mm; border-left: 3px solid #999; padding-left: 3mm; }
+.exam .footer-note { text-align: center; font-size: 9pt; color: #999; margin-top: auto; border-top: 1px solid #eee; padding-top: 2mm; }
+.exam .lv { display: inline-block; background: #fff7e6; color: #d48806; font-size: 9pt; padding: 0 3px; border-radius: 3px; }
+.exam .q { margin-bottom: 3mm; line-height: 1.7; font-size: 11pt; position: relative; }
+.exam .opts { display: grid; gap: 2px 8px; margin-top: 1mm; font-size: 10.5pt; }
+.exam .match-table { width: 100%; border-collapse: collapse; margin-top: 1mm; font-size: 10pt; }
+.exam .match-table th, .exam .match-table td { border: 1px solid #999; padding: 2px 4px; }
+.exam .match-table th { background: #f0f0f0; }
+.exam .reading-box { font-size: 10.5pt; line-height: 1.9; margin-bottom: 3mm; padding: 2mm 3mm; background: #fafafa; }
+
+/* 题目表格模式 */
+.q-table { border-collapse: collapse; width: 100%; }
+.q-table td { padding: 1mm 3mm; vertical-align: top; position: relative; }
+
+/* 行内答案 */
+.q-ans-inline { color: #d0342c; font-weight: 600; font-size: 10.5pt; margin-top: 1mm; }
+
+/* ── 数的分成（树状图） ── */
+.split-wrap { display: inline-flex; flex-direction: column; align-items: center; margin: 6px 12px; vertical-align: middle; }
+.split-box {
+  min-width: 28px; height: 26px; padding: 0 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11pt; font-weight: 400; color: #2b3a55;
+  background: #f7f9fc; border: 1.5px solid #b9c6db; border-radius: 6px;
+  line-height: 1; box-shadow: 0 1px 2px rgba(43, 58, 85, .06);
+}
+.split-box.blank { background: #fff; border: 1.5px dashed #c3cede; color: transparent; box-shadow: none; }
+.split-lines { width: 56px; height: 18px; margin: -1px 0; }
+.split-lines path { fill: none; stroke: #b9c6db; stroke-width: 1.5; stroke-linecap: round; }
+.split-bottom { display: flex; gap: 12px; }
+
+/* ── 比大小 ── */
+.compare-row { display: inline-flex; align-items: center; gap: 6px; font-size: 11pt; font-weight: 400; color: #2b3a55; margin: 3px 0; }
+.compare-expr {
+  min-width: 28px; padding: 2px 6px; text-align: center;
+  background: #f7f9fc; border: 1.5px solid #b9c6db; border-radius: 6px; line-height: 1.2;
+}
+.compare-circle { display: inline-block; width: 26px; height: 26px; border: 1.5px dashed #c3cede; border-radius: 50%; background: #fff; }
+
+/* ── 彩色试卷：背景 / 横幅 / 彩色标题 ── */
+.paper-bg-layer {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 0; pointer-events: none; opacity: .7;
+}
+.paper-bg-layer[data-bg="none"] { background: none; }
+.paper-bg-layer[data-bg="dots"] {
+  background-image:
+    radial-gradient(circle at 7px 7px, rgba(99, 102, 241, .15) 2.6px, transparent 3.6px),
+    radial-gradient(circle at 23px 19px, rgba(238, 157, 43, .13) 2.2px, transparent 3.2px);
+  background-size: 34px 34px;
+}
+.paper-bg-layer[data-bg="grid"] {
+  background-image:
+    linear-gradient(rgba(37, 99, 235, .08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, .08) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+.paper-bg-layer[data-bg="stars"] {
+  background-image:
+    radial-gradient(circle at 8px 8px, rgba(245, 185, 66, .2) 3px, transparent 4px),
+    radial-gradient(circle at 26px 22px, rgba(99, 102, 241, .15) 2px, transparent 3px),
+    radial-gradient(circle at 40px 10px, rgba(226, 106, 171, .13) 2.5px, transparent 3.5px);
+  background-size: 48px 32px;
+}
+.paper-bg-layer[data-bg="clouds"] {
+  background-image:
+    radial-gradient(circle at 15% 9%, rgba(147, 197, 253, .22), transparent 58%),
+    radial-gradient(circle at 84% 14%, rgba(191, 219, 254, .24), transparent 60%),
+    radial-gradient(circle at 28% 88%, rgba(196, 181, 253, .2), transparent 58%),
+    radial-gradient(circle at 80% 93%, rgba(254, 215, 170, .22), transparent 60%);
+}
+.paper-bg-layer[data-bg="rainbow"] {
+  background-image: linear-gradient(180deg,
+    rgba(255, 179, 186, .28) 0%, rgba(255, 223, 186, .24) 12%,
+    rgba(255, 255, 186, .2) 24%, rgba(186, 255, 201, .18) 36%,
+    rgba(186, 225, 255, .16) 48%, rgba(218, 198, 255, .14) 60%,
+    rgba(0, 0, 0, 0) 72%);
+}
+
+/* 卷头横幅 */
+.exam-head { padding: 4mm 5mm 3mm; margin-bottom: 4mm; border-radius: 3mm; background: linear-gradient(135deg, #e8f1fb 0%, #f0ecfa 55%, #fdf3e3 100%); border: 1px solid #dbe7f6; }
+.exam-head[data-plain="1"] { padding: 0; margin-bottom: 0; background: none; border: none; border-radius: 0; }
+
+/* 大题标题彩色（按题型） */
+.sec-block h2.sec { padding: 1.2mm 3mm; border-radius: 2mm; }
+.sec-block[data-type="quiz"] h2.sec,
+.sec-block[data-type="true_false"] h2.sec { background: linear-gradient(90deg, #e3effb, #f4f9fe); border-left: 1.2mm solid #4a7ebb; }
+.sec-block[data-type="fill_blank"] h2.sec,
+.sec-block[data-type="match_pair"] h2.sec { background: linear-gradient(90deg, #e5f6ec, #f5fcf8); border-left: 1.2mm solid #3e9b6c; }
+.sec-block[data-type="oral_math"] h2.sec,
+.sec-block[data-type="vertical_calc"] h2.sec,
+.sec-block[data-type="recursive_calc"] h2.sec,
+.sec-block[data-type="smart_calc"] h2.sec { background: linear-gradient(90deg, #fcf2e2, #fef9f0); border-left: 1.2mm solid #d8973c; }
+.sec-block[data-type="word_problem"] h2.sec,
+.sec-block[data-type="reading"] h2.sec,
+.sec-block[data-type="challenge"] h2.sec { background: linear-gradient(90deg, #eeeafa, #f8f6fd); border-left: 1.2mm solid #8b6fc4; }
+.sec-block[data-type="number_split"] h2.sec,
+.sec-block[data-type="compare"] h2.sec { background: linear-gradient(90deg, #fdebef, #fef6f8); border-left: 1.2mm solid #cc7a8e; }
+.paper[data-seccolor="0"] .sec-block h2.sec { background: none !important; border-left-color: transparent !important; }
+
+/* ── 童趣装饰 ── */
+.paper .paper-frame-layer { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.paper .paper-frame-layer .fr { position: absolute; }
+.paper[data-frame="stars"] .fr-a { inset: 0; border: 2.2mm solid #f5d76e; border-radius: 2mm; }
+.paper[data-frame="stars"] .fr-b { inset: 3.8mm; border: 1mm solid #f5d76e; border-radius: 1.5mm; }
+.paper[data-frame="crayon"] .fr-a { inset: 0; border: 2.2mm solid #f4a7bb; border-radius: 2mm; }
+.paper[data-frame="crayon"] .fr-b { inset: 3.8mm; border: 1mm solid #f4a7bb; border-radius: 1.5mm; }
+.paper[data-frame="dots"] .fr-a { inset: 0; border: 2.2mm solid #a8c8ec; border-radius: 2mm; }
+.paper[data-frame="dots"] .fr-b { inset: 3.8mm; border: 1mm solid #a8c8ec; border-radius: 1.5mm; }
+.paper[data-frame="rainbow"] .fr-top { top: 0; left: 0; right: 0; height: 2.6mm; background: linear-gradient(90deg, #ff9a9e, #ffd48a, #a8e6a1, #9ad0ff, #c3a6ff); }
+.paper[data-frame="rainbow"] .fr-bottom { bottom: 0; left: 0; right: 0; height: 2.6mm; background: linear-gradient(90deg, #c3a6ff, #9ad0ff, #a8e6a1, #ffd48a, #ff9a9e); }
+.paper[data-frame="rainbow"] .fr-left { left: 0; top: 2.6mm; bottom: 2.6mm; width: 2.6mm; background: linear-gradient(180deg, #ff9a9e, #ffd48a, #a8e6a1, #9ad0ff, #c3a6ff); }
+.paper[data-frame="rainbow"] .fr-right { right: 0; top: 2.6mm; bottom: 2.6mm; width: 2.6mm; background: linear-gradient(180deg, #c3a6ff, #9ad0ff, #a8e6a1, #ffd48a, #ff9a9e); }
+
+/* 鼓励语 */
+.sec-block h2.sec .encourage { font-size: 10pt; color: #b0651f; font-weight: 400; margin-left: 2mm; }
+.paper[data-encourage="0"] .sec-block h2.sec .encourage { display: none; }
+
+/* 卷尾奖励区 */
+.paper .reward-box {
+  display: flex; align-items: center; justify-content: center; gap: 4mm;
+  margin-top: 5mm; padding: 3.5mm 6mm;
+  border: 1px dashed #d9b3ff; border-radius: 4mm;
+  background: linear-gradient(90deg, #faf5ff, #f3f9ff);
+}
+.paper .reward-box .reward-title { font-size: 11pt; font-weight: 700; color: #7c5cbf; }
+.paper .reward-box .reward-stars { font-size: 15pt; letter-spacing: 3mm; color: #e8c53a; }
+.paper .reward-box .reward-msg { font-size: 9pt; color: #9b8ec4; }
+.paper[data-reward="0"] .reward-box { display: none; }
+
+/* 低年级大字号 */
+.paper[data-kid="1"] .exam .q { font-size: 14pt; line-height: 2; margin-bottom: 4.5mm; }
+.paper[data-kid="1"] .exam .opts { font-size: 13pt; gap: 3px 10px; }
+.paper[data-kid="1"] .exam h1 { font-size: 26pt; }
+.paper[data-kid="1"] .exam h2.sec { font-size: 15pt; margin: 6mm 0 3mm; }
+.paper[data-kid="1"] .exam .sub-line { font-size: 13pt; }
+.paper[data-kid="1"] .exam .info-row { font-size: 12pt; }
+.paper[data-kid="1"] .exam .notice { font-size: 11pt; }
+.paper[data-kid="1"] .split-box { min-width: 34px; height: 32px; font-size: 14pt; }
+.paper[data-kid="1"] .compare-expr { min-width: 34px; font-size: 14pt; }
+.paper[data-kid="1"] .compare-circle { width: 32px; height: 32px; }
+.paper[data-kid="1"] .match-table { font-size: 12pt; }
+.paper[data-kid="1"] .match-table th, .paper[data-kid="1"] .match-table td { padding: 4px 8px; }
+
+/* 纸面缩放容器（预览时整体缩小适配屏宽） */
+.paper-scaler { transform-origin: top center; }
+.paper-stack { display: flex; flex-direction: column; align-items: center; }
+.offscreen { position: fixed; left: -99999px; top: 0; z-index: -1; }
+
+@media print {
+  .paper { box-shadow: none; border: none; }
+  .paper + .paper { margin-top: 0; page-break-after: always; }
+  .offscreen { display: none !important; }
+}

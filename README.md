@@ -46,11 +46,19 @@ pip install -r requirements.txt
 cp .env.example .env
 # 编辑 .env，填入 LLM_API_KEY=your-key
 
-# 3. 启动服务
+# 3. 构建前端（需要 Node.js 20+ 和 pnpm）
+cd web
+pnpm install
+pnpm build        # 产物输出到 web/dist/
+cd ..
+
+# 4. 启动服务
 python run.py
 ```
 
-访问 `http://127.0.0.1:8000/docs` 查看 Swagger 交互式文档。
+访问 `http://127.0.0.1:8000` 使用出题工作台，`http://127.0.0.1:8000/docs` 查看 Swagger 文档。
+
+> 前端开发模式：`cd web && pnpm dev`（Vite 端口 5173，`/api` 自动代理到 8000）。
 
 ---
 
@@ -62,16 +70,34 @@ backend/
 ├── requirements.txt                    # 依赖
 ├── .env                                # 环境变量（需自行创建）
 ├── app/
-│   ├── main.py                         # FastAPI 应用 + CORS
+│   ├── main.py                         # FastAPI 应用 + CORS + 静态服务
 │   ├── config.py                       # 配置管理
 │   ├── models/__init__.py              # 全部 Pydantic 模型 & 枚举
 │   ├── routers/generate.py             # API 路由（6 个端点）
 │   ├── services/
 │   │   ├── knowledge_scope.py          # 知识范围约束服务
 │   │   ├── prompt_builder.py           # Prompt 组装器
-│   │   └── llm_client.py              # LLM API 客户端（流式+非流式）
-│   ├── cache/question_cache.py        # 内存 LRU 缓存
+│   │   └── llm_client.py               # LLM API 客户端（流式+非流式）
+│   ├── cache/question_cache.py         # 内存 LRU 缓存
 │   └── data/knowledge_scope.json       # 知识范围数据
+└── web/                                # 出题工作台前端（Vue 3 + TS + Vite）
+    ├── src/
+    │   ├── App.vue                     # 外壳：顶栏 + 三步向导
+    │   ├── stores/exam.ts              # Pinia 全局状态
+    │   ├── api.ts / types.ts / constants.ts / utils.ts
+    │   ├── exporter.ts                 # PDF/PNG/ZIP/打印导出
+    │   ├── components/
+    │   │   ├── StepConditions.vue      # 第 1 步：年级/科目/知识点/模板
+    │   │   ├── StepSections.vue        # 第 2 步：题型 + 大题列表
+    │   │   ├── StepResult.vue          # 第 3 步：预览/导出/排版模式
+    │   │   ├── PaperView.vue           # A4 分页渲染 + 排版模式
+    │   │   ├── PaperPage.vue           # 单页 A4 纸
+    │   │   ├── SectionBlock.vue        # 大题块（全题型）
+    │   │   ├── QuestionItem.vue        # 单题渲染（可编辑）
+    │   │   ├── AdvancedDrawer.vue      # 高级设置（卷面风格等）
+    │   │   └── LlmDialog.vue           # 模型配置弹窗
+    │   └── styles/                     # tokens / base / paper 样式
+    └── dist/                           # 构建产物（后端 serve 这个目录）
 ```
 
 ---

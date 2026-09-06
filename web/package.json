@@ -1,0 +1,27 @@
+{
+  "name": "learn-coach-web",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "html2canvas": "^1.4.1",
+    "jspdf": "^2.5.2",
+    "jszip": "^3.10.1",
+    "pinia": "^3.0.2",
+    "sortablejs": "^1.15.6",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@types/sortablejs": "^1.15.8",
+    "@vitejs/plugin-vue": "^5.2.3",
+    "typescript": "~5.7.3",
+    "vite": "^6.2.0",
+    "vue-tsc": "^2.2.8"
+  }
+}

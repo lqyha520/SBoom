@@ -1,4 +1,4 @@
-﻿"""FastAPI 主入口"""
+"""FastAPI 主入口"""
 
 import logging
 from contextlib import asynccontextmanager
@@ -64,9 +64,13 @@ app.add_middleware(
 # 注册路由
 app.include_router(generate_router)
 
-# 出题工作台页面
-_web_dir = Path(__file__).resolve().parent.parent / "web"
+# 出题工作台页面（Vue 构建产物；开发时可用 `pnpm dev` 起 Vite 代理）
+_web_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
 app.mount("/static", StaticFiles(directory=_web_dir), name="web")
+
+# Vite 构建产物以绝对路径 /assets/... 引用，挂在根路径兜底
+# （API 路由已先注册，不会被遮蔽；必须在最后挂载）
+app.mount("/", StaticFiles(directory=_web_dir, html=True), name="web_root")
 
 
 @app.get("/", tags=["系统"], include_in_schema=False)
