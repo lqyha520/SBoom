@@ -61,16 +61,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 注册路由
-app.include_router(generate_router)
-
-# 出题工作台页面（Vue 构建产物；开发时可用 `pnpm dev` 起 Vite 代理）
+# ─── 出题工作台页面目录（Vue 构建产物；开发时可用 `pnpm dev` 起 Vite 代理） ───
 _web_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
-app.mount("/static", StaticFiles(directory=_web_dir), name="web")
 
-# Vite 构建产物以绝对路径 /assets/... 引用，挂在根路径兜底
-# （API 路由已先注册，不会被遮蔽；必须在最后挂载）
-app.mount("/", StaticFiles(directory=_web_dir, html=True), name="web_root")
+# ─── API 路由（必须在静态挂载之前注册，否则会被 StaticFiles 遮蔽） ───
+app.include_router(generate_router)
 
 
 @app.get("/", tags=["系统"], include_in_schema=False)
@@ -78,7 +73,6 @@ async def home():
     return FileResponse(_web_dir / "index.html")
 
 
-# ─── 健康检查 ───
 @app.get("/health", tags=["系统"])
 async def health():
     return {
@@ -88,7 +82,6 @@ async def health():
     }
 
 
-# ─── LLM 配置 ───
 @app.put("/api/v1/config/llm", tags=["系统"])
 async def update_llm_config(req: LlmConfigRequest):
     """前端更新 LLM 配置（内存中生效，重启后恢复 .env）"""
@@ -101,11 +94,13 @@ async def update_llm_config(req: LlmConfigRequest):
     # 更新 httpx 超时——重建 client
     await llm_client.close()
     from app.services.llm_client import LLMClient
+    import app.services.llm_client as llm_mod
     new_client = LLMClient()
     new_client._timeout = req.timeout or 60
-    # 替换模块级单例
-    import app.services.llm_client as llm_mod
+    # 替换模块级单例（generate.py 顶部 from-import 持有的是旧引用，一并刷新）
     llm_mod.llm_client = new_client
+    import app.routers.generate as gen_mod
+    gen_mod.llm_client = new_client
     logger.info(f"LLM 配置已更新: {settings.llm_base_url} / {settings.llm_model} / timeout={req.timeout}s")
     return {"status": "ok", "message": f"LLM 配置已更新：{settings.llm_model} @ {settings.llm_base_url}"}
 
@@ -118,3 +113,8 @@ async def get_llm_config():
         "model": settings.llm_model,
         "timeout": getattr(llm_client, '_timeout', 60)
     }
+
+
+# ─── 静态挂载（必须放最后：根路径 mount 会吃掉后注册的路由） ───
+app.mount("/static", StaticFiles(directory=_web_dir), name="web")
+app.mount("/", StaticFiles(directory=_web_dir, html=True), name="web_root")
