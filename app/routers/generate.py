@@ -16,6 +16,8 @@ from app.models import (
     FeedbackRequest,
     ErrorResponse,
     KnowledgeScope,
+    BatchGenerateRequest,
+    BatchGenerateResponse,
 )
 from app.services.knowledge_scope import knowledge_scope_service
 from app.services.prompt_builder import prompt_builder
@@ -52,7 +54,8 @@ def _extract_json(text: str) -> dict:
 
 
 async def _call_llm_and_parse(
-    system_prompt: str, user_message: str
+    system_prompt: str, user_message: str,
+    base_url: str = None, model: str = None, api_key: str = None,
 ) -> dict:
     """调用 LLM 并解析返回的 JSON"""
     messages = [
@@ -61,7 +64,7 @@ async def _call_llm_and_parse(
     ]
 
     try:
-        raw_response = await llm_client.chat(messages)
+        raw_response = await llm_client.chat(messages, base_url=base_url, model=model, api_key=api_key)
         logger.debug(f"LLM raw response: {raw_response[:200]}...")
         return _extract_json(raw_response)
     except json.JSONDecodeError as e:
@@ -77,7 +80,9 @@ async def _call_llm_and_parse(
             detail={"error": f"LLM 服务请求失败 ({e.response.status_code})", "detail": str(e)},
         )
     except Exception as e:
-        logger.error(f"未知错误: {e}")
+        import traceback
+        traceback.print_exc()
+        logger.exception(f"LLM 调用未知错误")
         raise HTTPException(status_code=500, detail={"error": "内部错误", "detail": str(e)})
 
 
@@ -100,6 +105,110 @@ def _enrich_result(raw: dict, request: GenerateRequest, from_cache: bool, cache_
 # ─── API 端点 ───
 
 @router.post(
+    "/generate-batch",
+    response_model=BatchGenerateResponse,
+    responses={400: {"model": ErrorResponse}, 502: {"model": ErrorResponse}},
+    summary="批量生成整张试卷（一次 LLM 调用出多个题型）",
+    description="接收多个题型任务，一次 LLM 调用生成整张试卷的所有大题，避免限流。",
+)
+async def generate_batch(request: BatchGenerateRequest):
+    """一次 LLM 调用生成整卷的多个题型"""
+    # 1. 知识范围
+    scope = knowledge_scope_service.get_scope(request.grade, request.subject)
+    if not scope.allowed and not scope.forbidden:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"暂不支持 {request.grade.value} 的 {request.subject.value} 科目"},
+        )
+
+    # 2. 题型-年级适配校验
+    from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
+    g_num = _grade_num(request.grade.value)
+    for it in request.items:
+        min_g = MIN_GRADE_FOR_TYPE.get(it.game_type, 0)
+        if min_g and g_num < min_g:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"{request.grade.value}还没有学过{it.game_type}哦"},
+            )
+
+    # 3. 组装批量 Prompt
+    system_prompt = prompt_builder.build_batch_prompt(
+        grade=request.grade.value,
+        subject=request.subject.value,
+        keyword=request.keyword,
+        difficulty=request.difficulty.value,
+        items=request.items,
+        scope=scope,
+    )
+    user_message = prompt_builder.build_batch_user_message(request.keyword)
+
+    # 4. 调用 LLM（一次，使用前端传入的配置）
+    try:
+        raw = await _call_llm_and_parse(system_prompt, user_message,
+            base_url=request.llm_base_url,
+            model=request.llm_model,
+            api_key=request.llm_api_key)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("批量生成失败")
+        raise HTTPException(status_code=502, detail={"error": "批量生成失败", "detail": str(e)})
+
+    # 5. 按顺序映射回 GameResult
+    sections_raw = raw.get("sections", []) if isinstance(raw, dict) else []
+    sections = []
+    for i, it in enumerate(request.items):
+        sec_raw = sections_raw[i] if i < len(sections_raw) else {}
+        if isinstance(sec_raw, dict):
+            sec_raw = dict(sec_raw)
+            sec_raw.setdefault("game_type", it.game_type)
+            sec_raw.setdefault("topic", request.keyword)
+            sec_raw.setdefault("difficulty", request.difficulty.value)
+            sec_raw["grade"] = request.grade.value
+            sec_raw["subject"] = request.subject.value
+            sec_raw.setdefault("from_cache", False)
+            sec_raw.setdefault("cache_key", None)
+            # 兜底修正：LLM 可能漏掉 type 字段，按字段特征自动识别
+            for q in (sec_raw.get("questions") or []):
+                if not q.get("type"):
+                    if "top" in q:
+                        q["type"] = "number_split"
+                    elif "left_expr" in q:
+                        q["type"] = "compare"
+                    elif "options" in q:
+                        q["type"] = "multiple_choice"
+                    else:
+                        q["type"] = it.game_type
+                # 兜底：口算/填空等题型若 LLM 没给 stem，用 answer 生成默认题干
+                if not q.get("stem") and not q.get("top") and not q.get("left_expr"):
+                    ans = q.get("answer", "")
+                    if ans:
+                        q["stem"] = f"____ = {ans}" if "fill_blank" in (q.get("type","") or it.game_type) else f"{ans} = ？"
+                    else:
+                        q["stem"] = "请作答"
+            try:
+                sections.append(GameResult(**sec_raw))
+            except Exception:
+                # 题型数据不合规时给空题兜底，避免整卷失败
+                sections.append(GameResult(
+                    game_type=it.game_type, topic=request.keyword,
+                    difficulty=request.difficulty.value, grade=request.grade.value,
+                    subject=request.subject.value, questions=[],
+                    total_score=100, pass_score=60,
+                ))
+        else:
+            sections.append(GameResult(
+                game_type=it.game_type, topic=request.keyword,
+                difficulty=request.difficulty.value, grade=request.grade.value,
+                subject=request.subject.value, questions=[],
+                total_score=100, pass_score=60,
+            ))
+
+    return BatchGenerateResponse(sections=sections)
+
+
+@router.post(
     "/generate",
     response_model=GameResult,
     responses={400: {"model": ErrorResponse}, 502: {"model": ErrorResponse}},
@@ -108,6 +217,19 @@ def _enrich_result(raw: dict, request: GenerateRequest, from_cache: bool, cache_
 )
 async def generate_questions(request: GenerateRequest):
     """生成题目（非流式）"""
+    # 0. 题型-年级适配校验（低年级拦截超纲计算题型）
+    from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
+    g_num = _grade_num(request.grade.value)
+    min_g = MIN_GRADE_FOR_TYPE.get(request.game_type.value, 0)
+    if min_g and g_num < min_g:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"{request.grade.value}还没有学过{request.game_type.value}哦",
+                "detail": f"该题型建议 {min_g} 年级及以上使用，请换一个题型",
+            },
+        )
+
     # 1. 获取知识范围
     scope = knowledge_scope_service.get_scope(request.grade, request.subject)
 
@@ -144,7 +266,10 @@ async def generate_questions(request: GenerateRequest):
     user_message = prompt_builder.build_user_message(request.keyword)
 
     # 4. 调用 LLM
-    raw_result = await _call_llm_and_parse(system_prompt, user_message)
+    raw_result = await _call_llm_and_parse(system_prompt, user_message,
+        base_url=request.llm_base_url,
+        model=request.llm_model,
+        api_key=request.llm_api_key)
 
     # 5. 写入缓存
     if cache_key and settings.cache_enabled:
@@ -279,3 +404,22 @@ async def submit_feedback(request: FeedbackRequest):
         f"is_oob: {request.is_oob}, comment: {request.comment}"
     )
     return {"status": "ok", "message": "反馈已记录，感谢您的帮助！"}
+
+
+# ─── LLM 连接测试 ───
+
+@router.post(
+    "/test-llm",
+    summary="测试 LLM 连接",
+    description="发送一条短消息给 LLM，验证配置是否有效",
+)
+async def test_llm():
+    """用极简消息测试 LLM 能否连通"""
+    try:
+        resp = await llm_client.chat(
+            [{"role": "user", "content": "回复：ok"}],
+            max_tokens=5,
+        )
+        return {"status": "ok", "reply": resp.strip()}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail={"error": "LLM 连接失败", "detail": str(e)})

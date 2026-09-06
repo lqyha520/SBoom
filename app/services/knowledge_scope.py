@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from app.models import Grade, Subject, KnowledgeScope, SubjectGrades
 
@@ -42,6 +42,7 @@ class KnowledgeScopeService:
             subject=subject.value,
             allowed=subject_data.get("allowed", []),
             forbidden=subject_data.get("forbidden", []),
+            semesters=subject_data.get("semesters") or None,
         )
 
     def get_all_grades_for_subject(self, subject: Subject) -> SubjectGrades:
@@ -55,6 +56,7 @@ class KnowledgeScopeService:
                     subject=subject.value,
                     allowed=scope.get("allowed", []),
                     forbidden=scope.get("forbidden", []),
+                    semesters=scope.get("semesters") or None,
                 )
 
         return SubjectGrades(
@@ -62,11 +64,11 @@ class KnowledgeScopeService:
             grades=grades_map,
         )
 
-    def get_available_grades(self) -> list[str]:
+    def get_available_grades(self) -> List[str]:
         """获取所有已定义的年级"""
         return list(self._data.keys())
 
-    def get_available_subjects(self, grade: str) -> list[str]:
+    def get_available_subjects(self, grade: str) -> List[str]:
         """获取某年级下已定义的科目"""
         grade_data = self._data.get(grade, {})
         return list(grade_data.keys())
@@ -76,12 +78,21 @@ class KnowledgeScopeService:
         allowed_text = "、".join(scope.allowed) if scope.allowed else "（无特殊限制）"
         forbidden_text = "、".join(scope.forbidden) if scope.forbidden else "（无明确禁止项）"
 
-        return (
+        result = (
             f"当前学生年级：{scope.grade}\n"
             f"科目：{scope.subject}\n"
             f"允许涉及的知识点范围：{allowed_text}\n"
             f"严禁涉及（超纲）的知识点：{forbidden_text}"
         )
+
+        # 按学期划分的知识点（如上册/下册），帮助 LLM 根据关键词判断学期范围
+        if scope.semesters:
+            for sem, points in scope.semesters.items():
+                if points:
+                    result += f"\n{sem}知识点：{'、'.join(points)}"
+            result += "\n请根据知识点关键词判断用户要出上册还是下册的题，只出对应学期的内容；若无法判断，则严格限定在上面列出的总范围内。"
+
+        return result
 
 
 # 全局单例

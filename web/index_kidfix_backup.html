@@ -1,0 +1,4709 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>出题工作台 · Learning Coach</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Noto+Serif+SC:wght@400;600;900&display=swap');
+
+/* ═══════════ 设计令牌：标准 SaaS 风格 ═══════════ */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface2: #f7f8fa;
+  --border: #e5e7eb;
+  --border2: #d9dce3;
+  --ink: #1f2329;
+  --ink2: #646a73;
+  --ink3: #8f959e;
+
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-light: #eff4ff;
+  --primary-border: #b8cdf8;
+
+  /* 旧变量兼容（A4 纸引用，保持原值） */
+  --blue: #3b6ef0;
+  --blue-hover: #2b55cc;
+  --blue-light: #eef3ff;
+  --blue-deep: #1e40af;
+  --red: #e5484d;
+  --red-light: #feeceb;
+  --green: #22a06b;
+  --green-light: #e9f9f1;
+  --amber: #ee9d2b;
+  --amber-light: #fff8ea;
+
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-xs: 4px;
+
+  --shadow-xs: 0 1px 2px rgba(31,35,41,.04);
+  --shadow-sm: 0 1px 2px rgba(31,35,41,.04), 0 2px 8px rgba(31,35,41,.05);
+  --shadow-md: 0 4px 12px rgba(31,35,41,.08), 0 1px 3px rgba(31,35,41,.05);
+  --shadow-lg: 0 8px 24px rgba(31,35,41,.12), 0 2px 6px rgba(31,35,41,.06);
+
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  --font-title: 'ZCOOL KuaiLe', 'Microsoft YaHei', sans-serif;
+  --font-body: 'Noto Serif SC', 'SimSun', serif;   /* A4 试卷正文（衬线，勿改） */
+  --paper: #ffffff;
+  --pencil: var(--ink2);
+}
+
+/* ═══════════ 基础 ═══════════ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: var(--font-ui);
+  color: var(--ink);
+  background: var(--bg);
+  min-height: 100vh;
+  padding: 16px 20px 48px;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection { background: rgba(37,99,235,.15); }
+
+button { font-family: var(--font-ui); }
+
+button:focus-visible, input:focus-visible, select:focus-visible, [contenteditable]:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.app { max-width: 1440px; margin: 0 auto; }
+
+/* ═══════════ 顶部导航：常规白条 ═══════════ */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 20px;
+  height: 56px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xs);
+  margin-bottom: 16px;
+  position: sticky;
+  top: 12px;
+  z-index: 100;
+}
+
+.brand { display: flex; align-items: center; gap: 10px; flex: none; }
+.brand .logo {
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 19px;
+  background: var(--primary);
+  border-radius: var(--radius-sm);
+  flex: none;
+}
+.brand-text { display: flex; flex-direction: column; gap: 0; }
+.brand-name {
+  font-family: var(--font-title);
+  font-size: 18px;
+  letter-spacing: .5px;
+  color: var(--ink);
+  line-height: 1.25;
+}
+.brand-slogan { font-size: 11px; color: var(--ink3); }
+
+/* 步骤条：Ant Design 风格 */
+.steps-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 auto;
+  min-width: 0;
+}
+.step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink3);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color .2s;
+}
+.step i {
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all .2s;
+  flex: none;
+}
+.step.on { color: var(--primary); font-weight: 600; }
+.step.on i {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.step.done { color: var(--ink2); }
+.step.done i {
+  background: var(--primary-light);
+  border-color: var(--primary-border);
+  color: var(--primary);
+}
+
+.step-arrow {
+  position: relative;
+  width: 32px;
+  height: 12px;
+  flex: none;
+}
+.step-arrow::before {
+  content: '';
+  position: absolute;
+  left: 3px; right: 9px; top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background: var(--border2);
+}
+.step-arrow::after {
+  content: '';
+  position: absolute;
+  right: 3px; top: 50%;
+  width: 5px; height: 5px;
+  border-top: 1.5px solid var(--border2);
+  border-right: 1.5px solid var(--border2);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.btn-topbar {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .15s;
+}
+.btn-topbar:hover {
+  color: var(--primary);
+  border-color: var(--primary-border);
+  background: var(--primary-light);
+}
+.btn-topbar:active { transform: scale(.97); }
+
+.llm-cfg-toggle {
+  font-size: 13px;
+  color: var(--ink2);
+  cursor: pointer;
+  user-select: none;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: all .15s;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.llm-cfg-toggle:hover {
+  color: var(--primary);
+  border-color: var(--primary-border);
+  background: var(--primary-light);
+}
+
+/* ═══════════ LLM 配置面板 ═══════════ */
+.llm-cfg-panel {
+  display: none;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  box-shadow: var(--shadow-xs);
+}
+.llm-cfg-panel label { display: inline-flex; align-items: center; gap: 6px; color: var(--ink2); white-space: nowrap; }
+.llm-cfg-panel input {
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  font-family: var(--font-ui);
+  min-width: 130px;
+  color: var(--ink);
+  transition: border-color .15s, box-shadow .15s;
+}
+.llm-cfg-panel input:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+.llm-actions { display: flex; gap: 8px; }
+.llm-actions button {
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-xs);
+  background: var(--primary);
+  color: #fff;
+  transition: all .15s;
+}
+.llm-actions button:hover { background: var(--primary-hover); }
+.llm-actions button:active { transform: scale(.97); }
+.llm-actions button + button { background: var(--surface); color: var(--ink2); border-color: var(--border2); }
+.llm-actions button + button:hover { color: var(--red); border-color: var(--red); background: var(--red-light); }
+.llm-msg { color: var(--green); font-size: 13px; }
+
+/* ═══════════ 主工作区（双栏） ═══════════ */
+.workbench {
+  display: grid;
+  grid-template-columns: minmax(380px, 5fr) minmax(560px, 7fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xs);
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.panel-head h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.head-step {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--primary);
+  background: var(--primary-light);
+  padding: 2px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.panel-body { padding: 16px 20px 18px; }
+
+/* ═══════════ 表单分组 ═══════════ */
+.fgroup { margin-bottom: 18px; }
+.fgroup:last-child { margin-bottom: 0; }
+.fgroup-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--ink);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.fgroup-label i {
+  width: 17px; height: 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--ink3);
+  font-size: 11px;
+  font-weight: 600;
+  font-style: normal;
+  border-radius: 50%;
+  flex: none;
+}
+.fgroup-label b { color: var(--red); }
+.fgroup-label .opt-tag {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ink3);
+  background: var(--surface2);
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.fgroup-label .type-hint { font-size: 12px; font-weight: 400; color: var(--ink3); margin-left: auto; }
+
+/* 年级/科目胶囊 */
+.grade-row, .subject-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.grade-row + .subject-row { margin-top: 8px; }
+.grade-pill, .subject-pill {
+  padding: 5px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--ink2);
+  transition: all .15s;
+  white-space: nowrap;
+}
+.grade-pill:hover, .subject-pill:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.grade-pill:active, .subject-pill:active { transform: scale(.96); }
+.grade-pill.on, .subject-pill.on {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.subject-empty { font-size: 12px; color: var(--ink3); }
+
+.kw-input {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  font-family: var(--font-ui);
+  color: var(--ink);
+  transition: border-color .15s, box-shadow .15s;
+}
+.kw-input:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37,99,235,.1);
+}
+.kw-input::placeholder { color: var(--ink3); }
+
+.scope-hint {
+  font-size: 12px;
+  color: var(--ink2);
+  margin: 10px 0 0;
+  line-height: 1.8;
+  display: none;
+  padding: 10px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+}
+.scope-hint b { color: var(--ink); font-size: 13px; display: block; margin-bottom: 6px; }
+.scope-hint .tag {
+  display: inline-block;
+  padding: 3px 10px;
+  margin: 2px 4px 2px 0;
+  font-size: 12px;
+  color: var(--ink2);
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: all .15s;
+  user-select: none;
+}
+.scope-hint .tag:hover { border-color: var(--primary); color: var(--primary); }
+.scope-hint .tag.on {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+/* 难度：分段控件 */
+.diff-row {
+  display: flex;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+.diff {
+  flex: 1;
+  padding: 7px 4px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  color: var(--ink2);
+  transition: all .15s;
+}
+.diff + .diff { border-left: 1px solid var(--border); }
+.diff small { display: none; }
+.diff:hover { color: var(--primary); background: var(--primary-light); }
+.diff.on-1 { background: var(--green-light); color: var(--green); font-weight: 600; }
+.diff.on-2 { background: var(--primary); color: #fff; font-weight: 600; }
+.diff.on-3 { background: var(--red-light); color: var(--red); font-weight: 600; }
+
+/* 题型按钮 */
+.type-groups { display: flex; flex-direction: column; gap: 8px; }
+.type-group { display: flex; gap: 10px; align-items: flex-start; }
+.tg-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink3);
+  white-space: nowrap;
+  padding-top: 6px;
+  min-width: 30px;
+  flex: none;
+}
+.tg-body { display: flex; flex-wrap: wrap; gap: 6px; }
+.type-pill {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--ink);
+  transition: all .15s;
+  white-space: nowrap;
+}
+.type-pill:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-light);
+}
+.type-pill:active { transform: scale(.96); }
+.type-pill.flash { animation: pillFlash .5s ease; }
+@keyframes pillFlash {
+  0% { background: var(--primary); color: #fff; border-color: var(--primary); }
+  100% { background: var(--surface); color: var(--ink); border-color: var(--border2); }
+}
+.type-add-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px dashed var(--border2);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  background: transparent;
+  color: var(--ink3);
+  transition: all .15s;
+  white-space: nowrap;
+}
+.type-add-btn:hover { border-color: var(--primary); color: var(--primary); border-style: solid; }
+
+/* ═══════════ 左栏底部：生成条 ═══════════ */
+.panel-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  margin-top: auto;
+  padding: 12px 20px 14px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.gen-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.gen-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink2);
+  cursor: pointer;
+  user-select: none;
+}
+.gen-opt input[type="number"] {
+  width: 56px;
+  padding: 5px 8px;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  font-size: 13px;
+  font-family: var(--font-ui);
+  color: var(--ink);
+  transition: border-color .15s, box-shadow .15s;
+}
+.gen-opt input[type="number"]:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+.gen-opt input[type="checkbox"] { margin: 0; accent-color: var(--primary); width: 14px; height: 14px; cursor: pointer; }
+
+.btn-go {
+  width: 100%;
+  padding: 9px 26px;
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: var(--primary);
+  color: #fff;
+  transition: all .15s;
+}
+.btn-go:hover { background: var(--primary-hover); }
+.btn-go:active { transform: scale(.98); }
+.btn-go:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+
+.loading-bar { display: none; margin-top: 12px; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.loading-bar.show { display: block; }
+.loading-bar i {
+  display: block;
+  height: 100%;
+  width: 30%;
+  background: var(--primary);
+  animation: barSlide 1.2s ease-in-out infinite;
+  border-radius: 2px;
+}
+@keyframes barSlide { 0% { transform: translateX(-30%); } 100% { transform: translateX(360%); } }
+
+.err-box {
+  display: none;
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: var(--red-light);
+  color: var(--red);
+  border: 1px solid rgba(229,72,77,.25);
+  border-radius: var(--radius-xs);
+  font-size: 13px;
+}
+.err-box.show { display: block; }
+
+/* ═══════════ 右栏：卷面搭建 ═══════════ */
+.right-panel .tpl-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.tpl-label { font-size: 12px; font-weight: 500; color: var(--ink3); margin-right: 2px; }
+.tpl-btn {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border2);
+  background: var(--surface);
+  cursor: pointer;
+  color: var(--ink2);
+  transition: all .15s;
+  white-space: nowrap;
+}
+.tpl-btn:hover:not(.on) { border-color: var(--primary); color: var(--primary); }
+.tpl-btn.on {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+  font-weight: 500;
+}
+
+.my-tpl-wrap { position: relative; display: inline-flex; }
+.my-tpl-drop {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 35;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  min-width: 240px;
+  padding: 6px;
+}
+.my-tpl-wrap.open .my-tpl-drop { display: block; }
+.my-tpl-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  transition: background .12s;
+}
+.my-tpl-item:hover { background: var(--surface2); }
+.my-tpl-item-name { font-weight: 500; color: var(--ink); flex: 1; }
+.my-tpl-item-summary { font-size: 11px; color: var(--ink3); margin-left: 8px; }
+.my-tpl-item-del {
+  font-size: 12px;
+  color: #c33;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  margin-left: 6px;
+  visibility: hidden;
+  transition: background .12s;
+}
+.my-tpl-item:hover .my-tpl-item-del { visibility: visible; }
+.my-tpl-item-del:hover { background: var(--red-light); }
+.my-tpl-empty { padding: 14px 10px; text-align: center; font-size: 12px; color: var(--ink3); line-height: 1.8; }
+
+.b-count {
+  font-size: 12px;
+  background: var(--primary-light);
+  color: var(--primary);
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tpl-custom-cfg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  padding: 12px 20px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.tpl-custom-cfg label { display: inline-flex; align-items: center; gap: 4px; color: var(--ink2); white-space: nowrap; }
+.tpl-custom-cfg input[type="text"] {
+  width: 96px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-ui);
+  color: var(--ink);
+  transition: border-color .15s, box-shadow .15s;
+}
+.tpl-custom-cfg input[type="text"]:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+.tpl-custom-cfg input[type="checkbox"] { margin: 0; accent-color: var(--primary); }
+.tpl-save-btn {
+  padding: 5px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-xs);
+  background: var(--primary);
+  color: #fff;
+  cursor: pointer;
+  transition: all .15s;
+}
+.tpl-save-btn:hover { background: var(--primary-hover); }
+.tpl-save-btn:active { transform: scale(.96); }
+
+.sec-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 60px;
+  padding: 14px 16px;
+}
+.builder-empty {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--ink3);
+  font-size: 13px;
+  line-height: 1.9;
+  border: 1px dashed var(--border2);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface2);
+}
+.builder-empty .be-icon { font-size: 36px; opacity: .5; }
+.builder-empty b { font-size: 14px; color: var(--ink2); }
+
+.builder-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.builder-summary { font-size: 12px; color: var(--ink2); flex: 1; line-height: 1.6; }
+.builder-summary b { color: var(--primary); }
+.btn-save-layout {
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--ink2);
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.btn-save-layout:hover { border-color: var(--primary); color: var(--primary); }
+.btn-save-layout:active { transform: scale(.96); }
+
+/* ═══════════ 大题卡片 ═══════════ */
+.sec-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  transition: all .15s;
+  position: relative;
+  overflow: visible;
+}
+.sec-card:hover { border-color: var(--border2); box-shadow: var(--shadow-xs); }
+.sec-card.loading { opacity: .55; pointer-events: none; }
+.sec-card.sortable-ghost, .sortable-ghost {
+  opacity: .5;
+  border: 1px dashed var(--primary) !important;
+  background: var(--primary-light) !important;
+}
+.s-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; margin-bottom: 7px; flex-wrap: wrap; }
+.drag-handle { cursor: grab; color: var(--ink3); font-size: 14px; padding: 1px; transition: color .12s; flex: none; }
+.drag-handle:hover { color: var(--primary); }
+.drag-handle:active { cursor: grabbing; }
+.s-idx {
+  min-width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--primary-light);
+  color: var(--primary);
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  font-weight: 600;
+  flex: none;
+}
+.s-name { color: var(--ink); white-space: nowrap; }
+.s-cnt {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 1px 4px;
+}
+.s-cnt button, .s-cnt .minus, .s-cnt .plus {
+  width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-xs);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--ink2);
+  transition: all .12s;
+  user-select: none;
+}
+.s-cnt .minus:hover, .s-cnt .plus:hover { background: var(--primary-light); color: var(--primary); }
+.s-cnt input {
+  width: 28px;
+  text-align: center;
+  font-size: 12px;
+  border: none;
+  background: transparent;
+  font-family: var(--font-ui);
+  color: var(--ink);
+  font-weight: 600;
+  -moz-appearance: textfield;
+}
+.s-cnt input::-webkit-inner-spin-button, .s-cnt input::-webkit-outer-spin-button { -webkit-appearance: none; }
+.s-cnt-unit { font-size: 11px; color: var(--ink3); margin-right: 4px; }
+.s-btns { display: flex; gap: 4px; margin-left: 4px; }
+.s-btns button {
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: 11px;
+  background: var(--surface);
+  color: var(--ink2);
+  transition: all .12s;
+  line-height: 1;
+}
+.s-btns button:hover { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+.s-btns .s-del:hover { background: var(--red-light); border-color: var(--red); color: var(--red); }
+
+.s-body { font-size: 12px; color: var(--ink2); line-height: 1.5; }
+.s-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--surface2);
+  border-radius: var(--radius-xs);
+}
+.s-sum-stats {
+  font-weight: 600;
+  color: var(--primary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.s-sum-lines {
+  font-size: 12px;
+  color: var(--ink2);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.s-q-preview { color: var(--ink2); font-size: 12px; }
+.s-sum-more {
+  font-size: 11px;
+  color: var(--ink3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 0 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.s-loading-txt { color: var(--ink3); }
+.s-err-txt { color: var(--red); }
+.s-ok-txt { color: var(--green); }
+.s-loading { display: flex; align-items: center; gap: 10px; color: var(--ink2); font-size: 13px; padding: 6px 0; }
+.spin {
+  display: inline-block;
+  width: 15px; height: 15px;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.s-error {
+  font-size: 13px;
+  color: var(--red);
+  padding: 6px 10px;
+  background: var(--red-light);
+  border-radius: var(--radius-xs);
+}
+.s-retry {
+  margin-left: 8px;
+  cursor: pointer;
+  color: var(--primary);
+  font-weight: 500;
+  border: none;
+  background: none;
+  font-size: 13px;
+}
+.s-retry:hover { text-decoration: underline; }
+
+/* ═══════════ 卡片排版设置 ═══════════ */
+.s-layout-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+}
+.s-lay-tabs { display: flex; gap: 3px; }
+.s-lay-tab {
+  padding: 2px 9px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--ink3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  transition: all .13s;
+  font-weight: 500;
+  user-select: none;
+  white-space: nowrap;
+  background: var(--surface);
+  line-height: 1.5;
+}
+.s-lay-tab:hover { color: var(--primary); border-color: var(--primary); }
+.s-lay-tab.on { color: #fff; background: var(--primary); border-color: var(--primary); }
+.s-layout-drop {
+  display: none;
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  z-index: 40;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  padding: 8px;
+  min-width: 120px;
+}
+.s-layout-wrap.open .s-layout-drop { display: block; }
+.s-lay-pane { display: none; flex-wrap: wrap; gap: 4px; }
+.s-lay-pane.on { display: flex; }
+.s-layout-opt {
+  display: inline-block;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  color: var(--ink2);
+  white-space: nowrap;
+  transition: all .11s;
+  font-weight: 500;
+  line-height: 1.3;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.s-layout-opt:hover { background: var(--primary-light); color: var(--primary); border-color: var(--primary); }
+.s-layout-opt.on { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+/* ═══════════ 实时预览 ═══════════ */
+.live-preview {
+  border-top: 1px solid var(--border);
+  padding: 16px 20px 20px;
+  background: var(--surface2);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.live-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.lp-title { font-size: 14px; font-weight: 600; }
+.lp-hint { font-size: 12px; color: var(--ink3); }
+.lp-actions { display: flex; gap: 6px; align-items: center; margin-left: auto; flex-wrap: wrap; }
+.lp-btn {
+  font-size: 12px;
+  padding: 4px 12px;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--ink2);
+  font-weight: 500;
+  transition: all .12s;
+  white-space: nowrap;
+}
+.lp-btn:hover { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+.lp-select {
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-ui);
+  color: var(--ink);
+  background: var(--surface);
+}
+.lp-color {
+  width: 28px; height: 28px;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  padding: 2px;
+  background: var(--surface);
+}
+.lp-sep { width: 1px; height: 18px; background: var(--border); margin: 0 3px; }
+.f-btn { font-weight: 700; }
+
+.live-paper-stack { }
+.live-paper-stack .paper {
+  width: 210mm; max-width: 210mm; height: 297mm;
+  margin: 0 auto 16px;
+  box-shadow: var(--shadow-md);
+}
+.live-paper-stack .paper-breaker { display: none; }
+.live-paper-stack .q-table { margin-top: 0; margin-bottom: 0; }
+
+/* ═══════════ A4 纸（试卷排版核心样式 —— 请勿改动） ═══════════ */
+.paper {
+  background: #fff;
+  width: 210mm;
+  max-width: 210mm;
+  height: 297mm;
+  overflow: hidden;
+  margin: 0 auto;
+  padding: 15mm 16mm;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  position: relative;
+  z-index: 1;
+  font-family: var(--font-body);
+}
+.paper + .paper { margin-top: 18px; }
+
+/* 可编辑 */
+.can-edit { outline: 2px dashed transparent; outline-offset: 2px; transition: outline-color .15s; border-radius: 2px; }
+.can-edit:hover { outline-color: rgba(59,110,240,.25); }
+.can-edit:focus { outline-color: var(--blue); }
+.ed-del {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  width: 17px;
+  height: 17px;
+  line-height: 17px;
+  text-align: center;
+  font-size: 10px;
+  color: #bbb;
+  cursor: pointer;
+  border-radius: 50%;
+  z-index: 5;
+  transition: all .12s;
+  pointer-events: auto;
+  opacity: 0;
+}
+.can-edit:hover .ed-del, .ed-del:hover { opacity: 1; }
+.ed-del:hover { color: var(--red); background: var(--red-light); }
+
+.col-resizer { position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; background: transparent; z-index: 3; }
+.col-resizer:hover { background: rgba(59,110,240,.12); }
+.row-resizer { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; cursor: row-resize; background: transparent; z-index: 3; }
+.row-resizer:hover { background: rgba(59,110,240,.12); }
+.cell-resizer {
+  position: absolute; right: 0; bottom: 0;
+  width: 15px; height: 15px;
+  line-height: 15px;
+  text-align: center;
+  font-size: 11px;
+  color: #999;
+  cursor: nwse-resize;
+  opacity: 0;
+  transition: opacity .12s;
+  z-index: 3;
+  user-select: none;
+}
+.q-grid .q:hover .cell-resizer { opacity: 1; }
+.cell-resizer:hover { color: var(--blue); background: rgba(59,110,240,.1); border-radius: 4px 0 0 0; }
+
+/* ═══════════ 试卷内容排版 ═══════════ */
+.exam h1 { text-align: center; font-size: 22pt; font-family: "SimHei", "Microsoft YaHei", sans-serif; letter-spacing: 2px; line-height: 1.4; }
+.exam .sub-line { text-align: center; font-size: 11pt; color: #555; margin-bottom: 4mm; }
+.exam .info-row { display: flex; justify-content: space-between; font-size: 10pt; border-bottom: 1px solid #000; padding-bottom: 2mm; margin-bottom: 4mm; }
+.exam h2.sec { font-size: 13pt; font-family: "SimHei","Microsoft YaHei",sans-serif; display: flex; justify-content: space-between; align-items: center; margin: 5mm 0 2mm; }
+.exam .score-box { font-size: 10pt; font-weight: 400; color: #555; }
+.exam .notice { font-size: 9pt; color: #666; margin-bottom: 4mm; border-left: 3px solid #999; padding-left: 3mm; }
+.exam .footer-note { text-align: center; font-size: 9pt; color: #999; margin-top: 4mm; border-top: 1px solid #eee; padding-top: 2mm; }
+.exam .lv { display: inline-block; background: #fff7e6; color: #d48806; font-size: 9pt; padding: 0 3px; border-radius: 3px; }
+.exam .q { margin-bottom: 3mm; line-height: 1.7; font-size: 11pt; }
+.exam .opts { display: grid; gap: 2px 8px; margin-top: 1mm; font-size: 10.5pt; }
+.exam .opts.one { grid-template-columns: 1fr; }
+.exam .match-table { width: 100%; border-collapse: collapse; margin-top: 1mm; font-size: 10pt; }
+.exam .match-table th, .exam .match-table td { border: 1px solid #999; padding: 2px 4px; }
+.exam .match-table th { background: #f0f0f0; }
+
+/* 数的分成（精致树状图） */
+.split-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 6px 12px;
+  vertical-align: middle;
+}
+.split-box {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11pt;
+  font-weight: 400;
+  color: #2b3a55;
+  background: #f7f9fc;
+  border: 1.5px solid #b9c6db;
+  border-radius: 6px;
+  line-height: 1;
+  box-shadow: 0 1px 2px rgba(43,58,85,.06);
+}
+.split-box.blank {
+  background: #fff;
+  border: 1.5px dashed #c3cede;
+  color: transparent;
+  box-shadow: none;
+}
+.split-lines {
+  width: 56px;
+  height: 18px;
+  margin: -1px 0;
+}
+.split-lines path {
+  fill: none;
+  stroke: #b9c6db;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.split-bottom {
+  display: flex;
+  gap: 12px;
+}
+
+/* 比大小 */
+.compare-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11pt;
+  font-weight: 400;
+  color: #2b3a55;
+  margin: 3px 0;
+}
+.compare-expr {
+  min-width: 28px;
+  padding: 2px 6px;
+  text-align: center;
+  background: #f7f9fc;
+  border: 1.5px solid #b9c6db;
+  border-radius: 6px;
+  line-height: 1.2;
+}
+.compare-circle {
+  display: inline-block;
+  width: 26px;
+  height: 26px;
+  border: 1.5px dashed #c3cede;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.q-ans-inline { font-size: 9pt; color: var(--blue); margin-left: 4px; }
+.paper-stack.layouting .paper { page-break-after: always; }
+
+@media print {
+  .paper { box-shadow: none; border: none; }
+  .paper-stack.layouting .paper { page-break-after: always; }
+}
+
+/* ═══════════ 彩色试卷：背景 / 横幅 / 彩色标题 ═══════════ */
+.paper .exam { position: relative; z-index: 1; }
+
+/* 整页背景层（绝对定位、不挡文字、不参与分页计算） */
+.paper-bg-layer {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: .7;
+}
+.paper-bg-layer[data-bg="none"] { background: none; }
+.paper-bg-layer[data-bg="dots"] {
+  background-image:
+    radial-gradient(circle at 7px 7px, rgba(99,102,241,.15) 2.6px, transparent 3.6px),
+    radial-gradient(circle at 23px 19px, rgba(238,157,43,.13) 2.2px, transparent 3.2px);
+  background-size: 34px 34px;
+}
+.paper-bg-layer[data-bg="grid"] {
+  background-image:
+    linear-gradient(rgba(59,110,240,.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59,110,240,.08) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+.paper-bg-layer[data-bg="stars"] {
+  background-image:
+    radial-gradient(circle at 8px 8px, rgba(245,185,66,.20) 3px, transparent 4px),
+    radial-gradient(circle at 26px 22px, rgba(99,102,241,.15) 2px, transparent 3px),
+    radial-gradient(circle at 40px 10px, rgba(226,106,171,.13) 2.5px, transparent 3.5px);
+  background-size: 48px 32px;
+}
+.paper-bg-layer[data-bg="clouds"] {
+  background-image:
+    radial-gradient(circle at 15% 9%, rgba(147,197,253,.22), transparent 58%),
+    radial-gradient(circle at 84% 14%, rgba(191,219,254,.24), transparent 60%),
+    radial-gradient(circle at 28% 88%, rgba(196,181,253,.20), transparent 58%),
+    radial-gradient(circle at 80% 93%, rgba(254,215,170,.22), transparent 60%);
+}
+.paper-bg-layer[data-bg="rainbow"] {
+  background-image: linear-gradient(180deg,
+    rgba(255,179,186,.28) 0%, rgba(255,223,186,.24) 12%,
+    rgba(255,255,186,.20) 24%, rgba(186,255,201,.18) 36%,
+    rgba(186,225,255,.16) 48%, rgba(218,198,255,.14) 60%,
+    rgba(0,0,0,0) 72%);
+}
+
+/* 卷头横幅（标题区色带） */
+.exam-head {
+  padding: 4mm 5mm 3mm;
+  margin-bottom: 4mm;
+  border-radius: 3mm;
+  background: linear-gradient(135deg, #e8f1fb 0%, #f0ecfa 55%, #fdf3e3 100%);
+  border: 1px solid #dbe7f6;
+}
+.exam-head[data-plain="1"] {
+  padding: 0;
+  margin-bottom: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+
+/* 大题标题：按题型着色（低饱和 pastel） */
+.sec-block h2.sec {
+  padding: 1.2mm 3mm;
+  border-radius: 2mm;
+}
+.sec-block[data-type="quiz"] h2.sec,
+.sec-block[data-type="true_false"] h2.sec {
+  background: linear-gradient(90deg, #e3effb, #f4f9fe);
+  border-left: 1.2mm solid #4a7ebb;
+}
+.sec-block[data-type="fill_blank"] h2.sec,
+.sec-block[data-type="match_pair"] h2.sec {
+  background: linear-gradient(90deg, #e5f6ec, #f5fcf8);
+  border-left: 1.2mm solid #3e9b6c;
+}
+.sec-block[data-type="oral_math"] h2.sec,
+.sec-block[data-type="vertical_calc"] h2.sec,
+.sec-block[data-type="recursive_calc"] h2.sec,
+.sec-block[data-type="smart_calc"] h2.sec {
+  background: linear-gradient(90deg, #fcf2e2, #fef9f0);
+  border-left: 1.2mm solid #d8973c;
+}
+.sec-block[data-type="word_problem"] h2.sec,
+.sec-block[data-type="reading"] h2.sec,
+.sec-block[data-type="challenge"] h2.sec {
+  background: linear-gradient(90deg, #eeeafa, #f8f6fd);
+  border-left: 1.2mm solid #8b6fc4;
+}
+.sec-block[data-type="number_split"] h2.sec,
+.sec-block[data-type="compare"] h2.sec {
+  background: linear-gradient(90deg, #fdebef, #fef6f8);
+  border-left: 1.2mm solid #cc7a8e;
+}
+/* 关闭彩色标题时还原 */
+.paper[data-seccolor="0"] .sec-block h2.sec {
+  background: none !important;
+  border-left-color: transparent !important;
+}
+
+/* 背景设置控件 */
+.lp-bg-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink2);
+  flex-wrap: wrap;
+}
+.lp-bg-label { font-weight: 500; white-space: nowrap; }
+.lp-bg-val { font-size: 11px; color: var(--ink3); min-width: 32px; }
+.lp-bg-chk {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--ink2);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.lp-bg-chk input { margin: 0; accent-color: var(--primary); }
+input[type="range"].lp-range { accent-color: var(--primary); width: 68px; }
+
+/* ═══════════ 童趣风格：画框边框 / 鼓励语 / 奖励区 / 低年级 ═══════════ */
+/* 画框式装饰边框（独立装饰层画在纸内边缘，不占空间、不遮内容 —— Twinkl 风格） */
+.paper .paper-frame-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.paper[data-frame="rainbow"] .paper-frame-layer {
+  border: 2.8mm solid transparent;
+  border-image: repeating-linear-gradient(45deg,
+    #ff9a9e 0 14px, #ffd48a 14px 28px, #a8e6a1 28px 42px,
+    #9ad0ff 42px 56px, #c3a6ff 56px 70px) 30;
+}
+.paper[data-frame="stars"] .paper-frame-layer {
+  border: 2.2mm solid #f5d76e;
+  box-shadow: inset 0 0 0 1mm #fff, inset 0 0 0 1.8mm #f5d76e;
+  border-radius: 2mm;
+}
+.paper[data-frame="crayon"] .paper-frame-layer {
+  border: 2.2mm solid #f4a7bb;
+  box-shadow: inset 0 0 0 1mm #fff, inset 0 0 0 1.8mm #f4a7bb;
+  border-radius: 2mm;
+}
+.paper[data-frame="dots"] .paper-frame-layer {
+  border: 2.2mm solid #a8c8ec;
+  box-shadow: inset 0 0 0 1mm #fff, inset 0 0 0 1.8mm #a8c8ec;
+  border-radius: 2mm;
+}
+
+/* 鼓励语大题标题 */
+.sec-block h2.sec .encourage {
+  font-size: 10pt;
+  color: #b0651f;
+  font-weight: 400;
+  margin-left: 2mm;
+}
+.paper[data-encourage="0"] .sec-block h2.sec .encourage { display: none; }
+
+/* 卷尾星星奖励区 */
+.paper .reward-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4mm;
+  margin-top: 5mm;
+  padding: 3.5mm 6mm;
+  border: 1px dashed #d9b3ff;
+  border-radius: 4mm;
+  background: linear-gradient(90deg, #faf5ff, #f3f9ff);
+}
+.paper .reward-box .reward-title {
+  font-size: 11pt;
+  font-weight: 700;
+  color: #7c5cbf;
+}
+.paper .reward-box .reward-stars {
+  font-size: 15pt;
+  letter-spacing: 3mm;
+  color: #e8c53a;
+}
+.paper .reward-box .reward-msg {
+  font-size: 9pt;
+  color: #9b8ec4;
+}
+.paper[data-reward="0"] .reward-box { display: none; }
+
+/* 低年级模式：字号放大 + 行距放宽 */
+.paper[data-kid="1"] .exam .q { font-size: 14pt; line-height: 2; margin-bottom: 4.5mm; }
+.paper[data-kid="1"] .exam .opts { font-size: 13pt; gap: 3px 10px; }
+.paper[data-kid="1"] .exam h1 { font-size: 26pt; }
+.paper[data-kid="1"] .exam h2.sec { font-size: 15pt; margin: 6mm 0 3mm; }
+.paper[data-kid="1"] .exam .sub-line { font-size: 13pt; }
+.paper[data-kid="1"] .exam .info-row { font-size: 12pt; }
+.paper[data-kid="1"] .exam .notice { font-size: 11pt; }
+.paper[data-kid="1"] .split-box { min-width: 34px; height: 32px; font-size: 14pt; }
+.paper[data-kid="1"] .compare-expr { min-width: 34px; font-size: 14pt; }
+.paper[data-kid="1"] .compare-circle { width: 32px; height: 32px; }
+.paper[data-kid="1"] .match-table { font-size: 12pt; }
+.paper[data-kid="1"] .match-table th, .paper[data-kid="1"] .match-table td { padding: 4px 8px; }
+
+/* 童趣设置控件 */
+.lp-kid-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink2);
+  flex-wrap: wrap;
+}
+
+/* ═══════════ 结果弹层 ═══════════ */
+.result-area {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(31,35,41,.5);
+  overflow: hidden;
+  animation: fadeIn .18s ease;
+}
+.result-area > * { margin-left: auto; margin-right: auto; max-width: 1024px; }
+.result-area {
+  overflow-y: auto;
+  padding: 24px 16px;
+}
+.result-area .panel-head {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.result-area .preview-bar {
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+.result-area .paper-stack {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
+  padding: 24px 12px;
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.result-area .result-head {
+  border-bottom: none;
+  padding-bottom: 4px;
+}
+.result-area .sum { font-size: 12px; font-weight: 400; color: var(--ink2); margin-left: auto; text-align: right; line-height: 1.5; }
+.preview-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky;
+  top: 70px;
+  z-index: 50;
+}
+.bar-sep { width: 1px; height: 22px; background: var(--border); margin: 0 6px; }
+.btn-mini {
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--ink);
+  transition: all .13s;
+  white-space: nowrap;
+}
+.btn-mini:hover { border-color: var(--primary); color: var(--primary); }
+.btn-mini:active { transform: scale(.97); }
+.btn-mini.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn-mini.primary:hover { background: var(--primary-hover); color: #fff; }
+.btn-mini.warn { background: var(--amber-light); border-color: #e8c476; color: #9a6d10; }
+.btn-mini.warn:hover { border-color: var(--amber); color: #7d5a0c; }
+.btn-mini.ok { background: var(--green-light); border-color: var(--green); color: var(--green); }
+.btn-mini.ok:hover { background: var(--green); color: #fff; }
+
+.result-area .paper-stack { padding: 24px 12px; }
+
+/* ═══════════ 排版模式工具（JS 动态注入） ═══════════ */
+.layout-tip {
+  display: none;
+  margin: 0 auto 12px;
+  padding: 10px 16px;
+  background: var(--amber-light);
+  border: 1px solid #e8c476;
+  border-radius: var(--radius-sm);
+  color: #7d5a0c;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.layout-tip b { color: #9a6d10; }
+
+.sec-tools { margin: 0 0 1mm; }
+.q-tools { display: inline; margin-left: 3px; }
+.tool-btn {
+  display: inline-block;
+  padding: 1px 8px;
+  font-size: 9pt;
+  color: #c0392b;
+  background: #fdf0ef;
+  border: 1px solid #ecc7c4;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--font-ui);
+  transition: background .12s;
+}
+.tool-btn:hover { background: #f9e0de; }
+.sort-handle { cursor: grab; color: #888; margin-left: 4px; user-select: none; }
+.sort-handle:active { cursor: grabbing; }
+
+/* ═══════════ 动画与反馈 ═══════════ */
+.panel.need-attn { animation: attn 1s ease-in-out 2; }
+@keyframes attn {
+  0%, 100% { box-shadow: var(--shadow-xs); }
+  50% { box-shadow: 0 0 0 4px rgba(229,72,77,.18), var(--shadow-xs); }
+}
+
+.pg-footer { display: none; }
+
+/* ═══════════ 滚动条 ═══════════ */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #c9cdd4;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover { background: #adb2bc; }
+
+/* ═══════════ 响应式 ═══════════ */
+@media (max-width: 1120px) {
+  .workbench { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 860px) {
+  body { padding: 10px 10px 32px; }
+  .topbar { height: auto; flex-wrap: wrap; padding: 10px 14px; gap: 10px; }
+  .steps-nav { order: 3; flex-basis: 100%; justify-content: flex-start; flex-wrap: wrap; gap: 6px; }
+  .brand-slogan { display: none; }
+  .step { font-size: 12px; }
+  .step-arrow { width: 20px; }
+  .panel-body, .panel-foot { padding-left: 14px; padding-right: 14px; }
+  .preview-bar { top: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+  html { scroll-behavior: auto; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ═══════════ 顶部导航 ═══════════ -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">✏️</span>
+      <div class="brand-text">
+        <span class="brand-name">出题工作台</span>
+        <span class="brand-slogan">AI 帮你出好每一份卷子</span>
+      </div>
+    </div>
+
+    <nav class="steps-nav" aria-label="操作步骤">
+      <span class="step on" data-step="1"><i>1</i>选题出题</span>
+      <span class="step-arrow"></span>
+      <span class="step" data-step="2"><i>2</i>排版调整</span>
+      <span class="step-arrow"></span>
+      <span class="step" data-step="3"><i>3</i>生成导出</span>
+    </nav>
+
+    <div class="topbar-actions">
+      <button type="button" class="btn-topbar" id="btnReopenResult" title="查看已生成的试卷">📄 查看试卷</button>
+      <span class="llm-cfg-toggle" id="llmCfgToggle">⚙ 模型配置</span>
+    </div>
+  </header>
+
+  <!-- ═══════════ LLM 配置（点击顶栏「模型配置」展开） ═══════════ -->
+  <div class="llm-cfg-panel" id="llmCfgPanel" style="display:none">
+    <label>接口地址 <input id="llmBaseUrl" placeholder="https://api.deepseek.com"></label>
+    <label>模型 <input id="llmModel" placeholder="deepseek-v4-pro"></label>
+    <label>密钥 <input id="llmApiKey" type="password" placeholder="sk-..."></label>
+    <label>超时(秒) <input id="llmTimeout" type="number" value="60" min="10" max="600"></label>
+    <span class="llm-actions">
+      <button id="llmSave" type="button">保存生效</button>
+      <button id="llmReset" type="button">恢复默认</button>
+      <button id="llmTest" type="button">🔗 测试模型</button>
+    </span>
+    <span class="llm-msg" id="llmMsg"></span>
+  </div>
+
+  <!-- ═══════════ 主工作区：左出题 · 右搭建+预览 ═══════════ -->
+  <main class="workbench">
+
+    <!-- ── 左：出题条件 ── -->
+    <section class="panel" id="builderPanel">
+      <div class="panel-head">
+        <h2>出题条件</h2>
+        <span class="head-step">第 1 步</span>
+      </div>
+
+      <div class="panel-body">
+
+        <!-- 1 难度 -->
+        <div class="fgroup">
+          <div class="fgroup-label"><i>1</i>难度</div>
+          <div class="diff-row">
+            <div class="diff" data-v="easy">简单</div>
+            <div class="diff on-2" data-v="medium">中等</div>
+            <div class="diff" data-v="hard">困难</div>
+          </div>
+        </div>
+
+        <!-- 2 年级与科目 -->
+        <div class="fgroup">
+          <div class="fgroup-label"><i>2</i>年级与科目</div>
+          <div class="grade-row" id="gradeRow">
+            <button type="button" class="grade-pill" data-v="">加载中…</button>
+          </div>
+          <select id="grade" style="display:none"><option value="">加载中…</option></select>
+          <div class="subject-row" id="subjectRow">
+            <span class="subject-empty" id="subjectEmpty">请先选择年级</span>
+          </div>
+          <select id="subject" style="display:none" disabled><option value="">请先选年级</option></select>
+        </div>
+
+        <!-- 3 知识点 -->
+        <div class="fgroup">
+          <div class="fgroup-label"><i>3</i>知识点关键词 <b>*</b></div>
+          <input type="text" class="kw-input" id="keyword" maxlength="100" placeholder="手动输入或从下方点选">
+        </div>
+        <div class="scope-hint" id="scopeHint"></div>
+
+        <!-- 4 试卷标题 -->
+        <div class="fgroup">
+          <div class="fgroup-label"><i>4</i>试卷标题 <span class="opt-tag">可选</span></div>
+          <input type="text" class="kw-input" id="titleInput" maxlength="40" placeholder="如：第一单元测验卷">
+        </div>
+
+        <!-- 5 题型 -->
+        <div class="fgroup">
+          <div class="fgroup-label"><i>5</i>选择题型 <span class="type-hint">点击加入右侧卷面</span></div>
+          <div class="type-groups" id="typeGrid">
+            <div class="type-group">
+              <div class="tg-head">基础</div>
+              <div class="tg-body">
+                <button type="button" class="type-pill" data-v="quiz">☑️ 选择题</button>
+                <button type="button" class="type-pill" data-v="fill_blank">🔤 填空题</button>
+                <button type="button" class="type-pill" data-v="match_pair">🔗 连线配对</button>
+              </div>
+            </div>
+            <div class="type-group">
+              <div class="tg-head">计算</div>
+              <div class="tg-body">
+                <button type="button" class="type-pill" data-v="oral_math">⚡ 口算</button>
+                <button type="button" class="type-pill" data-v="vertical_calc">📐 竖式</button>
+                <button type="button" class="type-pill" data-v="recursive_calc">🧩 脱式</button>
+                <button type="button" class="type-pill" data-v="smart_calc">✨ 简便</button>
+              </div>
+            </div>
+            <div class="type-group">
+              <div class="tg-head">拓展</div>
+              <div class="tg-body">
+                <button type="button" class="type-pill" data-v="reading">📖 阅读理解</button>
+                <button type="button" class="type-pill" data-v="challenge">🏆 闯关挑战</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 吸底生成条：滚动时始终可见 -->
+      <div class="panel-foot">
+        <div class="gen-row">
+          <label class="gen-opt" title="一次生成多份，每份题目不同">
+            份数 <input type="number" id="paperCount" value="1" min="1">
+          </label>
+          <label class="gen-opt" title="在每份试卷标题后加（第X天）标记">
+            <input type="checkbox" id="addDayLabel" checked> 标题加（第X天）
+          </label>
+        </div>
+        <button type="button" class="btn-go" id="btnGo">🚀 生成试卷</button>
+        <div class="loading-bar" id="loadingBar"><i></i></div>
+        <div class="err-box" id="errBox"></div>
+      </div>
+    </section>
+
+    <!-- ── 右：卷面搭建 + A4 实时预览 ── -->
+    <section class="panel right-panel">
+      <div class="panel-head">
+        <h2>卷面搭建</h2>
+        <span class="head-step">第 2 步</span>
+        <span class="b-count" id="builderCount">0 个大题</span>
+        <div class="tpl-bar" id="tplBar">
+          <span class="tpl-label">模板</span>
+        </div>
+        <span class="my-tpl-wrap" id="myTplWrap">
+          <button type="button" class="btn-mini" id="btnMyTemplates" title="加载保存的模板">📋 我的模板</button>
+          <span class="my-tpl-drop" id="myTplDrop"></span>
+        </span>
+      </div>
+
+      <!-- 自定义模板配置 -->
+      <div class="tpl-custom-cfg" id="tplCustomCfg" style="display:none">
+        <label>标题前缀 <input id="cfgTitlePrefix" maxlength="20" placeholder="如：每日一练"></label>
+        <label>标题后缀 <input id="cfgTitleSuffix" maxlength="20" placeholder="如：测试卷"></label>
+        <label><input type="checkbox" id="cfgInfoRow" checked> 信息栏</label>
+        <label><input type="checkbox" id="cfgNotice" checked> 注意事项</label>
+        <label><input type="checkbox" id="cfgScore"> 分数</label>
+        <label>页脚 <input id="cfgFooter" maxlength="40" placeholder="页脚文字"></label>
+        <button class="tpl-save-btn" id="cfgSave" type="button">应用</button>
+      </div>
+
+      <div class="sec-list" id="secList">
+        <div class="builder-empty" id="builderEmpty">
+          <div class="be-icon">🧩</div>
+          <b>卷面还是空的</b>
+          <span>在左侧选好条件后点击题型卡片，<br>题目会实时出现在这里</span>
+        </div>
+      </div>
+
+      <div class="builder-actions">
+        <div class="builder-summary" id="builderSummary">还没有安排任何大题</div>
+        <button type="button" class="btn-save-layout" id="btnSaveLayout">💾 保存模板</button>
+      </div>
+
+      <!-- 实时 A4 预览 -->
+      <div class="live-preview" id="livePreview" style="display:none">
+        <div class="live-preview-head">
+          <span class="lp-title">📄 试卷实时预览</span>
+          <span class="lp-hint">纸上文字可直接点击修改 · 悬停出现 ✕ 可删除</span>
+<span class="lp-bg-group">
+            <span class="lp-bg-label">🖼 背景</span>
+            <select class="lp-select" id="bgStyle" title="试卷背景图案">
+              <option value="none">无</option>
+              <option value="dots">彩色圆点</option>
+              <option value="grid">浅格线</option>
+              <option value="stars">小星星</option>
+              <option value="clouds">云朵</option>
+              <option value="rainbow">彩虹渐变</option>
+            </select>
+            <input type="range" class="lp-range" id="bgOpacity" min="10" max="100" value="70" title="背景透明度">
+            <span class="lp-bg-val" id="bgOpacityVal">70%</span>
+            <label class="lp-bg-chk" title="试卷标题区加彩色横幅"><input type="checkbox" id="bgBanner"> 横幅</label>
+            <label class="lp-bg-chk" title="大题标题按题型显示彩色底条"><input type="checkbox" id="bgSecColor" checked> 彩色标题</label>
+            <label class="lp-bg-chk" title="导出 PDF/图片时保留彩色效果（关闭则导出传统白底，省墨）"><input type="checkbox" id="bgExportBg"> 导出保留彩色</label>
+          </span>
+<span class="lp-kid-group">
+            <span class="lp-bg-label">🎨 童趣</span>
+            <select class="lp-select" id="kidFrame" title="试卷四周装饰边框">
+              <option value="none">无边框</option>
+              <option value="rainbow">彩虹花边</option>
+              <option value="stars">星星边框</option>
+              <option value="crayon">蜡笔粉边</option>
+              <option value="dots">蓝色圆点</option>
+            </select>
+            <label class="lp-bg-chk" title="大题标题加鼓励语，如：填一填，我能行！"><input type="checkbox" id="kidEncourage"> 鼓励语</label>
+            <label class="lp-bg-chk" title="卷尾加星星奖励区，老师可涂星"><input type="checkbox" id="kidReward"> 奖励区</label>
+            <label class="lp-bg-chk" title="一、二年级自动放大字号、放宽行距"><input type="checkbox" id="kidFont"> 大字号</label>
+          </span>
+          <span class="lp-actions">
+            <button type="button" class="lp-btn f-btn" id="fBold" title="加粗"><b>B</b></button>
+            <select class="lp-select" id="fSize" title="字号">
+              <option value="1">小</option>
+              <option value="3" selected>中</option>
+              <option value="5">大</option>
+              <option value="7">特大</option>
+            </select>
+            <input type="color" class="lp-color" id="fColor" value="#000000" title="文字颜色">
+          </span>
+        </div>
+        <div class="live-paper-stack" id="livePaperStack"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ═══════════ 第 3 步：生成结果（弹层） ═══════════ -->
+  <section class="result-area" id="resultArea">
+    <div class="panel-head result-head">
+      <h2>试卷已生成，点击导出</h2>
+      <span class="head-step">第 3 步</span>
+      <span class="sum" id="sumLine">—</span>
+      <button type="button" class="btn-mini" id="btnCloseResult" title="关闭弹层">✕ 关闭</button>
+    </div>
+    <div class="preview-bar">
+      <button type="button" class="btn-mini ok" id="btnBatchExport">📦 导出全部</button>
+      <button type="button" class="btn-mini ok" id="btnMergeExport">📄 合并 PDF</button>
+      <span class="bar-sep"></span>
+      <button type="button" class="btn-mini" id="btnPreviewAns">👁 预览答案</button>
+      <button type="button" class="btn-mini" id="btnLayout">✏️ 排版模式</button>
+      <button type="button" class="btn-mini ok" id="btnLayoutDone" style="display:none">✅ 完成排版</button>
+      <button type="button" class="btn-mini" id="btnBackBuilder">🧩 返回搭建</button>
+    </div>
+    <div class="paper-stack" id="paperStack"></div>
+    <div class="paper-stack" id="finalPaperStack" style="display:none;"></div>
+  </section>
+
+  <!-- 打印页码 -->
+  <div class="pg-footer"></div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script>
+const API = '';
+let curDiff = 'medium';
+let paperData = null;   // {grade, subject, keyword, title, sections:[{type, data}], meta}
+let showAnswers = false;
+let batchPapers = [];   // 多份生成时：第 2~N 份的数据（第 1 份就是当前 paperData）
+let batchAddDay = false; // 批量导出时是否在标题后加（第X天）
+
+const $ = s => document.querySelector(s);
+const TYPE_NAME = { quiz:'选择题', fill_blank:'填空题', match_pair:'连线配对', challenge:'闯关挑战', oral_math:'口算题', reading:'阅读理解', vertical_calc:'竖式计算', recursive_calc:'脱式计算', smart_calc:'简便计算', number_split:'数的分成', compare:'比大小', true_false:'判断题', word_problem:'应用题' };
+
+/* ── 按年级+科目动态显示题型（依据人教版真实试卷结构联网核实） ──
+   一年级：口算/填空/判断/选择/数的分成/比大小 + 竖式（下册起）+ 应用
+   二年级：+ 表内乘除法口算
+   三年级：+ 脱式、估算、操作
+   四~六年级：+ 简便计算
+   初中：选择/填空/解答为主 */
+const TYPE_GROUPS_BY_GRADE = {
+  '数学': {
+    1: [ ['基础', ['oral_math','fill_blank','true_false','quiz','number_split','compare']],
+         ['计算', ['vertical_calc']],
+         ['应用', ['word_problem']],
+         ['配对', ['match_pair']] ],
+    2: [ ['基础', ['oral_math','fill_blank','true_false','quiz','number_split','compare']],
+         ['计算', ['vertical_calc']],
+         ['应用', ['word_problem','challenge']],
+         ['配对', ['match_pair']] ],
+    3: [ ['基础', ['fill_blank','true_false','quiz','oral_math']],
+         ['计算', ['vertical_calc','recursive_calc']],
+         ['应用', ['word_problem']],
+         ['拓展', ['challenge','reading','match_pair']] ],
+    4: [ ['基础', ['fill_blank','true_false','quiz','oral_math']],
+         ['计算', ['vertical_calc','recursive_calc','smart_calc']],
+         ['应用', ['word_problem']],
+         ['拓展', ['challenge','reading','match_pair']] ],
+    5: [ ['基础', ['fill_blank','true_false','quiz','oral_math']],
+         ['计算', ['vertical_calc','recursive_calc','smart_calc']],
+         ['应用', ['word_problem']],
+         ['拓展', ['challenge','reading','match_pair']] ],
+    6: [ ['基础', ['fill_blank','true_false','quiz','oral_math']],
+         ['计算', ['vertical_calc','recursive_calc','smart_calc']],
+         ['应用', ['word_problem']],
+         ['拓展', ['challenge','reading','match_pair']] ],
+    7: [ ['基础', ['fill_blank','true_false','quiz']],
+         ['计算', ['oral_math','vertical_calc','recursive_calc','smart_calc']],
+         ['应用', ['word_problem']],
+         ['拓展', ['challenge','reading','match_pair']] ],
+    8: [ ['基础', ['fill_blank','true_false','quiz']],
+         ['计算', ['oral_math','vertical_calc','recursive_calc','smart_calc']],
+         ['应用', ['word_problem']],
+         ['拓展', ['challenge','reading','match_pair']] ],
+    9: [ ['基础', ['fill_blank','true_false','quiz']],
+         ['计算', ['oral_math','vertical_calc','recursive_calc','smart_calc']],
+         ['应用', ['word_problem']],
+         ['拓展', ['challenge','reading','match_pair']] ],
+  },
+  '语文': {
+    1: [ ['字词', ['fill_blank','match_pair','quiz']] ],
+    2: [ ['字词', ['fill_blank','match_pair','quiz']] ],
+    3: [ ['基础', ['fill_blank','quiz','match_pair']],
+         ['拓展', ['reading','challenge']] ],
+    4: [ ['基础', ['fill_blank','quiz','match_pair']],
+         ['拓展', ['reading','challenge']] ],
+    5: [ ['基础', ['fill_blank','quiz','match_pair']],
+         ['拓展', ['reading','challenge']] ],
+    6: [ ['基础', ['fill_blank','quiz','match_pair']],
+         ['拓展', ['reading','challenge']] ],
+    7: [ ['基础', ['fill_blank','quiz','match_pair']],
+         ['拓展', ['reading','challenge']] ],
+    8: [ ['基础', ['fill_blank','quiz','match_pair']],
+         ['拓展', ['reading','challenge']] ],
+    9: [ ['基础', ['fill_blank','quiz','match_pair']],
+         ['拓展', ['reading','challenge']] ],
+  },
+  '英语': {
+    1: [ ['基础', ['quiz','match_pair','fill_blank']] ],
+    2: [ ['基础', ['quiz','match_pair','fill_blank']] ],
+    3: [ ['基础', ['quiz','match_pair','fill_blank']],
+         ['拓展', ['reading']] ],
+    4: [ ['基础', ['quiz','match_pair','fill_blank']],
+         ['拓展', ['reading']] ],
+    5: [ ['基础', ['quiz','match_pair','fill_blank']],
+         ['拓展', ['reading','challenge']] ],
+    6: [ ['基础', ['quiz','match_pair','fill_blank']],
+         ['拓展', ['reading','challenge']] ],
+    7: [ ['基础', ['quiz','match_pair','fill_blank']],
+         ['拓展', ['reading','challenge']] ],
+    8: [ ['基础', ['quiz','match_pair','fill_blank']],
+         ['拓展', ['reading','challenge']] ],
+    9: [ ['基础', ['quiz','match_pair','fill_blank']],
+         ['拓展', ['reading','challenge']] ],
+  }
+};
+/* 其他科目（科学等）默认题型 */
+const TYPE_GROUPS_DEFAULT = [
+  ['基础', ['quiz','fill_blank','match_pair']],
+  ['拓展', ['reading','challenge']]
+];
+/* 自定义题型（localStorage 持久化） */
+function getCustomTypes() {
+  try { return JSON.parse(localStorage.getItem('lc_custom_types') || '[]'); } catch(e) { return []; }
+}
+function saveCustomTypes(arr) { localStorage.setItem('lc_custom_types', JSON.stringify(arr)); }
+
+/* 根据年级+科目渲染题型区 */
+const CN_GRADE_NUM = { '一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9 };
+function gradeNumOf(g) {
+  g = g || '';
+  if (g.includes('初中') || g.includes('初')) {
+    const m = g.match(/[一二三]/);
+    return m ? (6 + (CN_GRADE_NUM[m[0]] || 0)) : 7; // 初一→7 初二→8 初三→9
+  }
+  const m = g.match(/[一二三四五六]/);
+  return m ? (CN_GRADE_NUM[m[0]] || 0) : 0;
+}
+function renderTypeGroups() {
+  const g = $('#grade').value;
+  const s = $('#subject').value;
+  const grid = $('#typeGrid');
+  if (!grid) return;
+  let groups;
+  const gNum = gradeNumOf(g);
+  if (s && TYPE_GROUPS_BY_GRADE[s] && TYPE_GROUPS_BY_GRADE[s][gNum]) {
+    groups = TYPE_GROUPS_BY_GRADE[s][gNum];
+  } else {
+    groups = TYPE_GROUPS_DEFAULT;
+  }
+  // 自定义题型追加到最后一组
+  const customs = getCustomTypes();
+  let html = groups.map(([label, types]) =>
+    `<div class="type-group"><div class="tg-head">${label}</div><div class="tg-body">` +
+    types.filter(t => TYPE_NAME[t]).map(t =>
+      `<button type="button" class="type-pill" data-v="${t}">${TYPE_NAME[t]}</button>`).join('') +
+    `</div></div>`).join('');
+  if (customs.length) {
+    html += `<div class="type-group"><div class="tg-head">自定义</div><div class="tg-body">` +
+      customs.map(t =>
+        `<button type="button" class="type-pill" data-v="${esc(t.id)}" title="长按可删除">✳️ ${esc(t.name)}</button>`).join('') +
+      `</div></div>`;
+  }
+  html += `<button type="button" class="type-add-btn" id="btnAddType">＋ 添加题型</button>`;
+  grid.innerHTML = html;
+  bindTypePills();
+}
+
+/* 绑定题型按钮点击（含自定义题型 → 走通用通道） */
+function bindTypePills() {
+  document.querySelectorAll('#typeGrid .type-pill').forEach(item => {
+    item.onclick = () => {
+      const v = item.dataset.v;
+      const customs = getCustomTypes();
+      const custom = customs.find(c => c.id === v);
+      const actualType = custom ? custom.baseType : v;
+      const defCnt = custom ? custom.defaultCount : (TYPE_DEFAULT[v] || 4);
+      addSecToBuilder(actualType, defCnt);
+      item.classList.remove('flash');
+      void item.offsetWidth;
+      item.classList.add('flash');
+    };
+  });
+  const addBtn = $('#btnAddType');
+  if (addBtn) addBtn.onclick = openAddTypeDialog;
+}
+
+/* 添加自定义题型弹窗 */
+function openAddTypeDialog() {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:999;display:flex;align-items:center;justify-content:center';
+  const dlg = document.createElement('div');
+  dlg.style.cssText = 'background:#fff;border-radius:10px;padding:22px 26px;width:340px;box-shadow:0 12px 32px rgba(0,0,0,.2);font-size:13px';
+  dlg.innerHTML = `
+    <div style="font-size:15px;font-weight:700;margin-bottom:14px">添加自定义题型</div>
+    <label style="display:block;margin-bottom:10px;font-size:12px;color:#666">题型名称（如：判断题 / 应用题 / 看图写话）<br>
+      <input id="ctName" maxlength="10" placeholder="题型名称" style="width:100%;margin-top:4px;padding:7px 10px;border:1px solid #d5d8dd;border-radius:5px;font-size:13px"></label>
+    <label style="display:block;margin-bottom:10px;font-size:12px;color:#666">生成方式（决定 AI 怎么出题）<br>
+      <select id="ctBase" style="width:100%;margin-top:4px;padding:7px 10px;border:1px solid #d5d8dd;border-radius:5px;font-size:13px">
+        <option value="fill_blank">填空式（题干留空填写）</option>
+        <option value="number_split">数的分成（数字拆分树状图）</option>
+        <option value="compare">比大小（填 > < =）</option>
+        <option value="quiz">选择式（四个选项选答案）</option>
+        <option value="challenge">闯关式（由易到难多道题）</option>
+        <option value="reading">阅读式（短文+理解问题）</option>
+        <option value="match_pair">连线式（左右配对）</option>
+      </select></label>
+    <label style="display:block;margin-bottom:14px;font-size:12px;color:#666">默认题数<br>
+      <input id="ctCount" type="number" value="5" min="1" max="99" style="width:70px;margin-top:4px;padding:7px 10px;border:1px solid #d5d8dd;border-radius:5px;font-size:13px"></label>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button id="ctCancel" style="padding:7px 16px;border:1px solid #d5d8dd;border-radius:5px;background:#fff;cursor:pointer;font-size:12px">取消</button>
+      <button id="ctOk" style="padding:7px 20px;border:none;border-radius:5px;background:#3b6ef0;color:#fff;cursor:pointer;font-size:12px;font-weight:600">添加</button>
+    </div>`;
+  overlay.appendChild(dlg);
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  $('#ctCancel').onclick = close;
+  $('#ctOk').onclick = () => {
+    const name = $('#ctName').value.trim();
+    const base = $('#ctBase').value;
+    const cnt = Math.min(99, Math.max(1, parseInt($('#ctCount').value) || 5));
+    if (!name) { $('#ctName').style.borderColor = '#e5484d'; $('#ctName').focus(); return; }
+    const customs = getCustomTypes();
+    const id = 'custom_' + Date.now().toString(36);
+    customs.push({ id, name, baseType: base, defaultCount: cnt });
+    saveCustomTypes(customs);
+    close();
+    renderTypeGroups();
+  };
+}
+const TYPE_DEFAULT = { quiz:4, fill_blank:4, match_pair:1, challenge:3, oral_math:6, reading:1, vertical_calc:4, recursive_calc:4, smart_calc:4, number_split:5, compare:5, true_false:5, word_problem:3 };
+const TYPE_ORDER = ['quiz','fill_blank','number_split','compare','vertical_calc','recursive_calc','smart_calc','match_pair','oral_math','challenge','reading'];
+const CN_NUM = ['一','二','三','四','五','六','七','八','九'];
+const DIFF_NAME = { easy:'简单', medium:'中等', hard:'困难' };
+
+/* ── 年级/科目 ── */
+let _availableData = {};
+async function loadAvailable() {
+  try {
+    const r = await fetch(API + '/api/v1/scope/available');
+    const d = await r.json();
+    _availableData = d.available;
+    const grades = Object.keys(d.available);
+    // 渲染年级胶囊（同时维护隐藏 select 保持兼容）
+    $('#grade').innerHTML = '<option value="">请选择年级</option>' +
+      grades.map(g => `<option value="${g}">${g}</option>`).join('');
+    const gradeRow = $('#gradeRow');
+    gradeRow.innerHTML = grades.map(g =>
+      `<button type="button" class="grade-pill" data-v="${esc(g)}">${esc(g)}</button>`).join('');
+    gradeRow.querySelectorAll('.grade-pill').forEach(p => {
+      p.onclick = () => {
+        gradeRow.querySelectorAll('.grade-pill').forEach(x => x.classList.remove('on'));
+        p.classList.add('on');
+        $('#grade').value = p.dataset.v;
+        $('#scopeHint').style.display = 'none';
+        renderSubjectPills(p.dataset.v);
+        renderTypeGroups();
+      };
+    });
+    $('#subject').onchange = loadScope;
+  } catch (e) {
+    $('#gradeRow').innerHTML = '<span class="subject-empty">年级加载失败，请刷新重试</span>';
+  }
+}
+
+/* 渲染科目胶囊 */
+function renderSubjectPills(g) {
+  const row = $('#subjectRow');
+  const subs = (_availableData[g] || []);
+  if (!subs.length) {
+    row.innerHTML = '<span class="subject-empty">该年级暂无可选科目</span>';
+    return;
+  }
+  row.innerHTML = subs.map(s =>
+    `<button type="button" class="subject-pill" data-v="${esc(s)}">${esc(s)}</button>`).join('');
+  row.querySelectorAll('.subject-pill').forEach(p => {
+    p.onclick = () => {
+      row.querySelectorAll('.subject-pill').forEach(x => x.classList.remove('on'));
+      p.classList.add('on');
+      const sel = $('#subject');
+      sel.disabled = false;
+      sel.innerHTML = `<option value="">请选择科目</option>` +
+        subs.map(s => `<option value="${s}">${s}</option>`).join('');
+      sel.value = p.dataset.v;
+      $('#scopeHint').style.display = 'none';
+      renderTypeGroups();
+      loadScope();
+    };
+  });
+}
+
+async function loadScope() {
+  const g = $('#grade').value, s = $('#subject').value;
+  if (!g || !s) return;
+  try {
+    const r = await fetch(API + `/api/v1/scope?grade=${encodeURIComponent(g)}&subject=${encodeURIComponent(s)}`);
+    const d = await r.json();
+    const box = $('#scopeHint');
+    box.style.display = 'block';
+    let html = `<b>📐 ${g} · ${s} 可出题的知识点</b>（可多选，点击选中/取消，也可在上方手动输入）：<br>`;
+    if (d.semesters && (d.semesters['上册'] || d.semesters['下册'])) {
+      // 按上/下册分组显示
+      if (d.semesters['上册']) {
+        html += `<div style="margin:6px 0 2px;font-size:12px;color:#888">📗 上册</div>` +
+          d.semesters['上册'].map(k => `<span class="tag" data-v="上册·${esc(k)}">${esc(k)}（上）</span>`).join('');
+      }
+      if (d.semesters['下册']) {
+        html += `<div style="margin:6px 0 2px;font-size:12px;color:#888">📘 下册</div>` +
+          d.semesters['下册'].map(k => `<span class="tag" data-v="下册·${esc(k)}">${esc(k)}（下）</span>`).join('');
+      }
+    }
+    // 其他通用知识点（若有）
+    html += d.allowed.map(k => `<span class="tag">${esc(k)}</span>`).join('');
+    box.innerHTML = html;
+    box.querySelectorAll('.tag').forEach(t => t.onclick = () => {
+      t.classList.toggle('on');
+      syncKeywordFromTags();
+    });
+  } catch (e) {}
+}
+
+/* 多选知识点 → 拼入关键词输入框 */
+function syncKeywordFromTags() {
+  const sel = [...document.querySelectorAll('#scopeHint .tag.on')].map(t => t.dataset.v || t.textContent);
+  $('#keyword').value = sel.join('、');
+}
+
+/* ── 卷面搭建区：点题型 → 立即生成真实题目并展示 ── */
+let builderSeq = 0;
+let builderSecSortable = null;
+
+/* 表单校验：点题型/组卷前必须有年级+科目+关键词 */
+function builderForm(quiet) {
+  const grade = $('#grade').value, subject = $('#subject').value, keyword = $('#keyword').value.trim();
+  if (!grade || !subject || !keyword) {
+    if (!quiet) alert('请先选好年级、科目，并填写知识点关键词～');
+    return null;
+  }
+  return { grade, subject, keyword };
+}
+
+function cardCount(card) {
+  return Math.min(99, Math.max(1, parseInt(card.querySelector('.s-cnt input').value) || 1));
+}
+
+function initBuilder() {
+  // 题型按钮由 renderTypeGroups 动态生成并绑定（选完年级/科目后更新）
+  renderTypeGroups();
+
+  // 大题块拖拽排序
+  if (typeof Sortable !== 'undefined') {
+    builderSecSortable = new Sortable($('#secList'), {
+      animation: 150,
+      handle: '.drag-handle',
+      draggable: '.sec-card',
+      ghostClass: 'sortable-ghost',
+      onEnd: updateBuilderSummary
+    });
+  }
+
+  // 换一批 / 重试 / 删除 / 数量加减（事件委托）
+  $('#secList').addEventListener('click', e => {
+    const card = e.target.closest('.sec-card');
+    if (!card) return;
+    if (e.target.classList.contains('s-del')) {
+      // 增量删除：只移除 A4 纸上对应的 sec-block，其他不动（保留用户编辑）
+      const sid = card._sid;
+      card.remove();
+      let removedBlock = false;
+      if (sid) {
+        const stack = $('#livePaperStack');
+        const block = stack?.querySelector(`.sec-block[data-sid="${sid}"]`);
+        if (block) {
+          block.remove();
+          removedBlock = true;
+          // 若删空了整张纸，隐藏预览
+          if (!stack.querySelector('.sec-block')) { $('#livePreview').style.display = 'none'; }
+          else {
+            // 重排剩余大题的序号（一、二、三…）—— 只替换开头的序号，保留内部格式标签
+            stack.querySelectorAll('.sec-block').forEach((b, i) => {
+              const h = b.querySelector('h2.sec span');
+              if (h) {
+                h.innerHTML = h.innerHTML.replace(/^[一二三四五六七八九十]+、/, (CN_NUM[i] || '') + '、');
+              }
+            });
+          }
+        }
+      }
+      if (removedBlock) {
+        skipNextPreviewRefresh = true; // 手动删过了，汇总时不要再全量刷新预览
+        updateBuilderSummary();
+        skipNextPreviewRefresh = false;
+      } else {
+        updateBuilderSummary(); // 没匹配到块（sid 失效），退回全量刷新
+      }
+    } else if (e.target.classList.contains('s-retry')) {
+      // 重试 LLM 出题，成功后同步到试卷
+      retryCardFetch(card);
+    } else if (e.target.classList.contains('minus') || e.target.classList.contains('plus')) {
+      const input = card.querySelector('.s-cnt input');
+      let n = parseInt(input.value) || 1;
+      n = e.target.classList.contains('plus') ? n + 1 : n - 1;
+      n = Math.min(99, Math.max(1, n));
+      input.value = n;
+      onCountChange(card, n);
+    }
+  });
+
+  // 直接输入数量（防抖：减少=裁剪展示，增加=重新出一批）
+  $('#secList').addEventListener('input', e => {
+    if (e.target.tagName !== 'INPUT') return;
+    const card = e.target.closest('.sec-card');
+    if (!card) return;
+    clearTimeout(card._cntTimer);
+    card._cntTimer = setTimeout(() => {
+      let n = parseInt(e.target.value) || 1;
+      n = Math.min(99, Math.max(1, n));
+      e.target.value = n;
+      onCountChange(card, n);
+    }, 600);
+  });
+
+  // 难度切换 → 已有大题自动重新出题（换难度=换题）
+  document.querySelectorAll('.diff').forEach(d => d.addEventListener('click', () => {
+    document.querySelectorAll('#secList .sec-card').forEach(card => {
+      if (card._status === 'loading') return;
+      mockFillData(card, card.dataset.type, cardCount(card));
+    });
+  }));
+
+  // 排版选项事件代理
+  $('#secList').addEventListener('click', e => {
+    const tab = e.target.closest('.s-lay-tab');
+    if (tab) {
+      e.stopPropagation();
+      const wrap = tab.closest('.s-layout-wrap');
+      // 点击标签：切换弹层开关 + 激活对应 pane
+      const wasOpen = wrap.classList.contains('open');
+      document.querySelectorAll('.s-layout-wrap.open').forEach(w => w.classList.remove('open'));
+      if (!wasOpen) wrap.classList.add('open');
+      wrap.querySelectorAll('.s-lay-tab').forEach(t => t.classList.toggle('on', t === tab));
+      wrap.querySelectorAll('.s-lay-pane').forEach(p => p.classList.toggle('on', p.dataset.pane === tab.dataset.tab));
+      return;
+    }
+    const opt = e.target.closest('.s-layout-opt');
+    if (opt) {
+      e.stopPropagation();
+      const card = opt.closest('.sec-card');
+      const cols = parseInt(opt.dataset.cols);
+      const kind = opt.dataset.kind; // 'q' 题目排列 / 'opt' 选项排列 / 'tbl' 表格线 / 'font' 字号 / 'no' 题号显隐
+      if (kind === 'q') setQCols(card, cols);
+      else if (kind === 'opt') setOptCols(card, cols);
+      else if (kind === 'tbl') setTblBorder(card, opt.dataset.tbl);
+      else if (kind === 'font') setFontSize(card, opt.dataset.fs);
+      else if (kind === 'no') setShowHead(card, opt.dataset.show === '1');
+      // 更新同 kind 高亮
+      card.querySelectorAll(`.s-layout-opt[data-kind="${kind}"]`).forEach(o => {
+        if (kind === 'tbl') o.classList.toggle('on', o.dataset.tbl === opt.dataset.tbl);
+        else if (kind === 'font') o.classList.toggle('on', o.dataset.fs === opt.dataset.fs);
+        else if (kind === 'no') o.classList.toggle('on', o.dataset.show === opt.dataset.show);
+        else o.classList.toggle('on', o.dataset.cols == cols);
+      });
+      return;
+    }
+  });
+  // 点击卡片外关闭排版弹层
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.s-layout-wrap')) {
+      document.querySelectorAll('.s-layout-wrap.open').forEach(w => w.classList.remove('open'));
+    }
+  });
+}
+
+/* 模拟题目数据——排版阶段用，快速出骨架（简短贴近真实题目） */
+function mockQuestions(type, count) {
+  const qs = [];
+  for (let i = 0; i < count; i++) {
+    const n = i + 1;
+    if (type === 'quiz') {
+      qs.push({ type:'multiple_choice', stem:`${n + 2} + 3 = ？`, options:['3','4','5','6'], answer:2, analysis:'' });
+    } else if (type === 'fill_blank') {
+      qs.push({ type:'fill_blank', stem:`${n} + ${n} = ____`, answer:`${n*2}`, analysis:'' });
+    } else if (type === 'oral_math') {
+      qs.push({ type:'oral_math', stem:`${n}×${n*7}=`, answer:`${n*n*7}`, analysis:'' });
+    } else if (type === 'vertical_calc') {
+      qs.push({ type:'vertical_calc', stem:`${123+n} + ${456-n} =`, answer:`${579}`, analysis:'' });
+    } else if (type === 'recursive_calc') {
+      qs.push({ type:'recursive_calc', stem:`${100+n} − ${n*3} + ${n*2} =`, answer:'', analysis:'' });
+    } else if (type === 'smart_calc') {
+      qs.push({ type:'smart_calc', stem:`${n*25}×4 =`, answer:`${n*100}`, analysis:'' });
+    } else if (type === 'match_pair') {
+      qs.push({ type:'match_pair', stem:'连一连。', left_items:[`2+3`,`4+1`], right_items:[`5`,`5`], answer:[[0,0],[1,1]], analysis:'' });
+    } else if (type === 'challenge') {
+      qs.push({ type:'challenge', stem:`第${n}关：${n*2} + ${n} = ____`, answer:`${n*3}`, analysis:'' });
+    } else if (type === 'reading') {
+      qs.push({ type:'reading', stem:`${n}. 读一读，答一答。`, answer:'', analysis:'' });
+    } else if (type === 'number_split') {
+      const top = n + 8;
+      if (n % 2 === 1) {
+        qs.push({ type:'number_split', top, left: n, right: '__', answer: top - n, analysis:'' });
+      } else {
+        qs.push({ type:'number_split', top: '__', left: n, right: n + 1, answer: n + (n+1), analysis:'' });
+      }
+    } else if (type === 'compare') {
+      const a = n + 2, b = n + 1, ans = a > b ? '>' : (a < b ? '<' : '=');
+      qs.push({ type:'compare', left_expr: `${a}`, right_expr: `${b}`, answer: ans, analysis:'' });
+    } else if (type === 'true_false') {
+      qs.push({ type:'true_false', stem:`${n + 5} 比 ${n} 大`, answer: '√', analysis:'' });
+    } else if (type === 'word_problem') {
+      qs.push({ type:'word_problem', stem:`小明有${n+3}个苹果，吃了${n}个，还剩几个？`, answer:`${3}`, analysis:'' });
+    } else {
+      qs.push({ type, stem:`第 ${n} 题：模拟题目，排版预览用。`, answer:'', analysis:'' });
+    }
+  }
+  return qs;
+}
+
+/* 用模拟数据填充（排版阶段，不调LLM） */
+function mockFillData(card, type, count, append = false) {
+  const qs = mockQuestions(type, count);
+  if (append && card._data?.questions) {
+    card._data.questions.push(...qs);
+  } else {
+    card._data = { questions: qs, topic:'', difficulty:'', grade:'', subject:'' };
+  }
+  card._mock = true;
+  card._status = 'ready';
+  card.classList.remove('loading');
+  const input = card.querySelector('.s-cnt input');
+  if (input) input.value = (card._data.questions || []).length;
+  renderSecBody(card);
+  updateBuilderSummary();
+}
+
+/* 添加大题块（先出骨架 + 加载动画，再异步填充真实题目） */
+function addSecToBuilder(type, count) {
+  builderSeq++;
+  const el = document.createElement('div');
+  el.className = 'sec-card';
+  el.dataset.type = type;
+  el.dataset.seq = builderSeq;
+  el._status = 'loading';
+  el._sid = `s${builderSeq}_${Math.random().toString(36).slice(2,7)}`; // 与 A4 纸上 sec-block 一一对应
+  el.innerHTML = `
+    <div class="s-head">
+      <span class="drag-handle" title="拖拽调整顺序">⠿</span>
+      <span class="s-idx">${builderSeq}</span>
+      <span class="s-name">${TYPE_NAME[type]}</span>
+      <span class="s-cnt" title="题目数量">
+        <span class="minus" title="减少一题">－</span>
+        <input type="number" value="${Math.min(99, Math.max(1, count || 1))}" min="1" max="99">
+        <span class="plus" title="增加一题">＋</span>
+        <span class="s-cnt-unit">题</span>
+      </span>
+      <span class="s-layout-wrap">
+        <span class="s-lay-tabs">
+          <span class="s-lay-tab" data-tab="q">题目栏</span>
+          <span class="s-lay-tab" data-tab="opt">选项</span>
+          <span class="s-lay-tab" data-tab="tbl">表格</span>
+          <span class="s-lay-tab" data-tab="font">字号</span>
+          <span class="s-lay-tab" data-tab="no">题号</span>
+        </span>
+        <span class="s-layout-drop">
+          <span class="s-lay-pane" data-pane="q">
+            <span class="s-layout-opt on" data-cols="1" data-kind="q">1栏</span>
+            <span class="s-layout-opt" data-cols="2" data-kind="q">2栏</span>
+            <span class="s-layout-opt" data-cols="3" data-kind="q">3栏</span>
+            <span class="s-layout-opt" data-cols="4" data-kind="q">4栏</span>
+            <span class="s-layout-opt" data-cols="5" data-kind="q">5栏</span>
+          </span>
+          <span class="s-lay-pane" data-pane="opt">
+            <span class="s-layout-opt" data-cols="1" data-kind="opt">1栏</span>
+            <span class="s-layout-opt on" data-cols="2" data-kind="opt">2栏</span>
+            <span class="s-layout-opt" data-cols="3" data-kind="opt">3栏</span>
+            <span class="s-layout-opt" data-cols="4" data-kind="opt">4栏</span>
+            <span class="s-layout-opt" data-cols="5" data-kind="opt">5栏</span>
+          </span>
+          <span class="s-lay-pane" data-pane="tbl">
+            <span class="s-layout-opt on" data-tbl="none" data-kind="tbl">无</span>
+            <span class="s-layout-opt" data-tbl="solid" data-kind="tbl">实线</span>
+            <span class="s-layout-opt" data-tbl="dashed" data-kind="tbl">虚线</span>
+          </span>
+          <span class="s-lay-pane" data-pane="font">
+            <span class="s-layout-opt on" data-fs="" data-kind="font">默认</span>
+            <span class="s-layout-opt" data-fs="9pt" data-kind="font">9</span>
+            <span class="s-layout-opt" data-fs="10pt" data-kind="font">10</span>
+            <span class="s-layout-opt" data-fs="10.5pt" data-kind="font">10.5</span>
+            <span class="s-layout-opt" data-fs="11pt" data-kind="font">11</span>
+            <span class="s-layout-opt" data-fs="12pt" data-kind="font">12</span>
+          </span>
+          <span class="s-lay-pane" data-pane="no">
+            <span class="s-layout-opt on" data-show="1" data-kind="no">显示题号</span>
+            <span class="s-layout-opt" data-show="0" data-kind="no">隐藏题号</span>
+          </span>
+        </span>
+      </span>
+      <span class="s-btns">
+        <button class="s-del" title="删除这个大题">✕</button>
+      </span>
+    </div>
+    <div class="s-body"></div>`;
+  $('#secList').appendChild(el);
+  showBuilderEmpty(false);
+  // 用模拟数据快速出骨架，排版完成后再调 LLM
+  const cnt = Math.min(99, Math.max(1, count || 1));
+  el._data = { questions: mockQuestions(type, cnt), topic: '', difficulty:'', grade:'', subject:'' };
+  el._status = 'ready';
+  el._mock = true; // 标记为模拟数据
+  const input = el.querySelector('.s-cnt input');
+  if (input) input.value = cnt;
+  renderSecBody(el);
+  updateBuilderSummary();
+}
+
+/* 调后端出一批题 → 渲染进卡片（append=true 时追加到已有题目后面） */
+async function fetchSecData(card, type, count, append = false) {
+  const form = builderForm(true);
+  if (!form) return;
+  const body = card.querySelector('.s-body');
+  card._status = 'loading';
+  card.classList.add('loading');
+  if (!append) {
+    body.innerHTML = `<div class="s-loading"><span class="spin"></span>正在出题…（约 3~15 秒）</div>`;
+  }
+  try {
+    const r = await fetch(API + '/api/v1/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grade: form.grade, subject: form.subject, keyword: form.keyword,
+        game_type: type, difficulty: curDiff,
+        question_count: count, use_cache: false,
+        llm_base_url: loadLlmCfg().baseUrl || undefined,
+        llm_model: loadLlmCfg().model || undefined,
+        llm_api_key: loadLlmCfg().apiKey || undefined
+      })
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      throw new Error(e.detail?.error || ('HTTP ' + r.status));
+    }
+    const data = await r.json();
+    if (append && card._data?.questions) {
+      card._data.questions.push(...(data.questions || []));
+    } else {
+      card._data = data;
+    }
+    card._status = 'ready';
+    card.classList.remove('loading');
+    const input = card.querySelector('.s-cnt input');
+    if (input) input.value = card._data.questions.length;
+    renderSecBody(card);
+    updateBuilderSummary();
+  } catch (err) {
+    card._status = 'error';
+    card.classList.remove('loading');
+    body.innerHTML = `<div class="s-error">⚠ ${TYPE_NAME[type]}出题失败：${esc(err.message)}<button class="s-retry">↻ 重试</button></div>`;
+    updateBuilderSummary();
+  }
+}
+
+/* 卡片摘要（不展开题目，题目在下面A4预览区展示） */
+function renderSecBody(card) {
+  const type = card.dataset.type;
+  const data = card._data;
+  const body = card.querySelector('.s-body');
+  const qs = data.questions || [];
+  const preview = qs.slice(0, 1).map((q, i) => {
+    const stem = (q.stem || '').replace(/<[^>]*>/g, '').substring(0, 30);
+    return `<span class="s-q-preview">${cirNum(i+1)} ${esc(stem)}${stem.length>=30?'…':''}</span>`;
+  }).join('');
+  body.innerHTML = `<div class="s-summary">
+    <span class="s-sum-stats">📋 ${qs.length} 题</span>
+    ${preview ? `<div class="s-sum-lines">${preview}</div>` : ''}
+    ${qs.length > 1 ? `<span class="s-sum-more">+${qs.length-1}</span>` : ''}
+  </div>`;
+  applyCardLayout(card);
+}
+
+/* 数量变化：减少→裁剪题目；增加→追加生成（不丢已有题） */
+function onCountChange(card, n) {
+  const qs = card._data?.questions || [];
+  if (card._status !== 'ready') { updateBuilderSummary(); return; }
+  if (n < qs.length) {
+    card._data.questions = qs.slice(0, n);
+    renderSecBody(card);
+    updateBuilderSummary();
+  } else if (n > qs.length) {
+    mockFillData(card, card.dataset.type, n - qs.length, true);
+  } else {
+    updateBuilderSummary();
+  }
+}
+
+/* 空态显隐 */
+function showBuilderEmpty(show) {
+  const empty = $('#builderEmpty');
+  if (show) {
+    if (!empty) {
+      const el = document.createElement('div');
+      el.className = 'builder-empty';
+      el.id = 'builderEmpty';
+      el.innerHTML = `<b>卷面还是空的</b>点击左侧「选择题」「填空题」等题型卡片，<br>这里会实时出现对应的题型大题块 🧩`;
+      $('#secList').appendChild(el);
+    }
+  } else {
+    empty?.remove();
+  }
+}
+
+/* 读取搭建区 → [{type, count, seq, data, status}]（按当前拖拽后的顺序） */
+function readBuilder() {
+  return Array.from(document.querySelectorAll('#secList .sec-card')).map(el => ({
+    type: el.dataset.type,
+    count: Math.min(99, Math.max(1, parseInt(el.querySelector('.s-cnt input').value) || 1)),
+    seq: parseInt(el.dataset.seq),
+    status: el._status,
+    data: el._data,
+    el
+  }));
+}
+
+/* 更新搭建区汇总（大题数 / 总题数 / 预估分值） */
+let suspendPreviewRefresh = false; // 生成试卷期间挂起预览刷新，保留编辑效果
+let skipNextPreviewRefresh = false; // 单次跳过：手动增量删除后不再全量刷新
+function updateBuilderSummary() {
+  // 汇总行更新即可；预览刷新在非挂起、非跳过时才执行
+  if (!suspendPreviewRefresh && !skipNextPreviewRefresh) {
+    const stack = $('#livePaperStack');
+    const existingBlocks = stack ? stack.querySelectorAll('.sec-block').length : 0;
+    const readySecs = document.querySelectorAll('#secList .sec-card').length;
+    if (existingBlocks <= readySecs) refreshLivePreview();
+  }
+  const secs = readBuilder();
+  const nSec = secs.length;
+  const nQ = secs.reduce((s, x) => s + (x.status === 'ready' ? x.data.questions.length : x.count), 0);
+  const nReady = secs.filter(x => x.status === 'ready').length;
+  const nLoading = secs.filter(x => x.status === 'loading').length;
+  const nError = secs.filter(x => x.status === 'error').length;
+  const seqs = Array.from(document.querySelectorAll('#secList .sec-card')).map(el => el.querySelector('.s-idx'));
+  seqs.forEach((s, i) => s.textContent = i + 1);
+  $('#builderCount').textContent = nSec ? `${nSec} 个大题` : '0 个大题';
+  if (!nSec) {
+    $('#builderSummary').innerHTML = '还没有安排任何大题';
+    showBuilderEmpty(true);
+  } else {
+    let html = `共 <b>${nSec}</b> 个大题 ｜ <b>${nQ}</b> 道题 ｜ 预计总分 <b>100</b> 分`;
+    if (nLoading) html += ` ｜ <span class="s-loading-txt">⏳ ${nLoading} 个出题中…</span>`;
+    if (nError) html += ` ｜ <span class="s-err-txt">⚠ ${nError} 个失败</span>`;
+    if (!nLoading && !nError && nReady === nSec) html += ` ｜ <span class="s-ok-txt">✅ 全部就绪，可组卷</span>`;
+    $('#builderSummary').innerHTML = html;
+    showBuilderEmpty(false);
+  }
+}
+
+/* 实时A4纸预览 —— 每当题目变化/模板切换时自动刷新 */
+let deletedElements = {}; // 记录每个模板中被删除的元素 key
+
+function refreshLivePreview(forceFullRender) {
+  const secs = readBuilder();
+  const readySecs = secs.filter(s => s.status === 'ready');
+  const preview = $('#livePreview');
+  const stack = $('#livePaperStack');
+  if (!preview || !stack) return;
+  if (!readySecs.length) { preview.style.display = 'none'; return; }
+
+  // 构建 paperData（不改变全局 paperData）
+  const form = builderForm(true);
+  if (!form) { preview.style.display = 'none'; return; } // 校验不通过静默跳过，不弹 alert
+  const d = {
+    grade: form.grade, subject: form.subject, keyword: form.keyword,
+    title: $('#titleInput').value.trim(),
+    sections: readySecs.map(s => ({ type: s.type, data: s.data, _layout: (s.el._layout || {qCols:1, optCols:2, showNo:true}), _sid: s.el._sid || undefined })),
+    _manualOrder: true
+  };
+  // 全局题号
+  let no = 0;
+  d.sections.forEach(sec => sec.data.questions.forEach(q => { no++; q._no = no; q._qid = q._qid || `q${no}_${Math.random().toString(36).slice(2,7)}`; }));
+  d.allQs = d.sections.flatMap(s => s.data.questions);
+
+  // ── 增量模式：A4 纸上已有 sec-block 时，只追加新增的块，不重渲染（保留用户编辑）──
+  const existingBlocks = stack.querySelectorAll('.sec-block');
+  if (existingBlocks.length && existingBlocks.length < d.sections.length && !forceFullRender) {
+    paperData = d; // 更新全局数据（题号等）
+    // 只把新增加的 sections 渲染出来，插入到最后一页的 footer 前
+    const newSecs = d.sections.slice(existingBlocks.length);
+    const lastPaper = stack.querySelector('.paper:last-child') || stack.querySelector('.paper');
+    const exam = lastPaper?.querySelector('.exam');
+    if (exam) {
+      const tpl = currentTemplate || TEMPLATES[0];
+      const tmp = document.createElement('div');
+      newSecs.forEach((sec, k) => {
+        // 局部题号（每块内从 1 开始）
+        sec.data.questions.forEach((q, qi) => { q._secIdx = qi; });
+        tmp.innerHTML = renderSecHTML(sec, existingBlocks.length + k, { showScore: tpl.showScore, secTotal: () => '' });
+        const block = tmp.firstElementChild;
+        const footer = exam.querySelector('.footer-note');
+        if (footer) exam.insertBefore(block, footer); else exam.appendChild(block);
+      });
+      // 新块可编辑
+      makePaperEditable(stack);
+      // 更新汇总行
+      $('#sumLine').textContent = `📋 ${d.grade} ${d.subject} ｜ ${d.keyword} ｜ 共 ${no} 题（${d.sections.map(s => `${TYPE_NAME[s.type]}×${s.data.questions.length}`).join(' + ')}）｜ 满分 100 分`;
+    }
+    preview.style.display = '';
+    return;
+  }
+
+  // 渲染到 livePaperStack（只取学生卷，不含答案）
+  const oldPaperData = paperData;
+  const oldShowAnswers = showAnswers;
+  paperData = d;
+  showAnswers = false;
+  renderPaper();
+  const paperStack = $('#paperStack');
+  if (paperStack && stack) {
+    const firstPaper = paperStack.querySelector('.paper');
+    stack.innerHTML = firstPaper ? firstPaper.outerHTML : '';
+    paperStack.innerHTML = '';
+  }
+  // 让A4纸上关键元素可编辑
+  makePaperEditable(stack);
+  // A4 分页
+  paginateA4(stack);
+  // 恢复删除状态
+  const tplId = (currentTemplate || TEMPLATES[0]).id;
+  const dels = deletedElements[tplId] || {};
+  Object.keys(dels).forEach(key => {
+    if (dels[key]) {
+      const el = stack.querySelector(`[data-editable="${key}"]`);
+      if (el) { el.style.display = 'none'; el.dataset.deleted = '1'; }
+    }
+  });
+  paperData = oldPaperData;
+  showAnswers = oldShowAnswers;
+  preview.style.display = '';
+}
+
+/* 让A4纸上的标题、副标题、信息行、注意事项可点击编辑 */
+function makePaperEditable(stack) {
+  const paper = stack.querySelector('.paper');
+  if (!paper) return;
+  const els = [
+    { sel:'h1',             key:'title', multi:false },
+    { sel:'.sub-line',      key:'sub', multi:false },
+    { sel:'.info-row',      key:'info', multi:false },
+    { sel:'.notice',        key:'notice', multi:false },
+    { sel:'.footer-note',   key:'footer', multi:false },
+    { sel:'.sec',           key:'sec', multi:true }
+  ];
+  els.forEach(({sel, key, multi}) => {
+    const elements = multi ? paper.querySelectorAll(sel) : [paper.querySelector(sel)].filter(Boolean);
+    elements.forEach((el, idx) => {
+      if (!el) return;
+      el.contentEditable = 'true';
+      const keyId = multi ? key + idx : key;
+      el.dataset.editable = key;
+      el.classList.add('can-edit');
+      el.title = '点击编辑 · 右侧按钮可删除';
+      const del = document.createElement('span');
+      del.className = 'ed-del';
+      del.textContent = '✕';
+      del.title = '删除此元素';
+      del.onclick = (e) => { e.stopPropagation(); el.style.display = 'none'; el.dataset.deleted = '1'; const tplId = (currentTemplate || TEMPLATES[0]).id; if (!deletedElements[tplId]) deletedElements[tplId] = {}; deletedElements[tplId][keyId] = true; };
+      el.style.position = el.style.position || 'relative';
+      el.appendChild(del);
+    });
+  });
+  // 分数单独可删
+  paper.querySelectorAll('.score-box').forEach(box => {
+    box.contentEditable = 'true';
+    box.classList.add('can-edit');
+    box.title = '点击编辑 · 右侧可删除';
+    if (!box.querySelector('.ed-del')) {
+      const del = document.createElement('span');
+      del.className = 'ed-del';
+      del.textContent = '✕';
+      del.title = '删除此分数';
+      del.onclick = (e) => { e.stopPropagation(); box.style.display = 'none'; };
+      box.style.position = box.style.position || 'relative';
+      box.appendChild(del);
+    }
+  });
+  // 表格大小可拖拽调整
+  enableTableResize(paper);
+  // 表格单元格可编辑（改字号、颜色等）
+  paper.querySelectorAll('.q-table td').forEach(td => {
+    td.contentEditable = 'true';
+    td.classList.add('can-edit');
+  });
+  // 所有题目文字可编辑
+  paper.querySelectorAll('.q, .opts > div').forEach(el => {
+    el.contentEditable = 'true';
+    el.classList.add('can-edit');
+  });
+  // 非表格模式下每道题可独立拖拽宽高
+  enableCellResize(paper);
+}
+
+/* 非表格模式下每道题独立拖拽宽高 */
+function enableCellResize(paper) {
+  const cells = paper.querySelectorAll('.q-grid .q');
+  cells.forEach(cell => {
+    cell.style.position = cell.style.position || 'relative';
+    // 右下角拖拽手柄
+    if (!cell.querySelector('.cell-resizer')) {
+      const rz = document.createElement('span');
+      rz.className = 'cell-resizer';
+      rz.title = '拖拽调整大小';
+      rz.textContent = '⤡';
+      cell.appendChild(rz);
+      let sx, sy, sw, sh;
+      rz.addEventListener('mousedown', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        sx = e.clientX; sy = e.clientY;
+        sw = cell.offsetWidth; sh = cell.offsetHeight;
+        const onMove = (ev) => {
+          cell.style.width = Math.max(30, sw + ev.clientX - sx) + 'px';
+          cell.style.height = Math.max(20, sh + ev.clientY - sy) + 'px';
+        };
+        const onUp = () => {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
+  });
+}
+
+/* 同步 paperStack 到 livePaperStack，分页，恢复编辑状态 */
+function syncAndPaginate() {
+  const paperStack = $('#paperStack');
+  const liveStack = $('#livePaperStack');
+  if (!paperStack || !liveStack) return;
+  liveStack.innerHTML = paperStack.innerHTML;
+  paginateA4(liveStack);
+  makePaperEditable(liveStack);
+  // 恢复删除状态
+  const tplId = (currentTemplate || TEMPLATES[0]).id;
+  const dels = deletedElements[tplId] || {};
+  Object.keys(dels).forEach(key => {
+    if (dels[key]) {
+      const el = liveStack.querySelector(`[data-editable="${key}"]`);
+      if (el) { el.style.display = 'none'; el.dataset.deleted = '1'; }
+    }
+  });
+}
+
+/* 替换预览区模拟题目文字为 LLM 真实数据，不重渲染 */
+function patchLivePreviewInStack(stack, finalSecs) {
+  if (!stack) return;
+  // 按顺序匹配：遍历每个 section 下的题目，依次替换预览区里对应 section 的 .q
+  const secBlocks = stack.querySelectorAll('.sec-block');
+  finalSecs.forEach((sec, si) => {
+    if (!sec.data || !sec.data.questions) return;
+    const newQs = sec.data.questions;
+    const block = secBlocks[si];
+    if (!block) return;
+    const secLayout = sec._layout || {qCols:1, optCols:2, tableBorder:'none', fontSize:'', showNo:true};
+    const qEls = block.querySelectorAll('.q');
+    qEls.forEach((el, qi) => {
+      const newQ = newQs[qi];
+      if (!newQ) return;
+      // 数的分成：重新渲染内容，保留外层元素的样式
+      if (newQ.top != null) {
+        el.innerHTML = (secLayout.showNo === false ? '' : `${cirNum((newQ._no || (qi + 1)))} `) + renderNumberSplit(newQ, secLayout);
+        return;
+      }
+      // 比大小：重新渲染
+      if (newQ.left_expr != null) {
+        el.innerHTML = (secLayout.showNo === false ? '' : `${cirNum((newQ._no || (qi + 1)))} `) + renderCompare(newQ);
+        return;
+      }
+      const stemEl = el.querySelector('[data-e="stem"]');
+      if (stemEl && newQ.stem) {
+        const lv = newQ.difficulty_level ? `[第${newQ.difficulty_level}关] ` : '';
+        const circle = stemEl.textContent.match(/^[①-⑳]/);
+        const prefix = circle ? circle[0] + ' ' : '';
+        // 判断题：格式化题干（去句号、补括号）
+        const tfText = newQ.type === 'true_false' ? tfStem(newQ.stem) : newQ.stem;
+        stemEl.innerHTML = esc(prefix + lv + tfText);
+      }
+      const optsEl = el.querySelector('[data-e="opts"]');
+      if (optsEl && newQ.options) {
+        optsEl.innerHTML = newQ.options.map((o, j) =>
+          `<div>${String.fromCharCode(65 + j)}. ${esc(stripOptPrefix(o))}</div>`).join('');
+      }
+      const matchEl = el.querySelector('[data-e="match"]');
+      if (matchEl && newQ.left_items) {
+        matchEl.innerHTML = `<tr><th style="width:50%">左栏</th><th style="width:50%">右栏</th></tr>` +
+          newQ.left_items.map((lft, i) =>
+            `<tr data-i="${i}"><td>（${i + 1}）${esc(lft)}</td><td>（${i + 1}）${esc(newQ.right_items[i])}</td></tr>`).join('');
+      }
+    });
+  });
+}
+
+/* 重试出题：调 LLM，成功后同步到试卷 */
+async function retryCardFetch(card) {
+  try {
+    await fetchSecData(card, card.dataset.type, cardCount(card));
+    // 只更新卡片显示 + 同步到已有试卷区
+    renderSecBody(card);
+    syncCardToFinal(card);
+  } catch(e) {
+    console.warn('重试失败:', e);
+  }
+}
+
+/* 将单张卡片的新数据同步到 finalPaperStack + paperStack */
+function syncCardToFinal(card) {
+  const fps = $('#finalPaperStack');
+  if (!fps) return;
+  const block = fps.querySelector(`.sec-block[data-type="${card.dataset.type}"]`);
+  if (!block) return;
+  const newQs = card._data?.questions || [];
+  const qEls = block.querySelectorAll('.q');
+  qEls.forEach((el, qi) => {
+    const newQ = newQs[qi];
+    if (!newQ) return;
+    // 恢复失败时的灰色标记
+    el.style.opacity = '';
+    el.title = '';
+    const stemEl = el.querySelector('[data-e="stem"]');
+    if (stemEl && newQ.stem) {
+      const lv = newQ.difficulty_level ? `[第${newQ.difficulty_level}关] ` : '';
+      const circle = stemEl.textContent.match(/^[①-⑳]/);
+      const prefix = circle ? circle[0] + ' ' : '';
+      // 判断题：格式化题干（去句号、补括号）
+      const tfText2 = newQ.type === 'true_false' ? tfStem(newQ.stem) : newQ.stem;
+      stemEl.innerHTML = esc(prefix + lv + tfText2);
+    }
+    const optsEl = el.querySelector('[data-e="opts"]');
+    if (optsEl && newQ.options) {
+      optsEl.innerHTML = newQ.options.map((o, j) =>
+        `<div>${String.fromCharCode(65 + j)}. ${esc(stripOptPrefix(o))}</div>`).join('');
+    }
+    const matchEl = el.querySelector('[data-e="match"]');
+    if (matchEl && newQ.left_items) {
+      matchEl.innerHTML = `<tr><th style="width:50%">左栏</th><th style="width:50%">右栏</th></tr>` +
+        newQ.left_items.map((lft, i) =>
+          `<tr data-i="${i}"><td>（${i + 1}）${esc(lft)}</td><td>（${i + 1}）${esc(newQ.right_items[i])}</td></tr>`).join('');
+    }
+  });
+  // 移除失败提示条（如果没有其他失败题型了）
+  const tip = fps.querySelector('.sec-block[style*="fff5f5"]');
+  if (tip) {
+    // 检查是否还有其他灰色的题
+    const stillFailed = [...fps.querySelectorAll('.q')].some(q => q.style.opacity === '0.35');
+    if (!stillFailed) tip.remove();
+    else tip.innerHTML = `<b>⚠ 以下题型生成失败：</b> ` +
+      [...new Set([...fps.querySelectorAll('.q')].filter(q => q.style.opacity === '0.35')
+        .map(q => q.closest('.sec-block')?.dataset.type))
+        .filter(Boolean).map(t => TYPE_NAME[t] || t)].join('、') +
+      `<br><small>已显示为灰色，如需重试请返回搭建区点击"↻ 重试"</small>`;
+  }
+  const ps = $('#paperStack');
+  if (ps) ps.innerHTML = fps.innerHTML;
+}
+
+/* A4 分页：超出一张纸高度的内容自动分到下一张 */
+function paginateA4(stack) {
+  const papers = stack.querySelectorAll('.paper');
+  if (!papers.length) return;
+  const firstPaper = papers[0];
+  const exam = firstPaper.querySelector('.exam');
+  if (!exam) return;
+  const secBlocks = exam.querySelectorAll('.sec-block');
+  if (!secBlocks.length) return;
+
+  // 1. 锁定一页纸高度，测量"可用内容高度"（纸高 - 上下 padding）
+  firstPaper.style.height = '297mm';
+  firstPaper.style.overflow = 'hidden';
+  const cs = getComputedStyle(firstPaper);
+  const availH = firstPaper.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+
+  // 2. 解除高度限制，测量每个大题块的真实高度 + 卷头高度
+  firstPaper.style.height = 'auto';
+  firstPaper.style.overflow = 'visible';
+
+  // 卷头 = .sec-block 之前的所有元素（大标题、信息栏、注意事项等）；页脚单独提出，只放最后一页
+  let headerHTML = '';
+  let headerH = 0;
+  let footerHTML = '';
+  for (const k of Array.from(exam.children)) {
+    if (k.classList && k.classList.contains('sec-block')) break;
+    if (k.classList && k.classList.contains('footer-note')) { footerHTML = k.outerHTML; continue; }
+    headerHTML += k.outerHTML;
+    headerH += k.offsetHeight || 0;
+  }
+
+  const blocks = Array.from(secBlocks).map(b => ({ html: b.outerHTML, h: b.offsetHeight || 0 }));
+
+  // 3. 恢复锁定
+  firstPaper.style.height = '297mm';
+  firstPaper.style.overflow = 'hidden';
+
+  // 4. 按块切页：每页容量 = 可用高度 - 卷头（每页都带卷头，保持一致）
+  const pageCap = availH - headerH - 2; // -2px 余量
+  const pages = [];
+  let cur = [], curH = 0;
+  for (const b of blocks) {
+    if (cur.length && curH + b.h > pageCap) {
+      pages.push(cur);
+      cur = []; curH = 0;
+    }
+    cur.push(b);
+    curH += b.h;
+  }
+  if (cur.length) pages.push(cur);
+  if (pages.length <= 1) return; // 一页装得下，无需分页
+
+  // 5. 第一页 = 卷头 + 第一组块（+ 单页时附页脚）
+  exam.innerHTML = headerHTML + pages[0].map(b => b.html).join('') + (pages.length === 1 ? footerHTML : '');
+
+  // 6. 后续页：克隆纸张结构，替换内容；最后一页附页脚
+  const wrapper = firstPaper.parentElement;
+  for (let i = 1; i < pages.length; i++) {
+    const newPage = firstPaper.cloneNode(true);
+    newPage.style.width = '210mm';
+    newPage.style.height = '297mm';
+    newPage.style.maxWidth = '210mm';
+    newPage.style.overflow = 'hidden';
+    newPage.querySelector('.exam').innerHTML = headerHTML + pages[i].map(b => b.html).join('') + (i === pages.length - 1 ? footerHTML : '');
+    wrapper.appendChild(newPage);
+  }
+}
+
+function enableTableResize(paper) {
+  const tables = paper.querySelectorAll('.q-table');
+  tables.forEach(table => {
+    // 给每个 td 加拖拽手柄（右边缘=列宽，底边缘=行高）
+    table.querySelectorAll('td').forEach(td => {
+      td.style.position = td.style.position || 'relative';
+      // 列宽拖拽 —— 右边缘
+      if (!td.querySelector('.col-resizer')) {
+        const cr = document.createElement('span');
+        cr.className = 'col-resizer';
+        cr.title = '拖拽调整列宽';
+        td.appendChild(cr);
+        cr.addEventListener('mousedown', (e) => {
+          e.preventDefault(); e.stopPropagation();
+          const colIndex = Array.from(td.parentElement.children).indexOf(td);
+          const allRows = table.querySelectorAll('tr');
+          const sx = e.clientX;
+          const sw = td.offsetWidth;
+          const onMove = (ev) => {
+            const w = Math.max(15, sw + ev.clientX - sx);
+            allRows.forEach(row => {
+              const cell = row.children[colIndex];
+              if (cell) cell.style.width = w + 'px';
+            });
+          };
+          const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+          };
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
+      }
+      // 行高拖拽 —— 底边缘
+      if (!td.querySelector('.row-resizer')) {
+        const rr = document.createElement('span');
+        rr.className = 'row-resizer';
+        rr.title = '拖拽调整行高';
+        td.appendChild(rr);
+        rr.addEventListener('mousedown', (e) => {
+          e.preventDefault(); e.stopPropagation();
+          const row = td.closest('tr');
+          const sy = e.clientY;
+          const sh = td.offsetHeight;
+          const onMove = (ev) => {
+            const h = Math.max(15, sh + ev.clientY - sy);
+            row.querySelectorAll('td').forEach(t => t.style.height = h + 'px');
+          };
+          const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+          };
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
+      }
+    });
+  });
+}
+
+/* 卷面为空时闪烁提示 */
+function flashBuilder() {
+  const p = $('#builderPanel');
+  if (!p) return;
+  p.classList.remove('need-attn');
+  void p.offsetWidth;
+  p.classList.add('need-attn');
+  setTimeout(() => p.classList.remove('need-attn'), 2000);
+}
+
+/* ── 难度 ── */
+document.querySelectorAll('.diff').forEach(d => d.onclick = () => {
+  document.querySelectorAll('.diff').forEach(x => x.classList.remove('on-1','on-2','on-3'));
+  d.classList.add(d.dataset.v === 'easy' ? 'on-1' : d.dataset.v === 'medium' ? 'on-2' : 'on-3');
+  curDiff = d.dataset.v;
+});
+
+/* ── 组卷（题目已在搭建区实时生成，这里只是组装渲染） ── */
+async function doGenerate() {
+  const secs = readBuilder();
+  if (!secs.length) {
+    flashBuilder();
+    alert('卷面还是空的～ 点击左侧题型卡片，先出题加进右侧卷面。');
+    return;
+  }
+  // ⚠ 挂起预览刷新：LLM 替换数据期间不要重渲染预览区，保留编辑效果
+  suspendPreviewRefresh = true;
+  let form = builderForm(true);
+  if (!form) {
+    // 可能是模板加载后的场景，用隐藏 select 的当前值兜底
+    form = {
+      grade: $('#grade').value || '小学一年级',
+      subject: $('#subject').value || '数学',
+      keyword: $('#keyword').value.trim() || '练习'
+    };
+  }
+
+  // 将模拟数据替换为 LLM 真实题目（批量一次调用）
+  const failedTypes = [];
+  const mockCards = document.querySelectorAll('#secList .sec-card');
+  // 所有 ready 的卡片都要调 AI（不依赖 _mock 判断，每次生成都是全新调用）
+  const needFetch = Array.from(mockCards).filter(c => c._status === 'ready');
+  needFetch.forEach(c => { c._mock = true; }); // 确保 AI 会替换
+  if (needFetch.length) {
+    const btn = $('#btnGo');
+    btn.disabled = true;
+    try {
+      // 构造批量请求项（同题型多块合并，取最大题数）
+      const items = [];
+      const cardByType = {};
+      needFetch.forEach(card => {
+        const t = card.dataset.type;
+        if (!cardByType[t]) {
+          cardByType[t] = [];
+          items.push({ game_type: t, question_count: cardCount(card) });
+        }
+        cardByType[t].push(card);
+      });
+      items.forEach(it => {
+        const cards = cardByType[it.game_type];
+        it.question_count = Math.max(...cards.map(c => cardCount(c)));
+      });
+
+      btn.textContent = `⏳ AI 出题中（整卷 1 次请求）…`;
+      const form2 = builderForm();
+      // 读取份数：多份时逐份生成（每份题目不同）
+      const nPapers = Math.max(1, parseInt($('#paperCount')?.value) || 1);
+      const addDay = $('#addDayLabel')?.checked ?? false;
+      if (nPapers > 1) btn.textContent = `⏳ AI 出题中（共 ${nPapers} 份，逐份生成）…`;
+      const fetchOne = async () => {
+        const r = await fetch(API + '/api/v1/generate-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            grade: form2.grade, subject: form2.subject, keyword: form2.keyword,
+            difficulty: curDiff, items,
+            llm_base_url: loadLlmCfg().baseUrl || undefined,
+            llm_model: loadLlmCfg().model || undefined,
+            llm_api_key: loadLlmCfg().apiKey || undefined
+          })
+        });
+        if (!r.ok) {
+          const e = await r.json().catch(() => ({}));
+          throw new Error(e.detail?.error || ('HTTP ' + r.status));
+        }
+        return await r.json();
+      };
+      const data = await fetchOne();
+      // 多份：其余份数据存入 batchPapers（第一份已在上面正常处理）
+      batchPapers = [];
+      if (nPapers > 1) {
+        for (let k = 1; k < nPapers; k++) {
+          btn.textContent = `⏳ AI 出题中（第 ${k + 1}/${nPapers} 份）…`;
+          try {
+            const d2 = await fetchOne();
+            batchPapers.push({ sections: d2.sections || [], layouts: needFetch.map(c => Object.assign({}, c._layout || {qCols:1,optCols:2,showNo:true})) });
+          } catch (err) {
+            console.warn(`第 ${k + 1} 份生成失败，跳过`, err);
+          }
+        }
+        // 更新导出按钮文案
+        const be1 = $('#btnBatchExport');
+        if (be1) be1.textContent = `📦 导出全部（${batchPapers.length + 1} 份）`;
+        const me1 = $('#btnMergeExport');
+        if (me1) me1.textContent = `📄 合并 PDF（${batchPapers.length + 1} 份合一）`;
+      }
+      batchAddDay = addDay && nPapers > 1;
+      // 将返回的 sections 按题型回填到卡片
+      (data.sections || []).forEach((sec, idx) => {
+        const t = items[idx]?.game_type;
+        const cards = cardByType[t] || [];
+        cards.forEach(card => {
+          card._data = sec;
+          card._mock = false;
+          card._status = 'ready';
+          card.classList.remove('loading');
+          const input = card.querySelector('.s-cnt input');
+          if (input) input.value = (sec.questions || []).length;
+          renderSecBody(card);
+        });
+      });
+      // 没覆盖到的卡片标记失败（保持模拟数据）
+      needFetch.forEach(card => {
+        if (card._mock) {
+          failedTypes.push({ type: card.dataset.type, name: TYPE_NAME[card.dataset.type] || card.dataset.type });
+        }
+      });
+      updateBuilderSummary();
+    } catch(e) {
+      console.warn('AI 批量出题失败，使用模拟数据:', e.message);
+      failedTypes.push({ type: '批量', name: e.message });
+    } finally {
+      btn.textContent = '🚀 生成试卷';
+      btn.disabled = false;
+    }
+  }
+
+  // 重读搭建区（数据已更新）
+  const finalSecs = readBuilder();
+  finalSecs.forEach(s => syncCardEdits(s.el));
+  paperData = {
+    grade: form?.grade || '小学一年级',
+    subject: form?.subject || '数学',
+    keyword: form?.keyword || '练习',
+    title: $('#titleInput').value.trim(),
+    sections: finalSecs.map(s => ({ type: s.type, data: s.data, _layout: (s.el._layout || {qCols:1, optCols:2, showNo:true}) })),
+    _manualOrder: true
+  };
+  showAnswers = false;
+  $('#btnPreviewAns').textContent = '👁 预览答案';
+  // 用 livePaperStack 作为最终试卷区（保留所有格式编辑）
+  const liveStack = $('#livePaperStack');
+  const fps = $('#finalPaperStack');
+  const ps = $('#paperStack');
+  if (liveStack && fps && ps) {
+    // 先把 livePaperStack 里的 mock 内容替换为 AI 数据（保留格式标签）
+    patchLivePreviewInStack(liveStack, finalSecs);
+    const rendered = liveStack.innerHTML;
+    fps.innerHTML = rendered;
+    ps.innerHTML = rendered;
+    if (failedTypes.length) {
+      const failedTypeSet = new Set(failedTypes.map(f => f.type));
+      fps.querySelectorAll('.sec-block').forEach(block => {
+        if (failedTypeSet.has(block.dataset.type)) {
+          const qs = block.querySelectorAll('.q');
+          qs.forEach(q => {
+            q.style.opacity = '0.35';
+            q.title = '此题生成失败';
+          });
+        }
+      });
+      const tipDiv = document.createElement('div');
+      tipDiv.className = 'sec-block';
+      tipDiv.style.cssText = 'padding:4mm;border:2px dashed #e88;background:#fff5f5;margin-bottom:4mm;color:#c33;font-size:10pt';
+      tipDiv.innerHTML = `<b>⚠ 以下题型生成失败：</b> ${failedTypes.map(f=>f.name).join('、')}<br><small>已显示为灰色，如需重试请返回搭建区点击"↻ 重试"</small>`;
+      const exam = fps.querySelector('.exam');
+      if (exam) exam.insertBefore(tipDiv, exam.firstChild);
+      ps.innerHTML = fps.innerHTML;
+    }
+  }
+  $('#resultArea').style.display = 'block';
+  // 弹层关闭：按钮 / 点遮罩空白处 / ESC
+  $('#btnCloseResult').onclick = () => { $('#resultArea').style.display = 'none'; };
+  $('#resultArea').onclick = (e) => {
+    if (e.target === $('#resultArea')) $('#resultArea').style.display = 'none';
+  };
+  document.onkeydown = (e) => {
+    if (e.key === 'Escape' && $('#resultArea').style.display === 'block') $('#resultArea').style.display = 'none';
+  };
+  // 恢复预览刷新
+  suspendPreviewRefresh = false;
+}
+$('#btnGo').onclick = doGenerate;
+
+$('#btnSaveLayout').onclick = () => {
+  const cards = document.querySelectorAll('#secList .sec-card');
+  if (!cards.length) { alert('还没有题目，先出题再保存模板'); return; }
+  const name = prompt('请输入模板名称：', '我的模板');
+  if (!name || !name.trim()) return;
+  const form = builderForm(false);
+  if (!form) return;
+  // 保存预览区 A4 纸完整 DOM（含所有格式编辑）
+  const liveStack = $('#livePaperStack');
+  const paperSnapshot = liveStack ? liveStack.innerHTML : '';
+  const tpl = {
+    name: name.trim(),
+    grade: form.grade,
+    subject: form.subject,
+    keyword: $('#keyword').value.trim(),
+    cards: Array.from(cards).map(card => ({
+      type: card.dataset.type,
+      _layout: Object.assign({}, card._layout || {qCols:1, optCols:2, tableBorder:'none', fontSize:'', showNo:true}),
+      count: cardCount(card)
+    })),
+    paperSnapshot
+  };
+  const templates = getTemplates();
+  // 同名覆盖
+  const idx = templates.findIndex(t => t.name === tpl.name);
+  if (idx >= 0) templates[idx] = tpl; else templates.unshift(tpl);
+  saveTemplates(templates);
+  refreshTplDrop();
+  // 视觉反馈
+  const btn = $('#btnSaveLayout');
+  btn.textContent = '✅ 已保存';
+  setTimeout(() => { btn.textContent = '💾 保存模板'; }, 2000);
+};
+
+/* 重新生成 = 搭建区所有大题全部换一批新题 */
+/* 重新打开已生成的试卷弹层 */
+$('#btnReopenResult').onclick = () => {
+  if (!paperData) { alert('还没有生成过试卷，先点「🚀 生成试卷」'); return; }
+  // 同步 livePaperStack 的最新内容到 paperStack（导出源）
+  const live = $('#livePaperStack');
+  const ps = $('#paperStack');
+  if (live && ps && live.querySelector('.paper')) ps.innerHTML = live.innerHTML;
+  $('#resultArea').style.display = 'block';
+};
+
+/* 搭建区 contenteditable 编辑内容 → 回写到大题数据（组卷前调用） */
+function syncCardEdits(card) {
+  if (!card._data?.questions) return;
+  const type = card.dataset.type;
+  if (type === 'reading') {
+    const p = card.querySelector('.s-passage');
+    if (p) card._data.passage = p.innerText.trim();
+  }
+  card.querySelectorAll('.s-q').forEach(qEl => {
+    const q = card._data.questions[parseInt(qEl.dataset.i)];
+    if (!q) return;
+    const stemEl = qEl.querySelector('.s-q-stem');
+    if (stemEl && q.stem != null) q.stem = stemEl.innerText.trim();
+    qEl.querySelectorAll('.s-opts > div').forEach(oEl => {
+      const j = parseInt(oEl.dataset.oi);
+      if (q.options && q.options[j] != null) {
+        const m = oEl.innerText.trim().match(/^[A-H][.、：:．]\s*(.+)$/);
+        q.options[j] = m ? m[1] : oEl.innerText.trim();
+      }
+    });
+    const tds = qEl.querySelectorAll('.s-match td');
+    tds.forEach((td, k) => {
+      if (!q.left_items || !q.right_items) return;
+      if (k % 2 === 0) q.left_items[k / 2] = td.innerText.trim();
+      else q.right_items[(k - 1) / 2] = td.innerText.trim();
+    });
+  });
+}
+$('#btnBackBuilder').onclick = () => {
+  flashBuilder();
+  $('#builderPanel').scrollIntoView({ behavior: 'smooth', block: 'center' });
+};
+
+/* ── 渲染试卷 ── */
+function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* 判断题题干格式化：去掉末尾句号，补（　）括号 */
+function tfStem(s) {
+  let t = String(s ?? '').trim();
+  t = t.replace(/。+\s*$/, '');            // 去掉末尾句号
+  if (!/[（(]\s*[）)]\s*$/.test(t)) t += '（　）'; // 没括号则补
+  return t;
+}
+
+/* 判断数的分成字段是否为空（兼容 __、____、空串、null、'?'） */
+function isBlankVal(v) {
+  if (v === null || v === undefined) return true;
+  const s = String(v).trim();
+  return s === '' || /^_+$/.test(s) || s === '?' || s === '□';
+}
+
+/* 数的分成渲染：返回 HTML 字符串（树状图，用 SVG 画斜线） */
+function renderNumberSplit(q, layout) {
+  const topIsBlank = isBlankVal(q.top);
+  const leftIsBlank = isBlankVal(q.left);
+  const rightIsBlank = isBlankVal(q.right);
+  const topVal = topIsBlank ? '' : q.top;
+  const leftVal = leftIsBlank ? '' : q.left;
+  const rightVal = rightIsBlank ? '' : q.right;
+  return `<div class="split-wrap">
+    <div class="split-box${topIsBlank ? ' blank' : ''}">${esc(topVal)}</div>
+    <svg class="split-lines" viewBox="0 0 120 22" preserveAspectRatio="none">
+      <path d="M60 0 L30 22 M60 0 L90 22" />
+    </svg>
+    <div class="split-bottom">
+      <span class="split-box${leftIsBlank ? ' blank' : ''}">${esc(leftVal)}</span>
+      <span class="split-box${rightIsBlank ? ' blank' : ''}">${esc(rightVal)}</span>
+    </div>
+  </div>`;
+}
+
+/* 比大小渲染 */
+function renderCompare(q) {
+  return `<div class="compare-row">
+    <span class="compare-expr">${esc(q.left_expr)}</span>
+    <span class="compare-circle"></span>
+    <span class="compare-expr">${esc(q.right_expr)}</span>
+  </div>`;
+}
+function cirNum(n) { const c = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳'; return n <= 20 ? c[n - 1] : `${n}.`; }
+
+function ansText(q) {
+  if (q.options && typeof q.answer === 'number') return String.fromCharCode(65 + q.answer);
+  if (Array.isArray(q.answer)) return q.answer.map(p => `${p[0]+1}－${p[1]+1}`).join('，');
+  return String(q.answer);
+}
+
+/* 剥掉 LLM 可能误带的选项字母前缀（如 "A." "B：" "(C)" "D、"），避免出现 "A. A" 重复 */
+function stripOptPrefix(o) {
+  const m = String(o).trim().match(/^(?:[（(][A-H][）)]|[A-H](?:\.|:|：|、|．|\)|）))\s*(.+)$/);
+  return m ? m[1] : String(o);
+}
+
+/* 渲染单个大题块的 HTML（renderPaper 与增量追加共用） */
+function renderSecHTML(sec, si, opts) {
+  const qs = sec.data.questions;
+  const secLayout = sec._layout || {qCols:1, optCols:2, tableBorder:'none', fontSize:'', showNo:true};
+  secLayout.tableBorder = secLayout.tableBorder || 'none';
+  secLayout.qCols = secLayout.qCols || 1;
+  const fsStyle = secLayout.fontSize ? `font-size:${secLayout.fontSize};` : '';
+  sec._sid = sec._sid || `s${si}_${Math.random().toString(36).slice(2,7)}`;
+  let html = `<div class="sec-block" data-type="${sec.type}" data-sid="${sec._sid}">`;
+  const ENCOURAGE_MAP = { quiz:'选一选，我最棒！', fill_blank:'填一填，我能行！', true_false:'判一判，我会辨！', match_pair:'连一连，找朋友！', oral_math:'算一算，我最快！', vertical_calc:'算一算，我最快！', recursive_calc:'算一算，我最快！', smart_calc:'算一算，我最巧！', number_split:'分一分，难不倒我！', compare:'比一比，我细心！', word_problem:'解一解，我最聪明！', reading:'读一读，我最认真！', challenge:'闯一闯，我是小勇士！' };
+  const encTag = (typeof PAPER_KID !== 'undefined' && PAPER_KID.encourage && ENCOURAGE_MAP[sec.type]) ? `<span class="encourage">${ENCOURAGE_MAP[sec.type]}</span>` : '';
+  html += `<h2 class="sec"><span>${CN_NUM[si]}、${TYPE_NAME[sec.type]}</span>${encTag}` + (opts.showScore ? `<span class="score-box">共 ${opts.secTotal(sec)} 分</span>` : '') + `</h2>`;
+
+  if (sec.type === 'reading' && sec.data.passage) {
+    html += `<div class="reading-box" data-e="passage">${esc(sec.data.passage).replace(/\n/g, '<br>')}</div>`;
+  }
+
+  const hasBorder = secLayout.tableBorder && secLayout.tableBorder !== 'none';
+  if (hasBorder) {
+    const rows = [];
+    for (let i = 0; i < qs.length; i += secLayout.qCols) {
+      rows.push(qs.slice(i, i + secLayout.qCols));
+    }
+    const tblColor = secLayout.tableBorder === 'dashed' ? '#ccc' : '#333';
+    html += `<table class="q-table" style="border-collapse:collapse;width:100%;border:1px ${secLayout.tableBorder} ${tblColor};margin:0;">`;
+    rows.forEach(row => {
+      html += `<tr>`;
+      row.forEach(q => {
+        const lv = q.difficulty_level ? `<span class="lv">[第${q.difficulty_level}关]</span> ` : '';
+        let stem = q.stem ? esc(q.stem) : '';
+        if (q.type === 'true_false') stem = esc(tfStem(q.stem));
+        const noTag = secLayout.showNo === false ? '' : `${cirNum(q._secIdx + 1)} `;
+        const isSplit = q.top != null;
+        const isCompare = q.left_expr != null;
+        const stemHtml = isSplit ? '' : (isCompare ? '' : `${noTag}${lv}${stem}`);
+        html += `<td style="border:1px ${secLayout.tableBorder} ${tblColor};padding:1mm 3mm;vertical-align:top;${fsStyle}">`;
+        html += `<div class="q" data-qid="${q._qid}" style="${fsStyle}">`;
+        if (isSplit) {
+          html += `${noTag}${renderNumberSplit(q, secLayout)}`;
+        } else if (isCompare) {
+          html += `${noTag}${renderCompare(q)}`;
+        } else {
+          html += `<div data-e="stem">${stemHtml}</div>`;
+          if (q.options) {
+            html += `<div class="opts" data-e="opts" style="grid-template-columns:repeat(${secLayout.optCols},1fr)">` + q.options.map((o, j) =>
+              `<div>${String.fromCharCode(65 + j)}. ${esc(stripOptPrefix(o))}</div>`).join('') + `</div>`;
+          } else if (q.left_items) {
+            html += `<table class="match-table" data-e="match"><tr><th style="width:50%">左栏</th><th style="width:50%">右栏</th></tr>`;
+            q.left_items.forEach((lft, i) => {
+              html += `<tr data-i="${i}"><td>（${i + 1}）${esc(lft)}</td><td>（${i + 1}）${esc(q.right_items[i])}</td></tr>`;
+            });
+            html += `</table>`;
+          }
+        }
+        html += `</div></td>`;
+      });
+      while (row.length < secLayout.qCols) {
+        html += `<td style="border:1px ${secLayout.tableBorder} ${tblColor};padding:1mm 3mm;${fsStyle}"></td>`;
+        row.push(null);
+      }
+      html += `</tr>`;
+    });
+    html += `</table>`;
+  } else {
+    html += `<div class="q-grid" style="display:grid;grid-template-columns:repeat(${secLayout.qCols},1fr);column-gap:${secLayout.qCols>1?'12mm':'0'}">`;
+    qs.forEach(q => {
+      const lv = q.difficulty_level ? `<span class="lv">[第${q.difficulty_level}关]</span> ` : '';
+      let stem = q.stem ? esc(q.stem) : '';
+      if (q.type === 'true_false') stem = esc(tfStem(q.stem));
+      const noTag = secLayout.showNo === false ? '' : `${cirNum(q._secIdx + 1)} `;
+      const isSplit = q.top != null;
+      const isCompare = q.left_expr != null;
+      html += `<div class="q" data-qid="${q._qid}" style="${fsStyle}">`;
+      if (isSplit) {
+        html += `${noTag}${renderNumberSplit(q, secLayout)}`;
+      } else if (isCompare) {
+        html += `${noTag}${renderCompare(q)}`;
+      } else {
+        html += `<div data-e="stem">${noTag}${lv}${stem}</div>`;
+        if (q.options) {
+          html += `<div class="opts" data-e="opts" style="grid-template-columns:repeat(${secLayout.optCols},1fr)">` + q.options.map((o, j) =>
+            `<div>${String.fromCharCode(65 + j)}. ${esc(stripOptPrefix(o))}</div>`).join('') + `</div>`;
+        } else if (q.left_items) {
+          html += `<table class="match-table" data-e="match"><tr><th style="width:50%">左栏</th><th style="width:50%">右栏</th></tr>`;
+          q.left_items.forEach((lft, i) => {
+            html += `<tr data-i="${i}"><td>（${i + 1}）${esc(lft)}</td><td>（${i + 1}）${esc(q.right_items[i])}</td></tr>`;
+          });
+          html += `</table>`;
+        }
+      }
+      html += `</div>`;
+    });
+    html += `</div>`; // q-grid
+  }
+  html += `</div>`; // sec-block
+  return html;
+}
+
+function renderPaper() {
+  const d = paperData;
+
+  // 大题按固定顺序排列（客观题→计算题→主观题）；人工排版过的卷子保持用户顺序
+  if (!d._manualOrder) {
+    d.sections.sort((a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type));
+  }
+
+  // 每题独立编号（每块从 1 开始）
+  let no = 0;
+  d.sections.forEach(sec => { sec._startNo = no + 1; sec.data.questions.forEach(q => { no++; q._no = no; q._secIdx = q._no - sec._startNo; q._qid = q._qid || `q${no}_${Math.random().toString(36).slice(2,7)}`; }); });
+  d.allQs = d.sections.flatMap(s => s.data.questions);
+  const totalQ = no;
+
+  // 分值：客观题(有选项)每题2分，其余平摊剩余，总和恒为 100
+  const isObj = q => !!q.options;
+  const objQs = [], subQs = [];
+  d.sections.forEach(sec => sec.data.questions.forEach(q => (isObj(q) ? objQs : subQs).push(q)));
+  const score = new Map();
+  if (subQs.length) {
+    objQs.forEach(q => score.set(q, 2));
+    let remain = Math.max(100 - objQs.length * 2, subQs.length);
+    const base = Math.floor(remain / subQs.length);
+    let extra = remain - base * subQs.length;
+    subQs.forEach(q => { score.set(q, base + (extra-- > 0 ? 1 : 0)); });
+  } else {
+    const base = Math.floor(100 / totalQ);
+    let extra = 100 - base * totalQ;
+    d.allQs.forEach(q => { score.set(q, base + (extra-- > 0 ? 1 : 0)); });
+  }
+  const secTotal = sec => sec.data.questions.reduce((s, q) => s + score.get(q), 0);
+
+  $('#sumLine').textContent = `📋 ${d.grade} ${d.subject} ｜ ${d.keyword} ｜ 共 ${totalQ} 题（${d.sections.map(s => `${TYPE_NAME[s.type]}×${s.data.questions.length}`).join(' + ')}）｜ 满分 100 分`;
+
+  // ── 学生卷 ──
+  const tpl = currentTemplate || TEMPLATES[0];
+  const showScore = tpl.showScore;
+  const showInfoRow = tpl.showInfoRow;
+  const showNotice = tpl.showNotice;
+
+  // 低年级自动放大：一、二年级（用户未手动设置时跟随年级自动开）
+  const _gnum = gradeNumOf(d.grade) || 0;
+  const kidAuto = PAPER_KID.font === 'auto' ? (_gnum >= 1 && _gnum <= 2) : (PAPER_KID.font === 'on');
+  let html = `<div class="paper" data-seccolor="${PAPER_BG.secColor ? 1 : 0}" data-frame="${PAPER_KID.frame}" data-encourage="${PAPER_KID.encourage ? 1 : 0}" data-reward="${PAPER_KID.reward ? 1 : 0}" data-kid="${kidAuto ? 1 : 0}" style="width:210mm;height:297mm;overflow:hidden;display:flex;flex-direction:column"><div class="paper-frame-layer"></div><div class="paper-bg-layer" data-bg="${PAPER_BG.style}"></div><div class="exam" style="flex:1;display:flex;flex-direction:column">`;
+  // 标题：优先用用户输入的titleInput，否则用模板组合
+  const paperTitle = d.title || (tpl.titlePrefix ? (tpl.titlePrefix + ' · ' + d.grade + d.subject + (tpl.titleSuffix||'')) : (d.grade + d.subject + (tpl.titleSuffix||'测试卷')));
+  html += `<div class="exam-head"${PAPER_BG.banner ? '' : ' data-plain="1"'}>`;
+  html += `<h1>${esc(paperTitle)}</h1>`;
+  // 副标题行
+  const subParts = [];
+  if (tpl.headerExtra) subParts.push(tpl.headerExtra);
+  subParts.push('范围：' + esc(d.keyword));
+  subParts.push('难度：' + DIFF_NAME[curDiff]);
+  if (showScore) subParts.push('满分 100 分');
+  html += `<div class="sub-line">${subParts.join(' ｜ ')}</div>`;
+  // 信息栏
+  if (showInfoRow) {
+    html += `<div class="info-row"><div>姓名：<span>&nbsp;</span></div><div>班级：<span>&nbsp;</span></div><div>学号：<span>&nbsp;</span></div><div>得分：<span>&nbsp;</span></div></div>`;
+  }
+  html += `</div>`;
+  // 注意事项
+  if (showNotice) {
+    html += `<div class="notice"><b>注意事项：</b>① 答题前请将姓名、班级填写清楚；② 选择题答案填入答题卡；③ 保持卷面整洁，字迹工整。</div>`;
+  }
+
+  // 各大题块（复用 renderSecHTML）
+  d.sections.forEach((sec, si) => {
+    html += renderSecHTML(sec, si, { showScore, secTotal });
+  });
+  if (typeof PAPER_KID !== 'undefined' && PAPER_KID.reward) {
+    html += `<div class="reward-box"><span class="reward-title">今天的表现：</span><span class="reward-stars">☆ ☆ ☆</span><span class="reward-msg">老师给你涂星星～</span></div>`;
+  }
+  html += `<div class="footer-note" style="margin-top:auto">${esc(tpl.footer || '')}</div>`;
+  html += `</div></div>`;
+
+  $('#paperStack').innerHTML = html;
+}
+
+/* ── 预览答案 / 打印 ── */
+$('#btnPreviewAns').onclick = () => {
+  showAnswers = !showAnswers;
+  if (showAnswers) fillBlanks(); else clearBlanks();
+  $('#btnPreviewAns').textContent = showAnswers ? '👁 隐藏答案' : '👁 预览答案';
+};
+
+function fillBlanks() {
+  if (!paperData) return;
+  document.querySelectorAll('#paperStack .paper:first-child .q').forEach(el => {
+    if (el.querySelector('.q-ans-inline')) return;
+    const qid = el.dataset.qid;
+    const q = qid ? paperData.allQs.find(x => x._qid === qid) : null;
+    if (!q) return;
+    let a;
+    if (q.top != null) {
+      // 数的分成：答案即空位填入的数字
+      const t = isBlankVal(q.top) ? q.answer : q.top;
+      const l = isBlankVal(q.left) ? q.answer : q.left;
+      const r = isBlankVal(q.right) ? q.answer : q.right;
+      a = `${t} 分成 ${l} 和 ${r}`;
+    } else if (q.left_expr != null) {
+      // 比大小
+      a = `${q.left_expr} ○ ${q.right_expr} → ${q.answer}`;
+    } else if (q.left_items) {
+      a = q.answer.map(p => `（${p[0] + 1}）→（${p[1] + 1}）`).join('；');
+    } else {
+      a = ansText(q);
+      if (q.options && typeof q.answer === 'number') a += `（${stripOptPrefix(q.options[q.answer])}）`;
+    }
+    const span = document.createElement('div');
+    span.className = 'q-ans-inline';
+    span.style.cssText = 'color:#d0342c;font-weight:600;font-size:10.5pt;margin-top:1mm;';
+    span.textContent = `✎ 答案：${a}`;
+    el.appendChild(span);
+  });
+}
+function clearBlanks() {
+  document.querySelectorAll('#paperStack .q-ans-inline').forEach(el => el.remove());
+}
+
+/* ── 人工排版模式（SortableJS 拖拽 + contenteditable 编辑）── */
+let layoutMode = false;
+let sortables = [];
+
+function initLayoutMode() {
+  const stack = $('#paperStack');
+  const tip = document.createElement('div');
+  tip.className = 'layout-tip';
+  tip.innerHTML = `<b>✏️ 排版模式</b>：拖 ⠿ 调整顺序（题目可跨大题移动）｜虚线框文字点击可直接修改｜✕ 删除题目或大题｜完成后点「✅ 完成排版」重新计算题号与分值`;
+  stack.parentNode.insertBefore(tip, stack);
+
+  $('#btnLayout').onclick = () => {
+    if (!paperData) return;
+    if (showAnswers) { $('#btnPreviewAns').click(); }
+    exitLayout(false);
+    enterLayout();
+  };
+  $('#btnLayoutDone').onclick = () => exitLayout(true);
+}
+
+/* 进入排版：激活 Sortable + contenteditable + 注入工具按钮 + 自由调整大小 */
+function enterLayout() {
+  layoutMode = true;
+  $('#paperStack').classList.add('layouting');
+  $('#btnLayout').style.display = 'none';
+  $('#btnLayoutDone').style.display = '';
+  $('.layout-tip').style.display = 'block';
+
+  const paper = $('#paperStack .paper');
+  if (!paper) return;
+
+  // 大题工具条（删除大题）
+  paper.querySelectorAll('.sec-block').forEach(secEl => {
+    const tools = document.createElement('div');
+    tools.className = 'sec-tools';
+    tools.innerHTML = `<span class="tool-btn del" data-act="del-sec">✕ 删除整题（大题）</span>`;
+    secEl.insertBefore(tools, secEl.firstChild);
+  });
+
+  // 题目工具条 + 拖拽手柄 + 可编辑字段
+  paper.querySelectorAll('.q').forEach((qEl, qi) => {
+    const tools = document.createElement('div');
+    tools.className = 'q-tools';
+    tools.innerHTML = `<span class="tool-btn del" data-act="del-q">✕ 删</span>`;
+    qEl.appendChild(tools);
+    const stem = qEl.querySelector('[data-e="stem"]');
+    if (stem) {
+      const h = document.createElement('span');
+      h.className = 'sort-handle';
+      h.textContent = '⠿';
+      stem.appendChild(h);
+      qEl._dragHandle = h;
+    }
+    qEl.querySelectorAll('[data-e]').forEach(ed => {
+      ed.contentEditable = 'true';
+      ed.spellcheck = false;
+    });
+  });
+
+  // 自由排版：题目可拖拽调整大小（非表格模式）+ 表格列宽/行高
+  enableCellResize(paper);
+  enableTableResize(paper);
+  // 题目可自由拖动位置（非表格模式下）
+  enableFreeMove(paper);
+
+  // 初始化 Sortable：外层大题排序 + 内层题目排序（共享 group，可跨大题拖）
+  if (typeof Sortable !== 'undefined') {
+    sortables = [];
+    new Sortable(paper.querySelector('.exam'), {
+      animation: 150,
+      handle: 'h2.sec',
+      draggable: '.sec-block',
+      ghostClass: 'sortable-ghost',
+      onEnd: syncFromDOM
+    });
+    paper.querySelectorAll('.sec-block').forEach(secEl => {
+      sortables.push(new Sortable(secEl, {
+        group: 'questions',
+        animation: 150,
+        handle: '.sort-handle',
+        draggable: '.q',
+        ghostClass: 'sortable-ghost',
+        onEnd: syncFromDOM
+      }));
+    });
+  }
+}
+
+/* 自由排版：非表格模式下，题目可拖拽自由移动位置（绝对定位） */
+function enableFreeMove(paper) {
+  paper.querySelectorAll('.q-grid .q').forEach(qEl => {
+    qEl.style.position = 'relative';
+    qEl.style.cursor = 'grab';
+    if (qEl.dataset._freeMove) return;
+    qEl.dataset._freeMove = '1';
+    let sx, sy, ox, oy, dragging = false;
+    qEl.addEventListener('mousedown', (e) => {
+      // 忽略拖拽手柄、删除按钮、可编辑文字、大小调整手柄
+      if (e.target.closest('.sort-handle') || e.target.closest('.q-tools') || e.target.closest('.cell-resizer') || e.target.closest('[contenteditable="true"]')) return;
+      e.preventDefault();
+      dragging = true;
+      sx = e.clientX; sy = e.clientY;
+      ox = qEl.offsetLeft; oy = qEl.offsetTop;
+      qEl.style.cursor = 'grabbing';
+      const onMove = (ev) => {
+        if (!dragging) return;
+        // 相对定位偏移
+        const dx = ev.clientX - sx, dy = ev.clientY - sy;
+        qEl.style.left = (ox + dx) + 'px';
+        qEl.style.top = (oy + dy) + 'px';
+      };
+      const onUp = () => {
+        dragging = false;
+        qEl.style.cursor = 'grab';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+}
+
+/* 退出排版：回写数据，保留自由排版样式，只重算题号（不重渲染，避免格式丢失） */
+function exitLayout(apply) {
+  if (!layoutMode) return;
+  if (apply) syncFromDOM();
+  const paper = $('#paperStack .paper');
+  // 移除排版模式的临时工具（保留自由排版的 left/top/width/height 内联样式）
+  paper.querySelectorAll('.sec-tools, .q-tools, .sort-handle, .cell-resizer, .col-resizer, .row-resizer').forEach(el => el.remove());
+  paper.querySelectorAll('[contenteditable="true"]').forEach(el => { el.removeAttribute('contenteditable'); el.classList.remove('can-edit'); });
+  paper.querySelectorAll('.q[data-_free-move]').forEach(el => { delete el.dataset._freeMove; el.style.cursor = ''; });
+  layoutMode = false;
+  sortables.forEach(s => s.destroy());
+  sortables = [];
+  $('#paperStack').classList.remove('layouting');
+  $('#btnLayout').style.display = '';
+  $('#btnLayoutDone').style.display = 'none';
+  $('.layout-tip').style.display = 'none';
+  if (apply) {
+    // 只重算题号与分值，不重渲染整个纸张（保留自由排版样式）
+    renumberAll();
+    refreshScoreLabels(paper);
+  }
+}
+
+/* 轻量刷新：仅重新计算题号显示与分值标签，不动 DOM 布局 */
+function refreshScoreLabels(paper) {
+  paper.querySelectorAll('.sec-block').forEach(secEl => {
+    const sid = secEl.dataset.sid;
+    const sec = paperData.sections.find(s => s._sid === sid);
+    if (!sec) return;
+    const scoreBox = secEl.querySelector('.score-box');
+    if (scoreBox) {
+      const qs = sec.data.questions;
+      const secScore = qs.reduce((s, q) => s + (q._score || 0), 0);
+      scoreBox.textContent = `共 ${secScore} 分`;
+    }
+  });
+}
+
+/* DOM → 数据回写：顺序、编辑文本、删除 */
+function syncFromDOM() {
+  if (!paperData) return;
+  const paper = $('#paperStack .paper');
+  if (!paper) return;
+
+  // 1) 读取顺序与编辑内容
+  const secs = [];
+  paper.querySelectorAll('.sec-block').forEach(secEl => {
+    const sid = secEl.dataset.sid;
+    const sec = paperData.sections.find(s => s._sid === sid);
+    if (!sec) return;
+    sec._used = true;
+    const qs = [];
+    // 题目可能嵌套在 .q-grid 或 table td 里，用后代选择器全部收集（按 DOM 顺序）
+    secEl.querySelectorAll('.q').forEach(qEl => {
+      const q = findQByQid(qEl);
+      if (!q) return;
+      if (layoutMode) writeBackQ(qEl, q);
+      qs.push(q);
+    });
+    secs.push({ type: sec.type, _sid: sec._sid, _layout: sec._layout, data: { ...sec.data, questions: qs } });
+  });
+  paperData.sections.forEach(s => delete s._used);
+
+  // 2) 删除的大题/题目不再出现在数据里（上面重建时已天然剔除）
+  paperData.sections = secs;
+
+  // 3) 全量重新编号 + 标记人工顺序
+  renumberAll();
+  paperData._manualOrder = true;
+}
+
+/* 由 DOM 的 data-qid 精确反查题目对象（跨大题移动/删题后依然稳定） */
+function findQByQid(qEl) {
+  const qid = qEl.dataset.qid;
+  return qid ? paperData.allQs.find(x => x._qid === qid) : null;
+}
+
+/* 编辑内容回写到题目对象 */
+function writeBackQ(qEl, q) {
+  const stemEl = qEl.querySelector('[data-e="stem"]');
+  if (stemEl) {
+    let t = stemEl.textContent.replace(/\s*⠿\s*$/g, '').trim();
+    const m = t.match(/^(\d+)\s*[.、]?\s*(.*)$/s);
+    if (m) {
+      q.stem = m[2].trim() || q.stem;
+    } else {
+      // 题号前缀被误删时兜底：剥掉手柄字符后整体作为题干，避免编辑静默丢失
+      q.stem = t || q.stem;
+    }
+  }
+  const optsEl = qEl.querySelector('[data-e="opts"]');
+  if (optsEl && q.options) {
+    const lines = Array.from(optsEl.querySelectorAll(':scope > div')).map(d => d.textContent.replace(/^[A-H][.、:：]\s*/, '').trim()).filter(Boolean);
+    if (lines.length) q.options = lines;
+  }
+  const matchEl = qEl.querySelector('[data-e="match"]');
+  if (matchEl && q.left_items) {
+    matchEl.querySelectorAll('tr[data-i]').forEach(tr => {
+      const i = parseInt(tr.dataset.i);
+      const tds = tr.querySelectorAll('td');
+      if (tds.length === 2 && i < q.left_items.length) {
+        q.left_items[i] = tds[0].textContent.replace(/^（\d+）\s*/, '').trim();
+        q.right_items[i] = tds[1].textContent.replace(/^（\d+）\s*/, '').trim();
+        q.left_items[i] = q.left_items[i] || ' ';
+        q.right_items[i] = q.right_items[i] || ' ';
+      }
+    });
+  }
+}
+
+/* 重新编号 + 计分 + 更新汇总行（不改 DOM 布局） */
+function renumberAll() {
+  let no = 0;
+  paperData.sections.forEach(sec => {
+    sec.data.questions.forEach(q => { no++; q._no = no; });
+  });
+  paperData.allQs = paperData.sections.flatMap(s => s.data.questions);
+
+  // 分值：客观题每题 2 分，其余平摊剩余，总和 100
+  const isObj = q => !!q.options;
+  const objQs = paperData.allQs.filter(isObj);
+  const subQs = paperData.allQs.filter(q => !isObj(q));
+  const score = new Map();
+  if (subQs.length) {
+    objQs.forEach(q => score.set(q, 2));
+    let remain = Math.max(100 - objQs.length * 2, subQs.length);
+    const base = Math.floor(remain / subQs.length);
+    let extra = remain - base * subQs.length;
+    subQs.forEach(q => score.set(q, base + (extra-- > 0 ? 1 : 0)));
+  } else {
+    const base = Math.floor(100 / paperData.allQs.length);
+    let extra = 100 - base * paperData.allQs.length;
+    paperData.allQs.forEach(q => score.set(q, base + (extra-- > 0 ? 1 : 0)));
+  }
+  paperData.allQs.forEach(q => q._score = score.get(q));
+
+  $('#sumLine').textContent = `📋 ${paperData.grade} ${paperData.subject} ｜ ${paperData.keyword} ｜ 共 ${no} 题（${paperData.sections.map(s => `${TYPE_NAME[s.type]}×${s.data.questions.length}`).join(' + ')}）｜ 满分 100 分`;
+}
+
+/* 删除按钮（事件委托） */
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.tool-btn[data-act]');
+  if (!btn || !layoutMode) return;
+  const act = btn.dataset.act;
+  if (act === 'del-q') {
+    if (confirm('确定删除这道题吗？')) {
+      btn.closest('.q').remove();
+      syncFromDOM();
+    }
+  } else if (act === 'del-sec') {
+    if (confirm('确定删除整个大题（含所有题目和答题卡）吗？')) {
+      btn.closest('.sec-block').remove();
+      syncFromDOM();
+    }
+  }
+});
+
+
+/* ── 统一导出：单份多份都走批量逻辑 ── */
+$('#btnBatchExport').onclick = async () => {
+  try { await exportBatch($('#btnBatchExport')); }
+  catch (e) { alert('导出失败：' + e.message); }
+};
+$('#btnMergeExport').onclick = async () => {
+  try { await exportBatch($('#btnMergeExport'), true); }
+  catch (e) { alert('合并导出失败：' + e.message); }
+};
+
+/* 构建参考答案页 HTML */
+function buildAnswerPage() {
+  if (!paperData || !paperData.sections) return '';
+  let html = `<div class="exam"><h1 style="font-size:16pt;">参考答案与解析</h1>`;
+  paperData.sections.forEach(sec => {
+    const qs = sec.data?.questions || [];
+    if (!qs.length) return;
+    html += `<h2 class="sec">${TYPE_NAME[sec.type] || sec.type}</h2>`;
+    qs.forEach((q, qi) => {
+      html += `<div style="margin-bottom:3mm"><b>${cirNum(qi + 1)}</b> `;
+      let a = '';
+      if (q.top != null) {
+        const t = isBlankVal(q.top) ? q.answer : q.top;
+        const l = isBlankVal(q.left) ? q.answer : q.left;
+        const r = isBlankVal(q.right) ? q.answer : q.right;
+        a = `${t} 分成 ${l} 和 ${r}`;
+      } else if (q.left_expr != null) {
+        a = `${q.left_expr} ○ ${q.right_expr} → ${q.answer}`;
+      } else if (q.left_items) {
+        a = (q.answer || []).map(p => `（${p[0] + 1}）→（${p[1] + 1}）`).join('；');
+      } else if (q.options) {
+        a = ansText(q);
+        if (typeof q.answer === 'number') a += `（${stripOptPrefix(q.options[q.answer] || '')}）`;
+      } else {
+        a = String(q.answer ?? '');
+      }
+      if (a) {
+        html += `答案：${esc(a)}`;
+      } else {
+        html += `<span style="color:#999">（暂无答案）</span>`;
+      }
+      if (q.analysis) {
+        html += `<br><span style="color:#666;font-size:9pt">解析：${esc(q.analysis)}</span>`;
+      }
+      html += `</div>`;
+    });
+  });
+  html += `</div>`;
+  return html;
+}
+
+/* 共用：离屏渲染试卷 → 按A4比例切成页画布数组 */
+async function buildPageCanvases(withAnswers) {
+  if (typeof html2canvas === 'undefined') throw new Error('组件加载失败，请检查网络后刷新重试');
+  clearBlanks();
+
+  // 从「当前最终试卷」（含排版模式的所有自由调整）取内容
+  const srcStack = $('#paperStack') || $('#finalPaperStack');
+  const holder = document.createElement('div');
+  holder.style.cssText = 'position:fixed;left:-99999px;top:0;background:#fff;z-index:-1;';
+  const clone = srcStack.cloneNode(true);
+  clone.style.display = 'block';
+  // 清理排版模式的临时工具、分页符、内联预览答案，避免带入导出
+  clone.querySelectorAll('.paper-breaker, .sec-tools, .q-tools, .sort-handle, .cell-resizer, .col-resizer, .row-resizer, .layout-tip, .q-ans-inline').forEach(b => b.remove());
+  clone.querySelectorAll('.q[data-_free-move]').forEach(el => { el.style.cursor = ''; });
+  // 导出开关：关闭时移除背景层 / 横幅底色 / 彩色标题（传统白底，省墨）
+  if (!PAPER_BG.exportBg) {
+    clone.querySelectorAll('.paper-bg-layer').forEach(el => { el.style.display = 'none'; });
+    clone.querySelectorAll('.exam-head').forEach(el => { el.setAttribute('data-plain', '1'); });
+    clone.querySelectorAll('.paper').forEach(p => p.setAttribute('data-seccolor', '0'));
+    // 童趣效果一并还原（传统白底省墨）
+    clone.querySelectorAll('.paper').forEach(p => {
+      p.setAttribute('data-frame', 'none');
+      p.setAttribute('data-encourage', '0');
+      p.setAttribute('data-reward', '0');
+    });
+    clone.querySelectorAll('.paper-frame-layer').forEach(el => { el.style.display = 'none'; });
+  }
+  clone.querySelectorAll('[contenteditable="true"]').forEach(el => el.removeAttribute('contenteditable'));
+  clone.querySelectorAll('.paper').forEach(p => {
+    p.style.display = 'block';
+    p.style.visibility = 'visible';
+  });
+  // 先挂载到文档流（分页测量需要在文档里进行）
+  holder.appendChild(clone);
+  document.body.appendChild(holder);
+
+  // 学生卷：只保留第一页；含答案版：追加答案页；仅答案版：只留答案页
+  if (!withAnswers) {
+    const papers = clone.querySelectorAll('.paper');
+    papers.forEach((p, i) => { if (i > 0) p.remove(); });
+  } else {
+    // 答案页 = 复制学生卷排版，去掉题干只留题号+答案
+    const srcPapers = clone.querySelectorAll('.paper');
+    if (srcPapers.length) {
+      const ansClone = clone.cloneNode(true);
+      // 合并所有页到第一张纸
+      const ansPapers = Array.from(ansClone.querySelectorAll('.paper'));
+      if (ansPapers.length > 1) {
+        const firstExam = ansPapers[0].querySelector('.exam');
+        for (let i = 1; i < ansPapers.length; i++) {
+          ansPapers[i].querySelectorAll('.sec-block, .footer-note').forEach(el => firstExam.appendChild(el));
+        }
+        ansPapers.slice(1).forEach(p => p.remove());
+      }
+      const firstPaper = ansClone.querySelector('.paper');
+      firstPaper.style.height = 'auto';
+      firstPaper.style.overflow = 'visible';
+      // 换标题
+      ansClone.querySelector('.exam h1')?.remove();
+      const ansH1 = document.createElement('h1');
+      ansH1.style.cssText = 'text-align:center;font-size:16pt;font-family:"SimHei","Microsoft YaHei",sans-serif;letter-spacing:2px;margin-bottom:4mm;';
+      ansH1.textContent = '参考答案与解析';
+      ansClone.querySelector('.exam').insertBefore(ansH1, ansClone.querySelector('.exam').firstChild);
+      // 逐题替换：题干→答案文字（保留题号、布局、题型块结构）
+      const typeSeen = {};
+      const typeQOff = {};
+      ansClone.querySelectorAll('.sec-block').forEach(block => {
+        const type = block.dataset.type;
+        const sid = block.dataset.sid;
+        // 定位 section（sid 优先，type 出现序号兜底）
+        let secIdx = -1;
+        if (sid) secIdx = (paperData.sections || []).findIndex(s => String(s._sid) === String(sid));
+        if (secIdx < 0) {
+          const seen = typeSeen[type] || 0;
+          let cnt = -1;
+          (paperData.sections || []).forEach((s, i) => { if (s.type === type) { cnt++; if (cnt === seen) secIdx = i; } });
+          typeSeen[type] = (typeSeen[type] || 0) + 1;
+        }
+        const sec = secIdx >= 0 ? paperData.sections[secIdx] : null;
+        const offKey = secIdx >= 0 ? `i${secIdx}` : type;
+        block.querySelectorAll('.q').forEach(qEl => {
+          const off = (typeQOff[offKey] || 0);
+          typeQOff[offKey] = off + 1;
+          const q = sec?.data?.questions?.[off];
+          // 生成答案文字
+          let a = '';
+          let analysis = '';
+          if (!q) { a = '（暂无答案）'; }
+          else {
+            analysis = q.analysis || '';
+            if (q.top != null) {
+              const t = isBlankVal(q.top) ? q.answer : q.top;
+              const l = isBlankVal(q.left) ? q.answer : q.left;
+              const r = isBlankVal(q.right) ? q.answer : q.right;
+              a = `${t} 分成 ${l} 和 ${r}`;
+            } else if (q.left_expr != null) {
+              a = `${q.left_expr} ○ ${q.right_expr} → ${q.answer}`;
+            } else if (q.left_items) {
+              a = (q.answer || []).map(p => `（${p[0]+1}）→（${p[1]+1}）`).join('；');
+            } else if (q.options) {
+              a = ansText(q) + (typeof q.answer === 'number' ? `（${stripOptPrefix(q.options[q.answer] || '')}）` : '');
+            } else {
+              a = String(q.answer ?? '（暂无答案）');
+            }
+          }
+          // 保留题号（开头的圈号），替换正文为答案
+          const txt = qEl.textContent || '';
+          const m = txt.match(/^[①-⑳]/);
+          const noTag = m ? m[0] + ' ' : '';
+          qEl.innerHTML = `<span style="color:#c0392b"><b>${noTag}答案：</b>${esc(a)}</span>` +
+            (analysis ? `<br><span style="color:#666;font-size:9pt">解析：${esc(analysis)}</span>` : '');
+        });
+      });
+      firstPaper.style.height = '297mm';
+      firstPaper.style.overflow = 'hidden';
+      clone.appendChild(ansClone);
+      try { paginateA4(ansClone); } catch (e) { console.warn('答案页分页失败', e); }
+      // 仅答案模式：移除学生卷的纸，只留答案页
+      if (withAnswers === 'answersOnly') {
+        // 学生卷的纸在 clone 的直属 paper 里（ansClone 是后来 append 的容器）
+        Array.from(clone.children).forEach(child => {
+          if (child !== ansClone) child.remove();
+        });
+      }
+    }
+  }
+
+  const pages = [];
+  try {
+    for (const paper of clone.querySelectorAll('.paper')) {
+      // 高分辨率渲染（约 288 DPI）
+      const canvas = await html2canvas(paper, { scale: 3, backgroundColor: '#ffffff' });
+      const W = canvas.width;
+      const pageH = Math.round(W * 297 / 210);   // A4 比例页高
+
+      // 收集块级元素的分界位置（避免把题目从中间切开）
+      const scale = W / paper.offsetWidth;
+      const breaks = [];
+      paper.querySelectorAll('.exam > *').forEach(el => {
+        breaks.push(Math.round(el.offsetTop * scale) + Math.round(el.offsetHeight * scale));
+      });
+      breaks.sort((a, b) => a - b);
+
+      // 逐页切片
+      let y = 0;
+      while (y < canvas.height - 2) {
+        let cut = y + pageH;
+        if (cut < canvas.height) {
+          // 优先在元素边界处断页
+          const ok = breaks.filter(b => b > y + pageH * 0.55 && b <= cut);
+          if (ok.length) cut = ok[ok.length - 1];
+        } else { cut = canvas.height; }
+        const h = cut - y;
+
+        const page = document.createElement('canvas');
+        page.width = W; page.height = pageH;
+        const ctx = page.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, W, pageH);
+        ctx.drawImage(canvas, 0, y, W, h, 0, 0, W, h);
+        pages.push(page);
+        y = cut;
+      }
+    }
+  } finally {
+    document.body.removeChild(holder);
+  }
+  return pages;
+}
+
+/* 统一的按钮状态管理 */
+async function withExportState(btn, job) {
+  const wasShown = showAnswers;
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '导出中…';
+  try {
+    await job();
+  } catch (e) {
+    alert('导出失败：' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+    if (wasShown) fillBlanks(); else clearBlanks();  // 恢复原预览状态
+  }
+}
+
+async function exportPDF(withAnswers, btn) {
+  if (!paperData) return;
+  if (layoutMode) exitLayout(true);
+  const mode = withAnswers === 'answersOnly' ? 'answersOnly' : !!withAnswers;
+  await withExportState(btn, async () => {
+    if (typeof window.jspdf === 'undefined') throw new Error('PDF 组件加载失败，请检查网络后刷新重试');
+    const pages = await buildPageCanvases(mode);
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    pages.forEach((pc, i) => {
+      if (i) doc.addPage();
+      doc.addImage(pc.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, 297);
+    });
+    // 页码：仅显示页数，无其他页眉页脚
+    const total = pages.length;
+    doc.setFont('times', 'normal');
+    doc.setFontSize(9);
+    for (let i = 1; i <= total; i++) {
+      doc.setPage(i);
+      const t = `- ${i} / ${total} -`;
+      doc.text(t, 105, 292.5, { align: 'center' });
+    }
+    const title = paperData.title || (paperData.grade + paperData.subject + '测试卷');
+    const suffix = mode === 'answersOnly' ? '（答案）' : (mode ? '（含答案）' : '');
+    doc.save(`${title}${suffix}.pdf`);
+  });
+}
+
+async function exportPNG(withAnswers, btn) {
+  if (!paperData) return;
+  if (layoutMode) exitLayout(true);
+  await withExportState(btn, async () => {
+    const pages = await buildPageCanvases(withAnswers);
+    const title = paperData.title || (paperData.grade + paperData.subject + '测试卷');
+    pages.forEach((pc, i) => {
+      const a = document.createElement('a');
+      a.href = pc.toDataURL('image/png');
+      a.download = `${title}_第${i + 1}页.png`;
+      a.click();
+    });
+  });
+}
+
+/* ── 批量导出：所有份数打包 ZIP（每份学生卷+仅答案）+ 全部合并 PDF；mergeOnly=true 时只下载合并 PDF ── */
+async function exportBatch(btn, mergeOnly = false) {
+  if (!mergeOnly && typeof window.JSZip === 'undefined') throw new Error('JSZip 组件加载失败，请检查网络后刷新重试');
+  if (typeof window.jspdf === 'undefined') throw new Error('PDF 组件加载失败，请检查网络后刷新重试');
+  if (layoutMode) exitLayout(true);
+
+  const wasShown = showAnswers;
+  const old = btn.textContent;
+  btn.disabled = true;
+  const totalN = batchPapers.length + 1;
+  const baseTitleRaw = paperData.title || (paperData.grade + paperData.subject + '测试卷');
+  const baseTitle = baseTitleRaw; // ZIP/文件名用（不带天数）
+
+  // 备份当前状态（第 1 份）
+  const firstSections = paperData.sections.map(s => ({ type: s.type, data: s.data, _layout: s._layout }));
+  const firstTitle = paperData.title;
+
+  // 模板：livePaperStack 的完整 DOM（含用户所有格式编辑：字体/颜色/加粗）
+  const liveStack = $('#livePaperStack');
+  const templateHTML = liveStack?.innerHTML || $('#paperStack').innerHTML;
+  if (!templateHTML) throw new Error('预览区没有试卷内容，请先生成');
+
+  const zip = new JSZip();
+  const mergePages = []; // 全部合并 PDF 的页
+
+  // 构建某一份的可导出 DOM：模板克隆 + 替换该份的题目数据 + 改标题
+  const buildPaperFor = (k, sections) => {
+    const holder = document.createElement('div');
+    holder.innerHTML = templateHTML;
+    // 替换题目内容（保留格式标签）
+    const fakeSecs = sections.map(s => ({ type: s.type, data: s.data, el: { _layout: s._layout } }));
+    patchLivePreviewInStack(holder, fakeSecs);
+    // 改标题（h1）：只在最后一个文本节点末尾追加（第X天），不碰任何格式标签
+    if (batchAddDay) {
+      const h1 = holder.querySelector('.exam h1');
+      if (h1) {
+        const daySuffix = `（第${k + 1}天）`;
+        // 找 h1 里最后一个非空文本节点
+        let lastText = null;
+        h1.childNodes.forEach(node => {
+          if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) lastText = node;
+        });
+        // 没有直接文本节点时，深入最后一层元素找
+        if (!lastText) {
+          const walker = document.createTreeWalker(h1, NodeFilter.SHOW_TEXT, null);
+          let n;
+          while ((n = walker.nextNode())) { if (n.textContent.trim()) lastText = n; }
+        }
+        if (lastText) {
+          // 去掉之前可能加过的（第X天）再追加新的（幂等）
+          lastText.textContent = lastText.textContent.replace(/（第\d+天）\s*$/, '') + daySuffix;
+        } else {
+          h1.insertBefore(document.createTextNode(daySuffix), null);
+        }
+      }
+    }
+    return holder;
+  };
+
+  try {
+    for (let k = 0; k < totalN; k++) {
+      btn.textContent = `📦 正在处理第 ${k + 1}/${totalN} 份…`;
+      // 该份的 sections：第 1 份用当前数据，其余用 batchPapers
+      let sections;
+      if (k === 0) {
+        sections = firstSections;
+      } else {
+        const bp = batchPapers[k - 1];
+        sections = (bp.sections || []).map((sec, si) => ({
+          type: sec.game_type,
+          data: { questions: sec.questions || [] },
+          _layout: bp.layouts?.[si] || {qCols:1, optCols:2, tableBorder:'none', showNo:true}
+        }));
+      }
+      // 基于模板（含格式）构建该份 DOM，替换 paperStack 用于导出
+      const paperHolder = buildPaperFor(k, sections);
+      const savedStackHTML = $('#paperStack').innerHTML;
+      const psEl = $('#paperStack');
+      // 挂到文档流（html2canvas 需要）
+      psEl.innerHTML = paperHolder.innerHTML;
+      // 学生卷 PDF
+      const stuPages = await buildPageCanvases(false);
+      stuPages.forEach(p => mergePages.push(p));
+      if (!mergeOnly) {
+        const stuDoc = pagesToPDF(stuPages);
+        zip.file(`${baseTitle}-第${k + 1}份-学生卷.pdf`, stuDoc.output('arraybuffer'));
+        // 仅答案 PDF
+        const ansPages = await buildPageCanvases('answersOnly');
+        const ansDoc = pagesToPDF(ansPages);
+        zip.file(`${baseTitle}-第${k + 1}份-答案.pdf`, ansDoc.output('arraybuffer'));
+      }
+      void savedStackHTML;
+    }
+    // 全部合并 PDF（学生卷连续排）
+    btn.textContent = '📦 正在合并全部 PDF…';
+    const mergeDoc = pagesToPDF(mergePages);
+    if (mergeOnly) {
+      // 直接下载合并 PDF（不打包）
+      mergeDoc.save(`${baseTitle}-全部${totalN}份合并.pdf`);
+    } else {
+      zip.file(`${baseTitle}-全部${totalN}份合并.pdf`, mergeDoc.output('arraybuffer'));
+      // 生成 ZIP
+      btn.textContent = '📦 正在打包…';
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${baseTitle}-${totalN}份.zip`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+  } finally {
+    // 恢复第 1 份的显示（paperStack 用 livePaperStack 的最新内容）
+    paperData.sections = firstSections;
+    paperData.title = firstTitle;
+    const lv = $('#livePaperStack');
+    if (lv && lv.querySelector('.paper')) $('#paperStack').innerHTML = lv.innerHTML;
+    btn.disabled = false;
+    btn.textContent = old;
+    if (wasShown) fillBlanks(); else clearBlanks();
+  }
+}
+
+/* canvas 页数组 → jsPDF 文档（带页码） */
+function pagesToPDF(pages) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+  pages.forEach((pc, i) => {
+    if (i) doc.addPage();
+    doc.addImage(pc.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, 297);
+  });
+  const total = pages.length;
+  doc.setFont('times', 'normal');
+  doc.setFontSize(9);
+  for (let i = 1; i <= total; i++) {
+    doc.setPage(i);
+    doc.text(`- ${i} / ${total} -`, 105, 292.5, { align: 'center' });
+  }
+  return doc;
+}
+
+/* ── 彩色试卷：背景图案 / 卷头横幅 / 彩色标题（localStorage 持久化） ── */
+const PAPER_BG_DEFAULTS = { style: 'none', opacity: 70, banner: false, secColor: true, exportBg: false };
+let PAPER_BG = Object.assign({}, PAPER_BG_DEFAULTS);
+try { PAPER_BG = Object.assign({}, PAPER_BG_DEFAULTS, JSON.parse(localStorage.getItem('lc_paper_bg') || '{}')); } catch(e) {}
+function savePaperBg() { try { localStorage.setItem('lc_paper_bg', JSON.stringify(PAPER_BG)); } catch(e) {} }
+
+/* 将当前背景设置应用到所有 A4 纸（预览区/结果区/最终导出区），保留用户已有编辑 */
+function applyPaperBg() {
+  ['#livePaperStack', '#paperStack', '#finalPaperStack'].forEach(sel => {
+    const stack = document.querySelector(sel);
+    if (!stack) return;
+    stack.querySelectorAll('.paper').forEach(paper => {
+      let layer = paper.querySelector('.paper-bg-layer');
+      if (!layer) {
+        layer = document.createElement('div');
+        layer.className = 'paper-bg-layer';
+        paper.insertBefore(layer, paper.firstChild);
+      }
+      layer.setAttribute('data-bg', PAPER_BG.style);
+      layer.style.opacity = PAPER_BG.style === 'none' ? '0' : String(PAPER_BG.opacity / 100);
+      paper.setAttribute('data-seccolor', PAPER_BG.secColor ? '1' : '0');
+      const head = paper.querySelector('.exam-head');
+      if (head) head.setAttribute('data-plain', PAPER_BG.banner ? '0' : '1');
+    });
+  });
+  savePaperBg();
+}
+
+(function initPaperBgControls() {
+  const sel = $('#bgStyle'), rng = $('#bgOpacity'), val = $('#bgOpacityVal');
+  const ckB = $('#bgBanner'), ckE = $('#bgExportBg'), ckS = $('#bgSecColor');
+  if (sel) { sel.value = PAPER_BG.style; sel.onchange = () => { PAPER_BG.style = sel.value; applyPaperBg(); }; }
+  if (rng) {
+    rng.value = PAPER_BG.opacity;
+    if (val) val.textContent = PAPER_BG.opacity + '%';
+    rng.oninput = () => {
+      PAPER_BG.opacity = parseInt(rng.value) || 0;
+      if (val) val.textContent = PAPER_BG.opacity + '%';
+      applyPaperBg();
+    };
+  }
+  if (ckB) { ckB.checked = PAPER_BG.banner; ckB.onchange = () => { PAPER_BG.banner = ckB.checked; applyPaperBg(); }; }
+  if (ckS) { ckS.checked = PAPER_BG.secColor; ckS.onchange = () => { PAPER_BG.secColor = ckS.checked; applyPaperBg(); }; }
+  if (ckE) { ckE.checked = PAPER_BG.exportBg; ckE.onchange = () => { PAPER_BG.exportBg = ckE.checked; savePaperBg(); }; }
+  applyPaperBg();
+})();
+
+/* ── 童趣风格：画框边框 / 鼓励语 / 奖励区 / 低年级大字号 ── */
+const PAPER_KID_DEFAULTS = { frame: 'none', encourage: false, reward: false, font: 'auto' };
+let PAPER_KID = Object.assign({}, PAPER_KID_DEFAULTS);
+try { PAPER_KID = Object.assign({}, PAPER_KID_DEFAULTS, JSON.parse(localStorage.getItem('lc_paper_kid') || '{}')); } catch(e) {}
+function savePaperKid() { try { localStorage.setItem('lc_paper_kid', JSON.stringify(PAPER_KID)); } catch(e) {} }
+
+/* 将童趣设置应用到所有 A4 纸（与 applyPaperBg 同构） */
+function applyPaperKid() {
+  ['#livePaperStack', '#paperStack', '#finalPaperStack'].forEach(sel => {
+    const stack = document.querySelector(sel);
+    if (!stack) return;
+    stack.querySelectorAll('.paper').forEach(paper => {
+      paper.setAttribute('data-frame', PAPER_KID.frame);
+      paper.setAttribute('data-encourage', PAPER_KID.encourage ? '1' : '0');
+      paper.setAttribute('data-reward', PAPER_KID.reward ? '1' : '0');
+      // 大字号：auto 跟随年级（一、二年级），手动开/关优先
+      const g = gradeNumOf($('#grade')?.value || '') || 0;
+      const kidOn = PAPER_KID.font === 'auto' ? (g >= 1 && g <= 2) : (PAPER_KID.font === 'on');
+      paper.setAttribute('data-kid', kidOn ? '1' : '0');
+      // 确保装饰边框层存在（旧快照恢复的纸没有这个层）
+      if (!paper.querySelector('.paper-frame-layer')) {
+        const fl = document.createElement('div');
+        fl.className = 'paper-frame-layer';
+        paper.insertBefore(fl, paper.firstChild);
+      }
+    });
+  });
+  savePaperKid();
+}
+
+(function initPaperKidControls() {
+  const sel = $('#kidFrame'), ckE = $('#kidEncourage'), ckR = $('#kidReward'), ckF = $('#kidFont');
+  if (sel) { sel.value = PAPER_KID.frame; sel.onchange = () => { PAPER_KID.frame = sel.value; applyPaperKid(); }; }
+  if (ckE) { ckE.checked = PAPER_KID.encourage; ckE.onchange = () => { PAPER_KID.encourage = ckE.checked; applyPaperKid(); }; }
+  if (ckR) { ckR.checked = PAPER_KID.reward; ckR.checked = PAPER_KID.reward; ckR.onchange = () => { PAPER_KID.reward = ckR.checked; applyPaperKid(); }; }
+  if (ckF) {
+    // 三态：auto（默认跟随年级）→ on → off → auto 循环
+    ckF.checked = PAPER_KID.font !== 'off';
+    ckF.title = '大字号：' + (PAPER_KID.font === 'auto' ? '自动（一、二年级开）' : (PAPER_KID.font === 'on' ? '已开启' : '已关闭'));
+    ckF.onclick = (e) => {
+      e.preventDefault();
+      PAPER_KID.font = PAPER_KID.font === 'auto' ? 'on' : (PAPER_KID.font === 'on' ? 'off' : 'auto');
+      ckF.checked = PAPER_KID.font !== 'off';
+      ckF.title = '大字号：' + (PAPER_KID.font === 'auto' ? '自动（一、二年级开）' : (PAPER_KID.font === 'on' ? '已开启' : '已关闭'));
+      applyPaperKid();
+    };
+  }
+})();
+
+loadAvailable();
+initLayoutMode();
+
+/* ── 模板系统 ── */
+const TEMPLATES = [
+  { id:'exam',       name:'📝 标准试卷',   tag:'测验/考试', showInfoRow:true,  showNotice:true,  showScore:true,  titlePrefix:'',      titleSuffix:'测试卷', footer:'—— 卷终 · 认真检查，你一定行！——', headerExtra:'' },
+  { id:'daily',      name:'📅 每日一练',   tag:'每日练习',   showInfoRow:false, showNotice:false, showScore:false, titlePrefix:'每日一练', titleSuffix:'',       footer:'坚持就是胜利！💪',                          headerExtra:'日期：______  用时：______' },
+  { id:'weekend',    name:'🏠 周末作业',   tag:'周末巩固',   showInfoRow:true,  showNotice:true,  showScore:false, titlePrefix:'周末巩固', titleSuffix:'练习',   footer:'—— 认真完成，周一检查！——',                  headerExtra:'' },
+  { id:'unit',       name:'📖 单元测验',   tag:'单元复习',   showInfoRow:true,  showNotice:true,  showScore:true,  titlePrefix:'第  单元', titleSuffix:'测验卷', footer:'—— 卷终 · 认真答题 ——',                    headerExtra:'时间：40 分钟' },
+  { id:'custom',     name:'✏️ 自定义',     tag:'自定义',     showInfoRow:true,  showNotice:true,  showScore:true,  titlePrefix:'',      titleSuffix:'',       footer:'',                                            headerExtra:'' },
+];
+const TEMPLATE_KEY = 'lc_template';
+
+let currentTemplate = TEMPLATES[0]; // 默认标准试卷
+
+function loadTemplate() {
+  try {
+    const saved = localStorage.getItem(TEMPLATE_KEY);
+    if (saved) { const p = JSON.parse(saved); const t = TEMPLATES.find(x => x.id === p.id); if (t) currentTemplate = t; }
+  } catch(e) {}
+}
+function saveTemplate() { localStorage.setItem(TEMPLATE_KEY, JSON.stringify({id:currentTemplate.id})); }
+function switchTemplate(id, skipRefresh = false) {
+  const t = TEMPLATES.find(x => x.id === id);
+  if (!t) return;
+  currentTemplate = t;
+  saveTemplate();
+  document.querySelectorAll('.tpl-btn').forEach(b => b.classList.toggle('on', b.dataset.tpl === id));
+  if (!skipRefresh) {
+    refreshLivePreview();
+    if (paperData) { const om = paperData._manualOrder; renderPaper(); paperData._manualOrder = om; }
+  }
+  const customCfg = $('#tplCustomCfg');
+  if (customCfg) customCfg.style.display = (id === 'custom') ? '' : 'none';
+}
+
+/* ── 卡片级排版配置 ── */
+function cardLayout(card) {
+  if (!card._layout) card._layout = { qCols: 1, optCols: 2, tableBorder: 'none', fontSize: '', showNo: true };
+  return card._layout;
+}
+function applyCardLayout(card) {
+  const lo = cardLayout(card);
+  // 题目分栏
+  const body = card.querySelector('.s-body');
+  if (body) {
+    body.style.display = 'grid';
+    body.style.gridTemplateColumns = `repeat(${lo.qCols}, 1fr)`;
+    body.style.columnGap = lo.qCols > 1 ? '12mm' : '0';
+  }
+  // 选项分栏（选择题）
+  const gapMap = {1:'16px',2:'16px',3:'8px',4:'6px'};
+  const optsList = card.querySelectorAll('.s-opts');
+  optsList.forEach(el => {
+    el.style.gridTemplateColumns = `repeat(${lo.optCols}, 1fr)`;
+    el.style.columnGap = gapMap[lo.optCols] || '16px';
+  });
+}
+/* 切换卡片栏数 */
+window.setQCols = function(card, cols) {
+  cardLayout(card).qCols = parseInt(cols);
+  applyCardLayout(card);
+  refreshLivePreview();
+  if (paperData) { const om = paperData._manualOrder; renderPaper(); paperData._manualOrder = om; }
+};
+window.setOptCols = function(card, cols) {
+  cardLayout(card).optCols = parseInt(cols);
+  applyCardLayout(card);
+  refreshLivePreview();
+  if (paperData) { const om = paperData._manualOrder; renderPaper(); paperData._manualOrder = om; }
+};
+window.setTblBorder = function(card, style) {
+  cardLayout(card).tableBorder = style;
+  refreshLivePreview();
+  if (paperData) { const om = paperData._manualOrder; renderPaper(); paperData._manualOrder = om; }
+};
+window.setFontSize = function(card, fs) {
+  cardLayout(card).fontSize = fs || '';
+  refreshLivePreview();
+  if (paperData) { const om = paperData._manualOrder; renderPaper(); paperData._manualOrder = om; }
+};
+window.setShowHead = function(card, show) {
+  cardLayout(card).showNo = !!show;
+  refreshLivePreview();
+  if (paperData) { const om = paperData._manualOrder; renderPaper(); paperData._manualOrder = om; }
+};
+
+/* ── 渲染模板按钮 ── */
+function renderTplBar() {
+  const bar = $('#tplBar');
+  if (!bar) return;
+  // 清空除 label 外的元素
+  while (bar.childNodes.length > 1) bar.removeChild(bar.lastChild);
+  TEMPLATES.forEach(t => {
+    const btn = document.createElement('span');
+    btn.className = 'tpl-btn' + (t.id === currentTemplate.id ? ' on' : '');
+    btn.textContent = t.name;
+    btn.dataset.tpl = t.id;
+    btn.onclick = () => switchTemplate(t.id);
+    bar.appendChild(btn);
+  });
+  // 自定义配置面板可见性
+  const customCfg = $('#tplCustomCfg');
+  if (customCfg) customCfg.style.display = (currentTemplate.id === 'custom') ? '' : 'none';
+}
+renderTplBar();
+
+// 自定义模板保存按钮
+$('#cfgSave').onclick = () => {
+  const t = TEMPLATES.find(x => x.id === 'custom');
+  t.showInfoRow = $('#cfgInfoRow').checked;
+  t.showNotice = $('#cfgNotice').checked;
+  t.showScore = $('#cfgScore').checked;
+  t.titlePrefix = $('#cfgTitlePrefix').value.trim();
+  t.titleSuffix = $('#cfgTitleSuffix').value.trim();
+  t.footer = $('#cfgFooter').value.trim();
+  currentTemplate = t;
+  saveTemplate();
+  if (paperData) { const om = paperData._manualOrder; renderPaper(); paperData._manualOrder = om; }
+  alert('自定义模板已应用！');
+};
+
+loadTemplate();
+renderTplBar();
+
+// LLM 配置
+const llmDefaults = {
+  baseUrl: 'https://ai.bcxtech.cc.cd/v1',
+  model: 'gpt-5.6-terra',
+  apiKey: '',
+  timeout: 60
+};
+function loadLlmCfg() {
+  try { return Object.assign({}, llmDefaults, JSON.parse(localStorage.getItem('lc_llm_cfg') || '{}')); } catch(e) { return Object.assign({}, llmDefaults); }
+}
+function applyLlmCfg(cfg) {
+  localStorage.setItem('lc_llm_cfg', JSON.stringify(cfg));
+  fetch('/api/v1/config/llm', {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(cfg)
+  }).then(r => r.json()).then(d => {
+    $('#llmMsg').textContent = '✅ ' + (d.message || '已保存');
+    setTimeout(() => $('#llmMsg').textContent = '', 3000);
+  }).catch(() => {
+    $('#llmMsg').textContent = '⚠ 已本地保存，后端未更新';
+    setTimeout(() => $('#llmMsg').textContent = '', 3000);
+  });
+}
+const cfg = loadLlmCfg();
+$('#llmBaseUrl').value = cfg.baseUrl;
+$('#llmModel').value = cfg.model;
+$('#llmApiKey').value = cfg.apiKey;
+$('#llmTimeout').value = cfg.timeout;
+
+$('#llmCfgToggle').onclick = () => {
+  const p = $('#llmCfgPanel');
+  p.style.display = p.style.display === 'none' ? 'flex' : 'none';
+};
+$('#llmSave').onclick = () => {
+  applyLlmCfg({
+    baseUrl: $('#llmBaseUrl').value.trim() || llmDefaults.baseUrl,
+    model: $('#llmModel').value.trim() || llmDefaults.model,
+    apiKey: $('#llmApiKey').value.trim(),
+    timeout: parseInt($('#llmTimeout').value) || 60
+  });
+};
+$('#llmReset').onclick = () => {
+  $('#llmBaseUrl').value = llmDefaults.baseUrl;
+  $('#llmModel').value = llmDefaults.model;
+  $('#llmApiKey').value = '';
+  $('#llmTimeout').value = 60;
+  applyLlmCfg(Object.assign({}, llmDefaults));
+};
+$('#llmTest').onclick = async () => {
+  const btn = $('#llmTest');
+  const msg = $('#llmMsg');
+  btn.disabled = true; btn.textContent = '⏳ 测试中…';
+  msg.textContent = '';
+  try {
+    const r = await fetch(API + '/api/v1/test-llm', { method: 'POST' });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      throw new Error(e.detail?.detail || ('HTTP ' + r.status));
+    }
+    const d = await r.json();
+    msg.textContent = '✅ 连接成功！模型回复：' + (d.reply || '');
+  } catch (e) {
+    msg.textContent = '❌ 连接失败：' + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = '🔗 测试模型';
+  }
+};
+
+// 实时预览区格式按钮
+$('#fBold').onclick = () => document.execCommand('bold', false, null);
+$('#fSize').onchange = function() { document.execCommand('fontSize', false, this.value); };
+$('#fColor').oninput = function() { document.execCommand('foreColor', false, this.value); };
+
+// ── 步骤导航联动 ──
+function setStep(n) {
+  document.querySelectorAll('.step').forEach(s => {
+    const v = parseInt(s.dataset.step);
+    s.classList.toggle('on', v === n);
+    s.classList.toggle('done', v < n);
+  });
+}
+// 原始 updateBuilderSummary 包装：有大题时进入第2步
+const _origUpdateBuilderSummary = updateBuilderSummary;
+updateBuilderSummary = function() {
+  _origUpdateBuilderSummary();
+  const n = document.querySelectorAll('#secList .sec-card').length;
+  if (n > 0) setStep(2);
+};
+// doGenerate 成功后进入第3步
+const _origDoGenerate = doGenerate;
+doGenerate = async function() {
+  await _origDoGenerate();
+  if ($('#resultArea').style.display === 'block') setStep(3);
+};
+// 点击步骤导航快速滚动
+document.querySelectorAll('.step').forEach(s => {
+  s.style.cursor = 'pointer';
+  s.onclick = () => {
+    const v = s.dataset.step;
+    if (v === '1') $('#builderPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    else if (v === '2') $('.right-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    else if (v === '3') $('#resultArea').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+});
+
+// ── 我的模板（保存 / 加载 / 删除） ──
+const TPL_STORAGE_KEY = 'lc_my_templates';
+
+function getTemplates() {
+  try { return JSON.parse(localStorage.getItem(TPL_STORAGE_KEY) || '[]'); } catch(e) { return []; }
+}
+function saveTemplates(arr) {
+  localStorage.setItem(TPL_STORAGE_KEY, JSON.stringify(arr.slice(0, 20))); // 最多 20 个
+}
+function refreshTplDrop() {
+  const drop = $('#myTplDrop');
+  if (!drop) return;
+  const templates = getTemplates();
+  if (!templates.length) {
+    drop.innerHTML = '<div class="my-tpl-empty">还没有保存的模板<br><small>搭建好卷面后点「💾 保存模板」</small></div>';
+    return;
+  }
+  drop.innerHTML = templates.map((t, i) => {
+    const summary = (t.cards || []).map(c => `${TYPE_NAME[c.type] || c.type}×${c.count}`).join('、');
+    return `<div class="my-tpl-item" data-idx="${i}">
+      <span class="my-tpl-item-name">${esc(t.name)}</span>
+      <span class="my-tpl-item-summary">${summary}</span>
+      <span class="my-tpl-item-del" data-act="del-tpl" data-idx="${i}" title="删除">✕</span>
+    </div>`;
+  }).join('');
+}
+$('#btnMyTemplates').onclick = (e) => {
+  e.stopPropagation();
+  refreshTplDrop();
+  const wrap = $('#myTplWrap');
+  wrap.classList.toggle('open');
+};
+// 模板下拉的交互全部代理到 #myTplWrap 容器（确保按钮、项、删除按钮都生效）
+$('#myTplWrap').addEventListener('click', e => {
+  // 删除按钮
+  const del = e.target.closest('.my-tpl-item-del');
+  if (del) {
+    e.stopPropagation();
+    const i = parseInt(del.dataset.idx);
+    if (!isNaN(i)) {
+      const templates = getTemplates();
+      if (i >= 0 && i < templates.length) {
+        if (confirm(`确定删除模板「${templates[i].name}」吗？`)) {
+          templates.splice(i, 1);
+          saveTemplates(templates);
+          refreshTplDrop();
+        }
+      }
+    }
+    return;
+  }
+  // 模板项（名称或摘要区域）
+  const item = e.target.closest('.my-tpl-item');
+  if (item) {
+    e.stopPropagation();
+    const i = parseInt(item.dataset.idx);
+    if (isNaN(i)) return;
+    const templates = getTemplates();
+    const tpl = templates[i];
+    if (!tpl) return;
+    // 恢复年级/科目/关键词：模拟完整的点选流程，让 pill 和 select 都同步
+    try {
+      // 1. 年级：设 select 值 + 点亮 pill
+      if (tpl.grade) {
+        $('#grade').value = tpl.grade;
+        const gr = $('#gradeRow');
+        if (gr) {
+          gr.querySelectorAll('.grade-pill').forEach(p => p.classList.toggle('on', p.dataset.v === tpl.grade));
+          // 先生成该年级的科目按钮（原来只在点年级 pill 时才生成）
+          renderSubjectPills(tpl.grade);
+        }
+      }
+      // 2. 科目：先生成选项再设值 + 点亮 pill
+      if (tpl.subject) {
+        const sel = $('#subject');
+        sel.disabled = false;
+        const subs = (_availableData[tpl.grade] || []);
+        if (subs.length) {
+          sel.innerHTML = `<option value="">请选择科目</option>` +
+            subs.map(s => `<option value="${s}">${s}</option>`).join('');
+          sel.value = tpl.subject;
+        }
+        const sr = $('#subjectRow');
+        if (sr) sr.querySelectorAll('.subject-pill').forEach(p => p.classList.toggle('on', p.dataset.v === tpl.subject));
+      }
+      // 3. 关键词
+      if (tpl.keyword) $('#keyword').value = tpl.keyword;
+      renderTypeGroups();
+    } catch (err) { console.warn('模板条件恢复失败:', err); }
+    // 清空搭建区，按模板重建卡片
+    const secList = $('#secList');
+    secList.querySelectorAll('.sec-card').forEach(c => c.remove());
+    builderSeq = 0;
+    (tpl.cards || []).forEach(c => addSecToBuilder(c.type, c.count));
+    if (!secList.querySelector('.sec-card')) {
+      // 旧模板没有 cards，尝试直接从 paperSnapshot 恢复
+      if (tpl.paperSnapshot) {
+        const liveStack = $('#livePaperStack');
+        if (liveStack) {
+          liveStack.innerHTML = tpl.paperSnapshot;
+          paginateA4(liveStack);
+          makePaperEditable(liveStack);
+          $('#livePreview').style.display = '';
+        }
+        $('#myTplWrap').classList.remove('open');
+        return;
+      }
+      alert('模板为空，请重新创建');
+      return;
+    }
+    // 恢复排版
+    setTimeout(() => {
+      const cards = secList.querySelectorAll('.sec-card');
+      (tpl.cards || []).forEach((sc, idx) => {
+        if (cards[idx] && sc._layout) {
+          cards[idx]._layout = Object.assign(cardLayout(cards[idx]), sc._layout);
+          renderSecBody(cards[idx]);
+        }
+      });
+      updateBuilderSummary();
+      // 恢复预览区 A4 纸格式（含所有字体/颜色/字号编辑效果）
+      if (tpl.paperSnapshot) {
+        const liveStack = $('#livePaperStack');
+        if (liveStack) {
+          liveStack.innerHTML = tpl.paperSnapshot;
+          $('#livePreview').style.display = '';
+          // 重新激活编辑控制（加粗/字号/颜色/删除等）
+          makePaperEditable(liveStack);
+          paginateA4(liveStack);
+          // 卡片与快照里的 sec-block 按 sid 一一对应（增量删除依赖此对应关系）
+          const snapBlocks = liveStack.querySelectorAll('.sec-block');
+          cards.forEach((card, idx) => {
+            if (snapBlocks[idx]) card._sid = snapBlocks[idx].dataset.sid;
+          });
+        }
+      } else {
+        refreshLivePreview();
+      }
+    }, 50);
+    $('#myTplWrap').classList.remove('open');
+    return;
+  }
+});
+// 全局关闭：点击 #myTplWrap 外部时收起下拉
+document.addEventListener('click', e => {
+  if (!e.target.closest('#myTplWrap')) {
+    $('#myTplWrap').classList.remove('open');
+  }
+});
+
+initBuilder();
+</script>
+</body>
+</html>

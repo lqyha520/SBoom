@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 from enum import Enum
 
 
@@ -31,12 +31,19 @@ class Subject(str, Enum):
 
 class GameType(str, Enum):
     """交互类型"""
-    QUIZ = "quiz"              # 选择题
-    FILL_BLANK = "fill_blank"  # 填空题
-    MATCH_PAIR = "match_pair"  # 连线配对
-    CHALLENGE = "challenge"    # 闯关模式
-    ORAL_MATH = "oral_math"    # 口算挑战
-    READING = "reading"        # 阅读理解
+    QUIZ = "quiz"                # 选择题
+    FILL_BLANK = "fill_blank"    # 填空题
+    MATCH_PAIR = "match_pair"    # 连线配对
+    CHALLENGE = "challenge"      # 闯关模式
+    ORAL_MATH = "oral_math"      # 口算挑战
+    READING = "reading"          # 阅读理解
+    VERTICAL_CALC = "vertical_calc"   # 竖式计算
+    RECURSIVE_CALC = "recursive_calc" # 脱式计算
+    SMART_CALC = "smart_calc"         # 简便计算
+    NUMBER_SPLIT = "number_split"     # 数的分成
+    COMPARE = "compare"             # 比大小
+    TRUE_FALSE = "true_false"        # 判断题
+    WORD_PROBLEM = "word_problem"    # 应用题（解决问题）
 
 
 class Difficulty(str, Enum):
@@ -55,9 +62,12 @@ class GenerateRequest(BaseModel):
     keyword: str = Field(..., description="知识点关键词", min_length=1, max_length=100)
     game_type: GameType = Field(GameType.QUIZ, description="交互类型")
     difficulty: Difficulty = Field(Difficulty.MEDIUM, description="难度")
-    question_count: int = Field(5, ge=1, le=10, description="生成题目数（1-10）")
+    question_count: int = Field(5, ge=1, le=99, description="生成题目数（1-99）")
     use_cache: bool = Field(True, description="是否使用缓存")
     stream: bool = Field(False, description="是否流式返回")
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_api_key: Optional[str] = None
 
 
 class ValidateRequest(BaseModel):
@@ -65,6 +75,24 @@ class ValidateRequest(BaseModel):
     grade: Grade
     subject: Subject
     question_content: str = Field(..., description="待校验的题目内容")
+
+
+class BatchItem(BaseModel):
+    """批量生成里的单个题型任务"""
+    game_type: str  # 自定义题型名可能是任意字符串，不用枚举约束
+    question_count: int = Field(5, ge=1, le=99)
+
+
+class BatchGenerateRequest(BaseModel):
+    """批量生成整张试卷的请求（一次 LLM 调用出多个题型）"""
+    grade: Grade
+    subject: Subject
+    keyword: str = Field(..., min_length=1, max_length=100)
+    difficulty: Difficulty = Field(Difficulty.MEDIUM)
+    items: List[BatchItem] = Field(..., min_items=1, max_items=10)
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_api_key: Optional[str] = None
 
 
 class FeedbackRequest(BaseModel):
@@ -78,13 +106,22 @@ class FeedbackRequest(BaseModel):
 
 class Question(BaseModel):
     """单道题目"""
-    id: int
-    type: str
-    stem: str
-    options: Optional[list[str]] = None       # 选择题的选项
-    answer: Union[str, int]                     # 正确答案
-    analysis: str                              # 解析
-    tags: list[str] = []                       # 知识点标签
+    id: Optional[int] = None
+    type: str = ""
+    stem: str = ""  # 题干（数的分成/比大小等特殊题型可能无题干）
+    options: Optional[List[str]] = None       # 选择题的选项
+    left_items: Optional[List[str]] = None    # 连线配对题左栏
+    right_items: Optional[List[str]] = None   # 连线配对题右栏
+    top: Optional[Union[int, str]] = None     # 数的分成：顶部数字（__ 表示填空）
+    left: Optional[Union[int, str]] = None    # 数的分成：左下数字（__ 表示填空）
+    right: Optional[Union[int, str]] = None   # 数的分成：右下数字（__ 表示填空）
+    left_expr: Optional[str] = None           # 比大小：左边表达式
+    right_expr: Optional[str] = None          # 比大小：右边表达式
+    answer: Union[str, int, float, List[List[int]]]  # 正确答案（口算题可能是小数；配对题为索引数组）
+    analysis: str = ""                        # 解析
+    tags: List[str] = []                      # 知识点标签
+    difficulty_level: Optional[int] = None    # 闯关题的关卡
+    expected_time_seconds: Optional[int] = None  # 口算题的建议用时（秒）
 
 
 class GameResult(BaseModel):
@@ -94,17 +131,22 @@ class GameResult(BaseModel):
     difficulty: str
     grade: str
     subject: str
-    questions: list[Question]
+    questions: List[Question]
     total_score: int = 100
     pass_score: int = 60
     from_cache: bool = False
     cache_key: Optional[str] = None
 
 
+class BatchGenerateResponse(BaseModel):
+    """批量生成结果：每项对应一个题型的一套题"""
+    sections: List[GameResult] = []
+
+
 class ValidateResult(BaseModel):
     """超纲校验结果"""
     is_oob: bool                               # 是否超纲
-    oob_points: list[str] = []                 # 超纲的知识点
+    oob_points: List[str] = []                 # 超纲的知识点
     suggestion: Optional[str] = None           # 修改建议
 
 
@@ -112,14 +154,15 @@ class KnowledgeScope(BaseModel):
     """知识范围信息"""
     grade: str
     subject: str
-    allowed: list[str]
-    forbidden: list[str]
+    allowed: List[str]
+    forbidden: List[str]
+    semesters: Optional[Dict[str, List[str]]] = None  # 按学期划分的知识点（上册/下册）
 
 
 class SubjectGrades(BaseModel):
     """某科目的所有年级知识范围"""
     subject: str
-    grades: dict[str, KnowledgeScope]
+    grades: Dict[str, KnowledgeScope]
 
 
 class ErrorResponse(BaseModel):
