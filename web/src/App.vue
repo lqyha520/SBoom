@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useExamStore } from './stores/exam'
 import LeftPanel from './components/LeftPanel.vue'
+import TypesColumn from './components/TypesColumn.vue'
 import BuildView from './components/BuildView.vue'
 import StepResult from './components/StepResult.vue'
 import AdvancedDrawer from './components/AdvancedDrawer.vue'
@@ -41,6 +42,7 @@ onMounted(() => store.init())
     <main class="workbench" :class="{ 'result-only': store.view === 'result' }">
       <template v-if="store.view === 'build'">
         <LeftPanel />
+        <TypesColumn />
         <BuildView />
       </template>
       <StepResult v-else />
