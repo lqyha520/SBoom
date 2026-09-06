@@ -62,6 +62,8 @@ const measureKey = computed(() =>
 async function paginate() {
   await nextTick()
   await new Promise(r => requestAnimationFrame(() => r(null)))
+  // 等字体加载完成再测量（否则块高度偏小，分页错乱）
+  try { await (document as any).fonts?.ready } catch { /* 老浏览器忽略 */ }
   const mEl = measureEl.value
   if (!mEl) return
   const paper = mEl.querySelector('.paper') as HTMLElement | null
@@ -79,7 +81,7 @@ async function paginate() {
   const tailH = tailEl ? tailEl.offsetHeight : 0
 
   const blocks = Array.from(paper.querySelectorAll('.sec-block')) as HTMLElement[]
-  const pageCap = availH - headH - 4 // 余量
+  const pageCap = Math.max(availH - headH - 4, 200)
   const chunks: number[][] = []
   const heights: number[] = []
   let cur: number[] = []
@@ -87,6 +89,7 @@ async function paginate() {
   blocks.forEach((b, i) => {
     const h = b.offsetHeight || 0
     heights.push(h)
+    // 当前页已有内容且装不下下一块 → 切页；单块超高也切（宁可溢出不可丢失）
     if (cur.length && curH + h > pageCap) {
       chunks.push(cur)
       cur = []
@@ -106,6 +109,7 @@ async function paginate() {
     }
   }
   pages.value = chunks.length ? chunks : [[]]
+  measured.value = true
 }
 
 watch(measureKey, () => paginate(), { immediate: false })
@@ -340,7 +344,22 @@ function enableTableResize(paper: Element) {
 
 onBeforeUnmount(() => teardownLayout())
 
-defineExpose({ applyLayout, repaginate: () => { measureTick.value++ } })
+defineExpose({
+  applyLayout,
+  repaginate: () => { measureTick.value++ },
+  /** 等分页测量完成（导出前调用） */
+  ready: () => new Promise<void>(resolve => {
+    const check = () => {
+      if (pages.value.length && pages.value[0]?.length !== undefined && measured.value) resolve()
+      else setTimeout(check, 50)
+    }
+    // paginate 完成会置 measured=true
+    setTimeout(check, 50)
+  }),
+})
+
+/** 分页是否已完成至少一次（导出等待用） */
+const measured = ref(false)
 </script>
 
 <template>

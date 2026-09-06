@@ -1,6 +1,6 @@
 /**
  * 导出：PDF / PNG / 批量 ZIP / 合并 PDF
- * 学生卷从当前可见 DOM 克隆（保留排版模式的自由调整），答案卷由数据渲染。
+ * 全部从数据离屏渲染（mount PaperView 等分页完成再截图），不依赖预览 DOM。
  */
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
@@ -11,23 +11,10 @@ import { answerOf, cirNum } from './utils'
 import { TYPE_NAME } from './constants'
 import PaperView from './components/PaperView.vue'
 
-export interface ExportOpts {
-  style: PaperStyle
-}
-
-/** 克隆并清理一个纸面容器（去掉排版工具/可编辑态，按需去掉彩色装饰） */
-function cleanClone(src: HTMLElement, style: PaperStyle): HTMLElement {
-  const clone = src.cloneNode(true) as HTMLElement
-  clone.style.display = 'block'
-  // 去掉预览缩放（导出按原始尺寸渲染）
-  clone.style.zoom = ''
-  clone.querySelectorAll('[style*="zoom"]').forEach(el => ((el as HTMLElement).style.zoom = ''))
-  clone.querySelectorAll('.offscreen, .q-tools, .sec-tools, .sort-handle, .cell-resizer, .col-resizer, .row-resizer, .q-ans-inline').forEach(b => b.remove())
-  clone.querySelectorAll('[contenteditable="true"]').forEach(el => el.removeAttribute('contenteditable'))
-  clone.querySelectorAll('.paper').forEach(p => {
-    ;(p as HTMLElement).style.display = 'block'
-    ;(p as HTMLElement).style.visibility = 'visible'
-    if (!style.exportBg) {
+/** 容器 → A4 页画布数组（在元素边界处断页）；按需关闭彩色装饰（省墨） */
+async function canvasesOf(holder: HTMLElement, style?: PaperStyle): Promise<HTMLCanvasElement[]> {
+  if (style && !style.exportBg) {
+    holder.querySelectorAll('.paper').forEach(p => {
       p.querySelectorAll('.paper-bg-layer').forEach(el => ((el as HTMLElement).style.display = 'none'))
       p.querySelectorAll('.exam-head').forEach(el => el.setAttribute('data-plain', '1'))
       p.setAttribute('data-seccolor', '0')
@@ -35,13 +22,8 @@ function cleanClone(src: HTMLElement, style: PaperStyle): HTMLElement {
       p.setAttribute('data-encourage', '0')
       p.setAttribute('data-reward', '0')
       p.querySelectorAll('.paper-frame-layer').forEach(el => ((el as HTMLElement).style.display = 'none'))
-    }
-  })
-  return clone
-}
-
-/** 容器 → A4 页画布数组（在元素边界处断页） */
-async function canvasesOf(holder: HTMLElement): Promise<HTMLCanvasElement[]> {
+    })
+  }
   const pages: HTMLCanvasElement[] = []
   for (const paper of Array.from(holder.querySelectorAll('.paper:not(.measure)'))) {
     const canvas = await html2canvas(paper as HTMLElement, { scale: 3, backgroundColor: '#ffffff' })
@@ -79,24 +61,12 @@ async function canvasesOf(holder: HTMLElement): Promise<HTMLCanvasElement[]> {
   return pages
 }
 
-/** 离屏克隆指定容器并出画布 */
-async function canvasesFromDOM(src: HTMLElement, style: PaperStyle): Promise<HTMLCanvasElement[]> {
-  const holder = document.createElement('div')
-  holder.style.cssText = 'position:fixed;left:-99999px;top:0;background:#fff;z-index:-1;'
-  holder.appendChild(cleanClone(src, style))
-  document.body.appendChild(holder)
-  try {
-    return await canvasesOf(holder)
-  } finally {
-    document.body.removeChild(holder)
-  }
-}
-
 /* ── 答案页 DOM 构建 ── */
 export function buildAnswerDOM(paper: PaperData, template: PaperTemplate): HTMLElement {
   const wrap = document.createElement('div')
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  let html = `<div class="paper measure" data-frame="none" data-encourage="0" data-reward="0" data-kid="0" data-seccolor="0" style="height:auto;overflow:visible"><div class="exam">`
+  // 注意：不带 .measure 类（canvasesOf 会跳过 measure 纸），高度自适应由内联样式控制
+  let html = `<div class="paper" data-frame="none" data-encourage="0" data-reward="0" data-kid="0" data-seccolor="0" style="height:auto;overflow:visible"><div class="exam">`
   html += `<h1 style="font-size:16pt;text-align:center;font-family:'SimHei','Microsoft YaHei',sans-serif;letter-spacing:2px;margin-bottom:4mm;">参考答案与解析</h1>`
   paper.sections.forEach(sec => {
     const qs = sec.data.questions || []
@@ -122,7 +92,7 @@ async function answerCanvases(paper: PaperData, template: PaperTemplate, style: 
   holder.appendChild(dom)
   document.body.appendChild(holder)
   try {
-    return await canvasesOf(holder)
+    return await canvasesOf(holder, style)
   } finally {
     document.body.removeChild(holder)
   }
@@ -165,11 +135,11 @@ export async function exportPDF(
   paper: PaperData,
   template: PaperTemplate,
   style: PaperStyle,
-  studentStack: HTMLElement,
+  _studentStack: HTMLElement,
   mode: 'student' | 'withAnswers' | 'answersOnly',
 ): Promise<void> {
   const parts: HTMLCanvasElement[] = []
-  if (mode !== 'answersOnly') parts.push(...(await canvasesFromDOM(studentStack, style)))
+  if (mode !== 'answersOnly') parts.push(...(await studentCanvases(paper, template, style, true)))
   if (mode !== 'student') parts.push(...(await answerCanvases(paper, template, style)))
   const doc = pagesToPDF(parts)
   const suffix = mode === 'answersOnly' ? '（答案）' : mode === 'withAnswers' ? '（含答案）' : ''
@@ -180,9 +150,9 @@ export async function exportPNG(
   paper: PaperData,
   template: PaperTemplate,
   style: PaperStyle,
-  studentStack: HTMLElement,
+  _studentStack: HTMLElement,
 ): Promise<void> {
-  const pages = await canvasesFromDOM(studentStack, style)
+  const pages = await studentCanvases(paper, template, style, true)
   const title = baseTitle(paper, template)
   pages.forEach((pc, i) => {
     pc.toBlob(blob => blob && download(blob, `${title}_第${i + 1}页.png`))
@@ -194,7 +164,7 @@ export async function exportBatch(
   papers: PaperData[],
   template: PaperTemplate,
   style: PaperStyle,
-  studentStack: HTMLElement,
+  _studentStack: HTMLElement,
   opts: { addDay: boolean; mergeOnly?: boolean },
   onProgress?: (msg: string) => void,
 ): Promise<void> {
@@ -205,10 +175,7 @@ export async function exportBatch(
   for (let k = 0; k < papers.length; k++) {
     onProgress?.(`正在处理第 ${k + 1}/${papers.length} 份…`)
     const paper = papers[k]
-    // 第 1 份从可见 DOM（含编辑），其余从数据渲染
-    const stuPages = k === 0
-      ? await canvasesFromDOM(studentStack, style)
-      : await canvasesFromDOM(await renderPaperDOM(paper, template, style, opts), style)
+    const stuPages = await studentCanvases(paper, template, style, opts.addDay)
     mergePages.push(...stuPages)
     if (zip) {
       const suffix = opts.addDay && papers.length > 1 ? `-第${k + 1}天` : `-第${k + 1}份`
@@ -231,19 +198,22 @@ export async function exportBatch(
   download(blob, `${title}-${papers.length}份.zip`)
 }
 
-/** 数据 → 离屏渲染一份学生卷 DOM（供批量导出的第 2~N 份） */
-async function renderPaperDOM(
+/** 数据 → 离屏渲染一份学生卷并出画布（等分页完成后再截图，不克隆） */
+async function renderPaperCanvases(
   paper: PaperData,
   template: PaperTemplate,
   style: PaperStyle,
   opts: { addDay: boolean },
-): Promise<HTMLElement> {
+): Promise<HTMLCanvasElement[]> {
   const holder = document.createElement('div')
   holder.style.cssText = 'position:fixed;left:-99999px;top:0;background:#fff;z-index:-1;'
   document.body.appendChild(holder)
+
+  let paperView: any = null
   const app = createApp({
     render: () =>
       h(PaperView, {
+        ref: (el: any) => { paperView = el },
         paper,
         template,
         style,
@@ -252,12 +222,28 @@ async function renderPaperDOM(
       }),
   })
   app.mount(holder)
-  // 等分页测量完成（测量在两帧内完成，加缓冲）
-  await new Promise(r => setTimeout(r, 350))
-  const el = holder.cloneNode(true) as HTMLElement
-  app.unmount()
-  document.body.removeChild(holder)
-  return el
+  try {
+    // 等分页测量完成（最多 5 秒兜底）
+    await Promise.race([
+      paperView?.ready?.() ?? Promise.resolve(),
+      new Promise(r => setTimeout(r, 5000)),
+    ])
+    await new Promise(r => setTimeout(r, 100))
+    return await canvasesOf(holder, style)
+  } finally {
+    app.unmount()
+    document.body.removeChild(holder)
+  }
+}
+
+/** 学生卷从数据渲染导出（不再克隆预览 DOM，避开 zoom/克隆态问题） */
+async function studentCanvases(
+  paper: PaperData,
+  template: PaperTemplate,
+  style: PaperStyle,
+  addDay: boolean,
+): Promise<HTMLCanvasElement[]> {
+  return renderPaperCanvases(paper, template, style, { addDay })
 }
 
 export function printStack(studentStack: HTMLElement) {
