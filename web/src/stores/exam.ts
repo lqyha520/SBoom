@@ -38,6 +38,52 @@ function loadArr<T>(key: string): T[] {
   }
 }
 
+/** 兼容旧版保存的「我的模板」格式（cards._layout、缺 difficulty/templateId） */
+function migrateMyTemplates(raw: any[]): MyTemplate[] {
+  return (raw || [])
+    .filter(t => t && t.name)
+    .map(t => ({
+      name: t.name,
+      grade: t.grade || '',
+      subject: t.subject || '',
+      keyword: t.keyword || '',
+      difficulty: (t.difficulty || 'medium') as Difficulty,
+      templateId: t.templateId || 'exam',
+      cards: (t.cards || []).map((c: any) => ({
+        type: c.type,
+        count: c.count ?? 1,
+        layout: { ...DEFAULT_LAYOUT, ...(c.layout || c._layout || {}) },
+      })),
+    }))
+}
+
+/** 旧版装饰设置迁移：lc_paper_bg + lc_paper_kid → 统一的 paper style */
+function migratePaperStyle(): Partial<PaperStyle> | null {
+  if (localStorage.getItem(LS.paperStyle)) return null // 新格式已存在，不迁移
+  try {
+    const bg = JSON.parse(localStorage.getItem('lc_paper_bg') || 'null')
+    const kid = JSON.parse(localStorage.getItem('lc_paper_kid') || 'null')
+    if (!bg && !kid) return null
+    const out: Partial<PaperStyle> = {}
+    if (bg) {
+      if (bg.style != null) out.bg = bg.style
+      if (bg.opacity != null) out.bgOpacity = bg.opacity
+      if (bg.banner != null) out.banner = bg.banner
+      if (bg.secColor != null) out.secColor = bg.secColor
+      if (bg.exportBg != null) out.exportBg = bg.exportBg
+    }
+    if (kid) {
+      if (kid.frame != null) out.frame = kid.frame
+      if (kid.encourage != null) out.encourage = kid.encourage
+      if (kid.reward != null) out.reward = kid.reward
+      if (kid.font === 'on' || kid.font === 'auto') out.kidFont = kid.font
+    }
+    return Object.keys(out).length ? out : null
+  } catch {
+    return null
+  }
+}
+
 const STYLE_DEFAULTS: PaperStyle = {
   bg: 'none',
   bgOpacity: 70,
@@ -101,11 +147,15 @@ export const useExamStore = defineStore('exam', {
 
       /* 卷面配置 */
       templateId,
-      style: load<PaperStyle>(LS.paperStyle, STYLE_DEFAULTS),
+      style: (() => {
+        const s = load<PaperStyle>(LS.paperStyle, STYLE_DEFAULTS)
+        const migrated = migratePaperStyle()
+        return migrated ? { ...s, ...migrated } : s
+      })(),
 
       /* 自定义题型 / 我的模板 / LLM */
       customTypes: loadArr<CustomType>(LS.customTypes),
-      myTemplates: loadArr<MyTemplate>(LS.myTemplates),
+      myTemplates: migrateMyTemplates(loadArr<any>(LS.myTemplates)),
       llm: load<LlmConfig>(LS.llm, LLM_DEFAULTS as LlmConfig),
     }
   },
@@ -391,9 +441,10 @@ export const useExamStore = defineStore('exam', {
       localStorage.setItem(LS.myTemplates, JSON.stringify(this.myTemplates))
     },
 
-    loadMyTemplate(name: string) {
+    loadMyTemplate(name: string): boolean {
       const tpl = this.myTemplates.find(t => t.name === name)
-      if (!tpl) return
+      if (!tpl) return false
+      if (!tpl.cards.length) return false
       this.grade = tpl.grade
       this.subject = tpl.subject
       this.keyword = tpl.keyword
@@ -404,11 +455,12 @@ export const useExamStore = defineStore('exam', {
         id: uid('s'),
         type: c.type,
         count: c.count,
-        status: 'ready',
+        status: 'ready' as const,
         data: { questions: mockQuestions(c.type, c.count) },
         layout: { ...DEFAULT_LAYOUT, ...c.layout },
       }))
       this.selectSubject(tpl.subject)
+      return true
     },
 
     deleteMyTemplate(name: string) {

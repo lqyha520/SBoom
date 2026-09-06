@@ -2,8 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import Sortable from 'sortablejs'
 import { useExamStore } from '../stores/exam'
-import { TYPE_DEFAULT, TYPE_NAME } from '../constants'
-import type { CustomType, PaperData } from '../types'
+import { TYPE_NAME } from '../constants'
+import type { PaperData, Section } from '../types'
 import PaperView from './PaperView.vue'
 import { useFitZoom } from '../useFitZoom'
 
@@ -45,17 +45,8 @@ onMounted(() => {
 })
 onBeforeUnmount(() => sortable?.destroy())
 
-/* ── 版式弹层 ── */
-const openLayId = ref('')
-function toggleLay(e: Event, id: string) {
-  e.stopPropagation()
-  openLayId.value = openLayId.value === id ? '' : id
-}
-function onDocClick() {
-  openLayId.value = ''
-}
-onMounted(() => document.addEventListener('click', onDocClick))
-onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
+/* ── 版式弹窗 ── */
+const laySec = ref<Section | null>(null)
 
 /* ── 数量编辑（防抖） ── */
 let cntTimer: ReturnType<typeof setTimeout> | null = null
@@ -93,39 +84,20 @@ function saveTpl() {
     <div class="card secs-card">
       <div class="card-head">
         <h2>卷面内容</h2>
-        <span style="font-size: 12px; color: var(--ink3);">⠿ 拖动排序</span>
+        <span style="font-size: 12px; color: var(--ink3);">⠿ 拖动排序 · 纸面文字可直接点击修改</span>
         <span style="margin-left: auto;">
-          <button class="btn mini" :disabled="!store.sections.length && !store.myTemplates.length" @click="showMyTpl = !showMyTpl">我的模板</button>
+          <button class="btn mini" @click="showMyTpl = true">我的模板</button>
         </span>
-      </div>
-
-      <!-- 我的模板下拉 -->
-      <div v-if="showMyTpl" style="padding: 10px 20px 0;">
-        <div class="card" style="padding: 12px;">
-          <div style="display: flex; gap: 8px; margin-bottom: 10px;">
-            <input class="input" v-model="saveTplName" placeholder="保存当前卷面为模板（输入名称）">
-            <button class="btn primary mini" :disabled="!saveTplName.trim() || !store.sections.length" @click="saveTpl">保存</button>
-          </div>
-          <div v-if="!store.myTemplates.length" style="font-size: 12px; color: var(--ink3);">还没有保存的模板</div>
-          <div v-for="t in store.myTemplates" :key="t.name" style="display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border);">
-            <b style="font-size: 13px;">{{ t.name }}</b>
-            <span style="font-size: 12px; color: var(--ink3); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-              {{ t.grade }}{{ t.subject }}：{{ t.cards.map(c => `${TYPE_NAME[c.type] || c.type}×${c.count}`).join('、') }}
-            </span>
-            <button class="btn mini primary" @click="store.loadMyTemplate(t.name); showMyTpl = false">使用</button>
-            <button class="btn mini danger" @click="store.deleteMyTemplate(t.name)">删除</button>
-          </div>
-        </div>
       </div>
 
       <div class="sec-scroll">
         <div v-if="!store.sections.length" class="empty" style="padding: 18px;">
           <b>卷面还是空的</b>
-          <span>点击左侧题型卡片，题目会实时出现在下面的预览里</span>
+          <span>点击中间题型卡片，题目会实时出现在下面的预览里</span>
         </div>
 
         <div ref="secListEl">
-          <div v-for="(sec, i) in store.sections" :key="sec.id" class="sec-card" @click.stop>
+          <div v-for="(sec, i) in store.sections" :key="sec.id" class="sec-card">
             <span class="drag-handle" title="拖拽调整顺序">⠿</span>
             <span class="sec-idx">{{ i + 1 }}</span>
             <span class="sec-name">{{ TYPE_NAME[sec.type] || sec.type }}</span>
@@ -137,30 +109,7 @@ function saveTpl() {
               <button title="增加一题" @click="store.setSectionCount(sec.id, Math.min(99, sec.count + 1))">＋</button>
             </span>
 
-            <span class="lay-wrap" :class="{ open: openLayId === sec.id }">
-              <button class="lay-btn" @click="toggleLay($event, sec.id)">版式</button>
-              <div class="lay-pop" @click.stop>
-                <div class="lay-row"><em>分栏</em>
-                  <button v-for="c in [1, 2, 3, 4, 5]" :key="'q' + c" class="lay-opt" :class="{ on: sec.layout.qCols === c }" @click="sec.layout.qCols = c">{{ c }}</button>
-                </div>
-                <div class="lay-row"><em>选项</em>
-                  <button v-for="c in [1, 2, 3, 4, 5]" :key="'o' + c" class="lay-opt" :class="{ on: sec.layout.optCols === c }" @click="sec.layout.optCols = c">{{ c }}</button>
-                </div>
-                <div class="lay-row"><em>表格</em>
-                  <button class="lay-opt" :class="{ on: sec.layout.tableBorder === 'none' }" @click="sec.layout.tableBorder = 'none'">无</button>
-                  <button class="lay-opt" :class="{ on: sec.layout.tableBorder === 'solid' }" @click="sec.layout.tableBorder = 'solid'">实线</button>
-                  <button class="lay-opt" :class="{ on: sec.layout.tableBorder === 'dashed' }" @click="sec.layout.tableBorder = 'dashed'">虚线</button>
-                </div>
-                <div class="lay-row"><em>字号</em>
-                  <button class="lay-opt" :class="{ on: !sec.layout.fontSize }" @click="sec.layout.fontSize = ''">默认</button>
-                  <button v-for="fs in ['9pt', '10pt', '10.5pt', '11pt', '12pt']" :key="fs" class="lay-opt" :class="{ on: sec.layout.fontSize === fs }" @click="sec.layout.fontSize = fs">{{ fs.replace('pt', '') }}</button>
-                </div>
-                <div class="lay-row"><em>题号</em>
-                  <button class="lay-opt" :class="{ on: sec.layout.showNo }" @click="sec.layout.showNo = true">显示</button>
-                  <button class="lay-opt" :class="{ on: !sec.layout.showNo }" @click="sec.layout.showNo = false">隐藏</button>
-                </div>
-              </div>
-            </span>
+            <button class="btn mini" @click="laySec = sec">版式</button>
 
             <button v-if="sec.status === 'error'" class="btn mini" @click="store.retrySection(sec.id)">重试</button>
             <button class="x-btn" title="删除" @click="store.removeSection(sec.id)">✕</button>
@@ -175,15 +124,84 @@ function saveTpl() {
       </div>
     </div>
 
-    <!-- A4 实时预览 -->
+    <!-- A4 实时预览（可直接编辑） -->
     <div class="card preview-card">
       <div class="card-head">
         <h2>实时预览</h2>
         <span style="font-size: 12px; color: var(--ink3);">占位题仅供参考，点「生成试卷」后由 AI 替换</span>
       </div>
       <div ref="previewBox" class="preview-scroll">
-        <PaperView :paper="previewPaper" :template="store.template" :style="store.style" :editable="false" :zoom="zoom" />
+        <PaperView :paper="previewPaper" :template="store.template" :style="store.style" :editable="true" :zoom="zoom" />
       </div>
     </div>
+
+    <!-- 版式弹窗 -->
+    <teleport to="body">
+      <div v-if="laySec" class="modal-mask" @click.self="laySec = null">
+        <div class="modal" style="width: 360px;">
+          <div class="modal-head">
+            <h3>版式 · {{ TYPE_NAME[laySec.type] || laySec.type }}</h3>
+            <button class="x-btn" @click="laySec = null">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="lay-row"><em>分栏</em>
+              <button v-for="c in [1, 2, 3, 4, 5]" :key="'q' + c" class="lay-opt" :class="{ on: laySec.layout.qCols === c }" @click="laySec!.layout.qCols = c">{{ c }}</button>
+            </div>
+            <div class="lay-row"><em>选项</em>
+              <button v-for="c in [1, 2, 3, 4, 5]" :key="'o' + c" class="lay-opt" :class="{ on: laySec.layout.optCols === c }" @click="laySec!.layout.optCols = c">{{ c }}</button>
+            </div>
+            <div class="lay-row"><em>表格</em>
+              <button class="lay-opt" :class="{ on: laySec.layout.tableBorder === 'none' }" @click="laySec!.layout.tableBorder = 'none'">无</button>
+              <button class="lay-opt" :class="{ on: laySec.layout.tableBorder === 'solid' }" @click="laySec!.layout.tableBorder = 'solid'">实线</button>
+              <button class="lay-opt" :class="{ on: laySec.layout.tableBorder === 'dashed' }" @click="laySec!.layout.tableBorder = 'dashed'">虚线</button>
+            </div>
+            <div class="lay-row"><em>字号</em>
+              <button class="lay-opt" :class="{ on: !laySec.layout.fontSize }" @click="laySec!.layout.fontSize = ''">默认</button>
+              <button v-for="fs in ['9pt', '10pt', '10.5pt', '11pt', '12pt']" :key="fs" class="lay-opt" :class="{ on: laySec.layout.fontSize === fs }" @click="laySec!.layout.fontSize = fs">{{ fs.replace('pt', '') }}</button>
+            </div>
+            <div class="lay-row" style="margin-bottom: 0;"><em>题号</em>
+              <button class="lay-opt" :class="{ on: laySec.layout.showNo }" @click="laySec!.layout.showNo = true">显示</button>
+              <button class="lay-opt" :class="{ on: !laySec.layout.showNo }" @click="laySec!.layout.showNo = false">隐藏</button>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn primary" @click="laySec = null">完成</button>
+          </div>
+        </div>
+      </div>
+    </teleport>
+
+    <!-- 我的模板弹窗 -->
+    <teleport to="body">
+      <div v-if="showMyTpl" class="modal-mask" @click.self="showMyTpl = false">
+        <div class="modal" style="width: 480px;">
+          <div class="modal-head">
+            <h3>我的模板</h3>
+            <button class="x-btn" @click="showMyTpl = false">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-row" style="display: flex; gap: 8px;">
+              <input class="input" v-model="saveTplName" placeholder="把当前卷面保存为模板（输入名称）">
+              <button class="btn primary" style="flex: none;" :disabled="!saveTplName.trim() || !store.sections.length" @click="saveTpl">保存</button>
+            </div>
+
+            <div v-if="!store.myTemplates.length" class="empty" style="padding: 24px;">
+              <span>还没有保存的模板<br>搭好卷面后输入名称点「保存」</span>
+            </div>
+
+            <div v-for="t in store.myTemplates" :key="t.name" style="display: flex; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--border);">
+              <div style="flex: 1; min-width: 0;">
+                <b style="font-size: 13px;">{{ t.name }}</b>
+                <div style="font-size: 12px; color: var(--ink3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                  {{ t.grade }}{{ t.subject }} · {{ t.cards.map(c => `${TYPE_NAME[c.type] || c.type}×${c.count}`).join('、') }}
+                </div>
+              </div>
+              <button class="btn mini primary" @click="store.loadMyTemplate(t.name); showMyTpl = false">使用</button>
+              <button class="btn mini danger" @click="store.deleteMyTemplate(t.name)">删除</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </teleport>
   </div>
 </template>
