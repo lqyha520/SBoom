@@ -21,10 +21,32 @@
 /* 测量用的纸（不限高） */
 .paper.measure { height: auto; overflow: visible; display: block; }
 
-/* 卷面编辑提示 */
+/* 可编辑 */
 .can-edit { outline: 2px dashed transparent; outline-offset: 2px; transition: outline-color .15s; border-radius: 2px; }
 .can-edit:hover { outline-color: rgba(37, 99, 235, .25); }
 .can-edit:focus { outline-color: var(--primary); }
+
+/* 卷头/卷尾元素删除按钮（不占内容流） */
+.exam .el-del {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  width: 17px;
+  height: 17px;
+  line-height: 17px;
+  text-align: center;
+  font-size: 10px;
+  color: #bbb;
+  cursor: pointer;
+  border-radius: 50%;
+  z-index: 5;
+  background: #fff;
+  opacity: 0;
+  transition: opacity .12s;
+  user-select: none;
+}
+.can-edit:hover .el-del, .exam-head:hover > .el-del, .reward-box:hover .el-del, .el-del:hover { opacity: 1; }
+.el-del:hover { color: #e5484d; background: #feeceb; }
 
 /* 拖拽/缩放手柄 */
 .col-resizer { position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; background: transparent; z-index: 3; }
