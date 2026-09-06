@@ -30,6 +30,8 @@ const { zoom, manual, setManual } = useFitZoom(previewBox)
 
 /* ── 排版模式 ── */
 const layoutMode = ref(false)
+const showSaveTpl = ref(false)
+const saveName = ref('')
 
 function toggleLayout() {
   if (layoutMode.value) {
@@ -37,6 +39,8 @@ function toggleLayout() {
     const newSections = paperViewEl.value?.applyLayout()
     if (newSections?.length) store.syncSections(newSections)
     layoutMode.value = false
+    // 排版成果值得留存：询问是否保存为模板
+    showSaveTpl.value = true
   } else {
     layoutMode.value = true
   }
@@ -44,6 +48,13 @@ function toggleLayout() {
 function cancelLayout() {
   layoutMode.value = false
   paperViewEl.value?.repaginate()
+}
+
+function confirmSaveTpl() {
+  const name = saveName.value.trim()
+  if (name) store.saveMyTemplate(name)
+  saveName.value = ''
+  showSaveTpl.value = false
 }
 </script>
 
@@ -87,6 +98,29 @@ function cancelLayout() {
         @toggle-element="store.toggleHiddenElement($event)"
       />
     </div>
+
+    <!-- 完成排版后：保存为模板询问 -->
+    <teleport to="body">
+      <div v-if="showSaveTpl" class="modal-mask" @click.self="showSaveTpl = false">
+        <div class="modal" style="width: 400px;">
+          <div class="modal-head">
+            <h3>排版已应用</h3>
+            <button class="x-btn" @click="showSaveTpl = false">✕</button>
+          </div>
+          <div class="modal-body">
+            <p style="font-size: 13px; color: var(--ink2); margin-bottom: 12px; line-height: 1.7;">
+              排版结果已同步到卷面。要不要把这套<b>排版 + 题目样式 + 装饰风格</b>保存为模板？<br>
+              <span style="font-size: 12px; color: var(--ink3);">下次从「我的模板」一键导入，原样恢复。</span>
+            </p>
+            <input class="input" v-model="saveName" maxlength="20" placeholder="模板名称，如：三年级口算每日一练" @keyup.enter="confirmSaveTpl">
+          </div>
+          <div class="modal-foot">
+            <button class="btn" @click="showSaveTpl = false">暂不保存</button>
+            <button class="btn primary" :disabled="!saveName.trim()" @click="confirmSaveTpl">保存模板</button>
+          </div>
+        </div>
+      </div>
+    </teleport>
   </div>
 </template>
 

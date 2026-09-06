@@ -7,10 +7,12 @@ import PreviewPane from './components/PreviewPane.vue'
 import StepResult from './components/StepResult.vue'
 import AdvancedDrawer from './components/AdvancedDrawer.vue'
 import LlmDialog from './components/LlmDialog.vue'
+import MyTemplatesDialog from './components/MyTemplatesDialog.vue'
 
 const store = useExamStore()
 const showAdv = ref(false)
 const showLlm = ref(false)
+const showTpl = ref(false)
 
 onMounted(() => store.init())
 </script>
@@ -28,6 +30,7 @@ onMounted(() => store.init())
       </div>
 
       <div class="topbar-actions" style="margin-left: auto;">
+        <button class="btn mini" @click="showTpl = true">📋 我的模板</button>
         <button
           v-if="store.papers.length"
           class="btn mini"
@@ -42,7 +45,7 @@ onMounted(() => store.init())
     <main class="workbench" :class="{ 'result-only': store.view === 'result' }">
       <template v-if="store.view === 'build'">
         <LeftPanel />
-        <MiddleColumn />
+        <MiddleColumn @open-templates="showTpl = true" />
         <PreviewPane />
       </template>
       <StepResult v-else />
@@ -51,5 +54,6 @@ onMounted(() => store.init())
     <!-- 弹层 -->
     <AdvancedDrawer :open="showAdv" @close="showAdv = false" />
     <LlmDialog :open="showLlm" @close="showLlm = false" />
+    <MyTemplatesDialog :open="showTpl" @close="showTpl = false" />
   </div>
 </template>

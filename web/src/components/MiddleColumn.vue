@@ -98,15 +98,8 @@ const previewOf = (sec: any): string => {
   return stem.length > 14 ? stem.slice(0, 14) + '…' : stem
 }
 
-/* ── 我的模板 ── */
-const showMyTpl = ref(false)
-const saveTplName = ref('')
-function saveTpl() {
-  const name = saveTplName.value.trim()
-  if (!name || !store.sections.length) return
-  store.saveMyTemplate(name)
-  saveTplName.value = ''
-}
+/* ── 我的模板（弹窗由 App 级组件承载，这里只发事件） ── */
+const emit = defineEmits<{ (e: 'open-templates'): void }>()
 
 const readyHint = computed(() => {
   if (!store.grade || !store.subject || !store.keyword.trim()) return '先在左侧选好条件'
@@ -160,7 +153,7 @@ const readyHint = computed(() => {
     <div class="mid-head">
       <b>卷面内容</b>
       <span style="font-size: 11px; color: var(--ink3);">⠿ 排序</span>
-      <button class="btn mini" style="margin-left: auto;" @click="showMyTpl = true">我的模板</button>
+      <button class="btn mini" style="margin-left: auto;" @click="emit('open-templates')">我的模板</button>
     </div>
 
     <div class="mid-secs">
@@ -271,39 +264,6 @@ const readyHint = computed(() => {
           </div>
           <div class="modal-foot">
             <button class="btn primary" @click="laySec = null">完成</button>
-          </div>
-        </div>
-      </div>
-    </teleport>
-
-    <!-- 我的模板弹窗 -->
-    <teleport to="body">
-      <div v-if="showMyTpl" class="modal-mask" @click.self="showMyTpl = false">
-        <div class="modal" style="width: 480px;">
-          <div class="modal-head">
-            <h3>我的模板</h3>
-            <button class="x-btn" @click="showMyTpl = false">✕</button>
-          </div>
-          <div class="modal-body">
-            <div class="form-row" style="display: flex; gap: 8px;">
-              <input class="input" v-model="saveTplName" placeholder="把当前卷面保存为模板（含全部文字编辑）">
-              <button class="btn primary" style="flex: none;" :disabled="!saveTplName.trim() || !store.sections.length" @click="saveTpl">保存</button>
-            </div>
-
-            <div v-if="!store.myTemplates.length" class="empty" style="padding: 24px;">
-              <span>还没有保存的模板<br>搭好卷面后输入名称点「保存」</span>
-            </div>
-
-            <div v-for="t in store.myTemplates" :key="t.name" style="display: flex; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--border);">
-              <div style="flex: 1; min-width: 0;">
-                <b style="font-size: 13px;">{{ t.name }}</b>
-                <div style="font-size: 12px; color: var(--ink3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                  {{ t.grade }}{{ t.subject }} · {{ t.cards.map(c => `${TYPE_NAME[c.type] || c.type}×${c.count}`).join('、') }}
-                </div>
-              </div>
-              <button class="btn mini primary" @click="store.loadMyTemplate(t.name) && (showMyTpl = false)">使用</button>
-              <button class="btn mini danger" @click="store.deleteMyTemplate(t.name)">删除</button>
-            </div>
           </div>
         </div>
       </div>
