@@ -9,6 +9,8 @@ const props = defineProps<{
   section: PaperSection
   /** 全卷中的大题序号（0 起，用于 一、二、三 标题） */
   secIndex: number
+  /** 全卷起始题号（题号跨大题连续） */
+  startNo: number
   showScore: boolean
   showAnswers: boolean
   editable: boolean
@@ -59,7 +61,7 @@ const gridStyle = computed(() => ({
           :key="q._qid || ci"
           :style="{ border: `1px ${layout.tableBorder} ${tblColor}`, padding: '1mm 3mm', verticalAlign: 'top', ...(fs as any) }"
         >
-          <QuestionItem :q="q" :no="ri * layout.qCols + ci + 1" :layout="layout" :show-answers="showAnswers" :editable="editable" />
+          <QuestionItem :q="q" :no="startNo + ri * layout.qCols + ci" :layout="layout" :show-answers="showAnswers" :editable="editable" />
         </td>
         <td
           v-for="k in layout.qCols - row.length"
@@ -75,7 +77,7 @@ const gridStyle = computed(() => ({
         v-for="(q, i) in qs"
         :key="q._qid || i"
         :q="q"
-        :no="i + 1"
+        :no="startNo + i"
         :layout="layout"
         :show-answers="showAnswers"
         :editable="editable"

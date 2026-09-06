@@ -127,7 +127,7 @@ const STYLE_DEFAULTS: PaperStyle = {
   frame: 'none',
   encourage: false,
   reward: false,
-  kidFont: 'auto',
+  kidFont: 'off',
   exportBg: false,
 }
 
@@ -184,6 +184,8 @@ export const useExamStore = defineStore('exam', {
       templateId,
       style: (() => {
         const s = load<PaperStyle>(LS.paperStyle, STYLE_DEFAULTS)
+        // 大字号不再默认跟随年级：已存的 auto 归一为 off
+        if (s.kidFont === 'auto') s.kidFont = 'off'
         const migrated = migratePaperStyle()
         return migrated ? { ...s, ...migrated } : s
       })(),
