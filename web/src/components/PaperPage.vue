@@ -25,17 +25,6 @@ const props = defineProps<{
 
 const blocks = computed(() => props.idxs.map(i => props.paper.sections[i]).filter(Boolean) as PaperSection[])
 
-/** 每个大题的全卷起始题号（跨大题连续编号） */
-const startNos = computed(() => {
-  const out: number[] = []
-  let n = 1
-  blocks.value.forEach(b => {
-    out.push(n)
-    n += (b.data.questions || []).length
-  })
-  return out
-})
-
 const paperTitle = computed(() => {
   const t = props.template
   return (
@@ -137,7 +126,6 @@ function toggleHidden(key: string) {
         :key="sec._sid || sec.type + '_' + idxs[k]"
         :section="sec"
         :sec-index="idxs[k]"
-        :start-no="startNos[k]"
         :show-score="template.showScore"
         :show-answers="showAnswers"
         :editable="editable"
