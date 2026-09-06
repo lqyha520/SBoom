@@ -4,11 +4,14 @@ import { useExamStore } from '../stores/exam'
 import { summaryText } from '../utils'
 import PaperView from './PaperView.vue'
 import * as exporter from '../exporter'
+import { useFitZoom } from '../useFitZoom'
 
 const store = useExamStore()
 
 const stackEl = ref<HTMLElement | null>(null)
 const paperViewEl = ref<InstanceType<typeof PaperView> | null>(null)
+const previewBox = ref<HTMLElement | null>(null)
+const zoom = useFitZoom(previewBox)
 
 const paper = computed(() => store.papers[0])
 const summary = computed(() => (paper.value ? summaryText(paper.value.grade, paper.value.subject, paper.value.keyword, paper.value.sections) : ''))
@@ -75,16 +78,10 @@ function cancelLayout() {
 </script>
 
 <template>
-  <div class="step-page" v-if="paper">
-    <!-- 汇总 -->
-    <div class="result-summary">
-      <b>{{ summary }}</b>
-      <template v-if="store.papers.length > 1"> ｜ 共 <b>{{ store.papers.length }}</b> 份（每份题目不同）</template>
-    </div>
-
+  <div class="result-view" v-if="paper">
     <!-- 工具栏 -->
-    <div class="card no-print">
-      <div class="result-toolbar">
+    <div class="card no-print" style="flex: none;">
+      <div class="result-toolbar" style="margin-bottom: 0;">
         <button class="btn primary" :disabled="!!exporting" @click="exportPdf('student')">
           <template v-if="busy('pdf')"><span class="spin"></span> 导出中…</template>
           <template v-else>下载 PDF</template>
@@ -117,14 +114,18 @@ function cancelLayout() {
           <template v-if="store.generating"><span class="spin"></span> 生成中…</template>
           <template v-else>再来一批</template>
         </button>
+        <span class="sep"></span>
+        <span class="result-summary" style="margin-bottom: 0; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="summary">
+          {{ summary }}<template v-if="store.papers.length > 1">（{{ store.papers.length }} 份）</template>
+        </span>
         <span style="flex: 1;"></span>
-        <button class="btn ghost" @click="store.backToSections()">← 返回调整</button>
+        <button class="btn ghost" @click="store.backToBuild()">← 返回调整</button>
       </div>
       <div v-if="exportErr" style="padding: 0 16px 12px; color: var(--red); font-size: 13px;">{{ exportErr }}</div>
     </div>
 
     <!-- A4 纸 -->
-    <div ref="stackEl" class="paper-area">
+    <div ref="stackEl" class="preview-scroll" style="padding: 16px;">
       <PaperView
         ref="paperViewEl"
         :paper="paper"
@@ -134,6 +135,7 @@ function cancelLayout() {
         :editable="true"
         :layout-mode="store.layoutMode"
         :add-day="store.addDayLabel"
+        :zoom="zoom"
       />
     </div>
   </div>

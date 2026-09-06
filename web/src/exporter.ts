@@ -19,6 +19,9 @@ export interface ExportOpts {
 function cleanClone(src: HTMLElement, style: PaperStyle): HTMLElement {
   const clone = src.cloneNode(true) as HTMLElement
   clone.style.display = 'block'
+  // 去掉预览缩放（导出按原始尺寸渲染）
+  clone.style.zoom = ''
+  clone.querySelectorAll('[style*="zoom"]').forEach(el => ((el as HTMLElement).style.zoom = ''))
   clone.querySelectorAll('.offscreen, .q-tools, .sec-tools, .sort-handle, .cell-resizer, .col-resizer, .row-resizer, .q-ans-inline').forEach(b => b.remove())
   clone.querySelectorAll('[contenteditable="true"]').forEach(el => el.removeAttribute('contenteditable'))
   clone.querySelectorAll('.paper').forEach(p => {

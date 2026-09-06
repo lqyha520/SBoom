@@ -399,6 +399,47 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .step-page { animation: fadeIn .25s ease; }
 
+/* ═══════════ 单屏工作台布局 ═══════════ */
+.app.shell {
+  max-width: none;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 12px 16px;
+}
+.workbench {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 350px minmax(0, 1fr);
+  gap: 14px;
+}
+.workbench.result-only { grid-template-columns: minmax(0, 1fr); }
+
+/* 左栏 */
+.left-panel { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.left-panel .left-scroll { flex: 1; overflow-y: auto; min-height: 0; }
+.left-panel .left-foot { border-top: 1px solid var(--border); padding: 12px 16px; flex: none; background: var(--surface); border-radius: 0 0 var(--radius) var(--radius); }
+
+/* 右侧搭建视图 */
+.build-view { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.secs-card { flex: none; display: flex; flex-direction: column; min-height: 0; }
+.secs-card .sec-scroll { overflow-y: auto; min-height: 0; padding: 12px 20px; max-height: 34vh; }
+.preview-card { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.preview-card .preview-scroll { flex: 1; min-height: 0; overflow: auto; }
+
+/* 结果视图 */
+.result-view { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.result-view .preview-scroll { flex: 1; min-height: 0; overflow: auto; }
+
+@media (max-width: 1000px) {
+  .app.shell { height: auto; min-height: 100vh; overflow: auto; }
+  .workbench { grid-template-columns: 1fr; }
+  .left-panel { height: auto; }
+  .preview-card { min-height: 70vh; }
+}
+
 /* ── 滚动条 ── */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #d5d8dd; border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
@@ -413,4 +454,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
   body { background: #fff; }
   .topbar, .step-foot, .result-toolbar, .result-summary, .no-print { display: none !important; }
   .app { padding: 0; max-width: none; }
+  .app.shell { height: auto; overflow: visible; }
+  .workbench { display: block; }
+  .preview-scroll { overflow: visible; }
 }

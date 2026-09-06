@@ -65,8 +65,8 @@ export const useExamStore = defineStore('exam', {
     } catch { /* ignore */ }
 
     return {
-      /* 向导步骤 1/2/3 */
-      step: 1 as 1 | 2 | 3,
+      /* 当前视图：搭建 | 结果 */
+      view: 'build' as 'build' | 'result',
 
       /* 基础数据 */
       available: {} as Record<string, string[]>,
@@ -319,7 +319,7 @@ export const useExamStore = defineStore('exam', {
         }
         this.papers = papers
         this.showAnswers = false
-        this.step = 3
+        this.view = 'result'
       } catch (e: any) {
         this.generateError = e.message || '生成失败，请重试'
       } finally {
@@ -327,9 +327,9 @@ export const useExamStore = defineStore('exam', {
       }
     },
 
-    /** 生成后回到第 2 步调整 */
-    backToSections() {
-      this.step = 2
+    /** 结果视图 → 回到搭建 */
+    backToBuild() {
+      this.view = 'build'
     },
 
     /** 用当前搭建区再来一批（题目不同） */

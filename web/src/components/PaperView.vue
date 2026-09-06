@@ -21,6 +21,8 @@ const props = defineProps<{
   /** 排版模式（拖拽/删除/缩放） */
   layoutMode?: boolean
   addDay?: boolean
+  /** 预览缩放（适配容器宽度，纯视觉） */
+  zoom?: number
 }>()
 
 const emit = defineEmits<{ (e: 'layout-done'): void }>()
@@ -341,7 +343,7 @@ defineExpose({ applyLayout, repaginate: () => { measureTick.value++ } })
 </script>
 
 <template>
-  <div ref="stackEl" class="paper-stack">
+  <div ref="stackEl" class="paper-stack" :style="{ zoom: zoom ?? 1 }">
     <PaperPage
       v-for="(pg, i) in pages"
       :key="i"
