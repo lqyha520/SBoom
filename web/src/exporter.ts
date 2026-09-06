@@ -66,7 +66,8 @@ export function buildAnswerDOM(paper: PaperData, template: PaperTemplate): HTMLE
   const wrap = document.createElement('div')
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   // 注意：不带 .measure 类（canvasesOf 会跳过 measure 纸），高度自适应由内联样式控制
-  let html = `<div class="paper" data-frame="none" data-encourage="0" data-reward="0" data-kid="0" data-seccolor="0" style="height:auto;overflow:visible"><div class="exam">`
+  // display:block 覆盖 .paper 的 flex（html2canvas 对 auto 高度 flex 容器渲染异常）
+  let html = `<div class="paper" data-frame="none" data-encourage="0" data-reward="0" data-kid="0" data-seccolor="0" style="height:auto;overflow:visible;display:block"><div class="exam" style="display:block">`
   html += `<h1 style="font-size:16pt;text-align:center;font-family:'SimHei','Microsoft YaHei',sans-serif;letter-spacing:2px;margin-bottom:4mm;">参考答案与解析</h1>`
   paper.sections.forEach(sec => {
     const qs = sec.data.questions || []
@@ -85,13 +86,26 @@ export function buildAnswerDOM(paper: PaperData, template: PaperTemplate): HTMLE
   return wrap
 }
 
+/* 离屏容器工厂：视口内 0×0 裁剪容器（html2canvas 对负偏移 fixed 元素有渲染裁剪 bug，
+   子元素绝对定位溢出显示但不占布局，截图取的是子元素本身不受父 overflow 影响） */
+function makeHolder(): HTMLElement {
+  const holder = document.createElement('div')
+  holder.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;overflow:hidden;'
+  const inner = document.createElement('div')
+  inner.style.cssText = 'position:absolute;left:0;top:0;background:#fff;'
+  holder.appendChild(inner)
+  return holder
+}
+
 async function answerCanvases(paper: PaperData, template: PaperTemplate, style: PaperStyle): Promise<HTMLCanvasElement[]> {
   const dom = buildAnswerDOM(paper, template)
-  const holder = document.createElement('div')
-  holder.style.cssText = 'position:fixed;left:-99999px;top:0;background:#fff;z-index:-1;'
-  holder.appendChild(dom)
+  const holder = makeHolder()
+  holder.firstElementChild!.appendChild(dom)
   document.body.appendChild(holder)
   try {
+    // 等两帧 + 字体就绪，确保答案 DOM 完成布局
+    try { await (document as any).fonts?.ready } catch { /* ignore */ }
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
     return await canvasesOf(holder, style)
   } finally {
     document.body.removeChild(holder)
@@ -198,22 +212,20 @@ export async function exportBatch(
   download(blob, `${title}-${papers.length}份.zip`)
 }
 
-/** 数据 → 离屏渲染一份学生卷并出画布（等分页完成后再截图，不克隆） */
+/** 数据 → 离屏渲染一份学生卷并出画布（确定性等待渲染完成后再截图） */
 async function renderPaperCanvases(
   paper: PaperData,
   template: PaperTemplate,
   style: PaperStyle,
   opts: { addDay: boolean },
 ): Promise<HTMLCanvasElement[]> {
-  const holder = document.createElement('div')
-  holder.style.cssText = 'position:fixed;left:-99999px;top:0;background:#fff;z-index:-1;'
+  const holder = makeHolder()
+  const mountPoint = holder.firstElementChild as HTMLElement
   document.body.appendChild(holder)
 
-  let paperView: any = null
   const app = createApp({
     render: () =>
       h(PaperView, {
-        ref: (el: any) => { paperView = el },
         paper,
         template,
         style,
@@ -221,14 +233,26 @@ async function renderPaperCanvases(
         addDay: opts.addDay,
       }),
   })
-  app.mount(holder)
+  app.mount(mountPoint)
   try {
-    // 等分页测量完成（最多 5 秒兜底）
-    await Promise.race([
-      paperView?.ready?.() ?? Promise.resolve(),
-      new Promise(r => setTimeout(r, 5000)),
-    ])
-    await new Promise(r => setTimeout(r, 100))
+    const totalQ = paper.sections.reduce((s, x) => s + (x.data.questions?.length || 0), 0)
+    const deadline = Date.now() + 10000
+    let lastSig = ''
+    let stableFrames = 0
+    // 等待：纸页出现、题数齐全、连续 3 帧签名不变（分页/字体/布局全部稳定）
+    while (Date.now() < deadline) {
+      await new Promise(r => requestAnimationFrame(r))
+      const papers = holder.querySelectorAll('.paper-stack .paper')
+      const qs = holder.querySelectorAll('.paper-stack .q')
+      const sig = `${papers.length}|${qs.length}|${(holder.firstElementChild as HTMLElement).offsetHeight}`
+      if (papers.length > 0 && qs.length >= totalQ && sig === lastSig) {
+        stableFrames++
+        if (stableFrames >= 3) break
+      } else {
+        stableFrames = 0
+        lastSig = sig
+      }
+    }
     return await canvasesOf(holder, style)
   } finally {
     app.unmount()

@@ -6,7 +6,12 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(API + url, init)
   if (!r.ok) {
     const e = await r.json().catch(() => ({} as any))
-    throw new Error(e?.detail?.error || e?.detail?.detail || `HTTP ${r.status}`)
+    const base = e?.detail?.error || e?.detail?.detail || `HTTP ${r.status}`
+    // 500 = LLM 连接失败等后端错误，给出可操作的提示
+    if (r.status === 500 || r.status === 502) {
+      throw new Error(`${base}（LLM 服务连接失败，请检查「模型配置」中的接口地址和密钥）`)
+    }
+    throw new Error(base)
   }
   return r.json()
 }
