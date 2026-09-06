@@ -7,10 +7,12 @@ _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 
 class Settings(BaseSettings):
-    # LLM（必须通过 .env 或环境变量提供）
-    llm_api_key: str  # 无默认值，缺失时启动即报错
+    # LLM —— 配置来源以前端为主：
+    # 生成请求会带 llm_base_url/llm_model/llm_api_key（前端「模型配置」弹窗保存的值），
+    # 后端仅在请求未携带时才回落到这里的值。可以把 .env 里的 LLM_* 删掉（llm_api_key 给空串即可）。
+    llm_api_key: str = ""  # 允许为空：前端配置为主
     llm_base_url: str = "https://api.deepseek.com"
-    llm_model: str = "deepseek-v4-pro"
+    llm_model: str = "deepseek-chat"
     llm_temperature: float = 0.4
     llm_max_tokens: int = 4096
     llm_top_p: float = 0.9

@@ -95,7 +95,15 @@ async def _call_llm_and_parse(
     system_prompt: str, user_message: str,
     base_url: str = None, model: str = None, api_key: str = None,
 ) -> dict:
-    """调用 LLM 并解析返回的 JSON"""
+    """调用 LLM 并解析返回的 JSON。配置以前端传入为主；未传且后端无有效 key 时明确报错。"""
+    if not api_key and not settings.llm_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "尚未配置模型",
+                "detail": "请点击页面右上角「⚙ 模型配置」填写接口地址和密钥并保存",
+            },
+        )
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
