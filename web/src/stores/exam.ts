@@ -310,11 +310,11 @@ export const useExamStore = defineStore('exam', {
     setSectionCount(id: string, n: number) {
       const sec = this.sections.find(s => s.id === id)
       if (!sec || !sec.data) return
-      const qs = sec.data.questions
+      let qs = sec.data.questions
       if (n < qs.length) {
-        sec.data.questions = qs.slice(0, n)
+        qs = qs.slice(0, n)
       } else if (n > qs.length) {
-        qs.push(...mockQuestions(sec.type, n - qs.length))
+        qs = [...qs, ...mockQuestions(sec.type, n - qs.length)]
       }
       sec.count = n
       sec.data.questions = qs
