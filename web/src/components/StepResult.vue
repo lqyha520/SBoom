@@ -10,8 +10,7 @@ const store = useExamStore()
 
 const stackEl = ref<HTMLElement | null>(null)
 const paperViewEl = ref<InstanceType<typeof PaperView> | null>(null)
-const previewBox = ref<HTMLElement | null>(null)
-const zoom = useFitZoom(previewBox)
+const zoom = useFitZoom(stackEl)
 
 const paper = computed(() => store.papers[0])
 const summary = computed(() => (paper.value ? summaryText(paper.value.grade, paper.value.subject, paper.value.keyword, paper.value.sections) : ''))

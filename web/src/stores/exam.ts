@@ -12,6 +12,7 @@ import * as api from '../api'
 import type {
   CustomType,
   Difficulty,
+  GameData,
   LlmConfig,
   MyTemplate,
   PaperData,
@@ -38,7 +39,7 @@ function loadArr<T>(key: string): T[] {
   }
 }
 
-/** 兼容旧版保存的「我的模板」格式（cards._layout、缺 difficulty/templateId） */
+/** 兼容旧版保存的「我的模板」格式（cards._layout、缺 difficulty/templateId、paperSnapshot） */
 function migrateMyTemplates(raw: any[]): MyTemplate[] {
   return (raw || [])
     .filter(t => t && t.name)
@@ -54,7 +55,40 @@ function migrateMyTemplates(raw: any[]): MyTemplate[] {
         count: c.count ?? 1,
         layout: { ...DEFAULT_LAYOUT, ...(c.layout || c._layout || {}) },
       })),
+      paperSnapshot: t.paperSnapshot || undefined,
     }))
+}
+
+/** 解析旧版 paperSnapshot DOM，把编辑过的题干/选项文字回填到 mock 题目上 */
+function applyOldSnapshot(cards: { type: string; count: number; data: GameData }[], snapshot: string): void {
+  try {
+    const doc = new DOMParser().parseFromString(snapshot, 'text/html')
+    const blocks = doc.querySelectorAll('.sec-block')
+    cards.forEach((card, ci) => {
+      const block = blocks[ci]
+      if (!block) return
+      const qEls = block.querySelectorAll('.q')
+      qEls.forEach((qEl, qi) => {
+        const q = card.data.questions[qi]
+        if (!q) return
+        const stemEl = qEl.querySelector('[data-e="stem"]')
+        if (stemEl && q.stem != null) {
+          const t = stemEl.textContent || ''
+            .replace(/^[①-⑳]\s*/, '')
+            .replace(/^\[第\d+关\]\s*/, '')
+            .trim()
+          if (t) q.stem = t
+        }
+        const optsEl = qEl.querySelector('[data-e="opts"]')
+        if (optsEl && q.options) {
+          const lines = Array.from(optsEl.children)
+            .map(d => (d.textContent || '').replace(/^[A-H][.、：:．]\s*/, '').trim())
+            .filter(Boolean)
+          if (lines.length) q.options = lines
+        }
+      })
+    })
+  } catch { /* 解析失败保持 mock */ }
 }
 
 /** 旧版装饰设置迁移：lc_paper_bg + lc_paper_kid → 统一的 paper style */
@@ -433,6 +467,13 @@ export const useExamStore = defineStore('exam', {
         difficulty: this.difficulty,
         templateId: this.templateId,
         cards: this.sections.map(s => ({ type: s.type, count: s.count, layout: { ...s.layout } })),
+        // 完整数据：含每题编辑后的文字，恢复时原样还原
+        sections: JSON.parse(JSON.stringify(this.sections)).map((s: any) => ({
+          type: s.type,
+          count: s.count,
+          layout: s.layout,
+          data: s.data,
+        })),
       }
       const idx = this.myTemplates.findIndex(t => t.name === name)
       if (idx >= 0) this.myTemplates[idx] = tpl
@@ -444,21 +485,42 @@ export const useExamStore = defineStore('exam', {
     loadMyTemplate(name: string): boolean {
       const tpl = this.myTemplates.find(t => t.name === name)
       if (!tpl) return false
-      if (!tpl.cards.length) return false
+      if (!tpl.cards.length && !tpl.sections?.length) return false
       this.grade = tpl.grade
       this.subject = tpl.subject
       this.keyword = tpl.keyword
       this.selectedTags = []
       this.difficulty = tpl.difficulty
       this.templateId = tpl.templateId
-      this.sections = tpl.cards.map(c => ({
-        id: uid('s'),
-        type: c.type,
-        count: c.count,
-        status: 'ready' as const,
-        data: { questions: mockQuestions(c.type, c.count) },
-        layout: { ...DEFAULT_LAYOUT, ...c.layout },
-      }))
+
+      if (tpl.sections?.length) {
+        // V2：完整还原（每题文字、版式、数量都在）
+        this.sections = JSON.parse(JSON.stringify(tpl.sections)).map((s: any) => ({
+          id: uid('s'),
+          type: s.type,
+          count: s.count,
+          status: 'ready' as const,
+          data: s.data,
+          layout: { ...DEFAULT_LAYOUT, ...s.layout },
+        }))
+      } else {
+        // 旧格式：mock 占位 + 快照文字回填
+        const cards = tpl.cards.map(c => ({
+          type: c.type,
+          count: c.count,
+          data: { questions: mockQuestions(c.type, c.count) },
+          layout: { ...DEFAULT_LAYOUT, ...c.layout },
+        }))
+        if (tpl.paperSnapshot) applyOldSnapshot(cards, tpl.paperSnapshot)
+        this.sections = cards.map(c => ({
+          id: uid('s'),
+          type: c.type,
+          count: c.count,
+          status: 'ready' as const,
+          data: c.data,
+          layout: c.layout,
+        }))
+      }
       this.selectSubject(tpl.subject)
       return true
     },

@@ -412,7 +412,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 320px 250px minmax(0, 1fr);
+  grid-template-columns: 300px 290px minmax(0, 1fr);
   gap: 14px;
 }
 .workbench.result-only { grid-template-columns: minmax(0, 1fr); }
@@ -431,13 +431,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 
 /* 结果视图 */
 .result-view { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
-.result-view .preview-scroll { flex: 1; min-height: 0; overflow: auto; }
+.result-view .preview-scroll { flex: 1; min-height: 0; overflow: auto; display: flex; justify-content: center; }
 
-@media (max-width: 1000px) {
+@media (max-width: 1100px) {
   .app.shell { height: auto; min-height: 100vh; overflow: auto; }
+  .workbench { grid-template-columns: 1fr 1fr; }
+  .workbench > :nth-child(3) { grid-column: 1 / -1; min-height: 80vh; }
+}
+@media (max-width: 760px) {
   .workbench { grid-template-columns: 1fr; }
-  .left-panel { height: auto; }
-  .preview-card { min-height: 70vh; }
 }
 
 /* ── 滚动条 ── */

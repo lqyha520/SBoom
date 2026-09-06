@@ -89,48 +89,54 @@ function applyCustom() {
       </div>
 
       <!-- 知识点 -->
-      <div class="fgroup" style="margin-bottom: 16px;">
-        <div class="fgroup-label">知识点 <span style="font-weight: 400; color: var(--ink3); font-size: 11px;">可点选可输入</span></div>
-        <input
-          class="input"
-          maxlength="100"
-          placeholder="如：分数的初步认识"
-          :value="store.keyword"
-          @input="store.setKeyword(($event.target as HTMLInputElement).value)"
-        >
-        <div class="scope-box">
-          <div v-if="store.scopeLoading" class="scope-empty">加载中…</div>
-          <template v-else-if="store.scope">
-            <div v-if="store.scope.semesters?.['上册']">
-              <div class="semester-label">上册</div>
-              <span
-                v-for="k in store.scope.semesters['上册']"
-                :key="'up' + k"
-                class="tag"
-                :class="{ on: store.selectedTags.includes('上册·' + k) }"
-                @click="store.toggleTag('上册·' + k)"
-              >{{ k }}（上）</span>
-            </div>
-            <div v-if="store.scope.semesters?.['下册']">
-              <div class="semester-label">下册</div>
-              <span
-                v-for="k in store.scope.semesters['下册']"
-                :key="'down' + k"
-                class="tag"
-                :class="{ on: store.selectedTags.includes('下册·' + k) }"
-                @click="store.toggleTag('下册·' + k)"
-              >{{ k }}（下）</span>
-            </div>
-            <span
-              v-for="k in store.scope.allowed"
-              :key="k"
-              class="tag"
-              :class="{ on: store.selectedTags.includes(k) }"
-              @click="store.toggleTag(k)"
-            >{{ k }}</span>
-          </template>
-          <div v-else-if="store.grade && store.subject" class="scope-empty">暂无知识点清单，可直接输入关键词</div>
+      <div class="fgroup" style="margin-bottom: 0;">
+        <div class="fgroup-label">
+          知识点
+          <span v-if="store.grade && store.subject" style="font-weight: 500; color: var(--primary); font-size: 12px;">{{ store.grade }}·{{ store.subject }}</span>
+          <span v-else style="font-weight: 400; color: var(--ink3); font-size: 11px;">选好年级科目后显示</span>
         </div>
+        <template v-if="store.grade && store.subject">
+          <input
+            class="input"
+            maxlength="100"
+            placeholder="手动输入或点选下方标签"
+            :value="store.keyword"
+            @input="store.setKeyword(($event.target as HTMLInputElement).value)"
+          >
+          <div class="scope-box">
+            <div v-if="store.scopeLoading" class="scope-empty">加载中…</div>
+            <template v-else-if="store.scope">
+              <div v-if="store.scope.semesters?.['上册']">
+                <div class="semester-label">上册</div>
+                <span
+                  v-for="k in store.scope.semesters['上册']"
+                  :key="'up' + k"
+                  class="tag"
+                  :class="{ on: store.selectedTags.includes('上册·' + k) }"
+                  @click="store.toggleTag('上册·' + k)"
+                >{{ k }}（上）</span>
+              </div>
+              <div v-if="store.scope.semesters?.['下册']">
+                <div class="semester-label">下册</div>
+                <span
+                  v-for="k in store.scope.semesters['下册']"
+                  :key="'down' + k"
+                  class="tag"
+                  :class="{ on: store.selectedTags.includes('下册·' + k) }"
+                  @click="store.toggleTag('下册·' + k)"
+                >{{ k }}（下）</span>
+              </div>
+              <span
+                v-for="k in store.scope.allowed"
+                :key="k"
+                class="tag"
+                :class="{ on: store.selectedTags.includes(k) }"
+                @click="store.toggleTag(k)"
+              >{{ k }}</span>
+            </template>
+            <div v-else class="scope-empty">暂无知识点清单，可直接输入关键词</div>
+          </div>
+        </template>
       </div>
 
       <!-- 标题 + 模板 -->
@@ -174,5 +180,5 @@ function applyCustom() {
 </template>
 
 <style scoped>
-.scope-box { margin-top: 8px; max-height: 130px; overflow-y: auto; }
+.scope-box { margin-top: 8px; }
 </style>

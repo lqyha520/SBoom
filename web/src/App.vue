@@ -2,8 +2,8 @@
 import { onMounted, ref } from 'vue'
 import { useExamStore } from './stores/exam'
 import LeftPanel from './components/LeftPanel.vue'
-import TypesColumn from './components/TypesColumn.vue'
-import BuildView from './components/BuildView.vue'
+import MiddleColumn from './components/MiddleColumn.vue'
+import PreviewPane from './components/PreviewPane.vue'
 import StepResult from './components/StepResult.vue'
 import AdvancedDrawer from './components/AdvancedDrawer.vue'
 import LlmDialog from './components/LlmDialog.vue'
@@ -38,12 +38,12 @@ onMounted(() => store.init())
       </div>
     </header>
 
-    <!-- 单屏工作区 -->
+    <!-- 单屏工作区：左条件 / 中题型+卷面 / 右 A4 预览 -->
     <main class="workbench" :class="{ 'result-only': store.view === 'result' }">
       <template v-if="store.view === 'build'">
         <LeftPanel />
-        <TypesColumn />
-        <BuildView />
+        <MiddleColumn />
+        <PreviewPane />
       </template>
       <StepResult v-else />
     </main>

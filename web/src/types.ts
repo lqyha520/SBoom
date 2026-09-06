@@ -139,6 +139,9 @@ export interface MyTemplate {
   keyword: string
   difficulty: Difficulty
   templateId: string
-  customTemplate?: Partial<PaperTemplate>
   cards: { type: string; count: number; layout: SecLayout }[]
+  /** 完整数据（V2）：每题编辑后的文字/答案/版式，恢复时原样还原 */
+  sections?: { type: string; count: number; layout: SecLayout; data: GameData }[]
+  /** 旧版 DOM 快照（迁移兼容用） */
+  paperSnapshot?: string
 }
