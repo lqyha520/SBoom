@@ -53,3 +53,6 @@ build/
 # ============================
 web/node_modules/
 web/pnpm-workspace.yaml
+
+# 独立项目（不属于本仓库）
+math-question-bank/
