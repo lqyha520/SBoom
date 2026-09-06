@@ -1,11 +1,27 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import Sortable from 'sortablejs'
 import { useExamStore } from '../stores/exam'
 import { TYPE_DEFAULT, TYPE_NAME } from '../constants'
-import type { CustomType } from '../types'
+import type { CustomType, PaperData } from '../types'
+import PaperView from './PaperView.vue'
 
 const store = useExamStore()
+
+/* ── 实时预览：搭建区当前状态 → 试卷数据 ── */
+const previewPaper = computed<PaperData>(() => ({
+  grade: store.grade || '',
+  subject: store.subject,
+  keyword: store.keyword,
+  title: store.title,
+  difficulty: store.difficulty,
+  sections: store.sections.map(s => ({
+    type: s.type,
+    data: s.data || { questions: [] },
+    layout: s.layout,
+    _sid: s.id,
+  })),
+}))
 
 /* ── 自定义题型弹窗 ── */
 const showAddType = ref(false)
@@ -230,8 +246,8 @@ async function generate() {
       </div>
     </div>
 
-    <!-- 生成条 -->
-    <div class="card" style="margin-top: 16px;">
+    <!-- 生成条（吸底，滚动时始终可见） -->
+    <div class="card" style="margin-top: 16px; position: sticky; bottom: 12px; z-index: 60;">
       <div class="card-body" style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
         <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink2);" title="一次生成多份，每份题目不同">
           份数
@@ -248,6 +264,17 @@ async function generate() {
         </button>
       </div>
       <div v-if="store.generateError" style="padding: 0 20px 14px; color: var(--red); font-size: 13px;">{{ store.generateError }}</div>
+    </div>
+
+    <!-- 实时 A4 预览 -->
+    <div v-if="store.sections.length" class="card" style="margin-top: 16px;">
+      <div class="card-head">
+        <h2>试卷实时预览</h2>
+        <span style="font-size: 12px; color: var(--ink3);">当前为排版占位题，点「生成试卷」后由 AI 替换为真实题目</span>
+      </div>
+      <div class="card-body" style="overflow-x: auto;">
+        <PaperView :paper="previewPaper" :template="store.template" :style="store.style" :editable="false" />
+      </div>
     </div>
 
     <!-- 添加自定义题型弹窗 -->
