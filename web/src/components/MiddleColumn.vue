@@ -205,7 +205,7 @@ const readyHint = computed(() => {
         </label>
       </div>
       <button class="btn primary" style="width: 100%;" :disabled="!store.canGenerate" @click="store.generate()">
-        <span v-if="store.generating"><span class="spin"></span> AI 出题中…</span>
+        <span v-if="store.generating"><span class="spin"></span> {{ store.generateProgress || 'AI 出题中…' }}</span>
         <span v-else>生成试卷</span>
       </button>
     </div>

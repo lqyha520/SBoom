@@ -11,7 +11,7 @@ const store = useExamStore()
 
 const stackEl = ref<HTMLElement | null>(null)
 const paperViewEl = ref<InstanceType<typeof PaperView> | null>(null)
-const { zoom } = useFitZoom(stackEl)
+const { zoom, manual, setManual } = useFitZoom(stackEl)
 
 /** 结果页标题编辑 → 同步回 store（保存模板读 store.titleHtml） */
 function onTitleEdited(title: string, html: string) {
@@ -120,9 +120,21 @@ function cancelLayout() {
           <button class="btn" :disabled="!!exporting" @click="exportBatch(true)">合并 PDF</button>
         </template>
         <button class="btn" :disabled="store.generating" @click="store.regenerate()">
-          <template v-if="store.generating"><span class="spin"></span> 生成中…</template>
+          <template v-if="store.generating"><span class="spin"></span> {{ store.generateProgress || '生成中…' }}</template>
           <template v-else>再来一批</template>
         </button>
+        <span class="sep"></span>
+        <span style="display: flex; align-items: center; gap: 6px;">
+          <button class="btn mini" :style="manual === 0 ? 'border-color: var(--primary); color: var(--primary);' : ''" title="缩放到容器宽度" @click="setManual(0)">适应</button>
+          <input
+            type="range" min="25" max="100" step="5"
+            :value="manual > 0 ? manual * 100 : Math.round(zoom * 100)"
+            @input="setManual(parseInt(($event.target as HTMLInputElement).value) / 100)"
+            style="width: 80px; accent-color: var(--primary);"
+            title="缩放比例"
+          >
+          <span style="font-size: 11px; color: var(--ink3); width: 34px;">{{ Math.round(zoom * 100) }}%</span>
+        </span>
         <span class="sep"></span>
         <span class="result-summary" style="margin-bottom: 0; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="summary">
           {{ summary }}<template v-if="store.papers.length > 1">（{{ store.papers.length }} 份）</template>

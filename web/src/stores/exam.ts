@@ -181,6 +181,8 @@ export const useExamStore = defineStore('exam', {
       papers: [] as PaperData[],
       generating: false,
       generateError: '',
+      /** 生成进度文案（如：正在生成第 2/5 份…） */
+      generateProgress: '',
 
       /* 预览 */
       showAnswers: false,
@@ -371,6 +373,7 @@ export const useExamStore = defineStore('exam', {
         const nPapers = Math.max(1, Math.min(20, this.paperCount))
         const papers: PaperData[] = []
         for (let k = 0; k < nPapers; k++) {
+          this.generateProgress = nPapers > 1 ? `正在生成第 ${k + 1}/${nPapers} 份…` : 'AI 出题中…'
           const sections = await api.generateBatch({
             grade: this.grade,
             subject: this.subject,
@@ -423,6 +426,7 @@ export const useExamStore = defineStore('exam', {
         this.generateError = e.message || '生成失败，请重试'
       } finally {
         this.generating = false
+        this.generateProgress = ''
       }
     },
 

@@ -61,29 +61,43 @@ async function canvasesOf(holder: HTMLElement, style?: PaperStyle): Promise<HTML
   return pages
 }
 
-/* ── 答案页 DOM 构建 ── */
-export function buildAnswerDOM(paper: PaperData, template: PaperTemplate): HTMLElement {
-  const wrap = document.createElement('div')
-  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  // 注意：不带 .measure 类（canvasesOf 会跳过 measure 纸），高度自适应由内联样式控制
-  // display:block 覆盖 .paper 的 flex（html2canvas 对 auto 高度 flex 容器渲染异常）
-  let html = `<div class="paper" data-frame="none" data-encourage="0" data-reward="0" data-kid="0" data-seccolor="0" style="height:auto;overflow:visible;display:block"><div class="exam" style="display:block">`
-  html += `<h1 style="font-size:16pt;text-align:center;font-family:'SimHei','Microsoft YaHei',sans-serif;letter-spacing:2px;margin-bottom:4mm;">参考答案与解析</h1>`
-  paper.sections.forEach(sec => {
-    const qs = sec.data.questions || []
-    if (!qs.length) return
-    html += `<h2 class="sec">${TYPE_NAME[sec.type] || sec.type}</h2>`
-    qs.forEach((q, qi) => {
-      html += `<div style="margin-bottom:3mm"><b>${cirNum(qi + 1)}</b> `
-      const a = answerOf(q)
-      html += a ? `答案：${esc(a)}` : '<span style="color:#999">（暂无答案）</span>'
-      if (q.analysis) html += `<br><span style="color:#666;font-size:9pt">解析：${esc(q.analysis)}</span>`
-      html += `</div>`
-    })
-  })
-  html += `</div></div>`
-  wrap.innerHTML = html
-  return wrap
+/* ── 答案卷：与试卷同版式（同卷头/字体/分栏），题干位置换成 答案+解析 ── */
+export function buildAnswerPaper(paper: PaperData): PaperData {
+  const esc = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return {
+    ...paper,
+    title: (paper.title || '试卷') + ' · 参考答案',
+    titleHtml: undefined, // 答案卷标题不做富文本，避免继承（第X天）等
+    sections: paper.sections.map(sec => ({
+      ...sec,
+      data: {
+        ...sec.data,
+        questions: (sec.data.questions || []).map((q, i) => {
+          const a = answerOf(q)
+          const stem =
+            `<b style="color:#c0392b">答案：${esc(a || '（暂无答案）')}</b>` +
+            (q.analysis ? `<br><span style="color:#555;font-size:9.5pt">解析：${esc(q.analysis)}</span>` : '')
+          return {
+            ...q,
+            type: 'fill_blank',
+            stem,
+            // stem 是富文本 HTML，走 _stemHtml 通道渲染（QuestionItem 优先用它）
+            _stemHtml: stem,
+            // 清掉选项/连线等结构，只留题干文字
+            options: undefined,
+            left_items: undefined,
+            right_items: undefined,
+            left_expr: undefined,
+            right_expr: undefined,
+            top: undefined,
+            left: undefined,
+            right: undefined,
+            _qid: 'ans_' + (q._qid || i),
+          }
+        }),
+      },
+    })),
+  }
 }
 
 /* 离屏容器工厂：视口内 0×0 裁剪容器（html2canvas 对负偏移 fixed 元素有渲染裁剪 bug，
@@ -98,18 +112,9 @@ function makeHolder(): HTMLElement {
 }
 
 async function answerCanvases(paper: PaperData, template: PaperTemplate, style: PaperStyle): Promise<HTMLCanvasElement[]> {
-  const dom = buildAnswerDOM(paper, template)
-  const holder = makeHolder()
-  holder.firstElementChild!.appendChild(dom)
-  document.body.appendChild(holder)
-  try {
-    // 等两帧 + 字体就绪，确保答案 DOM 完成布局
-    try { await (document as any).fonts?.ready } catch { /* ignore */ }
-    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
-    return await canvasesOf(holder, style)
-  } finally {
-    document.body.removeChild(holder)
-  }
+  // 答案卷与学生卷同一渲染管线（同版式、块级分页不切断单条答案）
+  const ansPaper = buildAnswerPaper(paper)
+  return renderPaperCanvases(ansPaper, template, style, { addDay: false })
 }
 
 /* ── 画布 → PDF ── */
