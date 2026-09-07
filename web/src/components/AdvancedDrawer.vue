@@ -33,21 +33,6 @@ const FRAMES: { v: PaperStyle['frame']; label: string }[] = [
         <button class="x-btn" @click="emit('close')">✕</button>
       </div>
       <div class="drawer-body">
-        <!-- 标题字号 -->
-        <div class="fgroup">
-          <div class="fgroup-label">标题字号</div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <input
-              type="range" min="60" max="200" step="5"
-              :value="Math.round((store.style.titleScale ?? 1) * 100)"
-              @input="store.setStyle({ titleScale: parseInt(($event.target as HTMLInputElement).value) / 100 })"
-              style="flex: 1; accent-color: var(--primary);"
-              title="标题字号缩放"
-            >
-            <span style="font-size: 12px; color: var(--ink3); width: 40px;">{{ Math.round((store.style.titleScale ?? 1) * 100) }}%</span>
-          </div>
-        </div>
-
         <!-- 一键风格 -->
         <div class="fgroup">
           <div class="fgroup-label">卷面风格</div>
