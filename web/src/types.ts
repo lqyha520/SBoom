@@ -48,6 +48,10 @@ export interface SecLayout {
   tableBorder: 'none' | 'solid' | 'dashed'
   fontSize: string
   showNo: boolean
+  /** 表格模式：列宽（px，按列索引；undefined = 自动） */
+  colWidths?: (number | undefined)[]
+  /** 表格模式：行高（px；undefined = 自动） */
+  rowHeight?: number
 }
 
 /** 搭建区的大题卡片 */

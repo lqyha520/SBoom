@@ -108,6 +108,7 @@ function onTitleEdited(title: string, html: string) {
         :zoom="zoom"
         @toggle-element="store.toggleHiddenElement($event)"
         @title-edited="onTitleEdited"
+        @layout-updated="(sid: string, lay: any) => store.syncSectionLayout(sid, lay)"
       />
     </div>
 

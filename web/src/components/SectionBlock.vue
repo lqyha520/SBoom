@@ -52,8 +52,15 @@ const gridStyle = computed(() => ({
     <div v-if="section.type === 'reading' && section.data.passage" class="reading-box" data-e="passage">{{ section.data.passage }}</div>
 
     <!-- 表格模式 -->
-    <table v-if="useTable" class="q-table" :style="{ border: `1px ${layout.tableBorder} ${tblColor}` }">
-      <tr v-for="(row, ri) in rows" :key="ri">
+    <table v-if="useTable" class="q-table" :style="{ border: `1px ${layout.tableBorder} ${tblColor}`, tableLayout: 'fixed' }">
+      <colgroup>
+        <col
+          v-for="ci in layout.qCols"
+          :key="'col' + ci"
+          :style="layout.colWidths?.[ci - 1] != null ? { width: layout.colWidths![ci - 1] + 'px' } : undefined"
+        />
+      </colgroup>
+      <tr v-for="(row, ri) in rows" :key="ri" :style="layout.rowHeight != null ? { height: layout.rowHeight + 'px' } : undefined">
         <td
           v-for="(q, ci) in row"
           :key="q._qid || ci"

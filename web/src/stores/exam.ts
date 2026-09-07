@@ -448,6 +448,12 @@ export const useExamStore = defineStore('exam', {
       this.view = 'build'
     },
 
+    /** 纸面交互修改了大题 layout（表格拖拽等），按 sid 同步回 sections */
+    syncSectionLayout(sid: string, layout: SecLayout) {
+      const sec = this.sections.find(s => s.id === sid)
+      if (sec) sec.layout = { ...sec.layout, ...layout }
+    },
+
     /** 搭建态排版模式完成后：把纸面回写结果同步回 sections */
     syncSections(newSections: { type: string; _sid?: string; count?: number; data: GameData; layout: SecLayout }[]) {
       const byId = new Map(this.sections.map(s => [s.id, s]))

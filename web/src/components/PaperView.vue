@@ -25,7 +25,13 @@ const props = defineProps<{
   zoom?: number
 }>()
 
-const emit = defineEmits<{ (e: 'layout-done'): void; (e: 'toggle-element', key: string): void; (e: 'title-edited', title: string, html: string): void }>()
+const emit = defineEmits<{
+  (e: 'layout-done'): void
+  (e: 'toggle-element', key: string): void
+  (e: 'title-edited', title: string, html: string): void
+  /** 大题 layout 被纸面交互修改（表格拖拽等），父级需同步回数据源 */
+  (e: 'layout-updated', sid: string, layout: PaperSection['layout']): void
+}>()
 
 const stackEl = ref<HTMLElement | null>(null)
 const measureEl = ref<HTMLElement | null>(null)
@@ -117,6 +123,24 @@ onMounted(() => paginate())
 // 纸张宽度随字体加载可能变化，稍后复测一次
 onMounted(() => setTimeout(() => { measureTick.value++ }, 800))
 
+/* ── 表格缩放：editable 即启用（不必进排版模式） ── */
+let tableResizePapers: Element[] = []
+async function setupTableResize() {
+  await nextTick()
+  await new Promise(r => requestAnimationFrame(() => r(null)))
+  const stack = stackEl.value
+  if (!stack) return
+  stack.querySelectorAll('.paper').forEach(paper => {
+    tableResizePapers.push(paper)
+    enableTableResize(paper)
+  })
+}
+watch(
+  () => [props.editable, props.paper.sections.map((s: any) => s.layout?.tableBorder).join(',')] as const,
+  () => setupTableResize(),
+  { immediate: true },
+)
+
 /* ── 排版模式 ── */
 let sortables: Sortable[] = []
 
@@ -190,7 +214,6 @@ function enterLayout() {
     })
 
     enableCellResize(paper)
-    enableTableResize(paper)
   })
 }
 
@@ -287,56 +310,82 @@ function enableCellResize(paper: Element) {
 }
 
 /** 表格模式：列宽/行高拖拽 */
+/** 由 sec-block DOM 反查 section 数据（_sid 对应） */
+function sectionOfBlock(block: Element): PaperSection | undefined {
+  const sid = block.getAttribute('data-sid') || ''
+  return props.paper.sections.find(s => s._sid === sid)
+}
+
+/** 表格模式：列宽/行高拖拽 —— 实时预览 + 松手写回 layout 数据（随保存/导出继承） */
 function enableTableResize(paper: Element) {
-  paper.querySelectorAll('.q-table').forEach(table0 => {
-    const table = table0 as HTMLElement
-    table.querySelectorAll('td').forEach(td0 => {
-      const td = td0 as HTMLElement
-      td.style.position = 'relative'
-      // 列宽
-      const cr = document.createElement('span')
-      cr.className = 'col-resizer'
-      td.appendChild(cr)
-      cr.addEventListener('mousedown', (e: MouseEvent) => {
-        e.preventDefault(); e.stopPropagation()
-        const colIndex = Array.from(td.parentElement!.children).indexOf(td)
-        const allRows = table.querySelectorAll('tr')
-        const sx = e.clientX
-        const sw = td.offsetWidth
-        const onMove = (ev: MouseEvent) => {
-          const w = Math.max(15, sw + ev.clientX - sx)
-          allRows.forEach(row => {
-            const c = (row as HTMLElement).children[colIndex] as HTMLElement | undefined
-            if (c) c.style.width = w + 'px'
-          })
-        }
-        const onUp = () => {
-          document.removeEventListener('mousemove', onMove)
-          document.removeEventListener('mouseup', onUp)
-        }
-        document.addEventListener('mousemove', onMove)
-        document.addEventListener('mouseup', onUp)
-      })
-      // 行高
-      const rr = document.createElement('span')
-      rr.className = 'row-resizer'
-      td.appendChild(rr)
-      rr.addEventListener('mousedown', (e: MouseEvent) => {
-        e.preventDefault(); e.stopPropagation()
-        const row = td.closest('tr') as HTMLElement | null
-        if (!row) return
-        const sy = e.clientY
-        const sh = td.offsetHeight
-        const onMove = (ev: MouseEvent) => {
-          const h = Math.max(15, sh + ev.clientY - sy)
-          row.querySelectorAll('td').forEach(t => ((t as HTMLElement).style.height = h + 'px'))
-        }
-        const onUp = () => {
-          document.removeEventListener('mousemove', onMove)
-          document.removeEventListener('mouseup', onUp)
-        }
-        document.addEventListener('mousemove', onMove)
-        document.addEventListener('mouseup', onUp)
+  paper.querySelectorAll('.sec-block').forEach(block => {
+    const sec = sectionOfBlock(block)
+    if (!sec) return
+    block.querySelectorAll('.q-table').forEach(table0 => {
+      const table = table0 as HTMLElement
+      table.querySelectorAll('td').forEach(td0 => {
+        const td = td0 as HTMLElement
+        td.style.position = 'relative'
+        if (td.querySelector('.col-resizer')) return // 已注入，避免重复
+        // 列宽
+        const cr = document.createElement('span')
+        cr.className = 'col-resizer'
+        td.appendChild(cr)
+        cr.addEventListener('mousedown', (e: MouseEvent) => {
+          e.preventDefault(); e.stopPropagation()
+          const colIndex = Array.from(td.parentElement!.children).indexOf(td)
+          const allRows = table.querySelectorAll('tr')
+          const sx = e.clientX
+          const sw = td.offsetWidth
+          let finalW = sw
+          const onMove = (ev: MouseEvent) => {
+            finalW = Math.max(15, sw + ev.clientX - sx)
+            allRows.forEach(row => {
+              const c = (row as HTMLElement).children[colIndex] as HTMLElement | undefined
+              if (c) c.style.width = finalW + 'px'
+            })
+          }
+          const onUp = () => {
+            document.removeEventListener('mousemove', onMove)
+            document.removeEventListener('mouseup', onUp)
+            // 写回数据：colgroup 会接管列宽渲染
+            const cw = [...(sec.layout.colWidths || [])]
+            cw[colIndex] = Math.round(finalW)
+            sec.layout.colWidths = cw
+            emit('layout-updated', sec._sid || '', { ...sec.layout })
+            allRows.forEach(row => {
+              const c = (row as HTMLElement).children[colIndex] as HTMLElement | undefined
+              if (c) c.style.width = ''
+            })
+          }
+          document.addEventListener('mousemove', onMove)
+          document.addEventListener('mouseup', onUp)
+        })
+        // 行高
+        const rr = document.createElement('span')
+        rr.className = 'row-resizer'
+        td.appendChild(rr)
+        rr.addEventListener('mousedown', (e: MouseEvent) => {
+          e.preventDefault(); e.stopPropagation()
+          const row = td.closest('tr') as HTMLElement | null
+          if (!row) return
+          const sy = e.clientY
+          const sh = td.offsetHeight
+          let finalH = sh
+          const onMove = (ev: MouseEvent) => {
+            finalH = Math.max(15, sh + ev.clientY - sy)
+            row.querySelectorAll('td').forEach(t => ((t as HTMLElement).style.height = finalH + 'px'))
+          }
+          const onUp = () => {
+            document.removeEventListener('mousemove', onMove)
+            document.removeEventListener('mouseup', onUp)
+            sec.layout.rowHeight = Math.round(finalH)
+            emit('layout-updated', sec._sid || '', { ...sec.layout })
+            row.querySelectorAll('td').forEach(t => ((t as HTMLElement).style.height = ''))
+          }
+          document.addEventListener('mousemove', onMove)
+          document.addEventListener('mouseup', onUp)
+        })
       })
     })
   })
