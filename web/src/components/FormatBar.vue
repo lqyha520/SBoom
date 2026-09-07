@@ -1,11 +1,16 @@
 <script setup lang="ts">
 /**
- * 纸面富文本工具条：加粗 / 字号滑条 / 颜色（作用于纸面内当前选区）
- * - mousedown.prevent 防止点按钮时选区丢失
- * - 颜色用预设色板（原生 color input 会开对话框导致选区和焦点丢失）
- * - exec 后对选区所在的 contenteditable 元素派发 blur，立即回写数据
+ * 纸面富文本工具条：加粗 / 字号滑条 / 颜色
+ * 字号滑条统一逻辑：
+ *   - 选中了纸面文字 → 调整选中文字的字号（1-7 档）
+ *   - 没选中 → 调整试卷大标题的字号（60%-200%）
+ * 颜色同理：选中文字改文字颜色；未选中改标题颜色。
+ * 注意：滑条/色板不 prevent mousedown（否则拖不动），选区用 saved 恢复。
  */
-import { ref, onBeforeUnmount, onMounted } from 'vue'
+import { computed, ref, onBeforeUnmount, onMounted } from 'vue'
+import { useExamStore } from '../stores/exam'
+
+const store = useExamStore()
 
 let saved: Range | null = null
 
@@ -36,57 +41,113 @@ const COLORS = [
   '#2980b9', '#8e44ad', '#16a085', '#34495e',
 ]
 
-function exec(cmd: string, val?: string) {
+/** 当前是否有纸面选区（决定滑条作用于选中文字还是标题） */
+const hasSelection = ref(false)
+function refreshHasSelection() {
+  const s = document.getSelection()
+  hasSelection.value = !!(s && !s.isCollapsed && s.rangeCount && editableHostOf(s.anchorNode)?.closest('.paper'))
+}
+onMounted(() => document.addEventListener('selectionchange', refreshHasSelection))
+onBeforeUnmount(() => document.removeEventListener('selectionchange', refreshHasSelection))
+
+/** 作用于选中文字的字号（1-7 档，execCommand fontSize） */
+const sizeVal = ref(3)
+
+function applyFontSize(v: number) {
+  sizeVal.value = v
   const s = document.getSelection()
   let host: HTMLElement | null = null
-  if (s && s.rangeCount) host = editableHostOf(s.anchorNode)
+  if (s && s.rangeCount && !s.isCollapsed) host = editableHostOf(s.anchorNode)
   if (!host && saved && s) {
-    // 选区丢失（点按钮瞬间）：恢复保存的选区
+    // 恢复保存的选区
     host = editableHostOf(saved.startContainer)
     if (host) {
       s.removeAllRanges()
       s.addRange(saved)
     }
   }
-  if (!host) return
-  host.focus({ preventScroll: true })
-  document.execCommand(cmd, false, val)
-  // 立即回写：手动派发 blur 事件触发数据同步
-  host.dispatchEvent(new FocusEvent('blur'))
-  // 更新保存的选区（样式已应用）
-  onSelChange()
+  if (host && s && !s.isCollapsed) {
+    host.focus({ preventScroll: true })
+    document.execCommand('fontSize', false, String(v))
+    host.dispatchEvent(new FocusEvent('blur'))
+    onSelChange()
+    refreshHasSelection()
+  }
 }
 
-/** 字号滑条（execCommand fontSize 只有 1-7 档：1=x-small 2=small 3=中 4=large 5=x-large 6/7=更大） */
-const sizeVal = ref(3)
-function onSizeSlider(v: number) {
-  sizeVal.value = v
-  exec('fontSize', String(v))
+function applyColor(c: string) {
+  const s = document.getSelection()
+  let host: HTMLElement | null = null
+  if (s && s.rangeCount && !s.isCollapsed) host = editableHostOf(s.anchorNode)
+  if (!host && saved && s) {
+    host = editableHostOf(saved.startContainer)
+    if (host) {
+      s.removeAllRanges()
+      s.addRange(saved)
+    }
+  }
+  if (host && s && !s.isCollapsed) {
+    host.focus({ preventScroll: true })
+    document.execCommand('foreColor', false, c)
+    host.dispatchEvent(new FocusEvent('blur'))
+    onSelChange()
+    refreshHasSelection()
+  }
 }
+
+function applyBold() {
+  const s = document.getSelection()
+  let host: HTMLElement | null = null
+  if (s && s.rangeCount && !s.isCollapsed) host = editableHostOf(s.anchorNode)
+  if (!host && saved && s) {
+    host = editableHostOf(saved.startContainer)
+    if (host) {
+      s.removeAllRanges()
+      s.addRange(saved)
+    }
+  }
+  if (host && s && !s.isCollapsed) {
+    host.focus({ preventScroll: true })
+    document.execCommand('bold', false, undefined)
+    host.dispatchEvent(new FocusEvent('blur'))
+    onSelChange()
+    refreshHasSelection()
+  }
+}
+
 const SIZE_NAMES = ['', '很小', '小', '标准', '大', '更大', '特大', '最大']
+const targetHint = computed(() => (hasSelection.value ? '选中文字' : '标题'))
 </script>
 
 <template>
-  <span class="fmt-bar" @mousedown.prevent>
-    <button class="fmt-btn" title="加粗" @click="exec('bold')"><b>B</b></button>
-    <span class="fmt-size" title="字号">
-      <span class="fmt-size-label">字号</span>
+  <span class="fmt-bar">
+    <button class="fmt-btn" :title="`加粗（${targetHint}）`" @mousedown.prevent @click="applyBold"><b>B</b></button>
+    <span class="fmt-size" :title="`字号：选中文字时改选中文字，否则改${hasSelection ? '选中文字' : '试卷标题'}`">
+      <span class="fmt-size-label">{{ targetHint }}</span>
       <input
+        v-if="hasSelection"
         type="range" min="1" max="7" step="1"
         :value="sizeVal"
-        @input="onSizeSlider(parseInt(($event.target as HTMLInputElement).value))"
+        @input="applyFontSize(parseInt(($event.target as HTMLInputElement).value))"
         class="fmt-size-range"
       >
-      <span class="fmt-size-val">{{ SIZE_NAMES[sizeVal] || sizeVal }}</span>
+      <input
+        v-else
+        type="range" min="60" max="200" step="5"
+        :value="Math.round((store.style.titleScale ?? 1) * 100)"
+        @input="store.setStyle({ titleScale: parseInt(($event.target as HTMLInputElement).value) / 100 })"
+        class="fmt-size-range"
+      >
+      <span class="fmt-size-val">{{ hasSelection ? (SIZE_NAMES[sizeVal] || sizeVal) : Math.round((store.style.titleScale ?? 1) * 100) + '%' }}</span>
     </span>
-    <span class="fmt-colors" title="文字颜色">
+    <span class="fmt-colors" :title="`颜色：选中文字时改选中文字，否则为标题准备（先选中标题文字）`">
       <button
         v-for="c in COLORS"
         :key="c"
         class="fmt-swatch"
         :style="{ background: c }"
         :title="c"
-        @click="exec('foreColor', c)"
+        @click="applyColor(c)"
       ></button>
     </span>
   </span>
@@ -106,9 +167,9 @@ const SIZE_NAMES = ['', '很小', '小', '标准', '大', '更大', '特大', '�
 }
 .fmt-btn:hover { border-color: var(--primary); color: var(--primary); }
 .fmt-size { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px; }
-.fmt-size-label { font-size: 11px; color: var(--ink3); }
+.fmt-size-label { font-size: 11px; color: var(--primary); white-space: nowrap; }
 .fmt-size-range { width: 70px; accent-color: var(--primary); height: 14px; cursor: pointer; }
-.fmt-size-val { font-size: 10px; color: var(--ink3); width: 26px; text-align: center; }
+.fmt-size-val { font-size: 10px; color: var(--ink3); width: 32px; text-align: center; }
 .fmt-colors { display: inline-flex; gap: 3px; padding: 2px; border-left: 1px solid var(--border); }
 .fmt-swatch {
   width: 15px;

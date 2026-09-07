@@ -77,16 +77,6 @@ function onTitleEdited(title: string, html: string) {
       <template v-if="!layoutMode">
         <span style="font-size: 12px; color: var(--ink3); flex: none;">纸面文字可直接点击修改</span>
         <FormatBar />
-        <span style="display: flex; align-items: center; gap: 4px;" title="标题字号缩放">
-          <span style="font-size: 11px; color: var(--ink3);">标题</span>
-          <input
-            type="range" min="60" max="200" step="5"
-            :value="Math.round((store.style.titleScale ?? 1) * 100)"
-            @input="store.setStyle({ titleScale: parseInt(($event.target as HTMLInputElement).value) / 100 })"
-            style="width: 70px; accent-color: var(--primary);"
-          >
-          <span style="font-size: 11px; color: var(--ink3); width: 34px;">{{ Math.round((store.style.titleScale ?? 1) * 100) }}%</span>
-        </span>
         <span style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
           <button class="btn mini" :class="{ 'btn-primary-on': manual === 0 }" title="缩放到容器宽度" @click="setManual(0)">适应</button>
           <input
