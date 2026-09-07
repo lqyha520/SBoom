@@ -46,11 +46,11 @@ const subParts = computed(() => {
 function onTitleBlur(e: FocusEvent) {
   if (!props.editable) return
   const el = e.target as HTMLElement
-  // innerHTML 会包含 ✕ 删除按钮，克隆后剔除再存
+  // innerHTML 会包含 ✕ 删除按钮和（第X天）后缀，克隆后剔除再存
   const clone = el.cloneNode(true) as HTMLElement
   clone.querySelectorAll('.el-del').forEach(n => n.remove())
-  props.paper.title = clone.innerText.trim()
-  ;(props.paper as any).titleHtml = clone.innerHTML
+  props.paper.title = clone.innerText.replace(/（第\d+天）\s*$/, '').trim()
+  ;(props.paper as any).titleHtml = clone.innerHTML.replace(/（第\d+天）\s*(<\/\w+>)?\s*$/, '$1')
   emit('title-edited', props.paper.title, (props.paper as any).titleHtml)
 }
 function onFooterBlur(e: FocusEvent) {
@@ -103,7 +103,8 @@ function toggleHidden(key: string) {
             <span v-if="editable" class="el-del" title="删除标题" @click.stop="toggleHidden('title')">✕</span>
             <!-- eslint-disable-next-line vue/no-v-html -->
             <span v-if="(paper as any).titleHtml" v-html="(paper as any).titleHtml"></span>
-            <template v-else>{{ paperTitle }}<template v-if="paper.day && addDay">（第{{ paper.day }}天）</template></template>
+            <template v-else>{{ paperTitle }}</template>
+            <template v-if="paper.day && addDay">（第{{ paper.day }}天）</template>
           </h1>
           <div v-if="!isHidden('subline')" class="sub-line can-edit" :contenteditable="editable" spellcheck="false" style="position: relative;">
             <span v-if="editable" class="el-del" title="删除副标题行" @click="toggleHidden('subline')">✕</span>
