@@ -4,10 +4,13 @@ import type { PaperData, PaperSection, PaperStyle, PaperTemplate } from '../type
 import { DIFF_NAME } from '../constants'
 import SectionBlock from './SectionBlock.vue'
 
+/** 页内大题分段（与 PaperView 的 PageChunk 对应） */
+export interface PageChunkLite { sec: number; qFrom: number; qTo: number; first: boolean }
+
 const props = defineProps<{
   paper: PaperData
-  /** 要渲染的大题索引切片 */
-  idxs: number[]
+  /** 要渲染的大题分段（null 段 = 整块渲染，向后兼容） */
+  chunks: PageChunkLite[]
   template: PaperTemplate
   style: PaperStyle
   kidOn: boolean
@@ -23,7 +26,11 @@ const props = defineProps<{
   scores?: Map<any, number>
 }>()
 
-const blocks = computed(() => props.idxs.map(i => props.paper.sections[i]).filter(Boolean) as PaperSection[])
+const blocks = computed(() =>
+  props.chunks
+    .map(c => ({ sec: props.paper.sections[c.sec], chunk: c }))
+    .filter(x => x.sec) as { sec: PaperSection; chunk: PageChunkLite }[],
+)
 
 const paperTitle = computed(() => {
   const t = props.template
@@ -131,12 +138,15 @@ function toggleHidden(key: string) {
         </div>
       </div>
 
-      <!-- 大题块 -->
+      <!-- 大题块（分段渲染：跨页大题只渲染本页题段） -->
       <SectionBlock
-        v-for="(sec, k) in blocks"
-        :key="sec._sid || sec.type + '_' + idxs[k]"
-        :section="sec"
-        :sec-index="idxs[k]"
+        v-for="(b, k) in blocks"
+        :key="(b.sec._sid || b.sec.type) + '_' + k"
+        :section="b.sec"
+        :sec-index="b.chunk.sec"
+        :q-from="b.chunk.first ? 0 : b.chunk.qFrom"
+        :q-to="b.chunk.qTo"
+        :show-title="b.chunk.first"
         :show-score="template.showScore"
         :show-answers="showAnswers"
         :editable="editable"

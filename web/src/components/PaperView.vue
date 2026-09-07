@@ -35,8 +35,9 @@ const emit = defineEmits<{
 
 const stackEl = ref<HTMLElement | null>(null)
 const measureEl = ref<HTMLElement | null>(null)
-/** 每页的大题索引切片 */
-const pages = ref<number[][]>([[]])
+/** 每页的大题分段：sec = 大题索引；qFrom/qTo = 题目切片 [from, to)；first = 本段带大题标题 */
+interface PageChunk { sec: number; qFrom: number; qTo: number; first: boolean }
+const pages = ref<PageChunk[][]>([])
 /** 强制重挂载测量纸 */
 const measureTick = ref(0)
 
@@ -49,7 +50,8 @@ const kidOn = computed(() => {
 
 const scores = computed(() => computeScores(props.paper.sections))
 
-const allIdxs = computed(() => props.paper.sections.map((_, i) => i))
+/** 测量纸用：每个大题整块一段 */
+const allChunks = computed(() => props.paper.sections.map((_, i) => ({ sec: i, qFrom: 0, qTo: Infinity, first: true })))
 
 /* ── 分页测量 ── */
 const measureKey = computed(() =>
@@ -87,34 +89,94 @@ async function paginate() {
   const tailH = tailEl ? tailEl.offsetHeight : 0
 
   const blocks = Array.from(paper.querySelectorAll('.sec-block')) as HTMLElement[]
-  const pageCap = Math.max(availH - headH - 4, 200)
-  const chunks: number[][] = []
-  const heights: number[] = []
-  let cur: number[] = []
-  let curH = 0
-  blocks.forEach((b, i) => {
-    const h = b.offsetHeight || 0
-    heights.push(h)
-    // 当前页已有内容且装不下下一块 → 切页；单块超高也切（宁可溢出不可丢失）
-    if (cur.length && curH + h > pageCap) {
-      chunks.push(cur)
-      cur = []
-      curH = 0
-    }
-    cur.push(i)
-    curH += h
-  })
-  if (cur.length) chunks.push(cur)
+  const cap = availH - headH - 16 // 每页内容容量（每页都有卷头；留 16px 余量防溢出）
 
-  // 最后一页要装下卷尾（奖励区 + 页脚）
-  if (chunks.length) {
-    const last = chunks[chunks.length - 1]
-    const lastH = last.reduce((s, i) => s + heights[i], 0)
-    if (lastH + tailH > availH - headH && last.length > 1) {
-      chunks.push([last.pop()!])
+  // ── 大题 → 段流：整块放得下就一段；超高就块内按行切 ──
+  interface Segment { sec: number; total: number; headBlockH: number; rows: number[]; rowStride: number }
+  const segments: Segment[] = []
+  blocks.forEach((b, i) => {
+    const qEls = Array.from(b.querySelectorAll('.q')) as HTMLElement[]
+    const total = qEls.length
+    const sec = props.paper.sections[i]
+    const rowStride = sec?.layout?.qCols || 1
+    // 全部用 viewport 坐标（getBoundingClientRect），避免 offsetTop 参照系错乱
+    const bTop = b.getBoundingClientRect().top
+    const bBottom = b.getBoundingClientRect().bottom
+    const rows: number[] = []
+    if (total > 0) {
+      const tops = qEls.map(q => q.getBoundingClientRect().top)
+      for (let r = 0; r < total; r += rowStride) {
+        const nextTop = r + rowStride < total ? tops[r + rowStride] : bBottom
+        rows.push(Math.max(20, nextTop - tops[r] + 4))
+      }
+      // 块头高度（大题标题 + 阅读短文等在第一题之前的部分）
+      const headBlockH = Math.max(0, tops[0] - bTop + 4)
+      segments.push({ sec: i, total, headBlockH, rows, rowStride })
+    } else {
+      segments.push({ sec: i, total: 0, headBlockH: bBottom - bTop, rows, rowStride })
+    }
+  })
+
+  // ── 段流 → 页 ──
+  const out: PageChunk[][] = []
+  let page: PageChunk[] = []
+  let used = 0
+  const pushPage = () => {
+    if (page.length) out.push(page)
+    page = []
+    used = 0
+  }
+  for (const seg of segments) {
+    const wholeH = seg.headBlockH + seg.rows.reduce((s, r) => s + r, 0)
+    if (used + wholeH <= cap) {
+      // 整段放得下
+      page.push({ sec: seg.sec, qFrom: 0, qTo: seg.total, first: true })
+      used += wholeH
+      continue
+    }
+    // 块内切分：逐行装
+    let from = 0
+    let first = true
+    while (from < seg.total) {
+      const room = cap - used
+      const headExtra = first ? seg.headBlockH : 0
+      if (room - headExtra < 50 && page.length) { pushPage(); continue }
+      let acc = headExtra
+      let rowCount = 0
+      while (from + rowCount * seg.rowStride < seg.total) {
+        const rowIdx = Math.floor((from + rowCount * seg.rowStride) / seg.rowStride)
+        const rh = seg.rows[rowIdx] ?? 40
+        if (acc + rh > room && rowCount > 0) break
+        acc += rh
+        rowCount++
+        if (acc > room) break // 单行超高兜底：独占一页
+      }
+      const to = Math.min(from + rowCount * seg.rowStride, seg.total)
+      if (to <= from) break // 防死循环
+      page.push({ sec: seg.sec, qFrom: from, qTo: to, first })
+      used += acc
+      first = false
+      from = to
+      if (from < seg.total) pushPage()
     }
   }
-  pages.value = chunks.length ? chunks : [[]]
+  if (page.length) pushPage()
+
+  // 最后一页装下卷尾（奖励区 + 页脚）：装不下则把最后一段推到新页
+  if (out.length) {
+    const lastPage = out[out.length - 1]
+    if (lastPage.length > 1 && tailH > 30) {
+      // 粗略：最后一页剩余空间不足 tailH 就挪走最后一段
+      const lastSeg = lastPage[lastPage.length - 1]
+      const seg = segments[lastSeg.sec]
+      const segH = (lastSeg.first ? seg.headBlockH : 0) + seg.rows.slice(Math.floor(lastSeg.qFrom / seg.rowStride), Math.ceil(lastSeg.qTo / seg.rowStride)).reduce((s, r) => s + r, 0)
+      if (used + tailH > cap && segH > 100) {
+        const moved = lastPage.pop()!
+        out.push([moved])
+      }
+    }
+  }
+  pages.value = out.length ? out : [[{ sec: 0, qFrom: 0, qTo: 0, first: true }]]
   measured.value = true
 }
 
@@ -433,7 +495,7 @@ onMounted(() => measureStackH())
         v-for="(pg, i) in pages"
         :key="i"
         :paper="paper"
-        :idxs="pg"
+        :chunks="pg"
         :template="template"
         :style="style"
         :kid-on="kidOn"
@@ -448,13 +510,13 @@ onMounted(() => measureStackH())
     </div>
   </div>
   </div>
-  <!-- 离屏测量纸 -->
+  <!-- 离屏测量纸（整卷单页，测各块真实高度） -->
   <div ref="measureEl" class="offscreen" aria-hidden="true">
     <div class="pv-probe" style="height: 297mm; width: 210mm; position: absolute;"></div>
     <PaperPage
       :key="'m' + measureTick"
       :paper="paper"
-      :idxs="allIdxs"
+      :chunks="allChunks"
       :template="template"
       :style="style"
       :kid-on="kidOn"

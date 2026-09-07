@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { PaperSection, Question } from '../types'
-import { ENCOURAGE_MAP, TYPE_NAME } from '../constants'
+import { ENCOURAGE_MAP } from '../constants'
 import { secTitle } from '../utils'
 import QuestionItem from './QuestionItem.vue'
 
@@ -9,6 +9,11 @@ const props = defineProps<{
   section: PaperSection
   /** 全卷中的大题序号（0 起，用于 一、二、三 标题） */
   secIndex: number
+  /** 题目切片 [qFrom, qTo)（跨页分段渲染；默认全部） */
+  qFrom?: number
+  qTo?: number
+  /** 是否渲染大题标题（跨页续段不渲染） */
+  showTitle?: boolean
   showScore: boolean
   showAnswers: boolean
   editable: boolean
@@ -17,11 +22,19 @@ const props = defineProps<{
 }>()
 
 const layout = computed(() => props.section.layout)
-const qs = computed(() => props.section.data.questions || [])
+const qs = computed(() => {
+  const all = props.section.data.questions || []
+  const from = props.qFrom ?? 0
+  const to = props.qTo ?? all.length
+  return all.slice(from, to)
+})
 const useTable = computed(() => layout.value.tableBorder !== 'none')
 const tblColor = computed(() => (layout.value.tableBorder === 'dashed' ? '#ccc' : '#333'))
 const enc = computed(() => (props.encourage ? ENCOURAGE_MAP[props.section.type] || '' : ''))
 const title = computed(() => secTitle(props.section.type, props.secIndex, props.section.name))
+
+/** 本段题号在全大题内的偏移（续段题号接续） */
+const noOffset = computed(() => props.qFrom ?? 0)
 
 const secScore = computed(() => {
   if (!props.scores) return 0
@@ -44,12 +57,13 @@ const gridStyle = computed(() => ({
 
 <template>
   <div class="sec-block" :data-type="section.type" :data-sid="section._sid || section.type + '_' + secIndex">
-    <h2 class="sec">
+    <h2 v-if="showTitle !== false" class="sec">
       <span>{{ title }}</span>
       <span v-if="enc" class="encourage">{{ enc }}</span>
-      <span v-if="showScore && scores" class="score-box">共 {{ secScore }} 分</span>    </h2>
+      <span v-if="showScore && scores" class="score-box">共 {{ secScore }} 分</span>
+    </h2>
 
-    <div v-if="section.type === 'reading' && section.data.passage" class="reading-box" data-e="passage">{{ section.data.passage }}</div>
+    <div v-if="section.type === 'reading' && section.data.passage && showTitle !== false" class="reading-box" data-e="passage">{{ section.data.passage }}</div>
 
     <!-- 表格模式 -->
     <table v-if="useTable" class="q-table" :style="{ border: `1px ${layout.tableBorder} ${tblColor}`, tableLayout: 'fixed' }">
@@ -66,7 +80,7 @@ const gridStyle = computed(() => ({
           :key="q._qid || ci"
           :style="{ border: `1px ${layout.tableBorder} ${tblColor}`, padding: '1mm 3mm', verticalAlign: 'top', ...(fs as any) }"
         >
-          <QuestionItem :q="q" :no="ri * layout.qCols + ci + 1" :layout="layout" :show-answers="showAnswers" :editable="editable" />
+          <QuestionItem :q="q" :no="noOffset + ri * layout.qCols + ci + 1" :layout="layout" :show-answers="showAnswers" :editable="editable" />
         </td>
         <td
           v-for="k in layout.qCols - row.length"
@@ -82,7 +96,7 @@ const gridStyle = computed(() => ({
         v-for="(q, i) in qs"
         :key="q._qid || i"
         :q="q"
-        :no="i + 1"
+        :no="noOffset + i + 1"
         :layout="layout"
         :show-answers="showAnswers"
         :editable="editable"
