@@ -135,6 +135,7 @@ const STYLE_DEFAULTS: PaperStyle = {
   reward: false,
   kidFont: 'off',
   exportBg: false,
+  titleScale: 1,
 }
 
 export const useExamStore = defineStore('exam', {
@@ -299,12 +300,12 @@ export const useExamStore = defineStore('exam', {
       const sec: Section = {
         id: uid('s'),
         type,
+        name: customName,
         count: cnt,
         status: 'ready',
         data: { questions: mockQuestions(type, cnt), topic: '' },
         layout: { ...DEFAULT_LAYOUT },
       }
-      if (customName) (sec as any).name = customName
       this.sections.push(sec)
     },
 
@@ -411,6 +412,7 @@ export const useExamStore = defineStore('exam', {
             difficulty: this.difficulty,
             sections: this.sections.map(s => ({
               type: s.type,
+              name: s.name,
               data: s.data || { questions: [] },
               layout: { ...s.layout },
               _sid: s.id,
@@ -469,6 +471,7 @@ export const useExamStore = defineStore('exam', {
           out.push({
             id: uid('s'),
             type: ns.type,
+            name: (ns as any).name,
             count: (ns.data.questions || []).length,
             status: 'ready' as const,
             data: ns.data,
@@ -533,10 +536,11 @@ export const useExamStore = defineStore('exam', {
         templateId: this.templateId,
         style: { ...this.style },
         hiddenElements: [...this.hiddenElements],
-        cards: this.sections.map(s => ({ type: s.type, count: s.count, layout: { ...s.layout } })),
+        cards: this.sections.map(s => ({ type: s.type, name: s.name, count: s.count, layout: { ...s.layout } })),
         // 完整数据：含每题编辑后的文字与富文本（加粗/字号/颜色），恢复时原样还原
         sections: JSON.parse(JSON.stringify(this.sections)).map((s: any) => ({
           type: s.type,
+          name: s.name,
           count: s.count,
           layout: s.layout,
           data: s.data,
@@ -569,6 +573,7 @@ export const useExamStore = defineStore('exam', {
         this.sections = JSON.parse(JSON.stringify(tpl.sections)).map((s: any) => ({
           id: uid('s'),
           type: s.type,
+          name: s.name,
           count: s.count,
           status: 'ready' as const,
           data: s.data,
@@ -578,6 +583,7 @@ export const useExamStore = defineStore('exam', {
         // 旧格式：mock 占位 + 快照文字回填
         const cards = tpl.cards.map(c => ({
           type: c.type,
+          name: (c as any).name,
           count: c.count,
           data: { questions: mockQuestions(c.type, c.count) },
           layout: { ...DEFAULT_LAYOUT, ...c.layout },
@@ -586,6 +592,7 @@ export const useExamStore = defineStore('exam', {
         this.sections = cards.map(c => ({
           id: uid('s'),
           type: c.type,
+          name: c.name,
           count: c.count,
           status: 'ready' as const,
           data: c.data,

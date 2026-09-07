@@ -18,6 +18,7 @@ const previewPaper = computed<PaperData>(() => ({
   difficulty: store.difficulty,
   sections: store.sections.map(s => ({
     type: s.type,
+    name: s.name,
     data: s.data || { questions: [] },
     layout: s.layout,
     _sid: s.id,

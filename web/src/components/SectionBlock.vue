@@ -21,7 +21,7 @@ const qs = computed(() => props.section.data.questions || [])
 const useTable = computed(() => layout.value.tableBorder !== 'none')
 const tblColor = computed(() => (layout.value.tableBorder === 'dashed' ? '#ccc' : '#333'))
 const enc = computed(() => (props.encourage ? ENCOURAGE_MAP[props.section.type] || '' : ''))
-const title = computed(() => secTitle(props.section.type, props.secIndex))
+const title = computed(() => secTitle(props.section.type, props.secIndex, props.section.name))
 
 const secScore = computed(() => {
   if (!props.scores) return 0

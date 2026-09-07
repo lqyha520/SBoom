@@ -55,7 +55,7 @@ function submitCustomType() {
 
 function addType(v: string | CustomType) {
   if (typeof v === 'string') store.addSection(v, TYPE_DEFAULT[v] || 4)
-  else store.addSection(v.baseType, v.defaultCount)
+  else store.addSection(v.baseType, v.defaultCount, v.name)
 }
 
 /* ── 大题拖拽排序 ── */
@@ -165,7 +165,7 @@ const readyHint = computed(() => {
         <div v-for="(sec, i) in store.sections" :key="sec.id" class="sec-card" style="padding: 8px 10px; gap: 7px; flex-wrap: wrap;">
           <span class="drag-handle" title="拖拽调整顺序">⠿</span>
           <span class="sec-idx" style="width: 20px; height: 20px; font-size: 11px;">{{ i + 1 }}</span>
-          <span class="sec-name" style="font-size: 12px;">{{ TYPE_NAME[sec.type] || sec.type }}</span>
+          <span class="sec-name" style="font-size: 12px;">{{ sec.name || TYPE_NAME[sec.type] || sec.type }}</span>
 
           <span class="stepper">
             <button @click="store.setSectionCount(sec.id, Math.max(1, sec.count - 1))">－</button>
@@ -283,6 +283,12 @@ const readyHint = computed(() => {
               <label>生成方式（决定 AI 怎么出题）</label>
               <select class="input" v-model="ctBase">
                 <option value="fill_blank">填空式（题干留空填写）</option>
+                <option value="oral_math">口算式（四则运算直接写得数）</option>
+                <option value="vertical_calc">竖式计算（列竖式算）</option>
+                <option value="recursive_calc">脱式计算（递等式）</option>
+                <option value="smart_calc">简便计算（用运算律巧算）</option>
+                <option value="true_false">判断题（对错判断）</option>
+                <option value="word_problem">应用题（文字情境题）</option>
                 <option value="number_split">数的分成（数字拆分树状图）</option>
                 <option value="compare">比大小（填 &gt; &lt; =）</option>
                 <option value="quiz">选择式（四个选项选答案）</option>
@@ -294,6 +300,16 @@ const readyHint = computed(() => {
             <div class="form-row">
               <label>默认题数</label>
               <input class="input" type="number" min="1" max="99" v-model.number="ctCount" style="width: 90px;">
+            </div>
+
+            <!-- 已有的自定义题型（可删） -->
+            <div v-if="store.customTypes.length" class="form-row">
+              <label>已定义的自定义题型</label>
+              <div v-for="t in store.customTypes" :key="t.id" style="display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--border);">
+                <b style="font-size: 12px;">{{ t.name }}</b>
+                <span style="font-size: 11px; color: var(--ink3); flex: 1;">{{ TYPE_NAME[t.baseType] || t.baseType }} · {{ t.defaultCount }} 题</span>
+                <button class="btn mini danger" @click="store.removeCustomType(t.id)">删除</button>
+              </div>
             </div>
           </div>
           <div class="modal-foot">

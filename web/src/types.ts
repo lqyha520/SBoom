@@ -59,6 +59,8 @@ export interface Section {
   id: string
   /** 实际请求后端的 game_type */
   type: string
+  /** 显示名（自定义题型时为用户定义的名字） */
+  name?: string
   count: number
   status: 'loading' | 'ready' | 'error'
   data: GameData | null
@@ -69,6 +71,8 @@ export interface Section {
 /** 结果卷中的大题 */
 export interface PaperSection {
   type: string
+  /** 显示名（自定义题型时为用户定义的名字） */
+  name?: string
   data: GameData
   layout: SecLayout
   /** 稳定 id（排版模式 DOM 回写用） */
@@ -123,6 +127,8 @@ export interface PaperStyle {
   /** auto=低年级自动放大 / on / off */
   kidFont: 'auto' | 'on' | 'off'
   exportBg: boolean
+  /** 标题字号缩放（1 = 默认 22pt） */
+  titleScale: number
 }
 
 export interface LlmConfig {

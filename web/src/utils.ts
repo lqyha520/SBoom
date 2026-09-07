@@ -148,8 +148,8 @@ export function summaryText(grade: string, subject: string, keyword: string, sec
   return `${grade} ${subject} ｜ ${keyword} ｜ 共 ${total} 题（${parts}）｜ 满分 100 分`
 }
 
-export function secTitle(type: string, si: number): string {
-  return `${CN_NUM[si] || si + 1}、${TYPE_NAME[type] || type}`
+export function secTitle(type: string, si: number, name?: string): string {
+  return `${CN_NUM[si] || si + 1}、${name || TYPE_NAME[type] || type}`
 }
 
 /** 确保题目都有 _qid（生成/回填后调用） */

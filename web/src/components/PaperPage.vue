@@ -99,7 +99,14 @@ function toggleHidden(key: string) {
       <div class="pv-head">
         <div v-if="!isHidden('banner')" class="exam-head" :data-plain="style.banner ? '0' : '1'">
           <span v-if="editable" class="el-del" title="删除整个卷头" @click="toggleHidden('banner')">✕</span>
-          <h1 v-if="!isHidden('title')" class="can-edit" :contenteditable="editable" spellcheck="false" @blur="onTitleBlur" style="position: relative;">
+          <h1
+            v-if="!isHidden('title')"
+            class="can-edit"
+            :contenteditable="editable"
+            spellcheck="false"
+            @blur="onTitleBlur"
+            :style="{ position: 'relative', fontSize: `calc(${kidOn ? '26pt' : '22pt'} * ${style.titleScale ?? 1})` }"
+          >
             <span v-if="editable" class="el-del" title="删除标题" @click.stop="toggleHidden('title')">✕</span>
             <!-- eslint-disable-next-line vue/no-v-html -->
             <span v-if="(paper as any).titleHtml" v-html="(paper as any).titleHtml"></span>
