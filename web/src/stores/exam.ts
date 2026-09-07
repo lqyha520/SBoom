@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import {
   DEFAULT_LAYOUT,
   LS,
-  LLM_DEFAULTS,
   TEMPLATES,
   TYPE_DEFAULT,
   TYPE_GROUPS_BY_GRADE,
@@ -13,7 +12,6 @@ import type {
   CustomType,
   Difficulty,
   GameData,
-  LlmConfig,
   MyTemplate,
   PaperData,
   PaperStyle,
@@ -23,10 +21,15 @@ import type {
   Section,
 } from '../types'
 import { ensureQids, gradeNumOf, mockQuestions, uid } from '../utils'
+import { UID_KEY, userPrefix } from './auth'
+
+/** 当前登录用户的 localStorage 命名空间前缀（多用户数据隔离） */
+const _uid = localStorage.getItem(UID_KEY) || ''
+const K = (k: string): string => (_uid ? userPrefix(_uid) + k : k)
 
 function load<T>(key: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem(key)
+    const raw = localStorage.getItem(K(key))
     return raw ? { ...fallback, ...JSON.parse(raw) } : fallback
   } catch {
     return fallback
@@ -34,7 +37,7 @@ function load<T>(key: string, fallback: T): T {
 }
 function loadArr<T>(key: string): T[] {
   try {
-    return JSON.parse(localStorage.getItem(key) || '[]')
+    return JSON.parse(localStorage.getItem(K(key)) || '[]')
   } catch {
     return []
   }
@@ -98,9 +101,9 @@ function applyOldSnapshot(cards: { type: string; count: number; data: GameData }
   } catch { /* 解析失败保持 mock */ }
 }
 
-/** 旧版装饰设置迁移：lc_paper_bg + lc_paper_kid → 统一的 paper style */
+/** 旧版装饰设置迁移：lc_paper_bg + lc_paper_kid → 统一的 paper style（只读全局旧键） */
 function migratePaperStyle(): Partial<PaperStyle> | null {
-  if (localStorage.getItem(LS.paperStyle)) return null // 新格式已存在，不迁移
+  if (localStorage.getItem(K(LS.paperStyle))) return null // 新格式已存在，不迁移
   try {
     const bg = JSON.parse(localStorage.getItem('lc_paper_bg') || 'null')
     const kid = JSON.parse(localStorage.getItem('lc_paper_kid') || 'null')
@@ -143,12 +146,12 @@ export const useExamStore = defineStore('exam', {
     // 恢复自定义模板的持久化配置
     const customTpl = TEMPLATES.find(t => t.id === 'custom')!
     try {
-      const savedCustom = JSON.parse(localStorage.getItem(LS.customTemplate) || 'null')
+      const savedCustom = JSON.parse(localStorage.getItem(K(LS.customTemplate)) || 'null')
       if (savedCustom) Object.assign(customTpl, savedCustom)
     } catch { /* ignore */ }
     let templateId = 'exam'
     try {
-      const p = JSON.parse(localStorage.getItem(LS.template) || 'null')
+      const p = JSON.parse(localStorage.getItem(K(LS.template)) || 'null')
       if (p?.id && TEMPLATES.some(t => t.id === p.id)) templateId = p.id
     } catch { /* ignore */ }
 
@@ -203,10 +206,9 @@ export const useExamStore = defineStore('exam', {
         return migrated ? { ...s, ...migrated } : s
       })(),
 
-      /* 自定义题型 / 我的模板 / LLM */
+      /* 自定义题型 / 我的模板（模型配置已收归后台 /admin 统一管理） */
       customTypes: loadArr<CustomType>(LS.customTypes),
       myTemplates: migrateMyTemplates(loadArr<any>(LS.myTemplates)),
-      llm: load<LlmConfig>(LS.llm, LLM_DEFAULTS as LlmConfig),
     }
   },
 
@@ -256,6 +258,21 @@ export const useExamStore = defineStore('exam', {
       } finally {
         this.availableLoading = false
       }
+      // 多用户：从服务端同步「我的模板」（服务端优先，保留本地独有）
+      this.syncTemplatesFromServer()
+    },
+
+    /** 与服务端模板列表合并（服务端版本优先，本地独有的追加） */
+    async syncTemplatesFromServer() {
+      try {
+        const server = await api.fetchTemplates()
+        if (!server.length) return
+        const local = this.myTemplates
+        const names = new Set(server.map(t => t.name))
+        const merged = [...server, ...local.filter(t => !names.has(t.name))]
+        this.myTemplates = merged.slice(0, 20)
+        localStorage.setItem(K(LS.myTemplates), JSON.stringify(this.myTemplates))
+      } catch { /* 离线/后端不可达时用本地数据 */ }
     },
 
     /* ── 条件选择 ── */
@@ -346,7 +363,6 @@ export const useExamStore = defineStore('exam', {
           game_type: sec.type,
           difficulty: this.difficulty,
           question_count: sec.count,
-          llm: this.llm,
         })
         sec.data = { questions: data.questions || [], passage: (data as any).passage, topic: data.topic }
         ensureQids(sec.data)
@@ -381,7 +397,6 @@ export const useExamStore = defineStore('exam', {
             keyword: this.keyword,
             difficulty: this.difficulty,
             items,
-            llm: this.llm,
           })
           // 按题型回填到卡片（同题型多卡共用同一份）
           for (const resp of sections) {
@@ -490,20 +505,20 @@ export const useExamStore = defineStore('exam', {
     /* ── 卷面配置 ── */
     setTemplate(id: string) {
       this.templateId = id
-      localStorage.setItem(LS.template, JSON.stringify({ id }))
+      localStorage.setItem(K(LS.template), JSON.stringify({ id }))
     },
 
     saveCustomTemplate(cfg: Partial<PaperTemplate>) {
       const t = TEMPLATES.find(t => t.id === 'custom')!
       Object.assign(t, cfg)
-      localStorage.setItem(LS.customTemplate, JSON.stringify(cfg))
+      localStorage.setItem(K(LS.customTemplate), JSON.stringify(cfg))
       this.templateId = 'custom'
-      localStorage.setItem(LS.template, JSON.stringify({ id: 'custom' }))
+      localStorage.setItem(K(LS.template), JSON.stringify({ id: 'custom' }))
     },
 
     setStyle(patch: Partial<PaperStyle>) {
       Object.assign(this.style, patch)
-      localStorage.setItem(LS.paperStyle, JSON.stringify(this.style))
+      localStorage.setItem(K(LS.paperStyle), JSON.stringify(this.style))
     },
 
     applyStylePreset(preset: 'standard' | 'colorful' | 'fun') {
@@ -515,12 +530,12 @@ export const useExamStore = defineStore('exam', {
     /* ── 自定义题型 ── */
     addCustomType(name: string, baseType: string, defaultCount: number) {
       this.customTypes.push({ id: 'custom_' + Date.now().toString(36), name, baseType, defaultCount })
-      localStorage.setItem(LS.customTypes, JSON.stringify(this.customTypes))
+      localStorage.setItem(K(LS.customTypes), JSON.stringify(this.customTypes))
     },
 
     removeCustomType(id: string) {
       this.customTypes = this.customTypes.filter(t => t.id !== id)
-      localStorage.setItem(LS.customTypes, JSON.stringify(this.customTypes))
+      localStorage.setItem(K(LS.customTypes), JSON.stringify(this.customTypes))
     },
 
     /* ── 我的模板 ── */
@@ -550,7 +565,9 @@ export const useExamStore = defineStore('exam', {
       if (idx >= 0) this.myTemplates[idx] = tpl
       else this.myTemplates.unshift(tpl)
       this.myTemplates = this.myTemplates.slice(0, 20)
-      localStorage.setItem(LS.myTemplates, JSON.stringify(this.myTemplates))
+      localStorage.setItem(K(LS.myTemplates), JSON.stringify(this.myTemplates))
+      // 同步到服务端（失败不影响本地使用，下次登录会再合并）
+      api.upsertTemplate(tpl).catch(() => {})
     },
 
     loadMyTemplate(name: string): boolean {
@@ -605,14 +622,8 @@ export const useExamStore = defineStore('exam', {
 
     deleteMyTemplate(name: string) {
       this.myTemplates = this.myTemplates.filter(t => t.name !== name)
-      localStorage.setItem(LS.myTemplates, JSON.stringify(this.myTemplates))
-    },
-
-    /* ── LLM ── */
-    async saveLlm(cfg: LlmConfig) {
-      this.llm = cfg
-      localStorage.setItem(LS.llm, JSON.stringify(cfg))
-      return api.saveLlmConfig(cfg)
+      localStorage.setItem(K(LS.myTemplates), JSON.stringify(this.myTemplates))
+      api.deleteTemplateOnServer(name).catch(() => {})
     },
   },
 })

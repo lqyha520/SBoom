@@ -1,4 +1,4 @@
-﻿"""LLM 客户端 —— 统一封装 OpenAI 兼容接口的调用（含流式）"""
+"""LLM 客户端 —— 统一封装 OpenAI 兼容接口的调用（含流式）"""
 
 import asyncio
 import json
@@ -36,7 +36,7 @@ class LLMClient:
             )
         return self._client
 
-    async def _get_client_for(self, base_url: str, api_key: str) -> httpx.AsyncClient:
+    async def _get_client_for(self, base_url: str, api_key: str, timeout: float = None) -> httpx.AsyncClient:
         """按 base_url+api_key 创建新 client（不缓存，每次请求独立）"""
         return httpx.AsyncClient(
             base_url=base_url,
@@ -44,7 +44,7 @@ class LLMClient:
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            timeout=httpx.Timeout(self._timeout),
+            timeout=httpx.Timeout(float(timeout) if timeout else self._timeout),
         )
 
     async def chat(
@@ -56,8 +56,9 @@ class LLMClient:
         base_url: str = None,
         model: str = None,
         api_key: str = None,
+        timeout: float = None,
     ) -> str:
-        """非流式调用，返回完整响应文本。可选传入 base_url/model/api_key 覆盖默认配置。"""
+        """非流式调用，返回完整响应文本。可选传入 base_url/model/api_key/timeout 覆盖默认配置。"""
         url = base_url or settings.llm_base_url
         key = api_key or settings.llm_api_key
         mdl = model or settings.llm_model
@@ -71,7 +72,7 @@ class LLMClient:
             "stream": False,
         }
 
-        client = await self._get_client_for(url, key)
+        client = await self._get_client_for(url, key, timeout)
         try:
             response = None
             for attempt in range(1, self.MAX_ATTEMPTS + 1):
@@ -87,7 +88,7 @@ class LLMClient:
                     await asyncio.sleep(wait)
                     # 断连后旧连接池可能已失效，强制重建
                     await client.aclose()
-                    client = await self._get_client_for(url, key)
+                    client = await self._get_client_for(url, key, timeout)
             data = response.json()
             return data["choices"][0]["message"]["content"]
         finally:
@@ -103,11 +104,12 @@ class LLMClient:
         base_url: str = None,
         model: str = None,
         api_key: str = None,
+        timeout: float = None,
     ) -> AsyncGenerator[str, None]:
-        """流式调用，逐 token 产出文本。可选传入 base_url/model/api_key 覆盖默认配置。"""
+        """流式调用，逐 token 产出文本。可选传入 base_url/model/api_key/timeout 覆盖默认配置。"""
         # 修复：mdl 未定义导致 NameError —— 改用与 chat() 一致的 fallback
         mdl = model or settings.llm_model
-        client = await self._get_client_for(base_url or settings.llm_base_url, api_key or settings.llm_api_key)
+        client = await self._get_client_for(base_url or settings.llm_base_url, api_key or settings.llm_api_key, timeout)
 
         payload = {
             "model": mdl,

@@ -1,0 +1,50 @@
+/* 后台管理独立应用 —— 全局基础样式 */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  color: #2c3550;
+  background: #f3f5fa;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 按钮 ── */
+.btn {
+  display: inline-block;
+  border: 1px solid #d8deeb;
+  background: #fff;
+  color: #44506b;
+  font-size: 14px;
+  padding: 7px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  text-decoration: none;
+  line-height: 1.5;
+  transition: all 0.15s;
+  user-select: none;
+}
+.btn:hover { border-color: #4b6ef5; color: #4b6ef5; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn.primary {
+  background: #4b6ef5;
+  border-color: #4b6ef5;
+  color: #fff;
+}
+.btn.primary:hover { background: #3d5ce4; color: #fff; }
+.btn.mini { font-size: 12px; padding: 4px 10px; border-radius: 6px; }
+
+/* ── 输入框 ── */
+.input {
+  width: 100%;
+  border: 1px solid #d8deeb;
+  border-radius: 8px;
+  font-size: 14px;
+  padding: 8px 12px;
+  background: #fff;
+  color: #2c3550;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.input:focus { border-color: #4b6ef5; }
+select.input { cursor: pointer; }

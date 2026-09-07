@@ -42,6 +42,11 @@ desktop.ini
 .pytest_cache/
 
 # ============================
+# 多用户数据（用户库 / 服务密钥，绝不入库）
+# ============================
+data/
+
+# ============================
 # 构建产物
 # ============================
 dist/
@@ -53,6 +58,8 @@ build/
 # ============================
 web/node_modules/
 web/pnpm-workspace.yaml
+admin/node_modules/
+admin/pnpm-workspace.yaml
 
 # 独立项目（不属于本仓库）
 math-question-bank/

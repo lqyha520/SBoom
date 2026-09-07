@@ -9,26 +9,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.routers.admin import router as admin_router
+from app.routers.auth import router as auth_router
 from app.routers.generate import router as generate_router
+from app.routers.me import router as me_router
 from app.services.llm_client import llm_client
+from app.services import user_store
 from app.cache.question_cache import question_cache
 from app.config import get_settings
-from pydantic import BaseModel
+from app.db import init_db
 
 settings = get_settings()
 
 
-class LlmConfigRequest(BaseModel):
-    baseUrl: str = ""
-    model: str = ""
-    apiKey: str = ""
-    timeout: int = 60
-
 # ─── 日志 ───
+_LOG_FILE = Path(__file__).resolve().parent.parent / "server.log"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.FileHandler("server.log", encoding="utf-8"), logging.StreamHandler()],
+    handlers=[logging.FileHandler(_LOG_FILE, encoding="utf-8"), logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
 
@@ -37,8 +36,16 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用启动/关闭时的管理"""
-    logger.info("🚀 Learning Coach API 启动")
-    logger.info(f"   LLM 模型: {settings.llm_model}")
+    init_db()  # 用户库建表 + 迁移（幂等）
+    # 环境变量种子管理员（可选）：确保存在并对齐角色/状态/密码
+    if settings.admin_username and settings.admin_password:
+        user_store.ensure_admin(settings.admin_username, settings.admin_password)
+        logger.info(f"已确保种子管理员账号存在: {settings.admin_username}")
+    # 模型配置收归后台：老部署里用户自配的 LLM 一次性迁移为全局配置
+    from app.services.app_config import seed_llm_from_user_configs
+    seed_llm_from_user_configs()
+    logger.info("🚀 Learning Coach API 启动（多用户模式）")
+    logger.info(f"   LLM 模型（全局兜底）: {settings.llm_model}")
     logger.info(f"   缓存状态: {'启用' if settings.cache_enabled else '关闭'}")
     yield
     logger.info("🛑 应用关闭，清理资源...")
@@ -48,29 +55,56 @@ async def lifespan(app: FastAPI):
 # ─── 创建应用 ───
 app = FastAPI(
     title="Learning Coach API",
-    description="AI+教育 课堂互动系统 —— 趣味题目/知识游戏生成服务",
-    version="0.1.0",
+    description="AI+教育 课堂互动系统 —— 趣味题目/知识游戏生成服务（多用户 + 后台管理）",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
-# CORS 配置
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 开发阶段允许所有来源（与 allow_credentials 互斥，故不启用 credentials）
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS：默认仅同源（前端由本服务直接托管，或经 Vite 代理，同源携带 Cookie）。
+# 需要跨域部署时，在 .env 设置 CORS_ORIGINS=https://a.com,https://b.com
+if settings.cors_origins.strip():
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+        allow_credentials=True,  # 跨域携带 Cookie 必须显式白名单 + credentials
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-# ─── 出题工作台页面目录（Vue 构建产物；开发时可用 `pnpm dev` 起 Vite 代理） ───
+
+# ─── 前端目录 ───
+# 出题工作台（用户端）：web/dist，挂在 /
 _web_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
+# 后台管理（独立系统）：admin/dist，挂在 /admin
+_admin_dir = Path(__file__).resolve().parent.parent / "admin" / "dist"
 
 # ─── API 路由（必须在静态挂载之前注册，否则会被 StaticFiles 遮蔽） ───
+app.include_router(auth_router)
+app.include_router(me_router)
 app.include_router(generate_router)
+app.include_router(admin_router)
 
 
 @app.get("/", tags=["系统"], include_in_schema=False)
 async def home():
     return FileResponse(_web_dir / "index.html")
+
+
+# ─── 后台管理前端（独立应用）。必须在根 mount 之前注册；未构建时告警但不阻塞主服务。 ───
+_admin_console_built = _admin_dir.is_dir()
+if _admin_console_built:
+    from starlette.responses import RedirectResponse
+
+    @app.get("/admin", tags=["系统"], include_in_schema=False)
+    async def admin_console_redirect():
+        """规范化到目录形式 /admin/（StaticFiles html 模式只响应目录路径）"""
+        return RedirectResponse(url="/admin/", status_code=307)
+
+    app.mount("/admin", StaticFiles(directory=_admin_dir, html=True), name="admin_console")
+else:
+    logger.warning(
+        "未找到 admin/dist —— 后台管理前端未构建。执行：cd admin && pnpm install && pnpm build"
+    )
 
 
 @app.get("/health", tags=["系统"])
@@ -79,39 +113,6 @@ async def health():
         "status": "healthy",
         "model": settings.llm_model,
         "cache": question_cache.stats(),
-    }
-
-
-@app.put("/api/v1/config/llm", tags=["系统"])
-async def update_llm_config(req: LlmConfigRequest):
-    """前端更新 LLM 配置（内存中生效，重启后恢复 .env）"""
-    if req.baseUrl:
-        settings.llm_base_url = req.baseUrl.rstrip("/")
-    if req.model:
-        settings.llm_model = req.model
-    if req.apiKey:
-        settings.llm_api_key = req.apiKey
-    # 更新 httpx 超时——重建 client
-    await llm_client.close()
-    from app.services.llm_client import LLMClient
-    import app.services.llm_client as llm_mod
-    new_client = LLMClient()
-    new_client._timeout = req.timeout or 60
-    # 替换模块级单例（generate.py 顶部 from-import 持有的是旧引用，一并刷新）
-    llm_mod.llm_client = new_client
-    import app.routers.generate as gen_mod
-    gen_mod.llm_client = new_client
-    logger.info(f"LLM 配置已更新: {settings.llm_base_url} / {settings.llm_model} / timeout={req.timeout}s")
-    return {"status": "ok", "message": f"LLM 配置已更新：{settings.llm_model} @ {settings.llm_base_url}"}
-
-
-@app.get("/api/v1/config/llm", tags=["系统"])
-async def get_llm_config():
-    """获取当前 LLM 配置"""
-    return {
-        "baseUrl": settings.llm_base_url,
-        "model": settings.llm_model,
-        "timeout": getattr(llm_client, '_timeout', 60)
     }
 
 

@@ -21,14 +21,22 @@ class Settings(BaseSettings):
     default_question_count: int = 5
     max_question_count: int = 10
 
-    # 缓存
-    cache_enabled: bool = True
+    # 缓存（默认关闭：用户要求每次生成都真实调用 LLM，保证试卷不重复）
+    cache_enabled: bool = False
     cache_max_size: int = 500
     cache_ttl_seconds: int = 86400
 
     # 服务
     host: str = "127.0.0.1"
     port: int = 8000
+
+    # 多用户
+    secret_key: str = ""  # 会话签名/加密密钥；空则自动生成并持久化到 data/secret_key.txt
+    cors_origins: str = ""  # 逗号分隔的跨域白名单；空 = 仅同源（默认，最安全）
+
+    # 后台管理
+    admin_username: str = ""  # 种子管理员用户名（可选；设置后启动时自动创建/对齐）
+    admin_password: str = ""  # 种子管理员密码（需与 ADMIN_USERNAME 同时设置）
 
     class Config:
         env_file = str(_ENV_PATH)

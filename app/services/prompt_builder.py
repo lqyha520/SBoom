@@ -354,8 +354,14 @@ class PromptBuilder:
 
     @staticmethod
     def build_user_message(keyword: str) -> str:
-        """构建用户消息"""
-        return f'请围绕知识点"{keyword}"出题。直接返回 JSON，不要加任何额外说明。'
+        """构建用户消息（每次注入随机种子，确保每次生成的题目组合都不同）"""
+        import random
+        seed = f"{random.randint(0, 999999):06d}"
+        return (
+            f'请围绕知识点"{keyword}"出题。'
+            f"本次生成批次编号 {seed}：请出一套与以往批次都不同的题目组合，"
+            "不要重复常见的典型例题。直接返回 JSON，不要加任何额外说明。"
+        )
 
     @staticmethod
     def build_batch_prompt(grade: str, subject: str, keyword: str, difficulty: str, items, scope=None) -> str:
@@ -425,7 +431,14 @@ class PromptBuilder:
 
     @staticmethod
     def build_batch_user_message(keyword: str) -> str:
-        return f'请围绕知识点"{keyword}"生成整张试卷。直接返回 JSON。'
+        """构建批量生成的用户消息（每次注入随机批次号，确保整卷题目组合都不同）"""
+        import random
+        seed = f"{random.randint(0, 999999):06d}"
+        return (
+            f'请围绕知识点"{keyword}"生成整张试卷。'
+            f"本次生成批次编号 {seed}：请出一套与以往批次都不同的题目组合，"
+            "尤其计算题要换数字、应用题要换情境，避免和常见例题雷同。直接返回 JSON。"
+        )
 
 
 # 全局单例

@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 import httpx
 
@@ -22,8 +22,11 @@ from app.models import (
 from app.services.knowledge_scope import knowledge_scope_service
 from app.services.prompt_builder import prompt_builder
 from app.services.llm_client import llm_client
+from app.services import app_config
+from app.services.user_store import CurrentUser
 from app.cache.question_cache import question_cache
 from app.config import get_settings
+from app.deps import require_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["生成"])
@@ -91,17 +94,32 @@ def _extract_json(text: str) -> dict:
         raise
 
 
+def _merged_llm_params(base_url: str = None, model: str = None, api_key: str = None) -> dict:
+    """合并 LLM 调用参数，优先级：请求显式传入 > 管理员在后台配置的全局模型 > .env 兜底。
+
+    模型配置已收归后台管理（/admin 的「模型配置」），全体用户共用一份，密钥加密存于服务端。
+    """
+    g = app_config.get_llm(with_key=True)
+    return {
+        "base_url": base_url or g["baseUrl"] or settings.llm_base_url,
+        "model": model or g["model"] or settings.llm_model,
+        "api_key": api_key or g["api_key"] or settings.llm_api_key,
+        "timeout": g["timeout"] or 60,
+    }
+
+
 async def _call_llm_and_parse(
     system_prompt: str, user_message: str,
     base_url: str = None, model: str = None, api_key: str = None,
 ) -> dict:
-    """调用 LLM 并解析返回的 JSON。配置以前端传入为主；未传且后端无有效 key 时明确报错。"""
-    if not api_key and not settings.llm_api_key:
+    """调用 LLM 并解析返回的 JSON。配置合并优先级：请求显式 > 后台全局配置 > .env 兜底。"""
+    p = _merged_llm_params(base_url, model, api_key)
+    if not p["api_key"]:
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "尚未配置模型",
-                "detail": "请点击页面右上角「⚙ 模型配置」填写接口地址和密钥并保存",
+                "detail": "模型服务由管理员统一配置，请联系管理员在后台「模型配置」中填写接口地址和密钥",
             },
         )
     messages = [
@@ -110,7 +128,10 @@ async def _call_llm_and_parse(
     ]
 
     try:
-        raw_response = await llm_client.chat(messages, base_url=base_url, model=model, api_key=api_key)
+        raw_response = await llm_client.chat(
+            messages, base_url=p["base_url"], model=p["model"],
+            api_key=p["api_key"], timeout=p["timeout"],
+        )
         logger.debug(f"LLM raw response: {raw_response[:200]}...")
         return _extract_json(raw_response)
     except json.JSONDecodeError as e:
@@ -124,6 +145,12 @@ async def _call_llm_and_parse(
         raise HTTPException(
             status_code=502,
             detail={"error": f"LLM 服务请求失败 ({e.response.status_code})", "detail": str(e)},
+        )
+    except httpx.TransportError as e:
+        logger.error(f"LLM 服务无法连接: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "无法连接模型服务", "detail": f"{e}（请管理员检查后台「模型配置」的接口地址）"},
         )
     except Exception as e:
         import traceback
@@ -157,7 +184,7 @@ def _enrich_result(raw: dict, request: GenerateRequest, from_cache: bool, cache_
     summary="批量生成整张试卷（一次 LLM 调用出多个题型）",
     description="接收多个题型任务，一次 LLM 调用生成整张试卷的所有大题，避免限流。",
 )
-async def generate_batch(request: BatchGenerateRequest):
+async def generate_batch(request: BatchGenerateRequest, user: CurrentUser = Depends(require_user)):
     """一次 LLM 调用生成整卷的多个题型"""
     # 1. 知识范围
     scope = knowledge_scope_service.get_scope(request.grade, request.subject)
@@ -189,9 +216,10 @@ async def generate_batch(request: BatchGenerateRequest):
     )
     user_message = prompt_builder.build_batch_user_message(request.keyword)
 
-    # 4. 调用 LLM（一次，使用前端传入的配置）
+    # 4. 调用 LLM（一次，配置合并：请求 > 后台全局 > .env）
     try:
-        raw = await _call_llm_and_parse(system_prompt, user_message,
+        raw = await _call_llm_and_parse(
+            system_prompt, user_message,
             base_url=request.llm_base_url,
             model=request.llm_model,
             api_key=request.llm_api_key)
@@ -261,8 +289,8 @@ async def generate_batch(request: BatchGenerateRequest):
     summary="生成题目/游戏",
     description="根据年级、科目、知识点关键词和交互类型，生成一套趣味题目。支持缓存。",
 )
-async def generate_questions(request: GenerateRequest):
-    """生成题目（非流式）"""
+async def generate_questions(request: GenerateRequest, user: CurrentUser = Depends(require_user)):
+    """生成题目（非流式）。缓存按用户隔离，避免不同用户撞卷。"""
     # 0. 题型-年级适配校验（低年级拦截超纲计算题型）
     from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
     g_num = _grade_num(request.grade.value)
@@ -288,7 +316,9 @@ async def generate_questions(request: GenerateRequest):
             },
         )
 
-    # 2. 检查缓存
+    # 2. 检查缓存（key 含用户维度）。
+    #    注意：缓存默认全局关闭（CACHE_ENABLED=false），保证每次生成真实调用 LLM；
+    #    且仅当「全局开启 + 请求显式要求」双层同时满足才会命中，任何一层关闭都不走缓存。
     result_from_cache = None
     cache_key = None
     if request.use_cache and settings.cache_enabled:
@@ -299,6 +329,7 @@ async def generate_questions(request: GenerateRequest):
             game_type=request.game_type.value,
             difficulty=request.difficulty.value,
             count=request.question_count,
+            owner=f"u{user.id}",
         )
         result_from_cache = question_cache.get(cache_key)
 
@@ -330,7 +361,7 @@ async def generate_questions(request: GenerateRequest):
     summary="生成题目/游戏（流式）",
     description="流式返回生成结果，降低首字延迟感知。SSE 格式。",
 )
-async def generate_questions_stream(request: GenerateRequest):
+async def generate_questions_stream(request: GenerateRequest, user: CurrentUser = Depends(require_user)):
     """流式生成题目"""
     scope = knowledge_scope_service.get_scope(request.grade, request.subject)
     if not scope.allowed and not scope.forbidden:
@@ -345,11 +376,15 @@ async def generate_questions_stream(request: GenerateRequest):
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
     ]
+    p = _merged_llm_params(request.llm_base_url, request.llm_model, request.llm_api_key)
 
     async def event_generator():
         """SSE 事件流"""
         try:
-            async for token in llm_client.chat_stream(messages):
+            async for token in llm_client.chat_stream(
+                messages, base_url=p["base_url"], model=p["model"],
+                api_key=p["api_key"], timeout=p["timeout"],
+            ):
                 yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:
@@ -374,7 +409,7 @@ async def generate_questions_stream(request: GenerateRequest):
     summary="查询知识范围",
     description="获取指定年级和科目的允许/禁止知识点范围",
 )
-async def get_knowledge_scope(grade: str, subject: str):
+async def get_knowledge_scope(grade: str, subject: str, user: CurrentUser = Depends(require_user)):
     """获取知识范围"""
     from app.models import Grade, Subject
 
@@ -393,7 +428,7 @@ async def get_knowledge_scope(grade: str, subject: str):
     summary="获取可用年级/科目列表",
     description="返回系统已定义的年级列表和每个年级下的科目",
 )
-async def get_available_scopes():
+async def get_available_scopes(user: CurrentUser = Depends(require_user)):
     """获取所有可用年级和科目"""
     grades = knowledge_scope_service.get_available_grades()
     result = {}
@@ -410,7 +445,7 @@ async def get_available_scopes():
     summary="超纲校验",
     description="校验指定题目内容是否超出年级知识范围",
 )
-async def validate_oob(request: ValidateRequest):
+async def validate_oob(request: ValidateRequest, user: CurrentUser = Depends(require_user)):
     """校验题目是否超纲"""
     scope = knowledge_scope_service.get_scope(request.grade, request.subject)
 
@@ -429,7 +464,11 @@ async def validate_oob(request: ValidateRequest):
     ]
 
     try:
-        raw = await llm_client.chat(messages)
+        p = _merged_llm_params()
+        raw = await llm_client.chat(
+            messages, base_url=p["base_url"], model=p["model"],
+            api_key=p["api_key"], timeout=p["timeout"],
+        )
         data = _extract_json(raw)
         return ValidateResult(**data)
     except Exception as e:
@@ -443,46 +482,11 @@ async def validate_oob(request: ValidateRequest):
     summary="用户反馈",
     description="收集用户对题目超纲等问题的反馈",
 )
-async def submit_feedback(request: FeedbackRequest):
+async def submit_feedback(request: FeedbackRequest, user: CurrentUser = Depends(require_user)):
     """接收用户反馈"""
     logger.info(
-        f"Feedback received - game_id: {request.game_id}, "
+        f"Feedback received - user: {user.username}, game_id: {request.game_id}, "
         f"is_oob: {request.is_oob}, comment: {request.comment}"
     )
     return {"status": "ok", "message": "反馈已记录，感谢您的帮助！"}
 
-
-# ─── LLM 连接测试 ───
-
-from pydantic import BaseModel as _BaseModel
-
-class TestLlmRequest(_BaseModel):
-    """可选传入待测配置；不传则用后端当前生效配置"""
-    baseUrl: Optional[str] = None
-    model: Optional[str] = None
-    apiKey: Optional[str] = None
-
-@router.post(
-    "/test-llm",
-    summary="测试 LLM 连接",
-    description="发送一条短消息给 LLM，验证配置是否有效；可传入待测配置，不传则用当前生效配置",
-)
-async def test_llm(req: Optional[TestLlmRequest] = None):
-    """用极简消息测试 LLM 能否连通（优先用请求里带的配置）"""
-    try:
-        kwargs = {}
-        if req:
-            if req.baseUrl:
-                kwargs["base_url"] = req.baseUrl.rstrip("/")
-            if req.model:
-                kwargs["model"] = req.model
-            if req.apiKey:
-                kwargs["api_key"] = req.apiKey
-        resp = await llm_client.chat(
-            [{"role": "user", "content": "回复：ok"}],
-            max_tokens=5,
-            **kwargs,
-        )
-        return {"status": "ok", "reply": resp.strip()}
-    except Exception as e:
-        raise HTTPException(status_code=502, detail={"error": "LLM 连接失败", "detail": str(e)})

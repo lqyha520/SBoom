@@ -119,13 +119,5 @@ export const LS = {
   template: 'lc_template',
   customTemplate: 'lc_custom_template',
   paperStyle: 'lc_paper_style',
-  llm: 'lc_llm_cfg',
   myTemplates: 'lc_my_templates',
 } as const
-
-export const LLM_DEFAULTS = {
-  baseUrl: 'https://ai.bcxtech.cc.cd/v1',
-  model: 'gpt-5.6-terra',
-  apiKey: '',
-  timeout: 60,
-}

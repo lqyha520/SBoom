@@ -24,9 +24,10 @@ class QuestionCache:
     def generate_key(
         grade: str, subject: str, keyword: str,
         game_type: str, difficulty: str, count: int,
+        owner: str = "",
     ) -> str:
-        """生成缓存 key"""
-        raw = f"{grade}|{subject}|{keyword}|{game_type}|{difficulty}|{count}"
+        """生成缓存 key。owner 为用户标识（如 "u3"）：多用户下按用户隔离，避免撞卷。"""
+        raw = f"{owner}|{grade}|{subject}|{keyword}|{game_type}|{difficulty}|{count}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def get(self, key: str) -> Optional[dict]:

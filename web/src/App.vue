@@ -1,24 +1,32 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useExamStore } from './stores/exam'
+import { useAuthStore } from './stores/auth'
 import LeftPanel from './components/LeftPanel.vue'
 import MiddleColumn from './components/MiddleColumn.vue'
 import PreviewPane from './components/PreviewPane.vue'
 import StepResult from './components/StepResult.vue'
 import AdvancedDrawer from './components/AdvancedDrawer.vue'
-import LlmDialog from './components/LlmDialog.vue'
 import MyTemplatesDialog from './components/MyTemplatesDialog.vue'
+import LoginView from './components/LoginView.vue'
 
 const store = useExamStore()
+const auth = useAuthStore()
 const showAdv = ref(false)
-const showLlm = ref(false)
 const showTpl = ref(false)
 
-onMounted(() => store.init())
+onMounted(() => { if (auth.user) store.init() })
 </script>
 
 <template>
-  <div class="app shell">
+  <!-- 启动中：解析会话 -->
+  <div v-if="!auth.ready" class="boot-splash">正在加载…</div>
+
+  <!-- 未登录：登录/注册页 -->
+  <LoginView v-else-if="!auth.user" />
+
+  <!-- 已登录：工作台 -->
+  <div v-else class="app shell">
     <!-- 顶栏 -->
     <header class="topbar no-print">
       <div class="brand">
@@ -37,7 +45,9 @@ onMounted(() => store.init())
           @click="store.view === 'result' ? store.backToBuild() : (store.view = 'result')"
         >{{ store.view === 'result' ? '← 返回搭建' : '查看试卷' }}</button>
         <button class="btn mini" title="卷面风格、自定义题型等" @click="showAdv = true">高级设置</button>
-        <button class="btn mini" title="LLM 接口配置" @click="showLlm = true">⚙ 模型配置</button>
+        <a v-if="auth.user?.role === 'admin'" class="btn mini" href="/admin" target="_self" title="后台管理系统（独立入口）">🛠 后台管理</a>
+        <span class="user-chip" :title="`当前用户：${auth.user?.username ?? ''}`">👤 {{ auth.user?.username }}</span>
+        <button class="btn mini" title="退出登录" @click="auth.logout()">退出</button>
       </div>
     </header>
 
@@ -53,7 +63,31 @@ onMounted(() => store.init())
 
     <!-- 弹层 -->
     <AdvancedDrawer :open="showAdv" @close="showAdv = false" />
-    <LlmDialog :open="showLlm" @close="showLlm = false" />
     <MyTemplatesDialog :open="showTpl" @close="showTpl = false" />
   </div>
 </template>
+
+<style scoped>
+.boot-splash {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #7b869e;
+  font-size: 14px;
+  background: var(--bg-page, #f3f5fa);
+}
+.user-chip {
+  font-size: 13px;
+  color: #44506b;
+  background: #eef1f9;
+  border-radius: 999px;
+  padding: 4px 12px;
+  margin-left: 4px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

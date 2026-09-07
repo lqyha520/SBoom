@@ -131,13 +131,6 @@ export interface PaperStyle {
   titleScale: number
 }
 
-export interface LlmConfig {
-  baseUrl: string
-  model: string
-  apiKey: string
-  timeout: number
-}
-
 export type Difficulty = 'easy' | 'medium' | 'hard'
 
 /** 知识点范围（含学期分组） */
