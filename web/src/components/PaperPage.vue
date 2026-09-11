@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { PaperData, PaperSection, PaperStyle, PaperTemplate } from '../types'
 import { DIFF_NAME } from '../constants'
 import SectionBlock from './SectionBlock.vue'
@@ -66,7 +66,7 @@ function onFooterBlur(e: FocusEvent) {
 }
 
 /* ── 卷头/卷尾元素单独删除（排版能力，随 paper 数据持久化） ── */
-const emit = defineEmits<{ (e: 'toggle-element', key: string): void; (e: 'title-edited', title: string, html: string): void }>()
+const emit = defineEmits<{ (e: 'toggle-element', key: string): void; (e: 'title-edited', title: string, html: string): void; (e: 'title-offset', v: number): void }>()
 const hiddenList = computed<string[]>(() => (props.paper as any).hiddenElements || [])
 function isHidden(key: string): boolean {
   return hiddenList.value.includes(key)
@@ -82,6 +82,57 @@ function toggleHidden(key: string) {
   p.hiddenElements = list
   emit('toggle-element', key)
 }
+
+/* ── 标题垂直拖拽：editable 状态下按住标题（避开 ✕ 按钮）上下拖 ──
+   页面里有 measure 模式（px 与 mm 换算），统一按 mm 计算：
+   1mm ≈ 96/25.4 px ≈ 3.7795px
+   与 contenteditable 共存：mousedown 不拦截（保留点击编辑），
+   移动超过 3px 才进入拖拽态并才 preventDefault */
+const MM = 96 / 25.4
+const dragState = ref<{ startY: number; startOffset: number; dragging: boolean } | null>(null)
+
+function onTitleDragStart(e: MouseEvent) {
+  if (!props.editable) return
+  if ((e.target as HTMLElement).closest('.el-del')) return // 删除按钮不触发拖拽
+  const startX = e.clientX
+  dragState.value = { startY: e.clientY, startOffset: props.style.titleOffsetY ?? 0, dragging: false }
+  const move = (ev: MouseEvent) => {
+    if (!dragState.value) return
+    const dx = ev.clientX - startX
+    const dyPx = ev.clientY - dragState.value.startY
+    if (!dragState.value.dragging) {
+      if (Math.abs(dyPx) < 3) return // 尚未构成拖拽（点击/双击编辑不受影响）
+      // 横向移动为主 = 用户在框选标题文字，不是拖动标题位置 → 放弃拖拽
+      if (Math.abs(dx) > Math.abs(dyPx)) {
+        dragState.value = null
+        window.removeEventListener('mousemove', move)
+        window.removeEventListener('mouseup', up)
+        return
+      }
+      dragState.value.dragging = true
+      document.body.style.cursor = 'grabbing'
+      document.body.style.userSelect = 'none'
+    }
+    ev.preventDefault()
+    const dyMm = Math.round((dragState.value.startOffset + dyPx / MM) * 10) / 10
+    const clamped = Math.max(-20, Math.min(30, dyMm))
+    emit('title-offset', clamped)
+  }
+  const up = () => {
+    dragState.value = null
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    window.removeEventListener('mousemove', move)
+    window.removeEventListener('mouseup', up)
+  }
+  window.addEventListener('mousemove', move)
+  window.addEventListener('mouseup', up)
+}
+
+/** 卷头整体应用标题偏移：负值上移（压缩顶部间距）、正值下移 */
+const headStyle = computed(() => ({
+  marginTop: `${props.style.titleOffsetY ?? 0}mm`,
+}))
 </script>
 
 <template>
@@ -102,16 +153,18 @@ function toggleHidden(key: string) {
     <div class="paper-bg-layer" :data-bg="style.bg" :style="{ opacity: style.bg === 'none' ? 0 : style.bgOpacity / 100 }"></div>
 
     <div class="exam">
-      <!-- 卷头 -->
-      <div class="pv-head">
+      <!-- 卷头（标题偏移随拖拽变化） -->
+      <div class="pv-head" :style="headStyle">
         <div v-if="!isHidden('banner')" class="exam-head" :data-plain="style.banner ? '0' : '1'">
           <span v-if="editable" class="el-del" title="删除整个卷头" @click="toggleHidden('banner')">✕</span>
           <h1
             v-if="!isHidden('title')"
-            class="can-edit"
+            class="can-edit paper-title"
             :contenteditable="editable"
             spellcheck="false"
+            :title="editable ? '上下拖动=移动位置；横向划选文字后可用工具条改色/字号' : undefined"
             @blur="onTitleBlur"
+            @mousedown="onTitleDragStart"
             :style="{ position: 'relative', fontSize: `calc(${kidOn ? '26pt' : '22pt'} * ${style.titleScale ?? 1})` }"
           >
             <span v-if="editable" class="el-del" title="删除标题" @click.stop="toggleHidden('title')">✕</span>
@@ -173,6 +226,8 @@ function toggleHidden(key: string) {
 
 <style scoped>
 .pv-head, .pv-tail { display: flow-root; }
+.paper-title { cursor: grab; }
+.paper-title:active { cursor: grabbing; }
 .el-del {
   position: absolute;
   right: 2px;

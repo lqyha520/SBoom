@@ -24,7 +24,6 @@ from app.services.prompt_builder import prompt_builder
 from app.services.llm_client import llm_client
 from app.services import app_config
 from app.services.user_store import CurrentUser
-from app.cache.question_cache import question_cache
 from app.config import get_settings
 from app.deps import require_user
 
@@ -159,7 +158,7 @@ async def _call_llm_and_parse(
         raise HTTPException(status_code=500, detail={"error": "内部错误", "detail": str(e)})
 
 
-def _enrich_result(raw: dict, request: GenerateRequest, from_cache: bool, cache_key: Optional[str]) -> GameResult:
+def _enrich_result(raw: dict, request: GenerateRequest) -> GameResult:
     """填充 GameResult 中服务端已知的字段"""
     raw.setdefault("game_type", request.game_type.value)
     raw.setdefault("topic", request.keyword)
@@ -169,8 +168,6 @@ def _enrich_result(raw: dict, request: GenerateRequest, from_cache: bool, cache_
 
     raw["grade"] = request.grade.value
     raw["subject"] = request.subject.value
-    raw["from_cache"] = from_cache
-    raw["cache_key"] = cache_key
 
     return GameResult(**raw)
 
@@ -241,8 +238,6 @@ async def generate_batch(request: BatchGenerateRequest, user: CurrentUser = Depe
             sec_raw.setdefault("difficulty", request.difficulty.value)
             sec_raw["grade"] = request.grade.value
             sec_raw["subject"] = request.subject.value
-            sec_raw.setdefault("from_cache", False)
-            sec_raw.setdefault("cache_key", None)
             # 兜底修正：LLM 可能漏掉 type 字段，按字段特征自动识别
             for q in (sec_raw.get("questions") or []):
                 if not q.get("type"):
@@ -261,6 +256,35 @@ async def generate_batch(request: BatchGenerateRequest, user: CurrentUser = Depe
                         q["stem"] = f"____ = {ans}" if "fill_blank" in (q.get("type","") or it.game_type) else f"{ans} = ？"
                     else:
                         q["stem"] = "请作答"
+            # 题型质检：源头已在 prompt 卡死；万一漏出（模型偶发违规），
+            # 被拦截的题不删除卷子也不悄悄缺数——逐道单独重生成补齐
+            from app.services.question_qc import filter_questions
+            kept, blocked = filter_questions(
+                sec_raw.get("questions") or [], context=f"{request.grade.value}/{it.game_type}"
+            )
+            if blocked:
+                logger.warning(
+                    f"题型质检拦截 {len(blocked)} 道违禁题（{it.game_type}），正在单独补生成同数量合规题"
+                )
+                for _ in range(len(blocked)):
+                    try:
+                        retry_prompt = prompt_builder.build_system_prompt(request, scope)
+                        retry_msg = (
+                            f"请围绕知识点\"{request.keyword}\"出 1 道{it.game_type}题型的新题。"
+                            "注意：禁止同数连加 3 项及以上、禁止加法转乘法等式，题干一行以内。"
+                            "直接返回 JSON。"
+                        )
+                        patch = await _call_llm_and_parse(retry_prompt, retry_msg,
+                            base_url=request.llm_base_url,
+                            model=request.llm_model,
+                            api_key=request.llm_api_key)
+                        patch_qs = patch.get("questions") or [] if isinstance(patch, dict) else []
+                        patch_ok, _ = filter_questions(patch_qs, context="补生成")
+                        if patch_ok:
+                            kept.append(patch_ok[0])
+                    except Exception:
+                        logger.exception("补生成失败（试卷该大题将缺少此题）")
+            sec_raw["questions"] = kept
             try:
                 sections.append(GameResult(**sec_raw))
             except Exception:
@@ -290,7 +314,7 @@ async def generate_batch(request: BatchGenerateRequest, user: CurrentUser = Depe
     description="根据年级、科目、知识点关键词和交互类型，生成一套趣味题目。支持缓存。",
 )
 async def generate_questions(request: GenerateRequest, user: CurrentUser = Depends(require_user)):
-    """生成题目（非流式）。缓存按用户隔离，避免不同用户撞卷。"""
+    """生成题目（非流式）。每次都真实调用 LLM，保证每次生成的试卷都是新的。"""
     # 0. 题型-年级适配校验（低年级拦截超纲计算题型）
     from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
     g_num = _grade_num(request.grade.value)
@@ -316,44 +340,38 @@ async def generate_questions(request: GenerateRequest, user: CurrentUser = Depen
             },
         )
 
-    # 2. 检查缓存（key 含用户维度）。
-    #    注意：缓存默认全局关闭（CACHE_ENABLED=false），保证每次生成真实调用 LLM；
-    #    且仅当「全局开启 + 请求显式要求」双层同时满足才会命中，任何一层关闭都不走缓存。
-    result_from_cache = None
-    cache_key = None
-    if request.use_cache and settings.cache_enabled:
-        cache_key = question_cache.generate_key(
-            grade=request.grade.value,
-            subject=request.subject.value,
-            keyword=request.keyword,
-            game_type=request.game_type.value,
-            difficulty=request.difficulty.value,
-            count=request.question_count,
-            owner=f"u{user.id}",
-        )
-        result_from_cache = question_cache.get(cache_key)
-
-    if result_from_cache:
-        result_from_cache["from_cache"] = True
-        result_from_cache["cache_key"] = cache_key
-        return GameResult(**result_from_cache)
-
-    # 3. 组装 Prompt
+    # 2. 组装 Prompt
     system_prompt = prompt_builder.build_system_prompt(request, scope)
     user_message = prompt_builder.build_user_message(request.keyword)
 
-    # 4. 调用 LLM
+    # 3. 调用 LLM
     raw_result = await _call_llm_and_parse(system_prompt, user_message,
         base_url=request.llm_base_url,
         model=request.llm_model,
         api_key=request.llm_api_key)
 
-    # 5. 写入缓存
-    if cache_key and settings.cache_enabled:
-        question_cache.set(cache_key, raw_result)
+    # 3.5 题型质检：源头 prompt 已卡死；万一漏出，被拦截题单独补生成（不删除不缺数）
+    from app.services.question_qc import filter_questions
+    if isinstance(raw_result, dict) and isinstance(raw_result.get("questions"), list):
+        kept, blocked = filter_questions(
+            raw_result["questions"], context=f"single/{request.game_type.value}"
+        )
+        for _ in range(len(blocked)):
+            try:
+                patch = await _call_llm_and_parse(system_prompt, user_message,
+                    base_url=request.llm_base_url,
+                    model=request.llm_model,
+                    api_key=request.llm_api_key)
+                patch_qs = patch.get("questions") or [] if isinstance(patch, dict) else []
+                patch_ok, _ = filter_questions(patch_qs, context="single补生成")
+                if patch_ok:
+                    kept.append(patch_ok[0])
+            except Exception:
+                logger.exception("单题补生成失败")
+        raw_result["questions"] = kept
 
-    # 6. 组装响应
-    return _enrich_result(raw_result, request, from_cache=False, cache_key=cache_key)
+    # 4. 组装响应
+    return _enrich_result(raw_result, request)
 
 
 @router.post(

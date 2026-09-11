@@ -117,7 +117,6 @@ export async function generateOne(params: {
     game_type: params.game_type,
     difficulty: params.difficulty,
     question_count: params.question_count,
-    use_cache: false,
   }
   return request<{ questions: any[]; passage?: string; topic?: string }>('/api/v1/generate', {
     method: 'POST',

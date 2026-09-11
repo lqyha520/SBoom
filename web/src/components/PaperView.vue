@@ -31,6 +31,8 @@ const emit = defineEmits<{
   (e: 'title-edited', title: string, html: string): void
   /** 大题 layout 被纸面交互修改（表格拖拽等），父级需同步回数据源 */
   (e: 'layout-updated', sid: string, layout: PaperSection['layout']): void
+  /** 标题垂直拖拽产生偏移，父级需写回 store.style */
+  (e: 'title-offset', v: number): void
 }>()
 
 const stackEl = ref<HTMLElement | null>(null)
@@ -506,6 +508,7 @@ onMounted(() => measureStackH())
         :scores="scores"
         @toggle-element="(k: string) => emit('toggle-element', k)"
         @title-edited="(t: string, h: string) => emit('title-edited', t, h)"
+        @title-offset="(v: number) => emit('title-offset', v)"
       />
     </div>
   </div>

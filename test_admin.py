@@ -44,8 +44,8 @@ r = norm.get("/api/v1/admin/stats")
 check("stats 普通用户 403", r.status_code == 403, f"got {r.status_code}")
 r = norm.get("/api/v1/admin/users")
 check("users 普通用户 403", r.status_code == 403, f"got {r.status_code}")
-r = norm.post("/api/v1/admin/cache/clear")
-check("cache/clear 普通用户 403", r.status_code == 403, f"got {r.status_code}")
+r = norm.put("/api/v1/admin/llm-config")
+check("llm-config PUT 普通用户 403", r.status_code == 403, f"got {r.status_code}")
 r = norm.delete("/api/v1/admin/users/999")
 check("delete 普通用户 403", r.status_code == 403, f"got {r.status_code}")
 
@@ -58,7 +58,7 @@ print("== 3. 概览数据 ==")
 r = admin.get("/api/v1/admin/stats")
 d = r.json()
 check("stats 200", r.status_code == 200, r.text[:200])
-check("stats 字段齐全", all(k in d for k in ("users", "activeUsers", "admins", "templates", "llmConfigured", "cache", "server")), str(d)[:200])
+check("stats 字段齐全", all(k in d for k in ("users", "activeUsers", "admins", "templates", "llmConfigured", "server")), str(d)[:200])
 check("至少 2 用户 / 1 管理员", d["users"] >= 2 and d["admins"] >= 1, str(d)[:150])
 
 print("== 4. 创建用户（含参数校验） ==")
@@ -157,11 +157,7 @@ check("模板被级联删除", r.json()["templates"] == tpl_before - 1, f"{tpl_b
 r = admin.delete(f"/api/v1/admin/users/{mid}")
 check("重复删除 404", r.status_code == 404, f"got {r.status_code}")
 
-print("== 11. 缓存清理 ==")
-r = admin.post("/api/v1/admin/cache/clear")
-check("清空缓存 200", r.status_code == 200 and r.json()["cache"]["size"] == 0, r.text[:200])
-
-print("== 11b. 全局模型配置 ==")
+print("== 11. 全局模型配置 ==")
 # 普通用户 403
 r = norm.get("/api/v1/admin/llm-config")
 check("普通用户读模型配置 403", r.status_code == 403, f"got {r.status_code}")
@@ -175,8 +171,9 @@ d = r.json()
 check("配置可读且字段正确", d.get("baseUrl") == "https://llm.example.com/v1" and d.get("model") == "global-model" and d.get("timeout") == 90, str(d))
 check("密钥明文绝不回传", "sk-global-secret" not in r.text, r.text[:200])
 # 数据库中加密存储
-import sqlite3, json as _json, pathlib
-row = sqlite3.connect(pathlib.Path(__file__).parent / "data" / "users.db").execute(
+import sqlite3, json as _json, pathlib, os
+_db_file = os.environ.get("LC_DB_PATH") or str(pathlib.Path(__file__).parent / "data" / "users.db")
+row = sqlite3.connect(_db_file).execute(
     "SELECT value FROM app_config WHERE key='llm'").fetchone()
 check("数据库中密钥已加密", row and "enc:" in row[0] and "sk-global-secret" not in row[0], str(row)[:120])
 # 空密钥保存 = 保留原密钥

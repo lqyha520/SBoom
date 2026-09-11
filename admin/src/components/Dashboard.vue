@@ -160,15 +160,6 @@ async function removeUser(u: AdminUser) {
   } catch (e: any) { flash(e?.message || '删除失败', false) }
 }
 
-async function clearCache() {
-  if (!window.confirm('确定清空全部题目缓存？下次生成将重新调用 LLM。')) return
-  try {
-    await api.adminClearCache()
-    flash('缓存已清空')
-    await loadStats()
-  } catch (e: any) { flash(e?.message || '操作失败', false) }
-}
-
 async function loadLogs() {
   logLoading.value = true
   try {
@@ -233,9 +224,9 @@ onMounted(refreshAll)
             <div class="stat-extra">{{ stats.llmConfigured ? '后台已配置' : '未配置，前往「模型配置」' }}</div>
           </div>
           <div class="stat-card">
-            <div class="stat-num">{{ stats.cache.size }}<span class="stat-unit">/{{ stats.cache.max_size }}</span></div>
-            <div class="stat-label">题目缓存</div>
-            <div class="stat-extra">TTL {{ Math.round(stats.cache.ttl_seconds / 3600) }} 小时</div>
+            <div class="stat-num">✓</div>
+            <div class="stat-label">题目生成策略</div>
+            <div class="stat-extra">每次生成实时调用 LLM，不读缓存</div>
           </div>
         </div>
 
@@ -247,11 +238,6 @@ onMounted(refreshAll)
               <dt>全局兜底模型</dt><dd>{{ stats.server.model }}</dd>
               <dt>密钥加密</dt><dd>{{ stats.server.encryption }}</dd>
             </dl>
-          </div>
-          <div class="admin-panel">
-            <h4>缓存管理</h4>
-            <p class="panel-desc">题目缓存按用户隔离（避免撞卷）。清空后所有用户的生成请求将重新调用 LLM。</p>
-            <button class="btn" @click="clearCache">🗑 清空题目缓存</button>
           </div>
         </div>
       </section>

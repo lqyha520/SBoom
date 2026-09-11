@@ -1,13 +1,16 @@
 <script setup lang="ts">
 /**
- * 纸面富文本工具条：加粗 / 字号滑条 / 颜色
+ * 纸面富文本工具条：加粗 / 字号滑条 / 颜色色板
  * 字号滑条统一逻辑：
  *   - 选中了纸面文字 → 调整选中文字的字号（1-7 档）
  *   - 没选中 → 调整试卷大标题的字号（60%-200%）
  * 颜色同理：选中文字改文字颜色；未选中改标题颜色。
- * 注意：滑条/色板不 prevent mousedown（否则拖不动），选区用 saved 恢复。
+ * 注意：所有控件 mousedown.prevent（保住选区），选区用 saved 恢复。
+ * 色板为自绘 popover（不抢焦点）；"自定义"用原生 color input，
+ * 但只在 change（弹窗关闭、焦点回归）时应用——input 实时应用会因
+ * 系统弹窗导致浏览器失焦而静默失败。
  */
-import { computed, ref, onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useExamStore } from '../stores/exam'
 
 const store = useExamStore()
@@ -36,9 +39,10 @@ function onSelChange() {
 onMounted(() => document.addEventListener('selectionchange', onSelChange))
 onBeforeUnmount(() => document.removeEventListener('selectionchange', onSelChange))
 
+/** 常用色板（含黑色；白字在白纸上不可见故不含白） */
 const COLORS = [
-  '#d0342c', '#e67e22', '#f1c40f', '#27ae60',
-  '#2980b9', '#8e44ad', '#16a085', '#34495e',
+  '#1a1a1a', '#d0342c', '#e67e22', '#f1c40f',
+  '#27ae60', '#16a085', '#2980b9', '#8e44ad',
 ]
 
 /** 当前是否有纸面选区（决定滑条作用于选中文字还是标题） */
@@ -53,20 +57,26 @@ onBeforeUnmount(() => document.removeEventListener('selectionchange', refreshHas
 /** 作用于选中文字的字号（1-7 档，execCommand fontSize） */
 const sizeVal = ref(3)
 
-function applyFontSize(v: number) {
-  sizeVal.value = v
+/** 恢复保存的选区；返回宿主元素（null = 无有效选区） */
+function restoreSelection(): HTMLElement | null {
   const s = document.getSelection()
   let host: HTMLElement | null = null
   if (s && s.rangeCount && !s.isCollapsed) host = editableHostOf(s.anchorNode)
   if (!host && saved && s) {
-    // 恢复保存的选区
     host = editableHostOf(saved.startContainer)
     if (host) {
       s.removeAllRanges()
       s.addRange(saved)
     }
   }
-  if (host && s && !s.isCollapsed) {
+  return host && s && !s.isCollapsed ? host : null
+}
+
+function applyFontSize(v: number) {
+  sizeVal.value = v
+  const s = document.getSelection()
+  const host = restoreSelection()
+  if (host && s) {
     host.focus({ preventScroll: true })
     document.execCommand('fontSize', false, String(v))
     host.dispatchEvent(new FocusEvent('blur'))
@@ -77,16 +87,8 @@ function applyFontSize(v: number) {
 
 function applyColor(c: string) {
   const s = document.getSelection()
-  let host: HTMLElement | null = null
-  if (s && s.rangeCount && !s.isCollapsed) host = editableHostOf(s.anchorNode)
-  if (!host && saved && s) {
-    host = editableHostOf(saved.startContainer)
-    if (host) {
-      s.removeAllRanges()
-      s.addRange(saved)
-    }
-  }
-  if (host && s && !s.isCollapsed) {
+  const host = restoreSelection()
+  if (host && s) {
     host.focus({ preventScroll: true })
     document.execCommand('foreColor', false, c)
     host.dispatchEvent(new FocusEvent('blur'))
@@ -97,16 +99,8 @@ function applyColor(c: string) {
 
 function applyBold() {
   const s = document.getSelection()
-  let host: HTMLElement | null = null
-  if (s && s.rangeCount && !s.isCollapsed) host = editableHostOf(s.anchorNode)
-  if (!host && saved && s) {
-    host = editableHostOf(saved.startContainer)
-    if (host) {
-      s.removeAllRanges()
-      s.addRange(saved)
-    }
-  }
-  if (host && s && !s.isCollapsed) {
+  const host = restoreSelection()
+  if (host && s) {
     host.focus({ preventScroll: true })
     document.execCommand('bold', false, undefined)
     host.dispatchEvent(new FocusEvent('blur'))
@@ -117,6 +111,31 @@ function applyBold() {
 
 const SIZE_NAMES = ['', '很小', '小', '标准', '大', '更大', '特大', '最大']
 const targetHint = computed(() => (hasSelection.value ? '选中文字' : '标题'))
+
+/* ── 自绘色板 popover ── */
+const paletteOpen = ref(false)
+function togglePalette() {
+  paletteOpen.value = !paletteOpen.value
+}
+function pickColor(c: string) {
+  applyColor(c)
+  paletteOpen.value = false
+}
+
+/* ── 自定义颜色：只在 change（选色器关闭、焦点回归浏览器）时应用 ── */
+const customColor = ref('#1a1a1a')
+function onCustomColor(e: Event) {
+  applyColor((e.target as HTMLInputElement).value)
+  paletteOpen.value = false
+}
+
+/* 点击色板外部时关闭 */
+function onDocMouseDown(e: MouseEvent) {
+  if (!paletteOpen.value) return
+  if (!(e.target as HTMLElement).closest('.fmt-palette-wrap')) paletteOpen.value = false
+}
+onMounted(() => document.addEventListener('mousedown', onDocMouseDown))
+onBeforeUnmount(() => document.removeEventListener('mousedown', onDocMouseDown))
 </script>
 
 <template>
@@ -140,15 +159,33 @@ const targetHint = computed(() => (hasSelection.value ? '选中文字' : '标题
       >
       <span class="fmt-size-val">{{ hasSelection ? (SIZE_NAMES[sizeVal] || sizeVal) : Math.round((store.style.titleScale ?? 1) * 100) + '%' }}</span>
     </span>
-    <span class="fmt-colors" :title="`颜色：选中文字时改选中文字，否则为标题准备（先选中标题文字）`">
+
+    <!-- 颜色：自绘色板（不抢焦点，选区不丢） -->
+    <span class="fmt-palette-wrap">
       <button
-        v-for="c in COLORS"
-        :key="c"
-        class="fmt-swatch"
-        :style="{ background: c }"
-        :title="c"
-        @click="applyColor(c)"
-      ></button>
+        class="fmt-btn fmt-color-btn"
+        :title="`文字颜色（${targetHint}）：点开色板选择`"
+        :class="{ on: paletteOpen }"
+        @mousedown.prevent
+        @click="togglePalette"
+      >🎨</button>
+      <div v-if="paletteOpen" class="fmt-palette" @mousedown.prevent>
+        <div class="fmt-pal-grid">
+          <button
+            v-for="c in COLORS"
+            :key="c"
+            class="fmt-pal-cell"
+            :style="{ background: c }"
+            :title="c"
+            @click="pickColor(c)"
+          ></button>
+        </div>
+        <label class="fmt-pal-custom" title="自定义颜色：打开系统选色器任选">
+          <span class="fmt-pal-custom-dot" :style="{ background: customColor }"></span>
+          自定义颜色…
+          <input type="color" :value="customColor" class="fmt-pal-input" @change="onCustomColor">
+        </label>
+      </div>
     </span>
   </span>
 </template>
@@ -165,19 +202,60 @@ const targetHint = computed(() => (hasSelection.value ? '选中文字' : '标题
   cursor: pointer;
   line-height: 1.5;
 }
-.fmt-btn:hover { border-color: var(--primary); color: var(--primary); }
+.fmt-btn:hover, .fmt-btn.on { border-color: var(--primary); color: var(--primary); }
 .fmt-size { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px; }
 .fmt-size-label { font-size: 11px; color: var(--primary); white-space: nowrap; }
 .fmt-size-range { width: 70px; accent-color: var(--primary); height: 14px; cursor: pointer; }
 .fmt-size-val { font-size: 10px; color: var(--ink3); width: 32px; text-align: center; }
-.fmt-colors { display: inline-flex; gap: 3px; padding: 2px; border-left: 1px solid var(--border); }
-.fmt-swatch {
-  width: 15px;
-  height: 15px;
-  border: 1px solid rgba(0, 0, 0, .15);
-  border-radius: 3px;
+
+/* ── 色板 ── */
+.fmt-palette-wrap { position: relative; display: inline-flex; }
+.fmt-color-btn { font-size: 13px; line-height: 1.2; }
+.fmt-palette {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  padding: 8px;
+  width: 148px;
+}
+.fmt-pal-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.fmt-pal-cell {
+  height: 24px;
+  border: 1px solid rgba(0, 0, 0, .12);
+  border-radius: 5px;
   cursor: pointer;
   padding: 0;
 }
-.fmt-swatch:hover { transform: scale(1.2); }
+.fmt-pal-cell:hover { transform: scale(1.12); border-color: var(--primary); }
+.fmt-pal-custom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--border);
+  font-size: 11px;
+  color: var(--ink2);
+  cursor: pointer;
+  position: relative;
+}
+.fmt-pal-custom:hover { color: var(--primary); }
+.fmt-pal-custom-dot {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, .15);
+}
+.fmt-pal-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+}
 </style>

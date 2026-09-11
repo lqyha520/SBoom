@@ -7,6 +7,13 @@ from app.models import GenerateRequest, KnowledgeScope
 
 SYSTEM_PROMPT_TEMPLATE = """你是一位专业的{subject}教育游戏设计师，面向{grade}学生。
 
+## 🚫 题型禁区（最高优先级，违反任何一条即为错误输出）
+1. 禁止「加法转乘法」题：任何 a+a+a+…（同数连加）与乘号并存的等式。
+   ❌ 错误示例：4 + 4 + 4 + 4 + 4 = 5 × ____（这种题绝对禁止）
+   ✅ 正确做法：考乘法意义就直接出 4 × 5 = ____
+2. 禁止同数连加 3 项及以上：❌ 3 + 3 + 3 = ____；同数最多两项（4 + 4 = ____ 可以）。
+3. 所有题干必须简短，一行以内放得下（约 20 字符）。
+
 ## 你的任务
 根据学生提供的知识点关键词，生成一套趣味互动题目。
 
@@ -121,7 +128,7 @@ GAME_TYPE_DESC = {
     "number_split": "数的分成/组成（一年级核心题型，给出一个数字拆成两个数，或给出部分求整体。格式为 top/left/right 三个字段，用____表示填空位置，如 top=9, left=5, right=____ 表示9可以分成5和几）",
     "compare": "比大小（在○里填 >、< 或 =，比较左右两个算式或数字的大小。left_expr 是左边表达式，right_expr 是右边表达式，answer 填 > / < / = 其中之一）",
     "true_false": "判断题（给出一个陈述句，学生判断对错。stem 不要以句号结尾，末尾带（　）括号供学生填写，如 '6 比 1 大（　）'。answer 填 '√'（对）或 '×'（错））",
-    "word_problem": "应用题/解决问题（结合生活情境的文字题，需要列式计算并作答。stem 是完整题目描述，answer 是最终答案）",
+    "word_problem": "应用题/解决问题（结合生活情境的文字题。stem 必须包含【完整条件】和【明确的问句】，问句以？结尾，如'文具店有 8 盒笔，每盒 6 支，一共有多少支？'——禁止只给条件不提问；answer 是最终答案，analysis 是列式过程）",
 }
 
 
@@ -397,6 +404,14 @@ class PromptBuilder:
                 "answer（填 '>' 或 '<' 或 '='）, analysis（简短解析） }。"
                 "示例：{id:1,type:'compare',left_expr:'5+2',right_expr:'8',answer:'<',analysis:'5+2=7，7小于8'}。"
             ),
+            "word_problem": (
+                "应用题 word_problem：每道题输出 { id（整数）, type: 'word_problem', "
+                "stem（完整题目：先条件后问句，问句必须以？结尾）, answer（最终答案）, analysis（列式与计算过程） }。"
+                "⚠ stem 硬性要求：必须包含明确的问句（如'一共有多少支？''还剩多少个？'），"
+                "只写条件不提问是错误输出。"
+                "正确示例：{id:1,type:'word_problem',stem:'文具店有 8 盒笔，每盒 6 支，一共有多少支？',answer:'48 支',analysis:'8 × 6 = 48（支）'}。"
+                "错误示例（禁止）：stem='文具店有 8 盒笔，每盒 6 支。'（没有问句）"
+            ),
         }
         field_rules_text = "\n".join(FIELD_RULES.get(it.game_type, "")
                                     for it in items if it.game_type in FIELD_RULES)
@@ -404,6 +419,12 @@ class PromptBuilder:
         system_prompt = (
             f"你是一位专业的{subject}教育老师，面向{grade}学生。\n"
             f"请围绕知识点「{keyword}」一次生成一张试卷的多个大题。\n\n"
+            f"## 🚫 题型禁区（最高优先级，违反任何一条即为错误输出）\n"
+            f"1. 禁止「加法转乘法」题：任何 a+a+a+…（同数连加）与乘号并存的等式。\n"
+            f"   ❌ 错误示例：4 + 4 + 4 + 4 + 4 = 5 × ____（这种题绝对禁止）\n"
+            f"   ✅ 正确做法：考乘法意义就直接出 4 × 5 = ____\n"
+            f"2. 禁止同数连加 3 项及以上：❌ 3 + 3 + 3 = ____；同数最多两项（4 + 4 = ____ 可以）。\n"
+            f"3. 所有题干必须简短，一行以内放得下（约 20 字符）。\n\n"
             f"{scope_text}"
             f"## 知识点范围\n"
             f"严格在 {keyword} 相关范围内出题，绝不超纲。\n\n"
@@ -411,12 +432,12 @@ class PromptBuilder:
             f"## 需要生成的大题\n" + "\n".join(item_descs) + "\n\n"
             f"## 出题要求\n"
             f"{lang_block}\n{calc_note}\n"
+            f"再次强调：同数连加最多 2 项；乘法意义的题直接出乘法算式。\n"
             f"每题都要带正确答案和解析。\n\n"
             f"## 字段规范（必须严格遵守）\n"
             f"{field_rules_text}\n"
             f"其他题型（quiz/fill_blank/match_pair/oral_math/vertical_calc/recursive_calc/smart_calc/challenge/reading）按各自标准字段结构输出。\n\n"
             f"## 输出格式\n"
-            f"所有数学表达式在运算符前后加空格（如 '3 + 5 =' 而不是 '3+5='，'5 + ____ = 9' 而不是 '5+____=9'）。\n"
             f"直接返回纯 JSON，不要 markdown 包裹、不要任何额外文字：\n"
             f'{{"sections": ['
             f'{{"game_type": "对应题目1的英文名", "questions": [各题JSON]}},'

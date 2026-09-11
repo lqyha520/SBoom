@@ -15,7 +15,6 @@ from app.routers.generate import router as generate_router
 from app.routers.me import router as me_router
 from app.services.llm_client import llm_client
 from app.services import user_store
-from app.cache.question_cache import question_cache
 from app.config import get_settings
 from app.db import init_db
 
@@ -46,7 +45,6 @@ async def lifespan(app: FastAPI):
     seed_llm_from_user_configs()
     logger.info("🚀 Learning Coach API 启动（多用户模式）")
     logger.info(f"   LLM 模型（全局兜底）: {settings.llm_model}")
-    logger.info(f"   缓存状态: {'启用' if settings.cache_enabled else '关闭'}")
     yield
     logger.info("🛑 应用关闭，清理资源...")
     await llm_client.close()
@@ -112,7 +110,6 @@ async def health():
     return {
         "status": "healthy",
         "model": settings.llm_model,
-        "cache": question_cache.stats(),
     }
 
 

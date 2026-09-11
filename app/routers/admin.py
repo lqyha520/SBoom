@@ -12,7 +12,6 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.cache.question_cache import question_cache
 from app.config import get_settings
 from app.deps import require_admin, require_user
 from app.security import encryption_backend
@@ -37,7 +36,6 @@ async def stats(admin: CurrentUser = Depends(require_admin)):
     return {
         **s,
         "llmConfigured": g["hasKey"] or bool(g["baseUrl"]),
-        "cache": question_cache.stats(),
         "server": {
             "model": g["model"] or settings.llm_model or "（未配置）",
             "encryption": encryption_backend(),
@@ -148,15 +146,6 @@ async def get_user_template(user_id: int, tpl_id: int, admin: CurrentUser = Depe
     return {"template": tpl}
 
 
-# ─── 缓存管理 ───
-
-@router.post("/cache/clear", summary="清空题目缓存")
-async def clear_cache(admin: CurrentUser = Depends(require_admin)):
-    question_cache.clear()
-    logger.info(f"管理员 {admin.username} 清空了题目缓存")
-    return {"status": "ok", "cache": question_cache.stats()}
-
-
 # ─── 日志查看 ───
 
 @router.get("/logs", summary="查看服务日志（尾部 N 行）")
@@ -202,22 +191,57 @@ async def save_llm_config(req: AdminLlmConfigIn, admin: CurrentUser = Depends(re
     return {"status": "ok", "message": "模型配置已保存，全体用户生效", "hasKey": has_key}
 
 
-@router.post("/test-llm", summary="测试模型连通性（可传待测配置；不传则用已保存的全局配置）")
+@router.post("/test-llm", summary="测试模型连通性（流式探测：拿到首个响应即判定成功）")
 async def test_llm(req: Optional[AdminLlmConfigIn] = None, admin: CurrentUser = Depends(require_admin)):
+    """连通性测试用流式请求：服务端开始吐第一个 token 就证明链路+鉴权都通。
+    超时耐心 = 配置的 timeout（中转站拥堵时首 token 可能 20-60s，不宜截断）。"""
+    import httpx as _httpx
+
     g = app_config.get_llm(with_key=True)
     base_url = (req.baseUrl if req and req.baseUrl else g["baseUrl"]) or settings.llm_base_url
     model = (req.model if req and req.model else g["model"]) or settings.llm_model
     api_key = (req.apiKey if req and req.apiKey else g["api_key"]) or settings.llm_api_key
     timeout = (req.timeout if req and req.timeout else g["timeout"]) or 60
     try:
-        resp = await llm_client.chat(
-            [{"role": "user", "content": "回复：ok"}],
-            max_tokens=5,
+        async with _httpx.AsyncClient(
             base_url=base_url,
-            model=model,
-            api_key=api_key,
-            timeout=timeout,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            timeout=_httpx.Timeout(max(float(timeout), 90.0)),
+        ) as client:
+            async with client.stream(
+                "POST",
+                "/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "回复：ok"}],
+                    "max_tokens": 5,
+                    "stream": True,
+                },
+            ) as resp:
+                if resp.status_code != 200:
+                    body = (await resp.aread()).decode("utf-8", errors="replace")[:200]
+                    raise HTTPException(
+                        status_code=502,
+                        detail={"error": f"模型服务返回 {resp.status_code}", "detail": body},
+                    )
+                async for line in resp.aiter_lines():
+                    if line.startswith("data: ") and '"content"' in line:
+                        return {"status": "ok", "reply": "已连通（流式响应正常）"}
+                # 流结束但没收到 content（如空回复）——链路已通，也算成功
+                return {"status": "ok", "reply": "已连通"}
+    except HTTPException:
+        raise
+    except _httpx.TimeoutException as e:
+        # 注意：必须放在 TransportError 之前（Timeout 是 TransportError 的子类，
+        # 顺序反了会把超时误报成"无法连接"——请求其实已到达服务端并计费）
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "模型服务响应超时", "detail": f"等待 {max(timeout, 90)}s 未见任何输出（服务端可能极度拥堵）"},
         )
-        return {"status": "ok", "reply": resp.strip()}
+    except _httpx.TransportError as e:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "无法连接模型服务", "detail": f"{e}（检查接口地址/网络）"},
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail={"error": "模型连接失败", "detail": str(e)})

@@ -158,6 +158,7 @@ function cancelLayout() {
         :add-day="store.addDayLabel"
         :zoom="zoom"
         @title-edited="onTitleEdited"
+        @title-offset="(v: number) => store.setStyle({ titleOffsetY: v })"
       />
     </div>
   </div>

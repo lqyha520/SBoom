@@ -17,7 +17,6 @@ export interface AdminStats {
   admins: number
   templates: number
   llmConfigured: number
-  cache: { size: number; max_size: number; ttl_seconds: number }
   server: { model: string; encryption: string; version: string }
 }
 
@@ -107,10 +106,6 @@ export async function fetchUserTemplates(userId: number): Promise<UserTemplateMe
 export async function fetchUserTemplateContent(userId: number, tplId: number): Promise<Record<string, unknown>> {
   const d = await request<{ template: Record<string, unknown> }>(`/api/v1/admin/users/${userId}/templates/${tplId}`)
   return d.template
-}
-
-export async function adminClearCache(): Promise<void> {
-  await request('/api/v1/admin/cache/clear', { method: 'POST' })
 }
 
 export async function fetchAdminLogs(lines = 200): Promise<string> {

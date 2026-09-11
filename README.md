@@ -22,7 +22,7 @@
   - [7. 健康检查 `GET /health`](#7-健康检查-get-health)
 - [枚举值速查表](#枚举值速查表)
 - [各游戏类型的响应结构](#各游戏类型的响应结构)
-- [缓存机制](#缓存机制)
+- [生成策略（无缓存）](#生成策略无缓存)
 - [错误处理](#错误处理)
 - [知识范围覆盖](#知识范围覆盖)
 - [前端对接指引](#前端对接指引)
@@ -71,7 +71,6 @@ python run.py
 | 账号密码 | SQLite `data/users.db`，密码 PBKDF2-SHA256 哈希存储 |
 | 会话 | JWT（HS256）签名，httpOnly Cookie 下发（30 天有效），防 XSS 窃取 |
 | 我的模板 | 每用户独立（`user_templates` 表按 `user_id` 隔离），跨设备同步 |
-| 试题缓存 | 缓存 key 含用户维度，不同用户互不撞卷 |
 | 浏览器本地数据 | localStorage 按 `lc_u{用户id}_` 前缀命名空间隔离 |
 
 **认证端点**：`POST /api/v1/auth/register|login|logout`、`GET /api/v1/auth/me`。
@@ -96,7 +95,7 @@ CORS_ORIGINS=      # 跨域白名单，留空=仅同源
 已被 .gitignore 排除——**请纳入备份，且绝不能提交到 git**。删除 secret_key.txt 会使
 所有会话失效、已存密钥无法解密（用户需重新保存密钥）。
 
-多用户全链路测试：`python test_multiuser.py`（覆盖注册/登录/隔离/缓存等 24 项断言）。
+多用户全链路测试：`python test_multiuser.py`（覆盖注册/登录/隔离等断言）。
 
 ---
 
@@ -118,7 +117,7 @@ CORS_ORIGINS=      # 跨域白名单，留空=仅同源
 | 功能 | 说明 |
 |------|------|
 | ⚙ 模型配置 | **全局 LLM 服务**（接口地址/模型/密钥/超时），全体用户共用，密钥服务端加密存储，支持连通性测试 |
-| 📊 概览 | 用户/模板/模型服务/缓存统计，服务信息，一键清空题目缓存 |
+| 📊 概览 | 用户/模板/模型服务统计，服务信息 |
 | 👥 用户管理 | 搜索、创建用户、重置密码、启用/禁用、提升/降级管理员、删除（级联清理其数据）；**📄 查看任意用户的模板**（列表 + 内容预览 + 原始 JSON，用于排查与协助） |
 | 📄 系统日志 | 在线查看 server.log 尾部（100–1000 行） |
 
@@ -177,7 +176,7 @@ backend/
 │   │   ├── knowledge_scope.py          # 知识范围约束服务
 │   │   ├── prompt_builder.py           # Prompt 组装器
 │   │   └── llm_client.py               # LLM API 客户端（流式+非流式）
-│   ├── cache/question_cache.py         # 内存 LRU 缓存
+│   ├── routers/generate.py             # API 路由（生成/范围/校验/反馈端点）
 │   └── data/knowledge_scope.json       # 知识范围数据
 └── web/                                # 出题工作台前端（Vue 3 + TS + Vite）
     ├── src/
@@ -224,8 +223,7 @@ backend/
   "keyword": "分数初步",
   "game_type": "quiz",
   "difficulty": "easy",
-  "question_count": 5,
-  "use_cache": true
+  "question_count": 5
 }
 ```
 
@@ -236,8 +234,7 @@ backend/
 | `keyword` | `string` | ✅ | - | 知识点关键词，1-100 字符 |
 | `game_type` | `string` | - | `"quiz"` | 交互类型，见[枚举值速查表](#枚举值速查表) |
 | `difficulty` | `string` | - | `"medium"` | 难度，`"easy"` / `"medium"` / `"hard"` |
-| `question_count` | `int` | - | `5` | 生成题目数，范围 1-10 |
-| `use_cache` | `bool` | - | `true` | 是否使用缓存（相同参数命中缓存会瞬时返回） |
+| `question_count` | `int` | - | `5` | 生成题目数，范围 1-99 |
 
 #### 响应（200）
 
@@ -269,8 +266,7 @@ backend/
     }
   ],
   "total_score": 100,
-  "pass_score": 60,
-  "from_cache": false
+  "pass_score": 60
 }
 ```
 
@@ -291,7 +287,6 @@ backend/
 | `questions[].tags` | `array` | 关联的知识点标签 |
 | `total_score` | `int` | 总分，默认 100 |
 | `pass_score` | `int` | 及格线，默认 60 |
-| `from_cache` | `bool` | 是否来自缓存 |
 
 #### 响应（400 — 年级/科目不支持）
 
@@ -390,7 +385,7 @@ while (true) {
 }
 ```
 
-> **注意**：流式接口**不使用缓存**，每次都会调用 LLM。最终前端需要自行将 tokens 拼接后做 JSON.parse。
+> **注意**：流式接口每次都会真实调用 LLM。最终前端需要自行将 tokens 拼接后做 JSON.parse。
 
 ---
 
@@ -497,7 +492,7 @@ while (true) {
 
 ```json
 {
-  "game_id": "cache_key_xxx",
+  "game_id": "game_xxx",
   "is_oob": true,
   "comment": "涉及了负数的计算，对三年级学生太难了"
 }
@@ -519,12 +514,7 @@ while (true) {
 ```json
 {
   "status": "healthy",
-  "model": "deepseek-chat",
-  "cache": {
-    "size": 12,
-    "max_size": 500,
-    "ttl_seconds": 86400
-  }
+  "model": "deepseek-chat"
 }
 ```
 
@@ -701,17 +691,12 @@ while (true) {
 
 ---
 
-## 缓存机制
+## 生成策略（无缓存）
 
-- **缓存 key**：由 `grade + subject + keyword + game_type + difficulty + question_count` 六元组生成 SHA256 哈希
-- **缓存策略**：LRU 淘汰，默认最大 500 条、24 小时过期
-- **缓存命中**：响应中 `from_cache: true`，几乎瞬时返回（无需等待 LLM）
-- **跳过缓存**：请求中设置 `"use_cache": false`
-- **注意**：流式接口（`/generate/stream`）不使用缓存
+系统**不使用任何题目缓存**：每次生成请求都会实时调用 LLM 生成全新试卷，相同参数重复生成也会得到内容不同的卷子。
 
-前端建议：
-1. 热门知识点（如"九九乘法表"、"分数初步"）首次加载后有缓存，后续相同请求秒级返回
-2. 可以使用 `cache_key` 字段追踪某次生成是否命中缓存
+- 整卷生成（`/generate-batch`）、单题型生成（`/generate`）、流式生成（`/generate/stream`）三条链路均无缓存
+- 代价是每次生成都要等待 LLM（通常 3-8 秒），前端请展示 loading 动画或骨架屏
 
 ---
 
@@ -776,7 +761,7 @@ while (true) {
 
 3. **reading 类型特殊处理**：响应中多了顶层 `passage` 字段，需要先渲染文章区域再展示题目
 
-4. **缓存预热**：首次进入某知识点页面时会有 LLM 调用延迟（通常 3-8 秒），建议在前端展示 loading 动画或骨架屏。同一知识点的后续请求会命中缓存，瞬时返回。
+4. **生成延迟**：每次生成都是实时调用 LLM（通常 3-8 秒），建议在前端展示 loading 动画或骨架屏。
 
 5. **流式降级**：如 `/generate/stream` 前端实现复杂，可先用 `/generate`，在响应回来前展示 loading 动画即可。
 
@@ -797,11 +782,6 @@ LLM_MODEL=deepseek-v4-pro
 # 生成参数
 LLM_TEMPERATURE=0.4               # 0-1，越低越稳定
 LLM_MAX_TOKENS=4096
-
-# 缓存
-CACHE_ENABLED=true                # 是否启用缓存
-CACHE_MAX_SIZE=500                # 最大缓存条数
-CACHE_TTL_SECONDS=86400           # 过期时间（秒），默认 24h
 
 # 服务
 HOST=127.0.0.1

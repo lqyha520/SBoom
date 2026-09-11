@@ -139,6 +139,7 @@ const STYLE_DEFAULTS: PaperStyle = {
   kidFont: 'off',
   exportBg: false,
   titleScale: 1,
+  titleOffsetY: 0,
 }
 
 export const useExamStore = defineStore('exam', {

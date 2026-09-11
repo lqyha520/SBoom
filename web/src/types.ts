@@ -52,6 +52,8 @@ export interface SecLayout {
   colWidths?: (number | undefined)[]
   /** 表格模式：行高（px；undefined = 自动） */
   rowHeight?: number
+  /** 应用题：解答留白行数（1 行 = 8mm；undefined = 默认 3 行） */
+  answerLines?: number
 }
 
 /** 搭建区的大题卡片 */
@@ -129,6 +131,8 @@ export interface PaperStyle {
   exportBg: boolean
   /** 标题字号缩放（1 = 默认 22pt） */
   titleScale: number
+  /** 标题垂直偏移（mm，正=下移 负=上移；0 = 默认） */
+  titleOffsetY: number
 }
 
 export type Difficulty = 'easy' | 'medium' | 'hard'

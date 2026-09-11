@@ -21,11 +21,6 @@ class Settings(BaseSettings):
     default_question_count: int = 5
     max_question_count: int = 10
 
-    # 缓存（默认关闭：用户要求每次生成都真实调用 LLM，保证试卷不重复）
-    cache_enabled: bool = False
-    cache_max_size: int = 500
-    cache_ttl_seconds: int = 86400
-
     # 服务
     host: str = "127.0.0.1"
     port: int = 8000

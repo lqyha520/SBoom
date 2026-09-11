@@ -93,18 +93,19 @@ r = alice.post("/api/v1/me/templates/bulk", json={"templates": [
     {"name": "迁移模板1", "cards": []}, {"name": "迁移模板2", "cards": []}, {"bad": "no name"}]})
 check("bulk 导入 2 条（跳过无效）", r.status_code == 200 and r.json()["imported"] == 2, r.text[:200])
 
-print("== 7. 未配置全局模型时生成请求得到明确报错 ==")
+print("== 7. 不支持的年级/科目组合在调 LLM 前被 400 拦截 ==")
 r = bob.post("/api/v1/generate-batch", json={
-    "grade": "小学三年级", "subject": "数学", "keyword": "分数", "difficulty": "medium",
+    "grade": "小学三年级", "subject": "物理", "keyword": "浮力", "difficulty": "medium",
     "items": [{"game_type": "oral_math", "question_count": 2}]})
-# 全局无配置、.env 也无密钥 → 400「尚未配置模型」
-check("未配置模型得到 400 引导联系管理员", r.status_code == 400 and "尚未配置模型" in r.text, f"{r.status_code} {r.text[:150]}")
+# 知识范围库未定义 → 400，不会消耗 LLM 调用
+check("不支持科目得到 400", r.status_code == 400 and "暂不支持" in r.text, f"{r.status_code} {r.text[:150]}")
 
-print("== 8. 缓存 key 含用户维度 ==")
-from app.cache.question_cache import question_cache
-k1 = question_cache.generate_key("三年级", "数学", "分数", "oral_math", "medium", 5, owner="u1")
-k2 = question_cache.generate_key("三年级", "数学", "分数", "oral_math", "medium", 5, owner="u2")
-check("不同用户缓存 key 不同", k1 != k2)
+print("== 8. 生成接口无缓存：use_cache 字段被忽略 ==")
+r = bob.post("/api/v1/generate", json={
+    "grade": "小学三年级", "subject": "物理", "keyword": "浮力", "difficulty": "medium",
+    "game_type": "quiz", "question_count": 2, "use_cache": True})
+# use_cache 已从请求模型移除（pydantic 忽略多余字段，不报 422）；照常在知识范围校验处 400
+check("use_cache 字段被忽略，不报 422", r.status_code == 400 and "暂不支持" in r.text, f"{r.status_code} {r.text[:150]}")
 
 print(f"\n===== 结果: {passed} passed, {failed} failed =====")
 exit(1 if failed else 0)

@@ -63,7 +63,6 @@ class GenerateRequest(BaseModel):
     game_type: GameType = Field(GameType.QUIZ, description="交互类型")
     difficulty: Difficulty = Field(Difficulty.MEDIUM, description="难度")
     question_count: int = Field(5, ge=1, le=99, description="生成题目数（1-99）")
-    use_cache: bool = Field(True, description="是否使用缓存")
     stream: bool = Field(False, description="是否流式返回")
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
@@ -134,8 +133,6 @@ class GameResult(BaseModel):
     questions: List[Question]
     total_score: int = 100
     pass_score: int = 60
-    from_cache: bool = False
-    cache_key: Optional[str] = None
 
 
 class BatchGenerateResponse(BaseModel):

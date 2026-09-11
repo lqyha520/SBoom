@@ -12,13 +12,20 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
-RETRYABLE = (httpx.TransportError, httpx.RemoteProtocolError, httpx.ReadTimeout)  # 断连/网络抖动/读取超时可重试
+RETRYABLE = (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError, httpx.ConnectError)  # 连接层故障可安全重试
+# 注意：ReadTimeout/ConnectTimeout 不在重试之列——超时意味着请求很可能已到达
+# 服务端并计费，盲目重发会造成重复扣费（中转站按次计费场景尤其敏感）
+
+
+def _should_retry(e: Exception) -> bool:
+    """只有确定请求未到达服务端的错误才值得重试（不产生二次计费）。"""
+    return isinstance(e, RETRYABLE)
 
 
 class LLMClient:
     """OpenAI 兼容的 LLM API 客户端"""
 
-    MAX_ATTEMPTS = 3  # 首次 + 重试 2 次
+    MAX_ATTEMPTS = 3  # 首次 + 重试 2 次（仅网络层错误；见 _should_retry）
 
     def __init__(self):
         self._client: Optional[httpx.AsyncClient] = None
@@ -80,11 +87,11 @@ class LLMClient:
                     response = await client.post("/chat/completions", json=payload)
                     response.raise_for_status()
                     break
-                except RETRYABLE as e:
-                    if attempt == self.MAX_ATTEMPTS:
+                except Exception as e:
+                    if attempt == self.MAX_ATTEMPTS or not _should_retry(e):
                         raise
                     wait = 2 ** attempt
-                    logger.warning(f"LLM 请求失败（第 {attempt} 次），{wait}s 后重试：{e}")
+                    logger.warning(f"LLM 请求失败（第 {attempt} 次，{type(e).__name__}），{wait}s 后重试：{e}")
                     await asyncio.sleep(wait)
                     # 断连后旧连接池可能已失效，强制重建
                     await client.aclose()

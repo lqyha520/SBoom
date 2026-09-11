@@ -19,6 +19,15 @@ const emit = defineEmits<{
 const isSplit = computed(() => props.q.top != null)
 const isCompare = computed(() => props.q.left_expr != null)
 const isTf = computed(() => props.q.type === 'true_false')
+/** 应用题：题干下方自动留解答空间（可用大题排版 answerLines 调行数，默认 3 行） */
+const isWordProblem = computed(() => props.q.type === 'word_problem')
+const answerLines = computed(() => (props.layout as any).answerLines ?? 3)
+/** 应用题题干缺问句提醒（LLM 偶发漏问句；只提醒不强改） */
+const stemNoQuestion = computed(() => {
+  if (!isWordProblem.value) return false
+  const s = props.q.stem || ''
+  return s.trim() !== '' && !/[？?]\s*$/.test(s.trim())
+})
 
 const stemText = computed(() => (isTf.value ? tfStem(props.q.stem || '') : props.q.stem || ''))
 const noTag = computed(() => (props.layout.showNo === false ? '' : cirNum(props.no) + ' '))
@@ -100,6 +109,10 @@ function onExprBlur(e: FocusEvent, field: 'left_expr' | 'right_expr') {
     <!-- 常规题 -->
     <template v-else>
       <div data-e="stem" :contenteditable="editable" spellcheck="false" @blur="onStemBlur($event)" v-html="noTag + stemHtml"></div>
+      <!-- 应用题缺问句提醒（编辑态可见，打印/导出不含） -->
+      <div v-if="stemNoQuestion && editable" class="wp-warn no-print">⚠ 题干缺问句（末尾应有"…多少…？"），请补全后使用</div>
+      <!-- 应用题解答留白：默认 3 行，随大题排版 answerLines 配置 -->
+      <div v-if="isWordProblem && !showAnswers" class="wp-answer-space" :style="{ height: `${answerLines * 8}mm` }"></div>
       <div
         v-if="q.options"
         class="opts"
@@ -128,3 +141,20 @@ function onExprBlur(e: FocusEvent, field: 'left_expr' | 'right_expr') {
     <div v-if="showAnswers" class="q-ans-inline">✎ 答案：{{ answerOf(q) }}</div>
   </div>
 </template>
+
+<style scoped>
+.wp-answer-space {
+  /* 解答留白：不设边框，纯空白区域供学生列式作答 */
+  margin-top: 1mm;
+  flex: none;
+}
+.wp-warn {
+  font-size: 10px;
+  color: #d0342c;
+  background: #fdecec;
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin-top: 1mm;
+  display: inline-block;
+}
+</style>
