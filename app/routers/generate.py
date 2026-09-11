@@ -1,5 +1,6 @@
 """生成路由 —— 题目/游戏生成 API 端点"""
 
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -99,11 +100,14 @@ def _merged_llm_params(base_url: str = None, model: str = None, api_key: str = N
     模型配置已收归后台管理（/admin 的「模型配置」），全体用户共用一份，密钥加密存于服务端。
     """
     g = app_config.get_llm(with_key=True)
+    t = float(g["timeout"] or 0)
     return {
         "base_url": base_url or g["baseUrl"] or settings.llm_base_url,
         "model": model or g["model"] or settings.llm_model,
         "api_key": api_key or g["api_key"] or settings.llm_api_key,
-        "timeout": g["timeout"] or 60,
+        # 超时下限 120s：整卷生成 prompt 很长，部分模型需要 1-2 分钟；
+        # 超时过短会让客户端先掐断，而服务端通常已开始生成并计费——白白扣钱
+        "timeout": max(t, 120.0),
     }
 
 
@@ -145,8 +149,20 @@ async def _call_llm_and_parse(
             status_code=502,
             detail={"error": f"LLM 服务请求失败 ({e.response.status_code})", "detail": str(e)},
         )
+    except httpx.TimeoutException as e:
+        # 注意：TimeoutException 是 TransportError 的子类，必须先于其捕获。
+        # 超时意味着请求已到达服务端（很可能已被处理甚至计费），不能自动重试。
+        logger.error(f"LLM 响应超时（timeout={p['timeout']}s）: {type(e).__name__}")
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "error": f"生成超时（等待 {int(p['timeout'])} 秒无响应）",
+                "detail": "请求已发送给模型服务，超时前未返回结果（服务端可能已处理并计费）。"
+                          "请重试一次；若频繁超时，请联系管理员在后台「模型配置」中调大超时时间。",
+            },
+        )
     except httpx.TransportError as e:
-        logger.error(f"LLM 服务无法连接: {e}")
+        logger.error(f"LLM 服务无法连接: {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=502,
             detail={"error": "无法连接模型服务", "detail": f"{e}（请管理员检查后台「模型配置」的接口地址）"},
@@ -170,6 +186,26 @@ def _enrich_result(raw: dict, request: GenerateRequest) -> GameResult:
     raw["subject"] = request.subject.value
 
     return GameResult(**raw)
+
+
+async def _regen_blocked(count: int, retry_prompt: str, retry_msg: str,
+                         base_url: str = None, model: str = None, api_key: str = None) -> list:
+    """并行补生成 count 道题，返回通过质检的题目列表（失败/仍违禁的不计入）"""
+    from app.services.question_qc import filter_questions
+
+    async def one():
+        try:
+            patch = await _call_llm_and_parse(
+                retry_prompt, retry_msg, base_url=base_url, model=model, api_key=api_key)
+            patch_qs = patch.get("questions") or [] if isinstance(patch, dict) else []
+            ok, _ = filter_questions(patch_qs, context="补生成")
+            return ok[0] if ok else None
+        except Exception:
+            logger.exception("补生成失败")
+            return None
+
+    results = await asyncio.gather(*(one() for _ in range(count)))
+    return [r for r in results if r is not None]
 
 
 # ─── API 端点 ───
@@ -257,34 +293,48 @@ async def generate_batch(request: BatchGenerateRequest, user: CurrentUser = Depe
                     else:
                         q["stem"] = "请作答"
             # 题型质检：源头已在 prompt 卡死；万一漏出（模型偶发违规），
-            # 被拦截的题不删除卷子也不悄悄缺数——逐道单独重生成补齐
+            # 被拦截的题不删除卷子也不悄悄缺数——并行补生成同数量合规题
             from app.services.question_qc import filter_questions
             kept, blocked = filter_questions(
                 sec_raw.get("questions") or [], context=f"{request.grade.value}/{it.game_type}"
             )
+            missing = 0
             if blocked:
                 logger.warning(
-                    f"题型质检拦截 {len(blocked)} 道违禁题（{it.game_type}），正在单独补生成同数量合规题"
+                    f"题型质检拦截 {len(blocked)} 道违禁题（{it.game_type}），正在并行补生成"
                 )
-                for _ in range(len(blocked)):
+                # 修复：以前这里误传 BatchGenerateRequest 给 build_system_prompt（只接受
+                # GenerateRequest），异常被吞掉导致补生成实际从未成功过——现在按单题型
+                # 合成正确的请求。注意补生成不占用户配额（同一张卷的补救，不算新调用）。
+                try:
+                    single_req = GenerateRequest(
+                        grade=request.grade, subject=request.subject,
+                        keyword=request.keyword, difficulty=request.difficulty,
+                        question_count=1,
+                    )
+                    # GameType 枚举外的自定义题型名保持默认 quiz 出题
                     try:
-                        retry_prompt = prompt_builder.build_system_prompt(request, scope)
-                        retry_msg = (
-                            f"请围绕知识点\"{request.keyword}\"出 1 道{it.game_type}题型的新题。"
-                            "注意：禁止同数连加 3 项及以上、禁止加法转乘法等式，题干一行以内。"
-                            "直接返回 JSON。"
-                        )
-                        patch = await _call_llm_and_parse(retry_prompt, retry_msg,
-                            base_url=request.llm_base_url,
-                            model=request.llm_model,
-                            api_key=request.llm_api_key)
-                        patch_qs = patch.get("questions") or [] if isinstance(patch, dict) else []
-                        patch_ok, _ = filter_questions(patch_qs, context="补生成")
-                        if patch_ok:
-                            kept.append(patch_ok[0])
-                    except Exception:
-                        logger.exception("补生成失败（试卷该大题将缺少此题）")
+                        from app.models import GameType
+                        single_req.game_type = GameType(it.game_type)
+                    except ValueError:
+                        pass
+                    retry_prompt = prompt_builder.build_system_prompt(single_req, scope)
+                except Exception:
+                    retry_prompt = system_prompt
+                retry_msg = (
+                    f"请围绕知识点\"{request.keyword}\"出 1 道{it.game_type}题型的新题。"
+                    "注意：禁止同数连加 3 项及以上、禁止加法转乘法等式，题干一行以内。"
+                    "直接返回 JSON。"
+                )
+                fixed = await _regen_blocked(
+                    len(blocked), retry_prompt, retry_msg,
+                    base_url=request.llm_base_url,
+                    model=request.llm_model,
+                    api_key=request.llm_api_key)
+                kept.extend(fixed)
+                missing = len(blocked) - len(fixed)
             sec_raw["questions"] = kept
+            sec_raw["missing_count"] = missing
             try:
                 sections.append(GameResult(**sec_raw))
             except Exception:
@@ -293,7 +343,7 @@ async def generate_batch(request: BatchGenerateRequest, user: CurrentUser = Depe
                     game_type=it.game_type, topic=request.keyword,
                     difficulty=request.difficulty.value, grade=request.grade.value,
                     subject=request.subject.value, questions=[],
-                    total_score=100, pass_score=60,
+                    total_score=100, pass_score=60, missing_count=missing,
                 ))
         else:
             sections.append(GameResult(
@@ -315,7 +365,7 @@ async def generate_batch(request: BatchGenerateRequest, user: CurrentUser = Depe
 )
 async def generate_questions(request: GenerateRequest, user: CurrentUser = Depends(require_user)):
     """生成题目（非流式）。每次都真实调用 LLM，保证每次生成的试卷都是新的。"""
-    # 0. 题型-年级适配校验（低年级拦截超纲计算题型）
+    # 1. 题型-年级适配校验（低年级拦截超纲计算题型）
     from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
     g_num = _grade_num(request.grade.value)
     min_g = MIN_GRADE_FOR_TYPE.get(request.game_type.value, 0)
@@ -350,25 +400,23 @@ async def generate_questions(request: GenerateRequest, user: CurrentUser = Depen
         model=request.llm_model,
         api_key=request.llm_api_key)
 
-    # 3.5 题型质检：源头 prompt 已卡死；万一漏出，被拦截题单独补生成（不删除不缺数）
+    # 3.5 题型质检：源头 prompt 已卡死；万一漏出，被拦截题并行补生成（不删除不缺数）
     from app.services.question_qc import filter_questions
     if isinstance(raw_result, dict) and isinstance(raw_result.get("questions"), list):
         kept, blocked = filter_questions(
             raw_result["questions"], context=f"single/{request.game_type.value}"
         )
-        for _ in range(len(blocked)):
-            try:
-                patch = await _call_llm_and_parse(system_prompt, user_message,
-                    base_url=request.llm_base_url,
-                    model=request.llm_model,
-                    api_key=request.llm_api_key)
-                patch_qs = patch.get("questions") or [] if isinstance(patch, dict) else []
-                patch_ok, _ = filter_questions(patch_qs, context="single补生成")
-                if patch_ok:
-                    kept.append(patch_ok[0])
-            except Exception:
-                logger.exception("单题补生成失败")
+        missing = 0
+        if blocked:
+            fixed = await _regen_blocked(
+                len(blocked), system_prompt, user_message,
+                base_url=request.llm_base_url,
+                model=request.llm_model,
+                api_key=request.llm_api_key)
+            kept.extend(fixed)
+            missing = len(blocked) - len(fixed)
         raw_result["questions"] = kept
+        raw_result["missing_count"] = missing
 
     # 4. 组装响应
     return _enrich_result(raw_result, request)
@@ -376,11 +424,23 @@ async def generate_questions(request: GenerateRequest, user: CurrentUser = Depen
 
 @router.post(
     "/generate/stream",
-    summary="生成题目/游戏（流式）",
-    description="流式返回生成结果，降低首字延迟感知。SSE 格式。",
+    summary="生成题目/游戏（流式，实验性）",
+    description="流式返回生成结果，降低首字延迟感知。SSE 格式。注意：为保持流式体验，"
+                "质检无法像非流式那样事后剔除违禁题，仅在流结束时追加 qc_warning 事件告警。",
 )
 async def generate_questions_stream(request: GenerateRequest, user: CurrentUser = Depends(require_user)):
     """流式生成题目"""
+    # 1. 题型-年级适配校验（与非流式对齐）
+    from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
+    g_num = _grade_num(request.grade.value)
+    min_g = MIN_GRADE_FOR_TYPE.get(request.game_type.value, 0)
+    if min_g and g_num < min_g:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"{request.grade.value}还没有学过{request.game_type.value}哦"},
+        )
+
+    # 2. 知识范围
     scope = knowledge_scope_service.get_scope(request.grade, request.subject)
     if not scope.allowed and not scope.forbidden:
         raise HTTPException(
@@ -397,13 +457,26 @@ async def generate_questions_stream(request: GenerateRequest, user: CurrentUser 
     p = _merged_llm_params(request.llm_base_url, request.llm_model, request.llm_api_key)
 
     async def event_generator():
-        """SSE 事件流"""
+        """SSE 事件流（结束时做质检，违禁题无法撤回已流出的内容，只追加告警事件）"""
+        buffered = []
         try:
             async for token in llm_client.chat_stream(
                 messages, base_url=p["base_url"], model=p["model"],
                 api_key=p["api_key"], timeout=p["timeout"],
             ):
+                buffered.append(token)
                 yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+            # 流结束：解析并质检，违禁题只告警（流式无法事后剔除）
+            try:
+                data = _extract_json("".join(buffered))
+                if isinstance(data, dict) and isinstance(data.get("questions"), list):
+                    from app.services.question_qc import filter_questions
+                    _, blocked = filter_questions(data["questions"], context="stream")
+                    if blocked:
+                        logger.warning(f"流式生成质检拦截 {len(blocked)} 道违禁题（仅告警）")
+                        yield f"data: {json.dumps({'qc_warning': f'检测到 {len(blocked)} 道题目不符合该年级要求，建议重新生成'}, ensure_ascii=False)}\n\n"
+            except Exception:
+                pass  # 解析失败不影响正常结束
             yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
@@ -501,9 +574,16 @@ async def validate_oob(request: ValidateRequest, user: CurrentUser = Depends(req
     description="收集用户对题目超纲等问题的反馈",
 )
 async def submit_feedback(request: FeedbackRequest, user: CurrentUser = Depends(require_user)):
-    """接收用户反馈"""
+    """接收用户反馈并落库（后台可查看，重启不丢）"""
+    from app.db import db
+
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO feedbacks (user_id, username, game_id, is_oob, comment) VALUES (?, ?, ?, ?, ?)",
+            (user.id, user.username, request.game_id, int(request.is_oob), request.comment),
+        )
     logger.info(
-        f"Feedback received - user: {user.username}, game_id: {request.game_id}, "
+        f"Feedback saved - user: {user.username}, game_id: {request.game_id}, "
         f"is_oob: {request.is_oob}, comment: {request.comment}"
     )
     return {"status": "ok", "message": "反馈已记录，感谢您的帮助！"}

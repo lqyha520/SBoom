@@ -12,7 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.config import get_settings
+from app.config import get_settings, APP_VERSION
 from app.deps import require_admin, require_user
 from app.security import encryption_backend
 from app.services import app_config, user_store
@@ -31,17 +31,44 @@ _LOG_PATH = Path(__file__).resolve().parent.parent.parent / "server.log"
 
 @router.get("/stats", summary="后台概览数据")
 async def stats(admin: CurrentUser = Depends(require_admin)):
+    from app.db import db
+
     s = user_store.admin_stats()
     g = app_config.get_llm()
+    with db() as conn:
+        fb_total = conn.execute("SELECT COUNT(*) c FROM feedbacks").fetchone()["c"]
+        fb_oob = conn.execute("SELECT COUNT(*) c FROM feedbacks WHERE is_oob = 1").fetchone()["c"]
     return {
         **s,
         "llmConfigured": g["hasKey"] or bool(g["baseUrl"]),
+        "feedbacks": fb_total,
+        "feedbacksOob": fb_oob,
         "server": {
             "model": g["model"] or settings.llm_model or "（未配置）",
             "encryption": encryption_backend(),
-            "version": "0.4.0",
+            "version": APP_VERSION,
         },
     }
+
+
+# ─── 用户反馈查看 ───
+
+@router.get("/feedbacks", summary="用户反馈列表（最新在前）")
+async def list_feedbacks(
+    limit: int = 100,
+    oob_only: bool = False,
+    admin: CurrentUser = Depends(require_admin),
+):
+    from app.db import db
+
+    limit = max(1, min(500, limit))
+    sql = "SELECT id, user_id, username, game_id, is_oob, comment, created_at FROM feedbacks"
+    if oob_only:
+        sql += " WHERE is_oob = 1"
+    sql += " ORDER BY id DESC LIMIT ?"
+    with db() as conn:
+        rows = [dict(r) for r in conn.execute(sql, (limit,))]
+    return {"feedbacks": rows}
 
 
 # ─── 用户管理 ───
@@ -152,8 +179,11 @@ async def get_user_template(user_id: int, tpl_id: int, admin: CurrentUser = Depe
 async def tail_logs(lines: int = 200, admin: CurrentUser = Depends(require_admin)):
     lines = max(10, min(1000, lines))
     try:
-        text = _LOG_PATH.read_text(encoding="utf-8", errors="replace")
-        return {"logs": "\n".join(text.splitlines()[-lines:])}
+        # deque 只保留尾部 N 行，日志文件再大也只读一遍流，不整文件进内存
+        from collections import deque
+        with open(_LOG_PATH, encoding="utf-8", errors="replace") as f:
+            tail = deque(f, maxlen=lines)
+        return {"logs": "".join(tail)}
     except FileNotFoundError:
         return {"logs": "（暂无日志文件）"}
 

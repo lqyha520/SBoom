@@ -68,6 +68,8 @@ export interface Section {
   data: GameData | null
   layout: SecLayout
   error?: string
+  /** 非致命告警（如质检补生成后仍缺题），不影响使用 */
+  warn?: string
 }
 
 /** 结果卷中的大题 */

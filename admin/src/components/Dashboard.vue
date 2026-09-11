@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import * as api from '../api'
-import type { AdminStats, AdminUser, UserInfo } from '../api'
+import type { AdminFeedback, AdminStats, AdminUser, UserInfo } from '../api'
 import UserTemplatesDialog from './UserTemplatesDialog.vue'
 
 const props = defineProps<{ user: UserInfo }>()
 const emit = defineEmits<{ (e: 'logout'): void }>()
 
-const tab = ref<'overview' | 'llm' | 'users' | 'logs'>('overview')
+const tab = ref<'overview' | 'llm' | 'users' | 'feedback' | 'logs'>('overview')
 const stats = ref<AdminStats | null>(null)
 const users = ref<AdminUser[]>([])
 const query = ref('')
@@ -26,6 +26,11 @@ const creating = ref(false)
 const logs = ref('')
 const logLines = ref(200)
 const logLoading = ref(false)
+
+// 用户反馈
+const feedbacks = ref<AdminFeedback[]>([])
+const fbOobOnly = ref(false)
+const fbLoading = ref(false)
 
 // 查看用户模板
 const tplUser = ref<AdminUser | null>(null)
@@ -47,10 +52,11 @@ async function refreshAll() {
   catch (e: any) { flash(e?.message || '加载失败', false) }
 }
 
-function switchTab(t: 'overview' | 'llm' | 'users' | 'logs') {
+function switchTab(t: 'overview' | 'llm' | 'users' | 'feedback' | 'logs') {
   tab.value = t
   if (t === 'logs') loadLogs()
   if (t === 'llm') loadLlmConfig()
+  if (t === 'feedback') loadFeedbacks()
 }
 
 /* ── 全局模型配置 ── */
@@ -171,6 +177,17 @@ async function loadLogs() {
   }
 }
 
+async function loadFeedbacks() {
+  fbLoading.value = true
+  try {
+    feedbacks.value = await api.fetchAdminFeedbacks(200, fbOobOnly.value)
+  } catch (e: any) {
+    flash(e?.message || '反馈加载失败', false)
+  } finally {
+    fbLoading.value = false
+  }
+}
+
 async function doLogout() {
   await api.logout()
   emit('logout')
@@ -201,6 +218,7 @@ onMounted(refreshAll)
       <button :class="{ on: tab === 'overview' }" @click="switchTab('overview')">📊 概览</button>
       <button :class="{ on: tab === 'llm' }" @click="switchTab('llm')">⚙ 模型配置</button>
       <button :class="{ on: tab === 'users' }" @click="switchTab('users')">👥 用户管理</button>
+      <button :class="{ on: tab === 'feedback' }" @click="switchTab('feedback')">💬 用户反馈</button>
       <button :class="{ on: tab === 'logs' }" @click="switchTab('logs')">📄 系统日志</button>
     </nav>
 
@@ -222,6 +240,11 @@ onMounted(refreshAll)
             <div class="stat-num">{{ stats.llmConfigured ? '✓' : '—' }}</div>
             <div class="stat-label">全局模型服务</div>
             <div class="stat-extra">{{ stats.llmConfigured ? '后台已配置' : '未配置，前往「模型配置」' }}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num">{{ stats.feedbacks }}</div>
+            <div class="stat-label">用户反馈</div>
+            <div class="stat-extra">{{ stats.feedbacksOob }} 条超纲反馈</div>
           </div>
           <div class="stat-card">
             <div class="stat-num">✓</div>
@@ -326,6 +349,39 @@ onMounted(refreshAll)
               </tr>
               <tr v-if="!users.length">
                 <td colspan="7" class="empty">（暂无用户{{ query ? '，试试清空搜索词' : '' }}）</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 用户反馈 -->
+      <section v-else-if="tab === 'feedback'" class="tab-pane">
+        <div class="admin-panel">
+          <div class="users-toolbar">
+            <h4 style="margin:0;">用户反馈（{{ feedbacks.length }}）</h4>
+            <label style="font-size:13px; color:#5c6880; display:flex; align-items:center; gap:4px; cursor:pointer;">
+              <input type="checkbox" v-model="fbOobOnly" @change="loadFeedbacks" /> 只看超纲反馈
+            </label>
+            <button class="btn mini" :disabled="fbLoading" @click="loadFeedbacks">{{ fbLoading ? '加载中…' : '↻ 刷新' }}</button>
+          </div>
+          <table class="users-table">
+            <thead>
+              <tr>
+                <th>ID</th><th>用户</th><th>类型</th><th>游戏/试卷 ID</th><th>反馈内容</th><th>时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="f in feedbacks" :key="f.id">
+                <td>{{ f.id }}</td>
+                <td class="uname">{{ f.username || `u${f.user_id}` }}</td>
+                <td><span class="badge" :class="f.is_oob ? 'off' : 'user'">{{ f.is_oob ? '超纲' : '一般' }}</span></td>
+                <td class="ctime">{{ f.game_id }}</td>
+                <td class="fb-comment">{{ f.comment || '—' }}</td>
+                <td class="ctime">{{ f.created_at }}</td>
+              </tr>
+              <tr v-if="!feedbacks.length">
+                <td colspan="6" class="empty">（暂无反馈{{ fbOobOnly ? '，试试取消「只看超纲」' : '' }}）</td>
               </tr>
             </tbody>
           </table>
@@ -451,6 +507,7 @@ onMounted(refreshAll)
 .ops { white-space: nowrap; }
 .ops .btn { margin-right: 4px; margin-bottom: 2px; }
 .empty { text-align: center; color: #a5adc0; padding: 28px 0 !important; }
+.fb-comment { max-width: 360px; word-break: break-all; color: #2c3550; }
 
 .badge { display: inline-block; font-size: 12px; padding: 2px 10px; border-radius: 999px; }
 .badge.admin { background: #ede9fe; color: #6d28d9; }

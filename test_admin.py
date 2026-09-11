@@ -158,6 +158,13 @@ r = admin.delete(f"/api/v1/admin/users/{mid}")
 check("重复删除 404", r.status_code == 404, f"got {r.status_code}")
 
 print("== 11. 全局模型配置 ==")
+# ⚠ 先备份当前模型配置（可能是真实生产配置），测试完恢复——绝不弄丢用户数据
+import sqlite3, pathlib
+_db_path = pathlib.Path(__file__).parent / "data" / "users.db"
+_conn = sqlite3.connect(_db_path)
+_saved_row = _conn.execute("SELECT value FROM app_config WHERE key='llm'").fetchone()
+_saved_llm = _saved_row[0] if _saved_row else None
+_conn.close()
 # 普通用户 403
 r = norm.get("/api/v1/admin/llm-config")
 check("普通用户读模型配置 403", r.status_code == 403, f"got {r.status_code}")
@@ -190,11 +197,18 @@ check("生成请求使用全局配置（连接被拒 → 502）", r.status_code 
 # stats 反映模型已配置
 r = admin.get("/api/v1/admin/stats")
 check("stats 显示模型已配置", r.json().get("llmConfigured") in (1, True), str(r.json())[:150])
-# 清除全局配置避免影响后续测试（直接清库）
-conn = sqlite3.connect(pathlib.Path(__file__).parent / "data" / "users.db")
-conn.execute("DELETE FROM app_config WHERE key='llm'")
-conn.commit()
-conn.close()
+# 恢复测试前的真实模型配置（测试写的假配置不残留）
+_conn = sqlite3.connect(_db_path)
+if _saved_llm is not None:
+    _conn.execute(
+        "INSERT INTO app_config (key, value, updated_at) VALUES ('llm', ?, datetime('now','localtime')) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (_saved_llm,),
+    )
+else:
+    _conn.execute("DELETE FROM app_config WHERE key='llm'")
+_conn.commit()
+_conn.close()
 
 print("== 12. 日志查看 ==")
 r = admin.get("/api/v1/admin/logs", params={"lines": 300})

@@ -77,6 +77,7 @@ export interface BatchRespSection {
   topic?: string
   passage?: string
   questions: any[]
+  missing_count?: number
 }
 
 export async function generateBatch(params: {

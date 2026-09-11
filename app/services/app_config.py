@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 _LLM_KEY = "llm"
 
-_EMPTY = {"baseUrl": "", "model": "", "timeout": 60, "hasKey": False, "api_key": ""}
+_EMPTY = {"baseUrl": "", "model": "", "timeout": 120, "hasKey": False, "api_key": ""}
 
 
 # ─── 全局 LLM 配置 ───
@@ -38,7 +38,7 @@ def get_llm(with_key: bool = False) -> dict:
     return {
         "baseUrl": d.get("baseUrl", ""),
         "model": d.get("model", ""),
-        "timeout": d.get("timeout", 60),
+        "timeout": d.get("timeout", 120),
         "hasKey": bool(key_enc),
         "api_key": decrypt_secret(key_enc) if with_key else "",
     }

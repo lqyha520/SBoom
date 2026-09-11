@@ -62,7 +62,7 @@ class GenerateRequest(BaseModel):
     keyword: str = Field(..., description="知识点关键词", min_length=1, max_length=100)
     game_type: GameType = Field(GameType.QUIZ, description="交互类型")
     difficulty: Difficulty = Field(Difficulty.MEDIUM, description="难度")
-    question_count: int = Field(5, ge=1, le=99, description="生成题目数（1-99）")
+    question_count: int = Field(5, ge=1, le=30, description="生成题目数（1-30，单次 LLM 调用过大题量质量难保证）")
     stream: bool = Field(False, description="是否流式返回")
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
@@ -79,7 +79,7 @@ class ValidateRequest(BaseModel):
 class BatchItem(BaseModel):
     """批量生成里的单个题型任务"""
     game_type: str  # 自定义题型名可能是任意字符串，不用枚举约束
-    question_count: int = Field(5, ge=1, le=99)
+    question_count: int = Field(5, ge=1, le=30)
 
 
 class BatchGenerateRequest(BaseModel):
@@ -133,6 +133,7 @@ class GameResult(BaseModel):
     questions: List[Question]
     total_score: int = 100
     pass_score: int = 60
+    missing_count: int = 0  # 质检拦截后补生成仍缺的题数（>0 时前端应提示重试）
 
 
 class BatchGenerateResponse(BaseModel):

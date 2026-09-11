@@ -87,6 +87,13 @@ function cancelLayout() {
 
 <template>
   <div class="result-view" v-if="paper">
+    <!-- 部分生成失败的告警（其余份正常展示） -->
+    <div v-if="store.generateWarn && !store.generating" class="card no-print" style="flex: none; padding: 10px 14px; border-color: var(--amber); color: var(--amber); font-size: 13px; margin-bottom: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+      <span>⚠️ {{ store.generateWarn }}</span>
+      <button v-if="store.failedCount" class="btn mini" :disabled="store.generating" @click="store.retryFailed()">
+        补齐失败的 {{ store.failedCount }} 份
+      </button>
+    </div>
     <!-- 工具栏 -->
     <div class="card no-print" style="flex: none;">
       <div class="result-toolbar" style="margin-bottom: 0;">

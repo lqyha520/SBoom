@@ -1,6 +1,7 @@
 """FastAPI 主入口"""
 
 import logging
+import logging.handlers
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -15,18 +16,20 @@ from app.routers.generate import router as generate_router
 from app.routers.me import router as me_router
 from app.services.llm_client import llm_client
 from app.services import user_store
-from app.config import get_settings
+from app.config import get_settings, APP_VERSION
 from app.db import init_db
 
 settings = get_settings()
 
 
-# ─── 日志 ───
+# ─── 日志（滚动：单文件 5MB，保留 3 份备份，无上限增长） ───
 _LOG_FILE = Path(__file__).resolve().parent.parent / "server.log"
+_log_file_handler = logging.handlers.RotatingFileHandler(
+    _LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.FileHandler(_LOG_FILE, encoding="utf-8"), logging.StreamHandler()],
+    handlers=[_log_file_handler, logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
 
@@ -54,7 +57,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Learning Coach API",
     description="AI+教育 课堂互动系统 —— 趣味题目/知识游戏生成服务（多用户 + 后台管理）",
-    version="0.3.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 

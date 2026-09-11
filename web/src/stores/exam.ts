@@ -186,7 +186,11 @@ export const useExamStore = defineStore('exam', {
       papers: [] as PaperData[],
       generating: false,
       generateError: '',
-      /** 生成进度文案（如：正在生成第 2/5 份…） */
+      /** 部分成功的告警（如：10 份中 2 份失败已跳过） */
+      generateWarn: '',
+      /** 上一批生成中失败被跳过的份数（>0 时结果页显示「补齐」按钮） */
+      failedCount: 0,
+      /** 生成进度文案（如：正在生成 2/5 份…） */
       generateProgress: '',
 
       /* 预览 */
@@ -389,9 +393,10 @@ export const useExamStore = defineStore('exam', {
         const items = [...byType.entries()].map(([game_type, question_count]) => ({ game_type, question_count }))
 
         const nPapers = Math.max(1, Math.min(20, this.paperCount))
-        const papers: PaperData[] = []
-        for (let k = 0; k < nPapers; k++) {
-          this.generateProgress = nPapers > 1 ? `正在生成第 ${k + 1}/${nPapers} 份…` : 'AI 出题中…'
+
+        // 单份生成：调用一次批量出题，组装一份独立试卷数据
+        let cardsFilled = false
+        const genOne = async (k: number): Promise<PaperData> => {
           const sections = await api.generateBatch({
             grade: this.grade,
             subject: this.subject,
@@ -399,49 +404,203 @@ export const useExamStore = defineStore('exam', {
             difficulty: this.difficulty,
             items,
           })
-          // 按题型回填到卡片（同题型多卡共用同一份）
-          for (const resp of sections) {
-            const data = { questions: resp.questions || [], passage: (resp as any).passage, topic: resp.topic }
-            ensureQids(data)
-            this.sections
-              .filter(s => s.type === resp.game_type)
-              .forEach(s => {
-                s.data = data
-                s.status = 'ready'
-                s.error = ''
-                s.count = (resp.questions || []).length || s.count
-              })
-          }
-          // 没覆盖到的题型标记失败
-          this.sections.forEach(s => {
-            if (!sections.some(r => r.game_type === s.type)) {
-              s.status = 'error'
-              s.error = '生成失败'
+          // 第一份完成的结果回填到搭建区卡片（并发下只回填一次，避免互相覆盖）
+          if (!cardsFilled) {
+            cardsFilled = true
+            for (const resp of sections) {
+              const data = { questions: resp.questions || [], passage: (resp as any).passage, topic: resp.topic }
+              ensureQids(data)
+              const miss = (resp as any).missing_count || 0
+              this.sections
+                .filter(s => s.type === resp.game_type)
+                .forEach(s => {
+                  s.data = data
+                  s.status = 'ready'
+                  s.error = ''
+                  s.count = (resp.questions || []).length || s.count
+                  s.warn = miss > 0 ? `有 ${miss} 道题未通过质量检查且补生成失败，建议重试该大题` : ''
+                })
             }
+            // 没覆盖到的题型标记失败
+            this.sections.forEach(s => {
+              if (!sections.some(r => r.game_type === s.type)) {
+                s.status = 'error'
+                s.error = '生成失败'
+              }
+            })
+          }
+          // 组装这一份试卷：按卡片逐个映射，保留每张卡的名称/布局，数据独立
+          const respByType = new Map<string, any>(sections.map(r => [r.game_type, r]))
+          const paperSections = this.sections.map(s => {
+            const r = respByType.get(s.type)
+            const data = r
+              ? { questions: r.questions || [], passage: (r as any).passage, topic: r.topic }
+              : { questions: [] }
+            ensureQids(data)
+            return { type: s.type, name: s.name, data, layout: { ...s.layout }, _sid: s.id }
           })
-          papers.push({
+          return {
             grade: this.grade,
             subject: this.subject,
             keyword: this.keyword,
             title: this.title,
             titleHtml: this.titleHtml || undefined,
             difficulty: this.difficulty,
-            sections: this.sections.map(s => ({
-              type: s.type,
-              name: s.name,
-              data: s.data || { questions: [] },
-              layout: { ...s.layout },
-              _sid: s.id,
-            })),
+            sections: paperSections,
             day: nPapers > 1 ? k + 1 : undefined,
             hiddenElements: [...this.hiddenElements],
-          } as PaperData)
+          } as PaperData
+        }
+
+        // 并发生成多份：最多 3 份同时出题（兼顾速度与模型服务的并发/限流承受能力）
+        const MAX_PARALLEL = 3
+        this.generateWarn = ''
+        this.failedCount = 0
+        this.generateProgress = nPapers > 1 ? `正在生成 0/${nPapers} 份…` : 'AI 出题中…'
+        const results: (PaperData | null)[] = new Array(nPapers).fill(null)
+        const failedIdx: number[] = []
+        let doneCount = 0
+        const pending = Array.from({ length: nPapers }, (_, i) => i)
+
+        // 单份失败不影响其他份：每份独立捕获错误，自动重试 1 次后再失败才放弃
+        const genOneWithRetry = async (k: number): Promise<PaperData> => {
+          try {
+            return await genOne(k)
+          } catch (firstErr) {
+            console.warn(`第 ${k + 1} 份生成失败，自动重试 1 次：`, firstErr)
+            return await genOne(k)
+          }
+        }
+
+        const workers = Array.from(
+          { length: Math.min(MAX_PARALLEL, nPapers) },
+          async () => {
+            while (pending.length) {
+              const k = pending.shift()!
+              try {
+                results[k] = await genOneWithRetry(k)
+              } catch (e) {
+                console.warn(`第 ${k + 1} 份重试后仍失败：`, e)
+                failedIdx.push(k + 1)
+              }
+              doneCount++
+              if (nPapers > 1) this.generateProgress = `正在生成 ${doneCount}/${nPapers} 份…`
+            }
+          },
+        )
+        await Promise.all(workers)
+
+        // 只保留成功的份，day 序号重排为连续的 1..n
+        const papers = results.filter((r): r is PaperData => r !== null)
+        papers.forEach((p, i) => { p.day = nPapers > 1 ? i + 1 : undefined })
+
+        if (!papers.length) {
+          // 一份都没成：走整体报错
+          const detail = failedIdx.length ? `（第 ${failedIdx.join('、')} 份，含自动重试）` : ''
+          throw new Error(`全部生成失败${detail}，请检查模型配置或稍后重试`)
         }
         this.papers = papers
         this.showAnswers = false
         this.view = 'result'
+        if (failedIdx.length) {
+          this.failedCount = failedIdx.length
+          this.generateWarn = `${papers.length}/${nPapers} 份生成成功；第 ${failedIdx.join('、')} 份失败（已自动重试仍失败，可能是模型服务超时），已跳过。可点「补齐失败的 ${failedIdx.length} 份」只补缺失的部分。`
+        }
       } catch (e: any) {
         this.generateError = e.message || '生成失败，请重试'
+      } finally {
+        this.generating = false
+        this.generateProgress = ''
+      }
+    },
+
+    /**
+     * 补齐上一批生成失败的份数：只补 failedCount 缺口，成功后追加并重排编号。
+     * 不会动已经生成好的试卷。
+     */
+    async retryFailed() {
+      if (this.generating || !this.failedCount) return
+      this.generating = true
+      this.generateError = ''
+      this.generateWarn = ''
+      try {
+        // 与 generate() 相同的题型合并逻辑
+        const byType = new Map<string, number>()
+        this.sections.forEach(s => {
+          byType.set(s.type, Math.max(byType.get(s.type) || 0, s.count))
+        })
+        const items = [...byType.entries()].map(([game_type, question_count]) => ({ game_type, question_count }))
+
+        const need = this.failedCount
+        this.generateProgress = `正在补齐 0/${need} 份…`
+
+        const genPaper = async (): Promise<PaperData> => {
+          const sections = await api.generateBatch({
+            grade: this.grade,
+            subject: this.subject,
+            keyword: this.keyword,
+            difficulty: this.difficulty,
+            items,
+          })
+          const respByType = new Map<string, any>(sections.map(r => [r.game_type, r]))
+          const paperSections = this.sections.map(s => {
+            const r = respByType.get(s.type)
+            const data = r
+              ? { questions: r.questions || [], passage: (r as any).passage, topic: r.topic }
+              : { questions: [] }
+            ensureQids(data)
+            return { type: s.type, name: s.name, data, layout: { ...s.layout }, _sid: s.id }
+          })
+          return {
+            grade: this.grade,
+            subject: this.subject,
+            keyword: this.keyword,
+            title: this.title,
+            titleHtml: this.titleHtml || undefined,
+            difficulty: this.difficulty,
+            sections: paperSections,
+            hiddenElements: [...this.hiddenElements],
+          } as PaperData
+        }
+
+        const MAX_PARALLEL = 3
+        const results: (PaperData | null)[] = new Array(need).fill(null)
+        let doneCount = 0
+        const pending = Array.from({ length: need }, (_, i) => i)
+        const workers = Array.from(
+          { length: Math.min(MAX_PARALLEL, need) },
+          async () => {
+            while (pending.length) {
+              const k = pending.shift()!
+              try {
+                results[k] = await genPaper()
+              } catch {
+                try {
+                  results[k] = await genPaper()  // 自动重试 1 次
+                } catch {
+                  /* 两次都失败，留空待下次补齐 */
+                }
+              }
+              doneCount++
+              this.generateProgress = `正在补齐 ${doneCount}/${need} 份…`
+            }
+          },
+        )
+        await Promise.all(workers)
+
+        const ok = results.filter((r): r is PaperData => r !== null)
+        if (ok.length) {
+          this.papers.push(...ok)
+          // 全部重排为连续编号 1..n（day 用于「第X天」标题与导出文件名）
+          this.papers.forEach((p, i) => { p.day = i + 1 })
+        }
+        const stillMissing = need - ok.length
+        this.failedCount = stillMissing
+        if (stillMissing) {
+          this.generateWarn = `补齐后共 ${this.papers.length} 份；仍有 ${stillMissing} 份失败（已自动重试），可再次点「补齐」继续尝试。`
+        }
+      } catch (e: any) {
+        this.generateError = e.message || '补齐失败，请重试'
       } finally {
         this.generating = false
         this.generateProgress = ''

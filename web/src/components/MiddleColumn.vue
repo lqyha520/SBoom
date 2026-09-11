@@ -181,6 +181,7 @@ const readyHint = computed(() => {
           <span class="sec-preview" style="flex-basis: 100%; width: auto; font-size: 11px; margin-top: 2px;">
             <span v-if="sec.status === 'loading'"><span class="spin"></span></span>
             <span v-else-if="sec.status === 'error'" class="err-txt">失败</span>
+            <span v-else-if="sec.warn" style="color: var(--amber);">{{ sec.warn }}</span>
             <template v-else>{{ previewOf(sec) }}</template>
           </span>
         </div>

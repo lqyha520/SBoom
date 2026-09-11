@@ -1,9 +1,8 @@
 """用户数据访问层 —— 账号 / 每用户 LLM 配置 / 每用户模板 / 管理员操作"""
 
 import json
-import sqlite3
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from app.db import db
 from app.security import hash_password, verify_password
@@ -21,14 +20,14 @@ class CurrentUser:
 
 def create_user(username: str, password: str, role: str = "user") -> CurrentUser:
     with db() as conn:
-        cur = conn.execute(
-            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+        row = conn.execute(
+            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?) RETURNING id",
             (username, hash_password(password), role),
-        )
-        return CurrentUser(id=cur.lastrowid, username=username, role=role)
+        ).fetchone()
+        return CurrentUser(id=row[0], username=username, role=role)
 
 
-def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
+def get_user_by_username(username: str) -> Optional[Any]:
     with db() as conn:
         return conn.execute(
             "SELECT * FROM users WHERE username = ?", (username,)
@@ -48,7 +47,7 @@ def get_user_by_id(user_id: int) -> Optional[CurrentUser]:
     )
 
 
-def authenticate(username: str, password: str) -> Optional[sqlite3.Row]:
+def authenticate(username: str, password: str) -> Optional[Any]:
     """校验用户名密码，返回完整用户行（含 role/is_active，由调用方决定如何处理）；失败返回 None。"""
     row = get_user_by_username(username)
     if not row or not verify_password(password, row["password_hash"]):

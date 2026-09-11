@@ -2,6 +2,8 @@ from pathlib import Path
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
+APP_VERSION = "0.5.0"  # 唯一版本号来源（main.py / admin stats 都引用这里）
+
 # .env 路径固定为 config.py 所在目录的上级（即 backend/.env）
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
@@ -24,6 +26,15 @@ class Settings(BaseSettings):
     # 服务
     host: str = "127.0.0.1"
     port: int = 8000
+    debug: bool = False  # 仅开发时设 true：启用热重载。生产必须为 false
+    workers: int = 1  # worker 进程数；>1 时建议配合 PostgreSQL 使用
+
+    # 数据库：空 = SQLite（data/users.db）；填 PostgreSQL 连接串则切到 PG，例如
+    #   postgresql://learncoach:learncoach@127.0.0.1:5432/learncoach
+    database_url: str = ""
+
+    # 注册开关
+    registration_enabled: bool = True  # 关闭后 /auth/register 返回 403
 
     # 多用户
     secret_key: str = ""  # 会话签名/加密密钥；空则自动生成并持久化到 data/secret_key.txt

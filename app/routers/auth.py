@@ -2,6 +2,8 @@
 
 角色规则：数据库中尚无管理员时，新注册的第一个用户自动成为管理员；
 也可以用 .env 的 ADMIN_USERNAME / ADMIN_PASSWORD 在启动时种子一个管理员。
+
+注：REGISTRATION_ENABLED=false 可关闭注册（管理员可在后台开用户）。
 """
 
 import logging
@@ -10,6 +12,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
+from app.config import get_settings
 from app.deps import SESSION_COOKIE, require_user
 from app.security import create_token
 from app.services import user_store
@@ -17,6 +20,7 @@ from app.services.user_store import CurrentUser
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/auth", tags=["认证"])
+settings = get_settings()
 
 _USERNAME_RE = re.compile(r"^[\w\u4e00-\u9fa5-]{2,32}$")
 
@@ -41,6 +45,8 @@ def _set_session_cookie(response: Response, user_id: int) -> str:
 
 @router.post("/register", summary="注册新用户")
 async def register(req: Credentials, response: Response):
+    if not settings.registration_enabled:
+        raise HTTPException(status_code=403, detail={"error": "注册已关闭，请联系管理员开通账号"})
     if not _USERNAME_RE.match(req.username):
         raise HTTPException(
             status_code=400,

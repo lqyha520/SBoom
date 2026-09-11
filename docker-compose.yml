@@ -1,0 +1,36 @@
+# Learning Coach —— PostgreSQL 数据库容器
+#
+# 使用方法（在你装了 Docker 的 WSL 终端里执行）：
+#   cd /mnt/f/开源项目/learn-coach
+#   docker compose up -d          # 启动数据库
+#   docker compose ps             # 查看状态
+#   docker compose logs -f db     # 看日志
+#   docker compose down           # 停止（数据保留在卷里）
+#   docker compose down -v        # 停止并清空数据（慎用）
+#
+# 启动后 Windows 侧通过 localhost:5432 访问（WSL2 端口自动转发），
+# 然后在 .env 里设置：
+#   DATABASE_URL=postgresql://learncoach:learncoach@127.0.0.1:5432/learncoach
+# 再运行 python migrate_to_pg.py 完成数据迁移，重启服务即切换完成。
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: learncoach-db
+    environment:
+      POSTGRES_USER: learncoach
+      POSTGRES_PASSWORD: learncoach
+      POSTGRES_DB: learncoach
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U learncoach -d learncoach"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

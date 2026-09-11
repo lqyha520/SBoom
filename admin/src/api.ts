@@ -17,7 +17,19 @@ export interface AdminStats {
   admins: number
   templates: number
   llmConfigured: number
+  feedbacks: number
+  feedbacksOob: number
   server: { model: string; encryption: string; version: string }
+}
+
+export interface AdminFeedback {
+  id: number
+  user_id: number | null
+  username: string
+  game_id: string
+  is_oob: number
+  comment: string | null
+  created_at: string
 }
 
 /** 会话失效（401）——由 App 捕获后回到登录页 */
@@ -89,6 +101,14 @@ export async function adminUpdateUser(
 
 export async function adminDeleteUser(id: number): Promise<void> {
   await request(`/api/v1/admin/users/${id}`, { method: 'DELETE' })
+}
+
+/* ── 用户反馈 ── */
+export async function fetchAdminFeedbacks(limit = 100, oobOnly = false): Promise<AdminFeedback[]> {
+  const d = await request<{ feedbacks: AdminFeedback[] }>(
+    `/api/v1/admin/feedbacks?limit=${limit}${oobOnly ? '&oob_only=true' : ''}`,
+  )
+  return d.feedbacks || []
 }
 
 /* ── 查看用户模板 ── */
