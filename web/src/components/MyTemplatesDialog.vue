@@ -10,6 +10,11 @@ const store = useExamStore()
 function use(name: string) {
   if (store.loadMyTemplate(name)) emit('close')
 }
+
+/** 删除需确认（不可恢复，且会同步删除服务端副本） */
+function remove(name: string) {
+  if (confirm(`确定删除模板「${name}」吗？此操作不可恢复。`)) store.deleteMyTemplate(name)
+}
 </script>
 
 <template>
@@ -35,7 +40,7 @@ function use(name: string) {
               </div>
             </div>
             <button class="btn mini primary" @click="use(t.name)">使用</button>
-            <button class="btn mini danger" @click="store.deleteMyTemplate(t.name)">删除</button>
+            <button class="btn mini danger" @click="remove(t.name)">删除</button>
           </div>
         </div>
       </div>

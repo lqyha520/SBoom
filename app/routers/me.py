@@ -7,7 +7,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.deps import require_user
 from app.services import user_store
@@ -24,7 +24,17 @@ class TemplateIn(BaseModel):
 
 
 class BulkTemplatesIn(BaseModel):
-    templates: list[dict]
+    templates: list[dict] = Field(..., max_length=50)  # 单次批量导入上限
+
+
+# 单条模板序列化后体积上限（防 MB 级 payload 膨胀 DB）
+_TEMPLATE_MAX_BYTES = 512 * 1024
+
+
+def _check_template_size(template: dict) -> None:
+    import json as _json
+    if len(_json.dumps(template, ensure_ascii=False).encode("utf-8")) > _TEMPLATE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail={"error": "模板内容过大（上限 512KB）"})
 
 
 @router.get("/templates", summary="列出当前用户的模板")
@@ -37,6 +47,7 @@ async def upsert_template(req: TemplateIn, user: CurrentUser = Depends(require_u
     name = (req.template or {}).get("name")
     if not name or not isinstance(name, str):
         raise HTTPException(status_code=400, detail={"error": "模板缺少 name 字段"})
+    _check_template_size(req.template)
     user_store.upsert_template(user.id, name, req.template)
     return {"status": "ok"}
 
@@ -51,5 +62,8 @@ async def delete_template(name: str, user: CurrentUser = Depends(require_user)):
 
 @router.post("/templates/bulk", summary="批量导入模板（本地数据迁移到服务端）")
 async def bulk_upload(req: BulkTemplatesIn, user: CurrentUser = Depends(require_user)):
-    n = user_store.bulk_upsert_templates(user.id, req.templates or [])
+    templates = [t for t in (req.templates or []) if isinstance(t, dict) and t.get("name")]
+    for t in templates:
+        _check_template_size(t)
+    n = user_store.bulk_upsert_templates(user.id, templates)
     return {"status": "ok", "imported": n}

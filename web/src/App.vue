@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { defineAsyncComponent, onMounted, ref } from 'vue'
 import { useExamStore } from './stores/exam'
 import { useAuthStore } from './stores/auth'
 import LeftPanel from './components/LeftPanel.vue'
@@ -8,7 +8,9 @@ import PreviewPane from './components/PreviewPane.vue'
 import StepResult from './components/StepResult.vue'
 import AdvancedDrawer from './components/AdvancedDrawer.vue'
 import MyTemplatesDialog from './components/MyTemplatesDialog.vue'
-import LoginView from './components/LoginView.vue'
+
+// 登录页仅在未登录时才需要，异步加载不进主包
+const LoginView = defineAsyncComponent(() => import('./components/LoginView.vue'))
 
 const store = useExamStore()
 const auth = useAuthStore()

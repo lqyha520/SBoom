@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { PaperData, PaperSection, PaperStyle, PaperTemplate } from '../types'
+import type { PaperData, PaperSection, PaperStyle, PaperTemplate, Question } from '../types'
 import { DIFF_NAME } from '../constants'
+import { sanitizeRich } from '../sanitize'
 import SectionBlock from './SectionBlock.vue'
 
 /** 页内大题分段（与 PaperView 的 PageChunk 对应） */
@@ -23,7 +24,7 @@ const props = defineProps<{
   /** 多份时标题加（第X天） */
   addDay?: boolean
   /** 传入则显示每大题分值 */
-  scores?: Map<any, number>
+  scores?: Map<Question, number>
 }>()
 
 const blocks = computed(() =>
@@ -53,33 +54,32 @@ const subParts = computed(() => {
 function onTitleBlur(e: FocusEvent) {
   if (!props.editable) return
   const el = e.target as HTMLElement
-  // innerHTML 会包含 ✕ 删除按钮和（第X天）后缀，克隆后剔除再存
+  // innerHTML 会包含 ✕ 删除按钮和（第X天）后缀，克隆后剔除再存；存前净化防 XSS
   const clone = el.cloneNode(true) as HTMLElement
   clone.querySelectorAll('.el-del').forEach(n => n.remove())
   props.paper.title = clone.innerText.replace(/（第\d+天）\s*$/, '').trim()
-  ;(props.paper as any).titleHtml = clone.innerHTML.replace(/（第\d+天）\s*(<\/\w+>)?\s*$/, '$1')
-  emit('title-edited', props.paper.title, (props.paper as any).titleHtml)
+  props.paper.titleHtml = sanitizeRich(clone.innerHTML.replace(/（第\d+天）\s*(<\/\w+>)?\s*$/, '$1'))
+  emit('title-edited', props.paper.title, props.paper.titleHtml)
 }
 function onFooterBlur(e: FocusEvent) {
   if (!props.editable) return
-  ;(props.paper as any).footerOverride = (e.target as HTMLElement).innerText.trim()
+  props.paper.footerOverride = (e.target as HTMLElement).innerText.trim()
 }
 
 /* ── 卷头/卷尾元素单独删除（排版能力，随 paper 数据持久化） ── */
 const emit = defineEmits<{ (e: 'toggle-element', key: string): void; (e: 'title-edited', title: string, html: string): void; (e: 'title-offset', v: number): void }>()
-const hiddenList = computed<string[]>(() => (props.paper as any).hiddenElements || [])
+const hiddenList = computed<string[]>(() => props.paper.hiddenElements || [])
 function isHidden(key: string): boolean {
   return hiddenList.value.includes(key)
 }
 function toggleHidden(key: string) {
   // 结果页：paper 是 store 里的对象，直接改（响应式生效）
   // 搭建预览：paper 是 computed 快照，通过 emit 让父级回写 store
-  const p = props.paper as any
-  const list: string[] = [...(p.hiddenElements || [])]
+  const list: string[] = [...(props.paper.hiddenElements || [])]
   const i = list.indexOf(key)
   if (i >= 0) list.splice(i, 1)
   else list.push(key)
-  p.hiddenElements = list
+  props.paper.hiddenElements = list
   emit('toggle-element', key)
 }
 
@@ -133,6 +133,9 @@ function onTitleDragStart(e: MouseEvent) {
 const headStyle = computed(() => ({
   marginTop: `${props.style.titleOffsetY ?? 0}mm`,
 }))
+
+/** 标题富文本渲染前净化（模板可能来自服务端/历史数据，防存储型 XSS） */
+const titleHtmlSafe = computed(() => sanitizeRich(props.paper.titleHtml))
 </script>
 
 <template>
@@ -169,7 +172,7 @@ const headStyle = computed(() => ({
           >
             <span v-if="editable" class="el-del" title="删除标题" @click.stop="toggleHidden('title')">✕</span>
             <!-- eslint-disable-next-line vue/no-v-html -->
-            <span v-if="(paper as any).titleHtml" v-html="(paper as any).titleHtml"></span>
+            <span v-if="paper.titleHtml" v-html="titleHtmlSafe"></span>
             <template v-else>{{ paperTitle }}</template>
             <template v-if="paper.day && addDay">（第{{ paper.day }}天）</template>
           </h1>
@@ -217,7 +220,7 @@ const headStyle = computed(() => ({
         </div>
         <div v-if="!isHidden('footer')" class="footer-note can-edit" :contenteditable="editable" spellcheck="false" @blur="onFooterBlur" style="position: relative;">
           <span v-if="editable" class="el-del" title="删除页脚" @click="toggleHidden('footer')">✕</span>
-          {{ (paper as any).footerOverride ?? template.footer }}
+          {{ paper.footerOverride ?? template.footer }}
         </div>
       </div>
     </div>

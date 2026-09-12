@@ -64,16 +64,15 @@ class GenerateRequest(BaseModel):
     difficulty: Difficulty = Field(Difficulty.MEDIUM, description="难度")
     question_count: int = Field(5, ge=1, le=30, description="生成题目数（1-30，单次 LLM 调用过大题量质量难保证）")
     stream: bool = Field(False, description="是否流式返回")
-    llm_base_url: Optional[str] = None
-    llm_model: Optional[str] = None
-    llm_api_key: Optional[str] = None
+    # 注：不提供客户端可控的 llm_base_url/llm_model/llm_api_key——
+    # 模型服务统一由管理员在后台配置，避免 SSRF（服务器被指任意地址）与越权绕过。
 
 
 class ValidateRequest(BaseModel):
     """超纲校验请求"""
     grade: Grade
     subject: Subject
-    question_content: str = Field(..., description="待校验的题目内容")
+    question_content: str = Field(..., max_length=5000, description="待校验的题目内容")
 
 
 class BatchItem(BaseModel):
@@ -89,16 +88,13 @@ class BatchGenerateRequest(BaseModel):
     keyword: str = Field(..., min_length=1, max_length=100)
     difficulty: Difficulty = Field(Difficulty.MEDIUM)
     items: List[BatchItem] = Field(..., min_items=1, max_items=10)
-    llm_base_url: Optional[str] = None
-    llm_model: Optional[str] = None
-    llm_api_key: Optional[str] = None
 
 
 class FeedbackRequest(BaseModel):
     """用户反馈请求"""
-    game_id: str = Field(..., description="游戏/题目 ID")
+    game_id: str = Field(..., max_length=200, description="游戏/题目 ID")
     is_oob: bool = Field(False, description="是否超纲")
-    comment: Optional[str] = Field(None, description="反馈备注")
+    comment: Optional[str] = Field(None, max_length=2000, description="反馈备注")
 
 
 # ─── 响应模型 ───

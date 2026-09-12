@@ -17,8 +17,11 @@ const { zoom, manual, setManual } = useFitZoom(stackEl)
 function onTitleEdited(title: string, html: string) {
   store.title = title
   store.titleHtml = html
-  // paper 是 store.papers[0] 的引用，titleHtml 已在 PaperPage 内写入；标题文字同步各份
-  if (paper.value) paper.value.title = title
+  // 标题同步到每一份：批量导出 ZIP 的文件名/卷头读的是各份 paper.title
+  store.papers.forEach(p => {
+    p.title = title
+    ;(p as any).titleHtml = html
+  })
 }
 
 const paper = computed(() => store.papers[0])
@@ -45,18 +48,18 @@ const busy = (label: string) => exporting.value === label
 
 function exportPdf(mode: 'student' | 'withAnswers' | 'answersOnly') {
   if (!paper.value || !stackEl.value) return
-  run('pdf', () => exporter.exportPDF(paper.value!, store.template, store.style, stackEl.value!, mode))
+  run('pdf', () => exporter.exportPDF(paper.value!, store.template, store.style, mode))
 }
 
 function exportPng() {
   if (!paper.value || !stackEl.value) return
-  run('png', () => exporter.exportPNG(paper.value!, store.template, store.style, stackEl.value!))
+  run('png', () => exporter.exportPNG(paper.value!, store.template, store.style))
 }
 
 function exportBatch(mergeOnly: boolean) {
   if (!paper.value || !stackEl.value) return
   run(mergeOnly ? 'merge' : 'zip', () =>
-    exporter.exportBatch(store.papers, store.template, store.style, stackEl.value!, {
+    exporter.exportBatch(store.papers, store.template, store.style, {
       addDay: store.addDayLabel,
       mergeOnly,
     }, msg => { exporting.value = msg }),
@@ -165,6 +168,7 @@ function cancelLayout() {
         :add-day="store.addDayLabel"
         :zoom="zoom"
         @title-edited="onTitleEdited"
+        @toggle-element="store.toggleHiddenElement($event)"
         @title-offset="(v: number) => store.setStyle({ titleOffsetY: v })"
       />
     </div>

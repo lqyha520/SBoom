@@ -35,14 +35,38 @@ export interface AdminFeedback {
 /** 会话失效（401）——由 App 捕获后回到登录页 */
 export class AuthError extends Error {}
 
+/** 401 广播事件：任何接口的会话失效都会通知外壳（App.vue 监听并回登录页），
+ *  避免管理员停留在 Dashboard 里逐个操作报错直到手动刷新 */
+export const AUTH_EXPIRED_EVENT = 'lc-admin:auth-expired'
+
+/** 默认超时：后台接口均为轻量操作，30s 足够（test-llm 除外，可能要等首 token） */
+const DEFAULT_TIMEOUT_MS = 30_000
+const TEST_LLM_TIMEOUT_MS = 120_000
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(url, init)
+  let r: Response
+  try {
+    r = await fetch(url, {
+      ...init,
+      signal: AbortSignal.timeout(url.includes('test-llm') ? TEST_LLM_TIMEOUT_MS : DEFAULT_TIMEOUT_MS),
+    })
+  } catch (e: any) {
+    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') throw new Error('请求超时，请稍后重试')
+    throw new Error('网络异常，请检查网络连接或后端服务状态')
+  }
   if (!r.ok) {
-    if (r.status === 401) throw new AuthError('登录已过期')
+    if (r.status === 401) {
+      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT))
+      throw new AuthError('登录已过期')
+    }
     if (r.status === 403) throw new AuthError('没有管理员权限')
     const e = await r.json().catch(() => ({} as any))
-    throw new Error(e?.detail?.error || e?.detail?.detail || `HTTP ${r.status}`)
+    // FastAPI 的 detail 可能是 {error, detail} 对象，也可能是纯字符串
+    const d = e?.detail
+    const base = typeof d === 'string' ? d : (d?.error || d?.detail || `HTTP ${r.status}`)
+    throw new Error(base)
   }
+  if (r.status === 204) return undefined as T
   return r.json()
 }
 
@@ -156,6 +180,11 @@ export async function saveLlmConfig(cfg: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(cfg),
   })
+}
+
+/** 清除全局模型配置（含已存密钥）：密钥疑似泄露/换服务商时使用 */
+export async function clearLlmConfig(): Promise<{ message: string }> {
+  return request('/api/v1/admin/llm-config', { method: 'DELETE' })
 }
 
 export async function testLlm(cfg?: {

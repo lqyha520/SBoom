@@ -42,6 +42,8 @@ interface PageChunk { sec: number; qFrom: number; qTo: number; first: boolean }
 const pages = ref<PageChunk[][]>([])
 /** 强制重挂载测量纸 */
 const measureTick = ref(0)
+/** 分页是否已完成至少一次（导出等待用；声明在使用前，避免可读性陷阱） */
+const measured = ref(false)
 
 const kidOn = computed(() => {
   if (props.style.kidFont === 'on') return true
@@ -56,18 +58,33 @@ const scores = computed(() => computeScores(props.paper.sections))
 const allChunks = computed(() => props.paper.sections.map((_, i) => ({ sec: i, qFrom: 0, qTo: Infinity, first: true })))
 
 /* ── 分页测量 ── */
+/* titleOffsetY 只影响卷头 margin、不改变任何块的高度，不参与测量键——
+   否则拖拽标题时每个 mousemove 都会触发全卷 JSON 序列化 + 重分页（卡顿主源） */
+const styleForMeasure = computed(() => {
+  const { titleOffsetY: _off, ...rest } = props.style as any
+  return rest
+})
 const measureKey = computed(() =>
   JSON.stringify([
     props.paper.sections.map(s => [s.type, (s.data.questions || []).map(q => [q._qid, q.stem, q.options?.length]), s.layout]),
     props.paper.title,
-    (props.paper as any).footerOverride,
+    props.paper.footerOverride,
     props.showAnswers,
     props.template,
-    props.style,
+    styleForMeasure.value,
     kidOn.value,
     measureTick.value,
   ]),
 )
+
+/* 输入类变化（标题逐字输入、字号滑条拖动）防抖后再重分页，
+   避免每个按键都做一次全卷测量；挂载时首次分页仍然立即执行 */
+let _pagTimer: ReturnType<typeof setTimeout> | undefined
+watch(measureKey, () => {
+  clearTimeout(_pagTimer)
+  _pagTimer = setTimeout(() => paginate(), 150)
+})
+onMounted(() => paginate())
 
 async function paginate() {
   await nextTick()
@@ -180,24 +197,20 @@ async function paginate() {
   }
   pages.value = out.length ? out : [[{ sec: 0, qFrom: 0, qTo: 0, first: true }]]
   measured.value = true
+  // 分页会整建 DOM：表格列宽/行高手柄需要随分页结果重新注入（否则丢失）
+  setupTableResize()
 }
 
-watch(measureKey, () => paginate(), { immediate: false })
-onMounted(() => paginate())
 // 纸张宽度随字体加载可能变化，稍后复测一次
 onMounted(() => setTimeout(() => { measureTick.value++ }, 800))
 
-/* ── 表格缩放：editable 即启用（不必进排版模式） ── */
-let tableResizePapers: Element[] = []
+/* ── 表格缩放：editable 即启用（不必进排版模式）；分页重建 DOM 后由 paginate 末尾重注入 ── */
 async function setupTableResize() {
   await nextTick()
   await new Promise(r => requestAnimationFrame(() => r(null)))
   const stack = stackEl.value
   if (!stack) return
-  stack.querySelectorAll('.paper').forEach(paper => {
-    tableResizePapers.push(paper)
-    enableTableResize(paper)
-  })
+  stack.querySelectorAll('.paper').forEach(paper => enableTableResize(paper))
 }
 watch(
   () => [props.editable, props.paper.sections.map((s: any) => s.layout?.tableBorder).join(',')] as const,
@@ -284,9 +297,13 @@ function enterLayout() {
 function teardownLayout() {
   sortables.forEach(s => s.destroy())
   sortables = []
+  // 还原 free-move 注入的监听与内联样式（题目回到正常文档流）
+  freeMoveCleanups.forEach(fn => fn())
+  freeMoveCleanups = []
   const stack = stackEl.value
   if (!stack) return
-  stack.querySelectorAll('.q-tools, .sec-tools, .cell-resizer, .col-resizer, .row-resizer').forEach(el => el.remove())
+  // 注意 .sort-handle 也要清（enterLayout 注入的拖拽手柄，漏掉会残留 ⠿ 图标）
+  stack.querySelectorAll('.q-tools, .sec-tools, .sort-handle, .cell-resizer, .col-resizer, .row-resizer').forEach(el => el.remove())
 }
 
 /** 排版模式完成：DOM 顺序/删除回写数据，返回新 sections（供调用方同步外部状态） */
@@ -318,18 +335,20 @@ function applyLayout(): PaperSection[] | null {
   return newSections
 }
 
-/* ── 题目自由移动（拖拽空白处） ── */
+/* ── 题目自由移动（拖拽空白处）──
+   注册的监听与内联样式都记录到 freeMoveCleanups，退出排版模式时统一还原，
+   否则残留 mousedown 监听会让退出后的题目仍可被拖走 */
+let freeMoveCleanups: Array<() => void> = []
 function enableFreeMove(qEl: HTMLElement) {
   qEl.style.position = 'relative'
   qEl.style.cursor = 'grab'
-  let sx = 0, sy = 0, ox = 0, oy = 0, dragging = false
-  qEl.addEventListener('mousedown', (e: MouseEvent) => {
+  const onDown = (e: MouseEvent) => {
     const t = e.target as HTMLElement
     if (t.closest('.q-tools') || t.closest('.cell-resizer') || t.closest('[contenteditable="true"]') || t.closest('.col-resizer') || t.closest('.row-resizer') || t.closest('.sort-handle')) return
     e.preventDefault()
-    dragging = true
-    sx = e.clientX; sy = e.clientY
-    ox = qEl.offsetLeft; oy = qEl.offsetTop
+    const sx = e.clientX, sy = e.clientY
+    const ox = qEl.offsetLeft, oy = qEl.offsetTop
+    let dragging = true
     qEl.style.cursor = 'grabbing'
     const onMove = (ev: MouseEvent) => {
       if (!dragging) return
@@ -344,6 +363,14 @@ function enableFreeMove(qEl: HTMLElement) {
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
+  }
+  qEl.addEventListener('mousedown', onDown)
+  freeMoveCleanups.push(() => {
+    qEl.removeEventListener('mousedown', onDown)
+    qEl.style.position = ''
+    qEl.style.cursor = ''
+    qEl.style.left = ''
+    qEl.style.top = ''
   })
 }
 
@@ -460,19 +487,7 @@ onBeforeUnmount(() => teardownLayout())
 defineExpose({
   applyLayout,
   repaginate: () => { measureTick.value++ },
-  /** 等分页测量完成（导出前调用） */
-  ready: () => new Promise<void>(resolve => {
-    const check = () => {
-      if (pages.value.length && pages.value[0]?.length !== undefined && measured.value) resolve()
-      else setTimeout(check, 50)
-    }
-    // paginate 完成会置 measured=true
-    setTimeout(check, 50)
-  }),
 })
-
-/** 分页是否已完成至少一次（导出等待用） */
-const measured = ref(false)
 
 /** stack 实际高度（缩放占位补偿用） */
 const stackH = ref(0)
@@ -480,7 +495,8 @@ async function measureStackH() {
   await nextTick()
   if (stackEl.value) stackH.value = stackEl.value.offsetHeight
 }
-watch(() => pages.value, () => measureStackH(), { deep: true })
+// pages 是整体替换，无需 deep 监听
+watch(() => pages.value, () => measureStackH())
 onMounted(() => measureStackH())
 </script>
 
@@ -491,7 +507,8 @@ onMounted(() => measureStackH())
     class="paper-scaler-wrap"
     :style="{ width: `210mm`, margin: '0 auto', height: stackH > 0 ? `${Math.round(stackH * (zoom ?? 1))}px` : undefined }"
   >
-    <div :style="{ transform: `scale(${zoom ?? 1})`, transformOrigin: 'top center' }">
+    <!-- pv-zoom 类供 @media print 强制重置缩放：zoom<100% 时打印出来的应是原尺寸而非缩小版 -->
+    <div class="pv-zoom" :style="{ transform: `scale(${zoom ?? 1})`, transformOrigin: 'top center' }">
       <div ref="stackEl" class="paper-stack">
       <PaperPage
         v-for="(pg, i) in pages"

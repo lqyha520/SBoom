@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import * as api from './api'
 import LoginPage from './components/LoginPage.vue'
 import Dashboard from './components/Dashboard.vue'
@@ -9,7 +9,13 @@ const ready = ref(false)
 const forbidden = ref(false) // 已登录但不是管理员
 const bootError = ref('')
 
+/** 任何接口返回 401（会话过期/被禁用/改密吊销）→ 立即回登录页 */
+function onAuthExpired() {
+  user.value = null
+}
+
 onMounted(async () => {
+  window.addEventListener(api.AUTH_EXPIRED_EVENT, onAuthExpired)
   try {
     const me = await api.fetchMe()
     if (me) {
@@ -21,6 +27,10 @@ onMounted(async () => {
   } finally {
     ready.value = true
   }
+})
+
+onUnmounted(() => {
+  window.removeEventListener(api.AUTH_EXPIRED_EVENT, onAuthExpired)
 })
 
 function onLogin(u: api.UserInfo) {

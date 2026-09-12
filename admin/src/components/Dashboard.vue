@@ -18,7 +18,7 @@ const flashTimer = ref(0)
 const llm = ref({ baseUrl: '', model: '', apiKey: '', timeout: 60 })
 const llmHasKey = ref(false)
 const llmMsg = ref({ text: '', ok: true })
-const llmBusy = ref<'save' | 'test' | ''>('')
+const llmBusy = ref<'save' | 'test' | 'clear' | ''>('')
 
 const newUser = ref({ username: '', password: '', role: 'user' })
 const creating = ref(false)
@@ -106,6 +106,24 @@ async function testLlmConn() {
     llmMsg.value = { text: '连接成功！模型回复：' + d.reply, ok: true }
   } catch (e: any) {
     llmMsg.value = { text: '连接失败：' + (e?.message || e), ok: false }
+  } finally {
+    llmBusy.value = ''
+  }
+}
+
+/** 清除全局模型配置（含密钥）：换服务商/密钥疑似泄露时使用 */
+async function clearLlm() {
+  if (llmBusy.value) return
+  if (!confirm('确定清除全局模型配置吗？已保存的密钥将被删除，全体用户将无法生成题目，需要重新配置。')) return
+  llmBusy.value = 'clear'
+  llmMsg.value = { text: '', ok: true }
+  try {
+    await api.clearLlmConfig()
+    llmHasKey.value = false
+    llmMsg.value = { text: '已清除模型配置', ok: true }
+    await loadStats()
+  } catch (e: any) {
+    llmMsg.value = { text: '清除失败：' + (e?.message || e), ok: false }
   } finally {
     llmBusy.value = ''
   }
@@ -298,6 +316,9 @@ onMounted(refreshAll)
             </button>
             <button class="btn primary" :disabled="!!llmBusy" @click="saveLlm">
               {{ llmBusy === 'save' ? '保存中…' : '💾 保存并全局生效' }}
+            </button>
+            <button v-if="llmHasKey || llm.baseUrl || llm.model" class="btn danger" :disabled="!!llmBusy" @click="clearLlm">
+              {{ llmBusy === 'clear' ? '清除中…' : '🗑 清除配置' }}
             </button>
           </div>
         </div>

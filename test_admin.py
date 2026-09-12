@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """后台管理系统全链路验证：角色/权限/用户管理/缓存/日志"""
+import os
+
 import httpx
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.environ.get("LC_TEST_BASE", "http://127.0.0.1:8000")
 passed, failed = 0, 0
 
 
@@ -158,57 +160,90 @@ r = admin.delete(f"/api/v1/admin/users/{mid}")
 check("重复删除 404", r.status_code == 404, f"got {r.status_code}")
 
 print("== 11. 全局模型配置 ==")
-# ⚠ 先备份当前模型配置（可能是真实生产配置），测试完恢复——绝不弄丢用户数据
-import sqlite3, pathlib
-_db_path = pathlib.Path(__file__).parent / "data" / "users.db"
-_conn = sqlite3.connect(_db_path)
-_saved_row = _conn.execute("SELECT value FROM app_config WHERE key='llm'").fetchone()
-_saved_llm = _saved_row[0] if _saved_row else None
-_conn.close()
+# 备份当前模型配置（可能是真实生产配置），测试完在 finally 里走 API 恢复——
+# 绝不弄丢用户数据；也绝不直写数据库文件（绕过加密、无视 LC_DB_PATH/PG）。
+
+
+def _read_llm_row():
+    """从运行时实际使用的数据库读 app_config.llm 原始值（兼容 PG 与 SQLite）。"""
+    import sys as _sys
+    import pathlib as _pl
+    _sys.path.insert(0, str(_pl.Path(__file__).parent))
+    from app.config import get_settings as _gs
+    _url = _gs().database_url
+    if _url.startswith(("postgresql://", "postgres://")):
+        import psycopg
+        with psycopg.connect(_url) as _c:
+            _row = _c.execute("SELECT value FROM app_config WHERE key='llm'").fetchone()
+            return _row[0] if _row else None
+    import sqlite3
+    _db_file = os.environ.get("LC_DB_PATH") or str(_pl.Path(__file__).parent / "data" / "users.db")
+    try:
+        _row = sqlite3.connect(_db_file).execute(
+            "SELECT value FROM app_config WHERE key='llm'").fetchone()
+        return _row[0] if _row else None
+    except sqlite3.OperationalError:
+        return None
+
+
+r = admin.get("/api/v1/admin/llm-config")
+_saved = r.json()  # {baseUrl, model, timeout, hasKey}（不含明文密钥）
+_saved_has_key = bool(_saved.get("hasKey"))
 # 普通用户 403
 r = norm.get("/api/v1/admin/llm-config")
 check("普通用户读模型配置 403", r.status_code == 403, f"got {r.status_code}")
-# 管理员保存（含密钥）
-r = admin.put("/api/v1/admin/llm-config", json={
-    "baseUrl": "https://llm.example.com/v1", "model": "global-model", "apiKey": "sk-global-secret", "timeout": 90})
-check("管理员保存全局配置", r.status_code == 200 and r.json().get("hasKey") is True, r.text[:200])
-# 读回：明文密钥绝不出现
-r = admin.get("/api/v1/admin/llm-config")
-d = r.json()
-check("配置可读且字段正确", d.get("baseUrl") == "https://llm.example.com/v1" and d.get("model") == "global-model" and d.get("timeout") == 90, str(d))
-check("密钥明文绝不回传", "sk-global-secret" not in r.text, r.text[:200])
-# 数据库中加密存储
-import sqlite3, json as _json, pathlib, os
-_db_file = os.environ.get("LC_DB_PATH") or str(pathlib.Path(__file__).parent / "data" / "users.db")
-row = sqlite3.connect(_db_file).execute(
-    "SELECT value FROM app_config WHERE key='llm'").fetchone()
-check("数据库中密钥已加密", row and "enc:" in row[0] and "sk-global-secret" not in row[0], str(row)[:120])
-# 空密钥保存 = 保留原密钥
-r = admin.put("/api/v1/admin/llm-config", json={
-    "baseUrl": "https://llm.example.com/v1", "model": "global-model-v2", "apiKey": "", "timeout": 90})
-check("空密钥保存保留原密钥", r.status_code == 200 and r.json().get("hasKey") is True, r.text[:200])
-# 生成请求走全局配置（本机关闭端口 → 502 连接失败，证明全局配置已生效）
-r = admin.put("/api/v1/admin/llm-config", json={
-    "baseUrl": "http://127.0.0.1:9", "model": "global-model", "apiKey": "sk-global-secret", "timeout": 10})
-r = admin.post("/api/v1/generate-batch", json={
-    "grade": "小学三年级", "subject": "数学", "keyword": "分数", "difficulty": "medium",
-    "items": [{"game_type": "oral_math", "question_count": 2}]})
-check("生成请求使用全局配置（连接被拒 → 502）", r.status_code == 502, f"got {r.status_code} {r.text[:150]}")
-# stats 反映模型已配置
-r = admin.get("/api/v1/admin/stats")
-check("stats 显示模型已配置", r.json().get("llmConfigured") in (1, True), str(r.json())[:150])
-# 恢复测试前的真实模型配置（测试写的假配置不残留）
-_conn = sqlite3.connect(_db_path)
-if _saved_llm is not None:
-    _conn.execute(
-        "INSERT INTO app_config (key, value, updated_at) VALUES ('llm', ?, datetime('now','localtime')) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (_saved_llm,),
-    )
-else:
-    _conn.execute("DELETE FROM app_config WHERE key='llm'")
-_conn.commit()
-_conn.close()
+try:
+    # 管理员保存（含密钥）
+    r = admin.put("/api/v1/admin/llm-config", json={
+        "baseUrl": "https://llm.example.com/v1", "model": "global-model", "apiKey": "sk-global-secret", "timeout": 90})
+    check("管理员保存全局配置", r.status_code == 200 and r.json().get("hasKey") is True, r.text[:200])
+    # 读回：明文密钥绝不出现
+    r = admin.get("/api/v1/admin/llm-config")
+    d = r.json()
+    check("配置可读且字段正确", d.get("baseUrl") == "https://llm.example.com/v1" and d.get("model") == "global-model" and d.get("timeout") == 90, str(d))
+    check("密钥明文绝不回传", "sk-global-secret" not in r.text, r.text[:200])
+    # 数据库中加密存储（按运行时实际 DB：PG 或 SQLite）
+    row = _read_llm_row()
+    check("数据库中密钥已加密", row and "enc:" in row and "sk-global-secret" not in row, str(row)[:120])
+    # 空密钥保存 = 保留原密钥
+    r = admin.put("/api/v1/admin/llm-config", json={
+        "baseUrl": "https://llm.example.com/v1", "model": "global-model-v2", "apiKey": "", "timeout": 90})
+    check("空密钥保存保留原密钥", r.status_code == 200 and r.json().get("hasKey") is True, r.text[:200])
+    # 生成请求走全局配置（本机关闭端口 → 502 连接失败，证明全局配置已生效）
+    r = admin.put("/api/v1/admin/llm-config", json={
+        "baseUrl": "http://127.0.0.1:9", "model": "global-model", "apiKey": "sk-global-secret", "timeout": 10})
+    r = admin.post("/api/v1/generate-batch", json={
+        "grade": "小学三年级", "subject": "数学", "keyword": "分数", "difficulty": "medium",
+        "items": [{"game_type": "oral_math", "question_count": 2}]})
+    check("生成请求使用全局配置（连接被拒 → 502）", r.status_code == 502, f"got {r.status_code} {r.text[:150]}")
+    # stats 反映模型已配置
+    r = admin.get("/api/v1/admin/stats")
+    check("stats 显示模型已配置", r.json().get("llmConfigured") in (1, True), str(r.json())[:150])
+    # 清除配置（含密钥）：DELETE 后回到未配置状态
+    r = admin.delete("/api/v1/admin/llm-config")
+    check("清除配置 200", r.status_code == 200, r.text[:150])
+    r = admin.get("/api/v1/admin/llm-config")
+    check("清除后 hasKey=False", not r.json().get("hasKey"), str(r.json()))
+finally:
+    # 恢复测试前的真实配置：一律走管理 API（后端负责加密），PG/自定义 DB 路径天然正确。
+    if _saved_has_key:
+        # API 拿不到明文密钥，无法原样回填——恢复非密钥字段并提示重新保存
+        admin.put("/api/v1/admin/llm-config", json={
+            "baseUrl": _saved.get("baseUrl", ""), "model": _saved.get("model", ""),
+            "apiKey": "", "timeout": _saved.get("timeout", 120)})
+        print("  [!!] 测试前已有真实模型密钥：密钥无法自动回填（明文不可知）。")
+        print("       请管理员到后台「模型配置」重新保存真实密钥！")
+    else:
+        # 原本无密钥：DELETE 清除 + 按需恢复非密钥字段（无密钥时空 apiKey 不会写入密钥）
+        admin.delete("/api/v1/admin/llm-config")
+        if _saved.get("baseUrl") or _saved.get("model"):
+            r = admin.put("/api/v1/admin/llm-config", json={
+                "baseUrl": _saved.get("baseUrl", ""), "model": _saved.get("model", ""),
+                "apiKey": "", "timeout": _saved.get("timeout", 120)})
+            if r.status_code != 200:
+                print(f"  [!!] 配置恢复失败: {r.status_code} {r.text[:150]}")
+                failed += 1
+        print("  [OK] 已恢复测试前的模型配置状态")
 
 print("== 12. 日志查看 ==")
 r = admin.get("/api/v1/admin/logs", params={"lines": 300})

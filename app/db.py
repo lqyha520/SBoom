@@ -11,6 +11,7 @@ ON CONFLICT upsert、RETURNING），由本模块统一翻译，业务代码无�
 import logging
 import os
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -127,6 +128,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     role          TEXT NOT NULL DEFAULT 'user',
     is_active     INTEGER NOT NULL DEFAULT 1,
+    token_valid_after INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -175,6 +177,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     role          TEXT NOT NULL DEFAULT 'user',
     is_active     INTEGER NOT NULL DEFAULT 1,
+    token_valid_after INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
 );
 
@@ -217,33 +220,66 @@ CREATE INDEX IF NOT EXISTS idx_feedbacks_created ON feedbacks(created_at DESC);
 """
 
 
+# ─── PostgreSQL 连接池（懒创建） ───
+
+_pg_pool = None
+_pg_pool_lock = threading.Lock()
+
+
+def _get_pg_pool():
+    """psycopg_pool 连接池：进程内复用，避免每请求新建 TCP+TLS 连接。
+
+    双检锁防竞态：db() 会被事件循环线程与 to_thread 工作线程并发调用，
+    无锁时多个线程可能同时建池——输家池泄漏连接，赢家可能长时间等打开。
+    """
+    global _pg_pool
+    if _pg_pool is None:
+        with _pg_pool_lock:
+            if _pg_pool is None:
+                from psycopg_pool import ConnectionPool
+
+                pool = ConnectionPool(
+                    get_settings().database_url,
+                    min_size=1,
+                    max_size=10,
+                    timeout=30,  # 池耗尽时最多等 30s
+                    open=False,
+                    kwargs={"row_factory": _pg_row_factory, "connect_timeout": 10},
+                )
+                pool.open(wait=True, timeout=30)
+                _pg_pool = pool
+                logger.info("PostgreSQL 连接池已就绪（min=1, max=10）")
+    return _pg_pool
+
+
+def close_pg_pool() -> None:
+    """应用关停时释放连接池。"""
+    global _pg_pool
+    with _pg_pool_lock:
+        if _pg_pool is not None:
+            _pg_pool.close()
+            _pg_pool = None
+
+
 @contextmanager
 def db():
-    """每请求独立连接；正常退出 commit，异常回滚并关闭。
+    """从连接池取连接（PG）或每请求新建（SQLite）；正常退出 commit，异常回滚并关闭。
 
     SQLite 路径：WAL 模式 + busy_timeout，多用户并发写不再互相锁死。
-    PG 路径：由 psycopg3 连接池/事务语义接管。
+    PG 路径：psycopg_pool 连接池接管（min=1, max=10）。
     """
     if _use_pg():
-        import psycopg
-
-        url = get_settings().database_url
-        conn = psycopg.connect(url, row_factory=_pg_row_factory, connect_timeout=10)
-        try:
+        with _get_pg_pool().connection() as conn:
             yield _PgConn(conn)
             conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
         return
 
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
+    # 注：journal_mode=WAL 是持久化设置，init_db() 已执行一次，
+    # 不在每连接重复执行（避免短暂持锁放大写竞争）
     try:
         yield conn
         conn.commit()
@@ -255,7 +291,7 @@ def db():
 
 
 def _migrate_sqlite(conn: sqlite3.Connection) -> None:
-    """存量库补列（方案B初期建的 users 表没有 role/is_active）。"""
+    """存量库补列（方案B初期建的 users 表没有 role/is_active/token_valid_after）。"""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
     if "role" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
@@ -263,16 +299,41 @@ def _migrate_sqlite(conn: sqlite3.Connection) -> None:
     if "is_active" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
         logger.info("迁移：users 表新增 is_active 列")
+    if "token_valid_after" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN token_valid_after INTEGER NOT NULL DEFAULT 0")
+        logger.info("迁移：users 表新增 token_valid_after 列（改密吊销旧会话）")
+
+
+def _migrate_pg(conn) -> None:
+    """存量 PG 库补列（与 _migrate_sqlite 对齐）。"""
+    cols = {
+        r[0]
+        for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'users'"
+        ).fetchall()
+    }
+    if "role" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+        logger.info("迁移：users 表新增 role 列（PG）")
+    if "is_active" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+        logger.info("迁移：users 表新增 is_active 列（PG）")
+    if "token_valid_after" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN token_valid_after INTEGER NOT NULL DEFAULT 0")
+        logger.info("迁移：users 表新增 token_valid_after 列（PG，改密吊销旧会话）")
 
 
 def init_db() -> None:
     if _use_pg():
         with db() as conn:
             conn.executescript(_SCHEMA_PG)
+            _migrate_pg(conn)
         logger.info("PostgreSQL 数据库就绪")
         return
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with db() as conn:
+        # WAL 模式是数据库级持久设置，建表时设一次即可（多用户并发写不互相锁死）
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(_SCHEMA_SQLITE)
         _migrate_sqlite(conn)
     logger.info(f"用户数据库就绪: {DB_PATH}")

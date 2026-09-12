@@ -1,18 +1,19 @@
 /**
  * 导出：PDF / PNG / 批量 ZIP / 合并 PDF
  * 全部从数据离屏渲染（mount PaperView 等分页完成再截图），不依赖预览 DOM。
+ *
+ * 性能：html2canvas / jspdf / jszip / PaperView 组件树均为动态 import——
+ * 只有点导出时才加载（合计数百 KB），首屏 bundle 不再背上导出库。
+ * 内存：批量导出逐份把画布立即转 JPEG dataURL 并释放，避免 20 份学生卷
+ * 的 RGBA 画布同时驻留（scale:3 单页约 32MB，累积可达 GB 级）。
  */
-import html2canvas from 'html2canvas'
-import { jsPDF } from 'jspdf'
-import JSZip from 'jszip'
 import { createApp, h } from 'vue'
 import type { PaperData, PaperStyle, PaperTemplate } from './types'
-import { answerOf, cirNum } from './utils'
-import { TYPE_NAME } from './constants'
-import PaperView from './components/PaperView.vue'
+import { answerOf, escHtml } from './utils'
 
 /** 容器 → A4 页画布数组（在元素边界处断页）；按需关闭彩色装饰（省墨） */
 async function canvasesOf(holder: HTMLElement, style?: PaperStyle): Promise<HTMLCanvasElement[]> {
+  const { default: html2canvas } = await import('html2canvas')
   if (style && !style.exportBg) {
     holder.querySelectorAll('.paper').forEach(p => {
       p.querySelectorAll('.paper-bg-layer').forEach(el => ((el as HTMLElement).style.display = 'none'))
@@ -57,13 +58,14 @@ async function canvasesOf(holder: HTMLElement, style?: PaperStyle): Promise<HTML
       pages.push(page)
       y = cut
     }
+    // 长图已切页，立即释放整卷大画布
+    canvas.width = canvas.height = 0
   }
   return pages
 }
 
 /* ── 答案卷：与试卷同版式（同卷头/字体/分栏），题干位置换成 答案+解析 ── */
 export function buildAnswerPaper(paper: PaperData): PaperData {
-  const esc = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   return {
     ...paper,
     title: (paper.title || '试卷') + ' · 参考答案',
@@ -75,13 +77,13 @@ export function buildAnswerPaper(paper: PaperData): PaperData {
         questions: (sec.data.questions || []).map((q, i) => {
           const a = answerOf(q)
           const stem =
-            `<b style="color:#c0392b">答案：${esc(a || '（暂无答案）')}</b>` +
-            (q.analysis ? `<br><span style="color:#555;font-size:9.5pt">解析：${esc(q.analysis)}</span>` : '')
+            `<b style="color:#c0392b">答案：${escHtml(a || '（暂无答案）')}</b>` +
+            (q.analysis ? `<br><span style="color:#555;font-size:9.5pt">解析：${escHtml(q.analysis)}</span>` : '')
           return {
             ...q,
             type: 'fill_blank',
             stem,
-            // stem 是富文本 HTML，走 _stemHtml 通道渲染（QuestionItem 优先用它）
+            // stem 是富文本 HTML，走 _stemHtml 通道渲染（QuestionItem 优先用它，渲染前会净化）
             _stemHtml: stem,
             // 清掉选项/连线等结构，只留题干文字
             options: undefined,
@@ -117,14 +119,24 @@ async function answerCanvases(paper: PaperData, template: PaperTemplate, style: 
   return renderPaperCanvases(ansPaper, template, style, { addDay: false })
 }
 
-/* ── 画布 → PDF ── */
-function pagesToPDF(pages: HTMLCanvasElement[]): jsPDF {
-  const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
-  pages.forEach((pc, i) => {
+/* ── 画布 ↔ JPEG：立即转 dataURL 并释放画布（批量导出防内存峰值） ── */
+function canvasesToJpegs(pages: HTMLCanvasElement[], quality = 0.92): string[] {
+  const imgs = pages.map(pc => pc.toDataURL('image/jpeg', quality))
+  // 归零宽高可立刻释放 RGBA 缓冲（比等 GC 确定性高）
+  pages.forEach(pc => { pc.width = pc.height = 0 })
+  return imgs
+}
+
+/* ── JPEG dataURL → PDF（增量添加，画布侧已释放；jspdf 动态加载，模块缓存命中时零开销） ── */
+type jsPDF = import('jspdf').jsPDF
+async function imagesToPDF(images: string[]): Promise<jsPDF> {
+  const { jsPDF: JsPDF } = await import('jspdf')
+  const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
+  images.forEach((img, i) => {
     if (i) doc.addPage()
-    doc.addImage(pc.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, 297)
+    doc.addImage(img, 'JPEG', 0, 0, 210, 297)
   })
-  const total = pages.length
+  const total = images.length
   doc.setFont('times', 'normal')
   doc.setFontSize(9)
   for (let i = 1; i <= total; i++) {
@@ -154,13 +166,12 @@ export async function exportPDF(
   paper: PaperData,
   template: PaperTemplate,
   style: PaperStyle,
-  _studentStack: HTMLElement,
   mode: 'student' | 'withAnswers' | 'answersOnly',
 ): Promise<void> {
-  const parts: HTMLCanvasElement[] = []
-  if (mode !== 'answersOnly') parts.push(...(await studentCanvases(paper, template, style, true)))
-  if (mode !== 'student') parts.push(...(await answerCanvases(paper, template, style)))
-  const doc = pagesToPDF(parts)
+  const images: string[] = []
+  if (mode !== 'answersOnly') images.push(...canvasesToJpegs(await studentCanvases(paper, template, style, true)))
+  if (mode !== 'student') images.push(...canvasesToJpegs(await answerCanvases(paper, template, style)))
+  const doc = await imagesToPDF(images)
   const suffix = mode === 'answersOnly' ? '（答案）' : mode === 'withAnswers' ? '（含答案）' : ''
   doc.save(`${baseTitle(paper, template)}${suffix}.pdf`)
 }
@@ -169,7 +180,6 @@ export async function exportPNG(
   paper: PaperData,
   template: PaperTemplate,
   style: PaperStyle,
-  _studentStack: HTMLElement,
 ): Promise<void> {
   const pages = await studentCanvases(paper, template, style, true)
   const title = baseTitle(paper, template)
@@ -183,30 +193,31 @@ export async function exportBatch(
   papers: PaperData[],
   template: PaperTemplate,
   style: PaperStyle,
-  _studentStack: HTMLElement,
   opts: { addDay: boolean; mergeOnly?: boolean },
   onProgress?: (msg: string) => void,
 ): Promise<void> {
+  const { default: JSZip } = await import('jszip')
   const zip = opts.mergeOnly ? null : new JSZip()
-  const mergePages: HTMLCanvasElement[] = []
+  // 合并卷不再累积画布：逐份转 JPEG（每份处理完即释放 RGBA 内存）
+  const mergedImages: string[] = []
   const title = baseTitle(papers[0], template)
 
   for (let k = 0; k < papers.length; k++) {
     onProgress?.(`正在处理第 ${k + 1}/${papers.length} 份…`)
     const paper = papers[k]
-    const stuPages = await studentCanvases(paper, template, style, opts.addDay)
-    mergePages.push(...stuPages)
+    const stuImgs = canvasesToJpegs(await studentCanvases(paper, template, style, opts.addDay))
+    mergedImages.push(...stuImgs)
     if (zip) {
       const suffix = opts.addDay && papers.length > 1 ? `-第${k + 1}天` : `-第${k + 1}份`
-      zip.file(`${title}${suffix}-学生卷.pdf`, pagesToPDF(stuPages).output('arraybuffer'))
+      zip.file(`${title}${suffix}-学生卷.pdf`, (await imagesToPDF(stuImgs)).output('arraybuffer'))
       onProgress?.(`正在生成第 ${k + 1} 份答案…`)
-      const ansPages = await answerCanvases(paper, template, style)
-      zip.file(`${title}${suffix}-答案.pdf`, pagesToPDF(ansPages).output('arraybuffer'))
+      const ansImgs = canvasesToJpegs(await answerCanvases(paper, template, style))
+      zip.file(`${title}${suffix}-答案.pdf`, (await imagesToPDF(ansImgs)).output('arraybuffer'))
     }
   }
 
   onProgress?.('正在合并 PDF…')
-  const merged = pagesToPDF(mergePages)
+  const merged = await imagesToPDF(mergedImages)
   if (!zip) {
     merged.save(`${title}-全部${papers.length}份合并.pdf`)
     return
@@ -224,6 +235,7 @@ async function renderPaperCanvases(
   style: PaperStyle,
   opts: { addDay: boolean },
 ): Promise<HTMLCanvasElement[]> {
+  const { default: PaperView } = await import('./components/PaperView.vue')
   const holder = makeHolder()
   const mountPoint = holder.firstElementChild as HTMLElement
   document.body.appendChild(holder)
@@ -275,13 +287,7 @@ async function studentCanvases(
   return renderPaperCanvases(paper, template, style, { addDay })
 }
 
-export function printStack(studentStack: HTMLElement) {
-  document.body.classList.add('printing')
+/** 打印预览栈（打印样式由 CSS @media print 控制；无需额外的 body 标记类） */
+export function printStack(_studentStack: HTMLElement) {
   window.print()
-  const cleanup = () => {
-    document.body.classList.remove('printing')
-    window.removeEventListener('afterprint', cleanup)
-  }
-  window.addEventListener('afterprint', cleanup)
-  setTimeout(cleanup, 60000)
 }

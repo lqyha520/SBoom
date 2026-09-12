@@ -56,16 +56,16 @@ function switchMode(m: 'login' | 'register') {
 
       <form @submit.prevent="submit">
         <div class="auth-field">
-          <label>用户名</label>
-          <input v-model="username" class="input" autocomplete="username" placeholder="2-32 位字母 / 数字 / 中文" />
+          <label for="lc-login-username">用户名</label>
+          <input id="lc-login-username" v-model="username" class="input" autocomplete="username" placeholder="2-32 位字母 / 数字 / 中文" />
         </div>
         <div class="auth-field">
-          <label>密码</label>
-          <input v-model="password" class="input" type="password" :autocomplete="mode === 'login' ? 'current-password' : 'new-password'" placeholder="至少 6 位" />
+          <label for="lc-login-password">密码</label>
+          <input id="lc-login-password" v-model="password" class="input" type="password" :autocomplete="mode === 'login' ? 'current-password' : 'new-password'" placeholder="至少 6 位" />
         </div>
         <div v-if="mode === 'register'" class="auth-field">
-          <label>确认密码</label>
-          <input v-model="password2" class="input" type="password" autocomplete="new-password" placeholder="再输入一次" />
+          <label for="lc-login-password2">确认密码</label>
+          <input id="lc-login-password2" v-model="password2" class="input" type="password" autocomplete="new-password" placeholder="再输入一次" />
         </div>
 
         <div v-if="error" class="auth-error">{{ error }}</div>

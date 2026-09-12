@@ -158,17 +158,11 @@ async def get_user_template(user_id: int, tpl_id: int, admin: CurrentUser = Depe
     """管理端查看模板内容（只读，用于排查/协助；内容含题目文字与配置）"""
     if not user_store.get_user_by_id(user_id):
         raise HTTPException(status_code=404, detail={"error": "用户不存在"})
-    tpl = user_store.get_template_for_admin(tpl_id)
+    # 单查询同时校验模板归属（tpl_id 与 user_id 不匹配时报 404）
+    tpl = user_store.get_template_for_admin(tpl_id, user_id)
     if tpl is None:
         raise HTTPException(status_code=404, detail={"error": "模板不存在"})
-    # 防御：模板必须属于目标用户（tpl_id 与 user_id 不匹配时报 404）
     with_title = tpl.get("name") or tpl.get("title") or ""
-    belongs = any(
-        row["id"] == tpl_id
-        for row in user_store.list_templates_for_admin(user_id)
-    )
-    if not belongs:
-        raise HTTPException(status_code=404, detail={"error": "模板不存在"})
     logger.info(f"管理员 {admin.username} 查看了用户 id={user_id} 的模板「{with_title}」")
     return {"template": tpl}
 
@@ -219,6 +213,14 @@ async def save_llm_config(req: AdminLlmConfigIn, admin: CurrentUser = Depends(re
     has_key = app_config.get_llm()["hasKey"]
     logger.info(f"管理员 {admin.username} 更新了全局模型配置: {req.baseUrl} / {req.model}")
     return {"status": "ok", "message": "模型配置已保存，全体用户生效", "hasKey": has_key}
+
+
+@router.delete("/llm-config", summary="清除全局模型配置（含已存密钥）")
+async def clear_llm_config(admin: CurrentUser = Depends(require_admin)):
+    """整行删除全局 LLM 配置。用于部署纠错/安全清理（如密钥泄露后重置）。"""
+    app_config.clear_llm()
+    logger.info(f"管理员 {admin.username} 清除了全局模型配置")
+    return {"status": "ok", "message": "模型配置已清除"}
 
 
 @router.post("/test-llm", summary="测试模型连通性（流式探测：拿到首个响应即判定成功）")

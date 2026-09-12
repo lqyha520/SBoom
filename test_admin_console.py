@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """独立后台系统验证：/admin 页面可达 + 资源加载 + 登录流程 + 权限隔离"""
+import os
+
 import httpx
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.environ.get("LC_TEST_BASE", "http://127.0.0.1:8000")
 passed, failed = 0, 0
 
 

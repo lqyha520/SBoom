@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """方案B 全链路验证脚本：注册/登录/配置/模板/用户隔离"""
+import os
+
 import httpx
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.environ.get("LC_TEST_BASE", "http://127.0.0.1:8000")
 passed, failed = 0, 0
 
 def check(name, cond, detail=""):

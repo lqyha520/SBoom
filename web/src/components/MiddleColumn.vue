@@ -199,7 +199,7 @@ const readyHint = computed(() => {
       </div>
       <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
         <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink2); flex: none;" title="一次生成多份，每份题目不同">
-          份数 <input class="input" type="number" min="1" max="20" style="width: 48px; padding: 4px 6px;" v-model.number="store.paperCount">
+          份数 <input class="input" type="number" min="1" max="20" style="width: 48px; padding: 4px 6px;" :value="store.paperCount" @change="store.paperCount = Math.min(20, Math.max(1, Math.round(Number(($event.target as HTMLInputElement).value) || 1)))">
         </label>
         <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink2); cursor: pointer; flex: none;" title="每份标题后加（第X天）">
           <input type="checkbox" v-model="store.addDayLabel"> 第X天

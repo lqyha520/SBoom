@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import type { Question, SecLayout } from '../types'
 import { answerOf, cirNum, escHtml, isBlankVal, stripOptPrefix, tfStem } from '../utils'
+import { sanitizeRich } from '../sanitize'
 
 const props = defineProps<{
   q: Question
@@ -34,11 +35,13 @@ const noTag = computed(() => (props.layout.showNo === false ? '' : cirNum(props.
 const lvTag = computed(() => (props.q.difficulty_level ? `[第${props.q.difficulty_level}关] ` : ''))
 const fs = computed(() => (props.layout.fontSize ? { fontSize: props.layout.fontSize } : {}))
 
-/* ── 富文本渲染：有编辑缓存用缓存，否则转义纯文本 ── */
-const stemHtml = computed(() => (props.q._stemHtml ?? escHtml(lvTag.value + stemText.value)))
+/* ── 富文本渲染：有编辑缓存用缓存（渲染前净化，防模板里夹带恶意 HTML），否则转义纯文本 ── */
+const stemHtml = computed(() =>
+  props.q._stemHtml ? sanitizeRich(props.q._stemHtml) : escHtml(lvTag.value + stemText.value),
+)
 function optHtml(j: number): string {
   const cached = props.q._optsHtml?.[j]
-  if (cached != null) return cached
+  if (cached != null) return sanitizeRich(cached)
   return `${String.fromCharCode(65 + j)}. ${escHtml(stripOptPrefix(props.q.options?.[j] ?? ''))}`
 }
 
@@ -50,14 +53,15 @@ function stripPrefix(text: string, re: RegExp): string {
 function onStemBlur(e: FocusEvent) {
   if (!props.editable) return
   const el = e.target as HTMLElement
-  props.q._stemHtml = el.innerHTML.replace(/^[①-㊿]\s*/, '')
+  // 写入前净化：剥离粘贴富文本里的事件/脚本，只保留排版标签
+  props.q._stemHtml = sanitizeRich(el.innerHTML.replace(/^[①-㊿]\s*/, ''))
   props.q.stem = stripPrefix(stripPrefix(el.innerText, /^[①-㊿]\s*/), /^\[第\d+关\]\s*/)
 }
 function onOptBlur(e: FocusEvent, j: number) {
   if (!props.editable || !props.q.options) return
   const el = e.target as HTMLElement
   if (!props.q._optsHtml) props.q._optsHtml = []
-  props.q._optsHtml[j] = el.innerHTML.replace(/^[A-H][.、：:．]\s*/, '')
+  props.q._optsHtml[j] = sanitizeRich(el.innerHTML.replace(/^[A-H][.、：:．]\s*/, ''))
   props.q.options[j] = stripPrefix(el.innerText, /^[A-H][.、：:．]\s*/)
 }
 function onMatchBlur(e: FocusEvent, side: 'left' | 'right', i: number) {

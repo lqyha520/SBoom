@@ -1,5 +1,8 @@
 /* ═══════════ 基础与通用 UI ═══════════ */
-@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;900&display=swap');
+/* 注：不再 @import Google Fonts 的 Noto Serif SC——目标用户（国内教师）大概率
+   加载失败，反而阻塞首屏渲染（FCP）。正文字体栈（tokens.css --font-body）
+   已按 'Noto Serif SC' → SimSun → serif 降级：本机装有该字体仍会生效；
+   若需统一衬线效果，建议自托管 woff2 并配 font-display: swap。 */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { scroll-behavior: smooth; }

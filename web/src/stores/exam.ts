@@ -23,9 +23,30 @@ import type {
 import { ensureQids, gradeNumOf, mockQuestions, uid } from '../utils'
 import { UID_KEY, userPrefix } from './auth'
 
-/** 当前登录用户的 localStorage 命名空间前缀（多用户数据隔离） */
-const _uid = localStorage.getItem(UID_KEY) || ''
+/** 当前登录用户的 localStorage 命名空间前缀（多用户数据隔离）。
+ *  localStorage 被禁用（隐私模式/权限策略）时不至于在模块加载期抛错白屏 */
+const _uid = (() => { try { return localStorage.getItem(UID_KEY) || '' } catch { return '' } })()
 const K = (k: string): string => (_uid ? userPrefix(_uid) + k : k)
+
+/** 安全写入 localStorage：配额超限（Safari 5MB / 隐私模式）不再抛穿调用链 */
+function safeSet(key: string, val: string): boolean {
+  try {
+    localStorage.setItem(key, val)
+    return true
+  } catch (e) {
+    console.warn('本地存储写入失败（可能超出配额，可清理旧模板后重试）：', key, e)
+    return false
+  }
+}
+
+/** 结构化深拷贝（可含 Date 等类型；极老浏览器退回 JSON 深拷贝） */
+export function deepClone<T>(v: T): T {
+  try {
+    return structuredClone(v)
+  } catch {
+    return JSON.parse(JSON.stringify(v))
+  }
+}
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -142,10 +163,14 @@ const STYLE_DEFAULTS: PaperStyle = {
   titleOffsetY: 0,
 }
 
+/** 卷面样式持久化的防抖句柄（模块级，store 重建也共用） */
+let _styleSaveTimer: ReturnType<typeof setTimeout> | undefined
+
 export const useExamStore = defineStore('exam', {
   state: () => {
-    // 恢复自定义模板的持久化配置
-    const customTpl = TEMPLATES.find(t => t.id === 'custom')!
+    // 自定义模板存为响应式 state（历史实现直接改模块常量 TEMPLATES 的 custom 项，
+    // 它不是响应式对象——正在使用 custom 模板时编辑配置，卷面不更新，要切走再切回才生效）
+    const customTpl: PaperTemplate = { ...TEMPLATES.find(t => t.id === 'custom')! }
     try {
       const savedCustom = JSON.parse(localStorage.getItem(K(LS.customTemplate)) || 'null')
       if (savedCustom) Object.assign(customTpl, savedCustom)
@@ -203,6 +228,8 @@ export const useExamStore = defineStore('exam', {
 
       /* 卷面配置 */
       templateId,
+      /** 自定义模板的当前配置（响应式；template getter 在 id=custom 时返回它） */
+      customTemplate: customTpl,
       style: (() => {
         const s = load<PaperStyle>(LS.paperStyle, STYLE_DEFAULTS)
         // 大字号不再默认跟随年级：已存的 auto 归一为 off
@@ -219,6 +246,7 @@ export const useExamStore = defineStore('exam', {
 
   getters: {
     template(state): PaperTemplate {
+      if (state.templateId === 'custom') return state.customTemplate
       return TEMPLATES.find(t => t.id === state.templateId) || TEMPLATES[0]
     },
     subjects(state): string[] {
@@ -275,8 +303,9 @@ export const useExamStore = defineStore('exam', {
         const local = this.myTemplates
         const names = new Set(server.map(t => t.name))
         const merged = [...server, ...local.filter(t => !names.has(t.name))]
+        if (merged.length > 20) console.warn(`模板超过 20 份，仅保留前 20（服务端 ${server.length} + 本地独有 ${merged.length - server.length}）`)
         this.myTemplates = merged.slice(0, 20)
-        localStorage.setItem(K(LS.myTemplates), JSON.stringify(this.myTemplates))
+        safeSet(K(LS.myTemplates), JSON.stringify(this.myTemplates))
       } catch { /* 离线/后端不可达时用本地数据 */ }
     },
 
@@ -665,20 +694,24 @@ export const useExamStore = defineStore('exam', {
     /* ── 卷面配置 ── */
     setTemplate(id: string) {
       this.templateId = id
-      localStorage.setItem(K(LS.template), JSON.stringify({ id }))
+      safeSet(K(LS.template), JSON.stringify({ id }))
     },
 
     saveCustomTemplate(cfg: Partial<PaperTemplate>) {
-      const t = TEMPLATES.find(t => t.id === 'custom')!
-      Object.assign(t, cfg)
-      localStorage.setItem(K(LS.customTemplate), JSON.stringify(cfg))
-      this.templateId = 'custom'
-      localStorage.setItem(K(LS.template), JSON.stringify({ id: 'custom' }))
+      // 写响应式 state（而非模块常量）：编辑中的卷面立即生效
+      Object.assign(this.customTemplate, cfg)
+      safeSet(K(LS.customTemplate), JSON.stringify(cfg))
+      this.setTemplate('custom')
     },
 
     setStyle(patch: Partial<PaperStyle>) {
       Object.assign(this.style, patch)
-      localStorage.setItem(K(LS.paperStyle), JSON.stringify(this.style))
+      // 持久化防抖：标题拖拽/字号滑条每个 mousemove 都会调 setStyle，
+      // 立即写盘会以 60+/s 的频率序列化整份样式（且触发重分页测量键变化）
+      clearTimeout(_styleSaveTimer)
+      _styleSaveTimer = setTimeout(() => {
+        safeSet(K(LS.paperStyle), JSON.stringify(this.style))
+      }, 300)
     },
 
     applyStylePreset(preset: 'standard' | 'colorful' | 'fun') {
@@ -690,12 +723,12 @@ export const useExamStore = defineStore('exam', {
     /* ── 自定义题型 ── */
     addCustomType(name: string, baseType: string, defaultCount: number) {
       this.customTypes.push({ id: 'custom_' + Date.now().toString(36), name, baseType, defaultCount })
-      localStorage.setItem(K(LS.customTypes), JSON.stringify(this.customTypes))
+      safeSet(K(LS.customTypes), JSON.stringify(this.customTypes))
     },
 
     removeCustomType(id: string) {
       this.customTypes = this.customTypes.filter(t => t.id !== id)
-      localStorage.setItem(K(LS.customTypes), JSON.stringify(this.customTypes))
+      safeSet(K(LS.customTypes), JSON.stringify(this.customTypes))
     },
 
     /* ── 我的模板 ── */
@@ -713,7 +746,7 @@ export const useExamStore = defineStore('exam', {
         hiddenElements: [...this.hiddenElements],
         cards: this.sections.map(s => ({ type: s.type, name: s.name, count: s.count, layout: { ...s.layout } })),
         // 完整数据：含每题编辑后的文字与富文本（加粗/字号/颜色），恢复时原样还原
-        sections: JSON.parse(JSON.stringify(this.sections)).map((s: any) => ({
+        sections: deepClone(this.sections).map((s: any) => ({
           type: s.type,
           name: s.name,
           count: s.count,
@@ -725,7 +758,7 @@ export const useExamStore = defineStore('exam', {
       if (idx >= 0) this.myTemplates[idx] = tpl
       else this.myTemplates.unshift(tpl)
       this.myTemplates = this.myTemplates.slice(0, 20)
-      localStorage.setItem(K(LS.myTemplates), JSON.stringify(this.myTemplates))
+      safeSet(K(LS.myTemplates), JSON.stringify(this.myTemplates))
       // 同步到服务端（失败不影响本地使用，下次登录会再合并）
       api.upsertTemplate(tpl).catch(() => {})
     },
@@ -747,7 +780,7 @@ export const useExamStore = defineStore('exam', {
 
       if (tpl.sections?.length) {
         // V2：完整还原（每题文字、版式、数量都在）
-        this.sections = JSON.parse(JSON.stringify(tpl.sections)).map((s: any) => ({
+        this.sections = deepClone(tpl.sections).map((s: any) => ({
           id: uid('s'),
           type: s.type,
           name: s.name,
@@ -782,7 +815,7 @@ export const useExamStore = defineStore('exam', {
 
     deleteMyTemplate(name: string) {
       this.myTemplates = this.myTemplates.filter(t => t.name !== name)
-      localStorage.setItem(K(LS.myTemplates), JSON.stringify(this.myTemplates))
+      safeSet(K(LS.myTemplates), JSON.stringify(this.myTemplates))
       api.deleteTemplateOnServer(name).catch(() => {})
     },
   },

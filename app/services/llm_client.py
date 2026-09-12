@@ -7,6 +7,7 @@
 import asyncio
 import json
 import logging
+from collections import OrderedDict
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
 import httpx
@@ -31,25 +32,46 @@ class LLMClient:
 
     MAX_ATTEMPTS = 3  # 首次 + 重试 2 次（仅网络层错误；见 _should_retry）
     DEFAULT_TIMEOUT = 120.0
+    MAX_CACHED_CLIENTS = 8  # 连接池缓存上限（LRU 淘汰），防止 key/地址变化导致无限增长
 
     def __init__(self):
-        self._clients: Dict[Tuple[str, str], httpx.AsyncClient] = {}
+        self._clients: "OrderedDict[Tuple[str, str], httpx.AsyncClient]" = OrderedDict()
+
+    def _evict_oldest(self) -> None:
+        """缓存超限时淘汰最久未用的 client（连接在后台异步关闭，不阻塞调用方）。"""
+        while len(self._clients) >= LLMClient.MAX_CACHED_CLIENTS:
+            _, old_client = self._clients.popitem(last=False)
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._aclose_quietly(old_client))
+            except RuntimeError:
+                pass  # 无事件循环（理论上不会发生），由 GC 兜底
 
     def _get_client_for(self, base_url: str, api_key: str) -> httpx.AsyncClient:
-        """按 base_url+api_key 复用（或创建）长连接 client。"""
+        """按 base_url+api_key 复用（或创建）长连接 client，LRU 上限内复用。"""
         cache_key = (base_url, api_key)
         client = self._clients.get(cache_key)
-        if client is None or client.is_closed:
-            client = httpx.AsyncClient(
-                base_url=base_url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=httpx.Timeout(self.DEFAULT_TIMEOUT),
-            )
-            self._clients[cache_key] = client
+        if client is not None and not client.is_closed:
+            self._clients.move_to_end(cache_key)  # LRU 触碰
+            return client
+        self._evict_oldest()
+        client = httpx.AsyncClient(
+            base_url=base_url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=httpx.Timeout(self.DEFAULT_TIMEOUT),
+        )
+        self._clients[cache_key] = client
         return client
+
+    @staticmethod
+    async def _aclose_quietly(client: httpx.AsyncClient) -> None:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
 
     @staticmethod
     def _req_timeout(timeout: float) -> httpx.Timeout:
@@ -96,15 +118,27 @@ class LLMClient:
                 wait = 2 ** attempt
                 logger.warning(f"LLM 请求失败（第 {attempt} 次，{type(e).__name__}），{wait}s 后重试：{e}")
                 await asyncio.sleep(wait)
-                # 断连后旧池化连接已失效，强制重建
-                self._clients.pop((url, key), None)
+                # 断连后旧池化连接已失效：关闭旧 client 并强制重建
+                old = self._clients.pop((url, key), None)
+                if old is not None and not old.is_closed:
+                    await self._aclose_quietly(old)
                 if response is not None:
                     await response.aclose()
                     response = None
                 client = self._get_client_for(url, key)
 
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
+        try:
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
+            # LLM 返回了非 JSON 错误页或结构异常——翻译成统一异常，由调用方按 502 处理
+            body = ""
+            try:
+                body = response.text[:300]
+            except Exception:
+                pass
+            logger.error(f"LLM 响应结构异常（{type(e).__name__}）: {body}")
+            raise RuntimeError(f"LLM 响应结构异常: {e}") from e
 
     async def chat_stream(
         self,

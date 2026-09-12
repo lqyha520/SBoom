@@ -5,7 +5,7 @@ import logging.handlers
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,7 +17,7 @@ from app.routers.me import router as me_router
 from app.services.llm_client import llm_client
 from app.services import user_store
 from app.config import get_settings, APP_VERSION
-from app.db import init_db
+from app.db import init_db, close_pg_pool
 
 settings = get_settings()
 
@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("🛑 应用关闭，清理资源...")
     await llm_client.close()
+    close_pg_pool()
 
 
 # ─── 创建应用 ───
@@ -64,9 +65,16 @@ app = FastAPI(
 # CORS：默认仅同源（前端由本服务直接托管，或经 Vite 代理，同源携带 Cookie）。
 # 需要跨域部署时，在 .env 设置 CORS_ORIGINS=https://a.com,https://b.com
 if settings.cors_origins.strip():
+    _origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+    if "*" in _origins:
+        # 通配符 + 携带凭证的组合等于向任意站点开放登录态，直接拒绝启动以防误配
+        raise RuntimeError(
+            "CORS_ORIGINS 不能使用 *：会话 Cookie 会被任意跨站携带。"
+            "请列出确切的来源域名，如 https://a.com,https://b.com"
+        )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+        allow_origins=_origins,
         allow_credentials=True,  # 跨域携带 Cookie 必须显式白名单 + credentials
         allow_methods=["*"],
         allow_headers=["*"],
@@ -78,6 +86,7 @@ if settings.cors_origins.strip():
 _web_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
 # 后台管理（独立系统）：admin/dist，挂在 /admin
 _admin_dir = Path(__file__).resolve().parent.parent / "admin" / "dist"
+_web_built = _web_dir.is_dir()
 
 # ─── API 路由（必须在静态挂载之前注册，否则会被 StaticFiles 遮蔽） ───
 app.include_router(auth_router)
@@ -88,6 +97,11 @@ app.include_router(admin_router)
 
 @app.get("/", tags=["系统"], include_in_schema=False)
 async def home():
+    if not _web_built:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "前端未构建", "detail": "请先执行 cd web && pnpm install && pnpm build"},
+        )
     return FileResponse(_web_dir / "index.html")
 
 
@@ -110,12 +124,16 @@ else:
 
 @app.get("/health", tags=["系统"])
 async def health():
-    return {
-        "status": "healthy",
-        "model": settings.llm_model,
-    }
+    # 不暴露模型名等内部信息，仅状态探针
+    return {"status": "healthy"}
 
 
 # ─── 静态挂载（必须放最后：根路径 mount 会吃掉后注册的路由） ───
-app.mount("/static", StaticFiles(directory=_web_dir), name="web")
-app.mount("/", StaticFiles(directory=_web_dir, html=True), name="web_root")
+if _web_built:
+    app.mount("/static", StaticFiles(directory=_web_dir), name="web")
+    app.mount("/", StaticFiles(directory=_web_dir, html=True), name="web_root")
+else:
+    logger.warning(
+        "未找到 web/dist —— 出题工作台前端未构建，API 正常服务但页面不可访问。"
+        "执行：cd web && pnpm install && pnpm build"
+    )

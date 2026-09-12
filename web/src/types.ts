@@ -89,12 +89,16 @@ export interface PaperData {
   subject: string
   keyword: string
   title: string
-  /** 标题富文本（排版模式改色/加粗缓存） */
+  /** 标题富文本（排版模式改色/加粗缓存；渲染前会经 sanitizeRich 净化） */
   titleHtml?: string
   difficulty: string
   sections: PaperSection[]
   /** 第几份（1 起，多份生成时） */
   day?: number
+  /** 已删除的卷头/卷尾元素（banner/title/subline/inforow/notice/reward/footer） */
+  hiddenElements?: string[]
+  /** 页脚覆盖文字（纸面直接编辑页脚后缓存） */
+  footerOverride?: string
 }
 
 /** 自定义题型 */

@@ -57,9 +57,9 @@ build/
 # 前端（Vue）
 # ============================
 web/node_modules/
-web/pnpm-workspace.yaml
 admin/node_modules/
-admin/pnpm-workspace.yaml
+# 注：web/admin 的 pnpm-workspace.yaml 需要入库（含 pnpm v10+ 构建脚本白名单，
+# 缺失时新 clone 的 esbuild postinstall 会被拒绝，vite 无法使用）
 
 # 独立项目（不属于本仓库）
 math-question-bank/

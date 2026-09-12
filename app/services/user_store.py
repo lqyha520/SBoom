@@ -1,6 +1,7 @@
 """用户数据访问层 —— 账号 / 每用户 LLM 配置 / 每用户模板 / 管理员操作"""
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -14,6 +15,7 @@ class CurrentUser:
     username: str
     role: str = "user"
     is_active: bool = True
+    token_valid_after: int = 0  # 早于该时间签发的会话一律视为失效（改密吊销）
 
 
 # ─── 账号 ───
@@ -37,13 +39,14 @@ def get_user_by_username(username: str) -> Optional[Any]:
 def get_user_by_id(user_id: int) -> Optional[CurrentUser]:
     with db() as conn:
         row = conn.execute(
-            "SELECT id, username, role, is_active FROM users WHERE id = ?", (user_id,)
+            "SELECT id, username, role, is_active, token_valid_after FROM users WHERE id = ?", (user_id,)
         ).fetchone()
     if not row:
         return None
     return CurrentUser(
         id=row["id"], username=row["username"],
         role=row["role"], is_active=bool(row["is_active"]),
+        token_valid_after=int(row["token_valid_after"] or 0),
     )
 
 
@@ -79,17 +82,18 @@ def ensure_admin(username: str, password: str) -> None:
 
 
 def list_users(query: str = "") -> list:
-    """管理端用户列表：附带模板数。（模型配置已收归后台全局管理，不再按用户统计密钥）"""
+    """管理端用户列表：附带模板数。LIKE 通配符转义，搜索语义与用户输入一致。"""
     with db() as conn:
+        safe_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         rows = conn.execute(
             """
             SELECT u.id, u.username, u.role, u.is_active, u.created_at,
                    (SELECT COUNT(*) FROM user_templates t WHERE t.user_id = u.id) AS template_count
             FROM users u
-            WHERE u.username LIKE ?
+            WHERE u.username LIKE ? ESCAPE '\\'
             ORDER BY u.id DESC
             """,
-            (f"%{query}%",),
+            (f"%{safe_query}%",),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -105,9 +109,10 @@ def update_user(
         if not conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
             return False
         if password is not None:
+            # 重置密码即吊销该用户所有旧会话（早于此刻签发的令牌全部失效）
             conn.execute(
-                "UPDATE users SET password_hash = ? WHERE id = ?",
-                (hash_password(password), user_id),
+                "UPDATE users SET password_hash = ?, token_valid_after = ? WHERE id = ?",
+                (hash_password(password), int(time.time()), user_id),
             )
         if role is not None:
             conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
@@ -219,11 +224,11 @@ def list_templates_for_admin(user_id: int) -> list:
     return [dict(r) for r in rows]
 
 
-def get_template_for_admin(tpl_id: int) -> Optional[dict]:
-    """管理端：取指定模板的完整内容。返回 dict（无匹配返回 None）。"""
+def get_template_for_admin(tpl_id: int, user_id: int) -> Optional[dict]:
+    """管理端：取指定用户的模板完整内容（单查询同时校验归属）。返回 dict（无匹配返回 None）。"""
     with db() as conn:
         row = conn.execute(
-            "SELECT data FROM user_templates WHERE id = ?", (tpl_id,)
+            "SELECT data FROM user_templates WHERE id = ? AND user_id = ?", (tpl_id, user_id)
         ).fetchone()
     if not row:
         return None

@@ -18,16 +18,17 @@ services:
     image: postgres:16-alpine
     container_name: learncoach-db
     environment:
-      POSTGRES_USER: learncoach
-      POSTGRES_PASSWORD: learncoach
-      POSTGRES_DB: learncoach
+      POSTGRES_USER: ${POSTGRES_USER:-learncoach}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-learncoach}
+      POSTGRES_DB: ${POSTGRES_DB:-learncoach}
     ports:
-      - "5432:5432"
+      # 只绑回环：数据库仅本机可访问（远程需要时再显式放开并改强密码）
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U learncoach -d learncoach"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-learncoach} -d $${POSTGRES_DB:-learncoach}"]
       interval: 5s
       timeout: 3s
       retries: 10

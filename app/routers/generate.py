@@ -24,6 +24,7 @@ from app.services.knowledge_scope import knowledge_scope_service
 from app.services.prompt_builder import prompt_builder
 from app.services.llm_client import llm_client
 from app.services import app_config
+from app.services.rate_limit import allow
 from app.services.user_store import CurrentUser
 from app.config import get_settings
 from app.deps import require_user
@@ -94,29 +95,27 @@ def _extract_json(text: str) -> dict:
         raise
 
 
-def _merged_llm_params(base_url: str = None, model: str = None, api_key: str = None) -> dict:
-    """合并 LLM 调用参数，优先级：请求显式传入 > 管理员在后台配置的全局模型 > .env 兜底。
+def _merged_llm_params() -> dict:
+    """合并 LLM 调用参数，来源：管理员在后台配置的全局模型 > .env 兜底。
 
-    模型配置已收归后台管理（/admin 的「模型配置」），全体用户共用一份，密钥加密存于服务端。
+    模型配置收归后台管理（/admin 的「模型配置」），全体用户共用，密钥加密存于服务端；
+    客户端不可指定接口地址/密钥（防 SSRF 与越权绕过）。
     """
     g = app_config.get_llm(with_key=True)
     t = float(g["timeout"] or 0)
     return {
-        "base_url": base_url or g["baseUrl"] or settings.llm_base_url,
-        "model": model or g["model"] or settings.llm_model,
-        "api_key": api_key or g["api_key"] or settings.llm_api_key,
+        "base_url": g["baseUrl"] or settings.llm_base_url,
+        "model": g["model"] or settings.llm_model,
+        "api_key": g["api_key"] or settings.llm_api_key,
         # 超时下限 120s：整卷生成 prompt 很长，部分模型需要 1-2 分钟；
         # 超时过短会让客户端先掐断，而服务端通常已开始生成并计费——白白扣钱
         "timeout": max(t, 120.0),
     }
 
 
-async def _call_llm_and_parse(
-    system_prompt: str, user_message: str,
-    base_url: str = None, model: str = None, api_key: str = None,
-) -> dict:
-    """调用 LLM 并解析返回的 JSON。配置合并优先级：请求显式 > 后台全局配置 > .env 兜底。"""
-    p = _merged_llm_params(base_url, model, api_key)
+async def _call_llm_and_parse(system_prompt: str, user_message: str) -> dict:
+    """调用 LLM 并解析返回的 JSON。配置来源：后台全局配置 > .env 兜底。"""
+    p = await asyncio.to_thread(_merged_llm_params)
     if not p["api_key"]:
         raise HTTPException(
             status_code=400,
@@ -138,7 +137,8 @@ async def _call_llm_and_parse(
         logger.debug(f"LLM raw response: {raw_response[:200]}...")
         return _extract_json(raw_response)
     except json.JSONDecodeError as e:
-        logger.error(f"JSON 解析失败: {e}, raw: {raw_response[:500]}")
+        # raw_response 可能未绑定（llm_client 内部解析响应 JSON 就失败时），分别兜底
+        logger.error(f"JSON 解析失败: {e}, raw: {str(locals().get('raw_response', ''))[:500]}")
         raise HTTPException(
             status_code=502,
             detail={"error": "LLM 返回格式异常，请重试", "detail": str(e)},
@@ -167,11 +167,9 @@ async def _call_llm_and_parse(
             status_code=502,
             detail={"error": "无法连接模型服务", "detail": f"{e}（请管理员检查后台「模型配置」的接口地址）"},
         )
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        logger.exception(f"LLM 调用未知错误")
-        raise HTTPException(status_code=500, detail={"error": "内部错误", "detail": str(e)})
+    except Exception:
+        logger.exception("LLM 调用未知错误")
+        raise HTTPException(status_code=500, detail={"error": "内部错误", "detail": "服务异常，请稍后重试；若持续出现请联系管理员查看服务日志"})
 
 
 def _enrich_result(raw: dict, request: GenerateRequest) -> GameResult:
@@ -188,15 +186,17 @@ def _enrich_result(raw: dict, request: GenerateRequest) -> GameResult:
     return GameResult(**raw)
 
 
-async def _regen_blocked(count: int, retry_prompt: str, retry_msg: str,
-                         base_url: str = None, model: str = None, api_key: str = None) -> list:
-    """并行补生成 count 道题，返回通过质检的题目列表（失败/仍违禁的不计入）"""
+async def _regen_blocked(count: int, retry_prompt: str, retry_msg: str) -> list:
+    """并行补生成 count 道题（并发上限 3，防止一次误拦触发大量计费调用），
+    返回通过质检的题目列表（失败/仍违禁的不计入）"""
     from app.services.question_qc import filter_questions
+
+    sem = asyncio.Semaphore(3)
 
     async def one():
         try:
-            patch = await _call_llm_and_parse(
-                retry_prompt, retry_msg, base_url=base_url, model=model, api_key=api_key)
+            async with sem:
+                patch = await _call_llm_and_parse(retry_prompt, retry_msg)
             patch_qs = patch.get("questions") or [] if isinstance(patch, dict) else []
             ok, _ = filter_questions(patch_qs, context="补生成")
             return ok[0] if ok else None
@@ -249,18 +249,14 @@ async def generate_batch(request: BatchGenerateRequest, user: CurrentUser = Depe
     )
     user_message = prompt_builder.build_batch_user_message(request.keyword)
 
-    # 4. 调用 LLM（一次，配置合并：请求 > 后台全局 > .env）
+    # 4. 调用 LLM（一次，配置：后台全局 > .env）
     try:
-        raw = await _call_llm_and_parse(
-            system_prompt, user_message,
-            base_url=request.llm_base_url,
-            model=request.llm_model,
-            api_key=request.llm_api_key)
+        raw = await _call_llm_and_parse(system_prompt, user_message)
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("批量生成失败")
-        raise HTTPException(status_code=502, detail={"error": "批量生成失败", "detail": str(e)})
+        raise HTTPException(status_code=502, detail={"error": "批量生成失败", "detail": "生成链路异常，请重试；若持续失败请联系管理员"})
 
     # 5. 按顺序映射回 GameResult
     sections_raw = raw.get("sections", []) if isinstance(raw, dict) else []
@@ -327,10 +323,7 @@ async def generate_batch(request: BatchGenerateRequest, user: CurrentUser = Depe
                     "直接返回 JSON。"
                 )
                 fixed = await _regen_blocked(
-                    len(blocked), retry_prompt, retry_msg,
-                    base_url=request.llm_base_url,
-                    model=request.llm_model,
-                    api_key=request.llm_api_key)
+                    len(blocked), retry_prompt, retry_msg)
                 kept.extend(fixed)
                 missing = len(blocked) - len(fixed)
             sec_raw["questions"] = kept
@@ -338,12 +331,16 @@ async def generate_batch(request: BatchGenerateRequest, user: CurrentUser = Depe
             try:
                 sections.append(GameResult(**sec_raw))
             except Exception:
-                # 题型数据不合规时给空题兜底，避免整卷失败
+                # 题型数据不合规时给空题兜底，避免整卷失败；计数进 missing_count，前端可提示重试
+                lost = len(sec_raw.get("questions") or [])
+                logger.warning(
+                    f"大题 {it.game_type} 数据不合规（{lost} 道题被丢弃）: {request.grade.value}/{request.keyword}"
+                )
                 sections.append(GameResult(
                     game_type=it.game_type, topic=request.keyword,
                     difficulty=request.difficulty.value, grade=request.grade.value,
                     subject=request.subject.value, questions=[],
-                    total_score=100, pass_score=60, missing_count=missing,
+                    total_score=100, pass_score=60, missing_count=lost,
                 ))
         else:
             sections.append(GameResult(
@@ -394,11 +391,8 @@ async def generate_questions(request: GenerateRequest, user: CurrentUser = Depen
     system_prompt = prompt_builder.build_system_prompt(request, scope)
     user_message = prompt_builder.build_user_message(request.keyword)
 
-    # 3. 调用 LLM
-    raw_result = await _call_llm_and_parse(system_prompt, user_message,
-        base_url=request.llm_base_url,
-        model=request.llm_model,
-        api_key=request.llm_api_key)
+    # 3. 调用 LLM（配置：后台全局 > .env）
+    raw_result = await _call_llm_and_parse(system_prompt, user_message)
 
     # 3.5 题型质检：源头 prompt 已卡死；万一漏出，被拦截题并行补生成（不删除不缺数）
     from app.services.question_qc import filter_questions
@@ -408,11 +402,7 @@ async def generate_questions(request: GenerateRequest, user: CurrentUser = Depen
         )
         missing = 0
         if blocked:
-            fixed = await _regen_blocked(
-                len(blocked), system_prompt, user_message,
-                base_url=request.llm_base_url,
-                model=request.llm_model,
-                api_key=request.llm_api_key)
+            fixed = await _regen_blocked(len(blocked), system_prompt, user_message)
             kept.extend(fixed)
             missing = len(blocked) - len(fixed)
         raw_result["questions"] = kept
@@ -454,7 +444,7 @@ async def generate_questions_stream(request: GenerateRequest, user: CurrentUser 
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
     ]
-    p = _merged_llm_params(request.llm_base_url, request.llm_model, request.llm_api_key)
+    p = await asyncio.to_thread(_merged_llm_params)
 
     async def event_generator():
         """SSE 事件流（结束时做质检，违禁题无法撤回已流出的内容，只追加告警事件）"""
@@ -478,8 +468,10 @@ async def generate_questions_stream(request: GenerateRequest, user: CurrentUser 
             except Exception:
                 pass  # 解析失败不影响正常结束
             yield "data: [DONE]\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+        except Exception:
+            # 不向客户端泄漏内部异常细节（可能含内网 URL/密钥提示），详情留日志
+            logger.exception("流式生成失败")
+            yield f"data: {json.dumps({'error': '生成失败，请重试；若持续失败请联系管理员'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -555,15 +547,26 @@ async def validate_oob(request: ValidateRequest, user: CurrentUser = Depends(req
     ]
 
     try:
-        p = _merged_llm_params()
+        p = await asyncio.to_thread(_merged_llm_params)
+        if not p["api_key"]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "尚未配置模型",
+                    "detail": "模型服务由管理员统一配置，请联系管理员在后台「模型配置」中填写接口地址和密钥",
+                },
+            )
         raw = await llm_client.chat(
             messages, base_url=p["base_url"], model=p["model"],
             api_key=p["api_key"], timeout=p["timeout"],
         )
         data = _extract_json(raw)
         return ValidateResult(**data)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail={"error": "校验请求失败", "detail": str(e)})
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("超纲校验失败")
+        raise HTTPException(status_code=502, detail={"error": "校验请求失败", "detail": "校验链路异常，请重试；若持续失败请联系管理员"})
 
 
 # ─── 反馈收集 ───
@@ -576,6 +579,9 @@ async def validate_oob(request: ValidateRequest, user: CurrentUser = Depends(req
 async def submit_feedback(request: FeedbackRequest, user: CurrentUser = Depends(require_user)):
     """接收用户反馈并落库（后台可查看，重启不丢）"""
     from app.db import db
+
+    if not allow(f"feedback:{user.id}", 20, 3600):
+        raise HTTPException(status_code=429, detail={"error": "反馈提交过于频繁，请稍后再试"})
 
     with db() as conn:
         conn.execute(

@@ -2,10 +2,14 @@
 
 模型配置收归后台管理：所有用户共用管理员配置的全局 LLM 服务；
 密钥加密存储在 app_config 表，接口绝不回传明文。
+
+读取走 TTL 内存缓存（默认 60s），避免每次生成请求都开新 DB 连接查询；
+管理员保存配置 / 启动迁移时主动失效，生效即时。
 """
 
 import json
 import logging
+import time
 
 from app.db import db
 from app.security import decrypt_secret, encrypt_secret
@@ -13,32 +17,54 @@ from app.security import decrypt_secret, encrypt_secret
 logger = logging.getLogger(__name__)
 
 _LLM_KEY = "llm"
+_CACHE_TTL_SECONDS = 60.0
 
 _EMPTY = {"baseUrl": "", "model": "", "timeout": 120, "hasKey": False, "api_key": ""}
 
+# ─── 缓存（进程内；管理员保存时失效，重启即空） ───
 
-# ─── 全局 LLM 配置 ───
+_cache_raw: dict = {}
+_cache_ts: float = 0.0
 
-def get_llm(with_key: bool = False) -> dict:
-    """读取全局 LLM 配置。
 
-    with_key=True 时附带解密后的 api_key（仅供后端调用 LLM 使用，绝不下发前端）。
-    """
+def _invalidate_cache() -> None:
+    global _cache_ts
+    _cache_ts = 0.0
+
+
+def _load_llm_raw() -> dict:
     with db() as conn:
         row = conn.execute(
             "SELECT value FROM app_config WHERE key = ?", (_LLM_KEY,)
         ).fetchone()
     if not row:
-        return dict(_EMPTY)
+        return {}
     try:
-        d = json.loads(row["value"])
+        return json.loads(row["value"])
     except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+# ─── 全局 LLM 配置 ───
+
+def get_llm(with_key: bool = False) -> dict:
+    """读取全局 LLM 配置（TTL 缓存）。
+
+    with_key=True 时附带解密后的 api_key（仅供后端调用 LLM 使用，绝不下发前端）。
+    """
+    global _cache_ts
+    now = time.monotonic()
+    if not _cache_raw or now - _cache_ts > _CACHE_TTL_SECONDS:
+        _cache_raw.clear()
+        _cache_raw.update(_load_llm_raw())
+        _cache_ts = now
+    if not _cache_raw:
         return dict(_EMPTY)
-    key_enc = d.get("apiKeyEnc", "")
+    key_enc = _cache_raw.get("apiKeyEnc", "")
     return {
-        "baseUrl": d.get("baseUrl", ""),
-        "model": d.get("model", ""),
-        "timeout": d.get("timeout", 120),
+        "baseUrl": _cache_raw.get("baseUrl", ""),
+        "model": _cache_raw.get("model", ""),
+        "timeout": _cache_raw.get("timeout", 120),
         "hasKey": bool(key_enc),
         "api_key": decrypt_secret(key_enc) if with_key else "",
     }
@@ -71,6 +97,17 @@ def save_llm(base_url: str, model: str, api_key: str, timeout: int) -> None:
     else:
         key_enc = ""
     _save_llm_raw(base_url, model, key_enc, timeout)
+    _invalidate_cache()
+
+
+def clear_llm() -> None:
+    """清除全局 LLM 配置（整行删除，含已存密钥）。用于后台重置 / 测试还原。"""
+    global _cache_raw
+    with db() as conn:
+        conn.execute("DELETE FROM app_config WHERE key = ?", (_LLM_KEY,))
+    _invalidate_cache()
+    _cache_raw = {}
+    logger.info("全局模型配置已清除")
 
 
 # ─── 存量迁移 ───
@@ -95,5 +132,6 @@ def seed_llm_from_user_configs() -> bool:
     if not row:
         return False
     _save_llm_raw(row["base_url"], row["model"], row["api_key_enc"], row["timeout"])
+    _invalidate_cache()
     logger.info("已将最近一次用户自配的 LLM 配置迁移为全局配置（模型配置现已收归后台管理）")
     return True

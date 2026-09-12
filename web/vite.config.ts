@@ -21,6 +21,6 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    chunkSizeWarningLimit: 1500,
+    // 导出库已改动态 import，主包回归正常体积；不再调高告警阈值掩盖问题
   },
 })

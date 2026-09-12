@@ -109,8 +109,8 @@ def create_token(user_id: int, ttl_seconds: int = _TOKEN_TTL_SECONDS) -> str:
     return f"{header}.{payload}.{_b64url(sig)}"
 
 
-def parse_token(token: str) -> Optional[int]:
-    """校验签名与过期时间，返回 user_id；无效返回 None"""
+def parse_token(token: str) -> Optional[dict]:
+    """校验签名与过期时间，返回 payload（含 sub/iat/exp）；无效返回 None。"""
     try:
         header, payload, sig = token.split(".")
         signing_input = f"{header}.{payload}".encode("ascii")
@@ -120,7 +120,8 @@ def parse_token(token: str) -> Optional[int]:
         data = json.loads(_b64url_decode(payload))
         if data.get("exp", 0) < time.time():
             return None
-        return int(data["sub"])
+        data["sub"] = int(data["sub"])
+        return data
     except Exception:
         return None
 

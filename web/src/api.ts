@@ -1,4 +1,4 @@
-import type { Difficulty, MyTemplate, ScopeData } from './types'
+import type { Difficulty, MyTemplate, Question, ScopeData } from './types'
 
 const API = ''
 
@@ -10,19 +10,38 @@ export class AuthError extends Error {
   }
 }
 
+/** 各接口默认超时：生成类请求要等 LLM（可能 2 分钟+），其余接口 30s 足够。
+ *  无超时的 fetch 会让启动 splash 在后端挂起时无限转圈 */
+const DEFAULT_TIMEOUT_MS = 30_000
+const GENERATE_TIMEOUT_MS = 300_000
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  // 同源部署（FastAPI 托管 / Vite 代理）默认携带 Cookie，无需显式 credentials
-  const r = await fetch(API + url, init)
+  const timeoutMs = url.includes('/generate') ? GENERATE_TIMEOUT_MS : DEFAULT_TIMEOUT_MS
+  let r: Response
+  try {
+    r = await fetch(API + url, {
+      ...init,
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (e: any) {
+    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+      throw new Error('请求超时，请稍后重试')
+    }
+    throw new Error('网络异常，请检查网络连接后重试')
+  }
   if (!r.ok) {
     if (r.status === 401) throw new AuthError('请先登录')
     const e = await r.json().catch(() => ({} as any))
-    const base = e?.detail?.error || e?.detail?.detail || `HTTP ${r.status}`
-    // 500 = LLM 连接失败等后端错误，给出可操作的提示
-    if (r.status === 500 || r.status === 502) {
-      throw new Error(`${base}（LLM 服务连接失败，请检查「模型配置」中的接口地址和密钥）`)
+    // FastAPI 的 detail 可能是 {error, detail} 对象，也可能是纯字符串/校验数组
+    const d = e?.detail
+    const base = typeof d === 'string' ? d : (d?.error || d?.detail || `HTTP ${r.status}`)
+    // 只有生成类接口的 5xx 才指向 LLM 服务；auth/templates 等接口同码是其他故障
+    if ((r.status === 500 || r.status === 502 || r.status === 504) && url.includes('/generate')) {
+      throw new Error(`${base}（LLM 服务连接失败，请管理员检查后台「模型配置」的接口地址和密钥）`)
     }
     throw new Error(base)
   }
+  if (r.status === 204) return undefined as T
   return r.json()
 }
 
@@ -76,7 +95,7 @@ export interface BatchRespSection {
   game_type: string
   topic?: string
   passage?: string
-  questions: any[]
+  questions: Question[]
   missing_count?: number
 }
 
@@ -119,7 +138,7 @@ export async function generateOne(params: {
     difficulty: params.difficulty,
     question_count: params.question_count,
   }
-  return request<{ questions: any[]; passage?: string; topic?: string }>('/api/v1/generate', {
+  return request<{ questions: Question[]; passage?: string; topic?: string }>('/api/v1/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
