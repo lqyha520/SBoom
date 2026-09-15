@@ -26,10 +26,29 @@ class UiContracts(unittest.TestCase):
         cls.user_id = result.json()["id"]
         cls.user = httpx.Client(base_url=BASE)
         cls.user.post("/api/v1/auth/login", json={"username": username, "password": "test-pass-123"}).raise_for_status()
+        # 公共试卷库只认小程序读者的 bearer 会话，与工作台 cookie 是两个互不相通的账号域
+        # （见 app/library_deps.py 的 require_mini_user），所以可见性断言必须用真实读者身份；
+        # 第二个读者用来验证「收藏是读者私有的」。
+        cls.reader_id, cls.reader = cls._new_reader("ui-reader-")
+        cls.other_reader_id, cls.other_reader = cls._new_reader("ui-reader-other-")
+
+    @classmethod
+    def _new_reader(cls, prefix):
+        name = prefix + str(time.time_ns())[-10:]
+        created = cls.admin.post("/api/v1/admin/mini-users", json={"username": name, "password": "test-pass-123"})
+        created.raise_for_status()
+        token = httpx.post(BASE + "/api/v1/mini/login-password",
+                           json={"username": name, "password": "test-pass-123"})
+        token.raise_for_status()
+        return created.json()["id"], httpx.Client(base_url=BASE,
+                                                  headers={"Authorization": "Bearer " + token.json()["token"]})
 
     @classmethod
     def tearDownClass(cls):
         cls.admin.delete(f"/api/v1/admin/users/{cls.user_id}").raise_for_status()
+        for client, reader_id in ((cls.reader, cls.reader_id), (cls.other_reader, cls.other_reader_id)):
+            client.close()
+            cls.admin.delete(f"/api/v1/admin/mini-users/{reader_id}").raise_for_status()
         cls.admin.close()
         cls.user.close()
 
@@ -144,7 +163,8 @@ class UiContracts(unittest.TestCase):
         path = f"/api/v1/catalog/papers/{publication_id}"
         admin_path = f"/api/v1/admin/catalog/papers/{publication_id}"
         update = {"revision": 1, "title": "Public HTTP contract", "category": "Contract", "status": "published", "confirm_publication": True}
-        self.assertEqual(self.user.get(path).status_code, 404)
+        self.assertEqual(self.reader.get(path).status_code, 404)
+        self.assertEqual(self.user.get(path).status_code, 401)  # 工作台 cookie 进不了读者接口：两个账号域互不相通
         self.assertEqual(self.admin.put(admin_path, json=update).status_code, 409)
 
         image, files = io.BytesIO(), io.BytesIO()
@@ -156,29 +176,29 @@ class UiContracts(unittest.TestCase):
                        headers={"Content-Type": "application/zip"}).raise_for_status()
         published = self.admin.put(admin_path, json=update)
         published.raise_for_status()
-        detail = self.user.get(path)
+        detail = self.reader.get(path)
         detail.raise_for_status()
         self.assertNotIn("private-source-metadata", detail.text)
         for asset in detail.json()["assets"]:
-            file = self.user.get(asset["url"])
+            file = self.reader.get(asset["url"])
             self.assertEqual(file.status_code, 200)
             self.assertEqual(len(file.content), asset["byte_size"])
             self.assertEqual(file.headers["cache-control"], "private, no-store")
-        self.user.put(path + "/favorite", json={"favorite": True}).raise_for_status()
-        pdf = self.user.post(path + "/download").json()
-        self.assertTrue(self.user.get(pdf["url"]).content.startswith(b"%PDF-"))
-        self.assertEqual(self.user.get("/api/v1/catalog/papers?favorite=true").json()["total"], 1)
-        self.assertEqual(self.user.get("/api/v1/catalog/papers?downloaded=true").json()["total"], 1)
-        self.assertFalse(self.admin.get(path).json()["favorite"])
+        self.reader.put(path + "/favorite", json={"favorite": True}).raise_for_status()
+        pdf = self.reader.post(path + "/download").json()
+        self.assertTrue(self.reader.get(pdf["url"]).content.startswith(b"%PDF-"))
+        self.assertEqual(self.reader.get("/api/v1/catalog/papers?favorite=true").json()["total"], 1)
+        self.assertEqual(self.reader.get("/api/v1/catalog/papers?downloaded=true").json()["total"], 1)
+        self.assertFalse(self.other_reader.get(path).json()["favorite"])  # 收藏是读者私有的
         self.assertEqual(self.admin.delete(f"/api/v1/library/papers/{source_id}").status_code, 409)
 
         update.update(revision=published.json()["revision"], status="withdrawn", confirm_publication=False)
         withdrawn = self.admin.put(admin_path, json=update)
         withdrawn.raise_for_status()
-        self.assertEqual(self.user.get(path).status_code, 404)
-        self.assertEqual(self.user.get(pdf["url"]).status_code, 404)
-        self.assertEqual(self.user.post(path + "/download").status_code, 404)
-        self.assertEqual(self.user.get("/api/v1/catalog/papers?favorite=true").json()["total"], 0)
+        self.assertEqual(self.reader.get(path).status_code, 404)
+        self.assertEqual(self.reader.get(pdf["url"]).status_code, 404)
+        self.assertEqual(self.reader.post(path + "/download").status_code, 404)
+        self.assertEqual(self.reader.get("/api/v1/catalog/papers?favorite=true").json()["total"], 0)
         self.admin.delete(admin_path, params={"revision": withdrawn.json()["revision"]}).raise_for_status()
         self.assertEqual(self.admin.get(f"/api/v1/library/papers/{source_id}").status_code, 200)
         self.admin.delete(f"/api/v1/library/papers/{source_id}").raise_for_status()
