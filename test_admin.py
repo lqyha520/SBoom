@@ -26,16 +26,17 @@ def register_or_login(c, username, password):
 
 
 admin = httpx.Client(base_url=BASE, timeout=60)  # 生成请求含 LLM 重试退避（~7s），需放宽超时
-r = register_or_login(admin, "admin_root", "admin-pass-123")
+r = admin.post("/api/v1/auth/login", json={"username": "admin_root", "password": "admin-pass-123"})
 if r.status_code != 200:
     print(f"无法准备管理员账号: {r.status_code} {r.text[:200]}")
+    print("请仅在可丢弃测试环境中显式配置 ADMIN_USERNAME=admin_root 和对应密码，不要使用真实数据库。")
     exit(1)
 admin_id = r.json()["id"]
 role = r.json().get("role")
 
 if role != "admin":
-    print("SKIP: admin_root 不是管理员（数据库中已有其他管理员先于它创建）。")
-    print("      如需完整测试：停止服务后删除 data/users.db 再重跑。")
+    print("SKIP: admin_root 不是管理员。公开注册始终只创建普通用户。")
+    print("      推荐运行 python tests/run_ui_contracts.py，使用自动隔离的测试服务。")
     exit(0)
 
 print("== 1. 普通用户访问管理端应被拒 403 ==")

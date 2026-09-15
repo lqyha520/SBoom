@@ -37,6 +37,7 @@ SYSTEM_PROMPT_TEMPLATE = """你是一位专业的{subject}教育游戏设计师�
 ## 重要提醒
 - 只输出 JSON，不要有 ```json``` 包裹
 - 答案如果是选择题，answer 字段填选项索引（从0开始）
+- 所有数学表达式在运算符前后加空格（如 '3 + 5 =' 而不是 '3+5='，'5 + ____ = 9' 而不是 '5+____=9'）
 - 解析要写得像个亲切的老师在讲解，不要生硬
 """
 
@@ -135,6 +136,8 @@ GAME_TYPE_DESC = {
 # ─── 各类型的输出 JSON Schema ───
 
 OUTPUT_SCHEMAS = {
+    "true_false": '{"game_type":"true_false","questions":[{"type":"true_false","stem":"6 比 1 大（ ）","answer":"√","analysis":"比较两个数"}]}',
+    "word_problem": '{"game_type":"word_problem","questions":[{"type":"word_problem","stem":"文具店有 8 盒笔，每盒 6 支，一共有多少支？","answer":"48 支","analysis":"8 × 6 = 48（支）"}]}',
     "quiz": """{
   "game_type": "quiz",
   "topic": "知识点主题",
@@ -260,7 +263,7 @@ OUTPUT_SCHEMAS = {
       "type": "recursive_calc",
       "stem": "128 + 72 × 3 =",
       "answer": 344,
-      "analysis": "递等式过程：先算乘法 72×3=216，再算加法 128+216=344",
+      "analysis": "递等式过程：先算乘法 72 × 3 = 216，再算加法 128 + 216 = 344",
       "tags": ["四则混合运算"]
     }
   ]
@@ -274,7 +277,7 @@ OUTPUT_SCHEMAS = {
       "type": "smart_calc",
       "stem": "25 × 44 =",
       "answer": 1100,
-      "analysis": "简便方法：44 拆成 4×11，25×4=100，100×11=1100（乘法结合律）",
+      "analysis": "简便方法：44 拆成 4 × 11，25 × 4 = 100，100 × 11 = 1100（乘法结合律）",
       "tags": ["乘法结合律"]
     }
   ]
@@ -310,18 +313,18 @@ OUTPUT_SCHEMAS = {
     {
       "id": 1,
       "type": "compare",
-      "left_expr": "5+2",
+      "left_expr": "5 + 2",
       "right_expr": "8",
       "answer": "<",
-      "analysis": "5+2=7，7小于8"
+      "analysis": "5 + 2 = 7，7 小于 8"
     },
     {
       "id": 2,
       "type": "compare",
-      "left_expr": "9-1",
+      "left_expr": "9 - 1",
       "right_expr": "7",
       "answer": ">",
-      "analysis": "9-1=8，8大于7"
+      "analysis": "9 - 1 = 8，8 大于 7"
     }
   ]
 }""",
@@ -377,7 +380,8 @@ class PromptBuilder:
         for i, it in enumerate(items):
             t = it.game_type
             desc = GAME_TYPE_DESC.get(t, "")
-            item_descs.append(f"{i + 1}. {t}（{desc}）：{it.question_count} 道题")
+            section_id = getattr(it, "section_id", None) or f"section-{i + 1}"
+            item_descs.append(f"{i + 1}. section_id={section_id}，{t}（{desc}）：{it.question_count} 道题")
 
         from app.models import GameType
         lang_block = _lang_block_for_grade(grade).format(grade=grade)
@@ -402,7 +406,7 @@ class PromptBuilder:
                 "比大小 compare：每道题输出 { id（整数）, type: 'compare', "
                 "left_expr（左边算式或数字）, right_expr（右边算式或数字）, "
                 "answer（填 '>' 或 '<' 或 '='）, analysis（简短解析） }。"
-                "示例：{id:1,type:'compare',left_expr:'5+2',right_expr:'8',answer:'<',analysis:'5+2=7，7小于8'}。"
+                "示例：{id:1,type:'compare',left_expr:'5 + 2',right_expr:'8',answer:'<',analysis:'5 + 2 = 7，7 小于 8'}。"
             ),
             "word_problem": (
                 "应用题 word_problem：每道题输出 { id（整数）, type: 'word_problem', "
@@ -438,14 +442,18 @@ class PromptBuilder:
             f"{field_rules_text}\n"
             f"其他题型（quiz/fill_blank/match_pair/oral_math/vertical_calc/recursive_calc/smart_calc/challenge/reading）按各自标准字段结构输出。\n\n"
             f"## 输出格式\n"
+            f"所有数学表达式在运算符前后加空格（如 '3 + 5 =' 而不是 '3+5='，'5 + ____ = 9' 而不是 '5+____=9'）。\n"
+            f"这条对 stem、options、answer、analysis、left_expr、right_expr 里的每一个算式都生效。\n"
             f"直接返回纯 JSON，不要 markdown 包裹、不要任何额外文字：\n"
             f'{{"sections": ['
-            f'{{"game_type": "对应题目1的英文名", "questions": [各题JSON]}},'
-            f'{{"game_type": "对应题目2的英文名", "questions": [各题JSON]}}'
+            f'{{"section_id": "对应大题ID", "game_type": "对应题目1的英文名", "questions": [各题JSON]}},'
+            f'{{"section_id": "对应大题ID", "game_type": "对应题目2的英文名", "questions": [各题JSON]}}'
             f']}}\n\n'
             f"每个 section 的 game_type 必须是上面标注的**英文名**（如 number_split、compare），不要中文，不要写错拼写。\n"
+            f"section_id 必须逐字保留。即使多个大题是同一题型，也必须独立出题，整卷禁止重复题目。\n"
+            f"reading 大题必须在 section 的 passage 字段提供完整阅读正文，不能只给问题。\n"
             f"口算(oral_math)、填空(fill_blank)、竖式(vertical_calc)、脱式(recursive_calc)、简便(smart_calc)、闯关(challenge)、选择题(quiz)、阅读(reading)这些题型，每道题必须包含 stem（题干）、answer（答案）、analysis（解析）字段。\n"
-            f"stem 是题目正文（如 '3+5='、'5+____=9'、'9×7='），不能为空。\n"
+            f"stem 是题目正文（如 '3 + 5 ='、'5 + ____ = 9'、'9 × 7 ='），不能为空。\n"
             f"questions 数组里的每道题必须严格包含上面对应的所有字段（type 字段也要正确写出英文）。"
         )
         return system_prompt

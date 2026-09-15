@@ -505,10 +505,10 @@ onMounted(() => measureStackH())
        wrapper 的高度用 scale 后的值占位，避免滚动区留白/裁切 -->
   <div
     class="paper-scaler-wrap"
-    :style="{ width: `210mm`, margin: '0 auto', height: stackH > 0 ? `${Math.round(stackH * (zoom ?? 1))}px` : undefined }"
+    :style="{ width: `${210 * (zoom ?? 1)}mm`, margin: '0 auto', height: stackH > 0 ? `${Math.round(stackH * (zoom ?? 1))}px` : undefined }"
   >
     <!-- pv-zoom 类供 @media print 强制重置缩放：zoom<100% 时打印出来的应是原尺寸而非缩小版 -->
-    <div class="pv-zoom" :style="{ transform: `scale(${zoom ?? 1})`, transformOrigin: 'top center' }">
+    <div class="pv-zoom" :style="{ width: '210mm', transform: `scale(${zoom ?? 1})`, transformOrigin: 'top left' }">
       <div ref="stackEl" class="paper-stack">
       <PaperPage
         v-for="(pg, i) in pages"

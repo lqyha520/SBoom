@@ -81,19 +81,27 @@ def ensure_admin(username: str, password: str) -> None:
             )
 
 
-def list_users(query: str = "") -> list:
-    """管理端用户列表：附带模板数。LIKE 通配符转义，搜索语义与用户输入一致。"""
+def list_users(query: str = "", role: str = "") -> list:
+    """管理端用户列表：附带模板数。LIKE 通配符转义，搜索语义与用户输入一致。
+
+    role 为空时返回全部；后台把「出题用户」与「管理员账号」分成两页，各自只请求自己那一侧。
+    """
     with db() as conn:
         safe_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        clauses = ["u.username LIKE ? ESCAPE '\\'"]
+        args: list = [f"%{safe_query}%"]
+        if role:
+            clauses.append("u.role = ?")
+            args.append(role)
         rows = conn.execute(
-            """
+            f"""
             SELECT u.id, u.username, u.role, u.is_active, u.created_at,
                    (SELECT COUNT(*) FROM user_templates t WHERE t.user_id = u.id) AS template_count
             FROM users u
-            WHERE u.username LIKE ? ESCAPE '\\'
+            WHERE {' AND '.join(clauses)}
             ORDER BY u.id DESC
             """,
-            (f"%{safe_query}%",),
+            tuple(args),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -124,9 +132,16 @@ def update_user(
     return True
 
 
+class UserHasCatalogPapers(ValueError):
+    pass
+
+
 def delete_user(user_id: int) -> bool:
     """删除用户（模板、LLM 配置级联删除）。"""
-    with db() as conn:
+    with db(serialized=True) as conn:
+        if conn.execute("SELECT c.id FROM catalog_papers c JOIN paper_archives a ON a.id = c.paper_id WHERE a.user_id = ? LIMIT 1",
+                        (user_id,)).fetchone():
+            raise UserHasCatalogPapers("该用户的试卷仍在公共库中，请先在公共试卷管理中处理对应条目")
         cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         return cur.rowcount > 0
 
@@ -135,8 +150,10 @@ def admin_stats() -> dict:
     with db() as conn:
         q = lambda sql: conn.execute(sql).fetchone()[0]  # noqa: E731
         return {
-            "users": q("SELECT COUNT(*) FROM users"),
-            "activeUsers": q("SELECT COUNT(*) FROM users WHERE is_active = 1"),
+            # users/activeUsers 只统计出题用户（普通账号），管理员单独计 admins，
+            # 与后台「出题用户」「管理员账号」两页的口径保持一致。
+            "users": q("SELECT COUNT(*) FROM users WHERE role <> 'admin'"),
+            "activeUsers": q("SELECT COUNT(*) FROM users WHERE is_active = 1 AND role <> 'admin'"),
             "admins": q("SELECT COUNT(*) FROM users WHERE role = 'admin'"),
             "templates": q("SELECT COUNT(*) FROM user_templates"),
         }
@@ -144,64 +161,102 @@ def admin_stats() -> dict:
 
 # ─── 每用户模板 ───
 
+class TemplateConflict(ValueError):
+    """The caller no longer owns the current template revision."""
+
+
+def _template_payload(data: dict, name: str) -> str:
+    content = {key: value for key, value in data.items()
+               if key not in ("_revision", "_syncState", "_syncError")}
+    return json.dumps({**content, "name": name}, ensure_ascii=False)
+
+
+def _next_template_revision(conn, user_id: int) -> int:
+    # Keep revisions monotonic even when a name is deleted and recreated.
+    return conn.execute(
+        "INSERT INTO template_revision_counters (user_id, revision) "
+        "SELECT ?, COALESCE(MAX(revision), 0) + 1 FROM user_templates WHERE user_id = ? "
+        "ON CONFLICT(user_id) DO UPDATE SET revision = template_revision_counters.revision + 1 "
+        "RETURNING revision", (user_id, user_id),
+    ).fetchone()[0]
+
+
 def list_templates(user_id: int) -> list:
     with db() as conn:
         rows = conn.execute(
-            "SELECT data FROM user_templates WHERE user_id = ? ORDER BY id DESC",
+            "SELECT data, revision FROM user_templates WHERE user_id = ? ORDER BY id DESC",
             (user_id,),
         ).fetchall()
     out = []
     for r in rows:
         try:
-            out.append(json.loads(r["data"]))
-        except json.JSONDecodeError:
+            out.append({**json.loads(r["data"]), "_revision": r["revision"]})
+        except (json.JSONDecodeError, TypeError):
             continue
     return out
 
 
-def upsert_template(user_id: int, name: str, data: dict) -> None:
-    payload = json.dumps(data, ensure_ascii=False)
+def upsert_template(user_id: int, name: str, data: dict, expected_revision: Optional[int] = None) -> int:
+    payload = _template_payload(data, name)
     with db() as conn:
-        conn.execute(
-            """
-            INSERT INTO user_templates (user_id, name, data)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id, name) DO UPDATE SET
-                data = excluded.data,
-                updated_at = datetime('now', 'localtime')
-            """,
-            (user_id, name, payload),
-        )
+        revision = _next_template_revision(conn, user_id)
+        if expected_revision == 0:
+            row = conn.execute(
+                "INSERT INTO user_templates (user_id, name, data, revision) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(user_id, name) DO NOTHING RETURNING revision",
+                (user_id, name, payload, revision),
+            ).fetchone()
+        elif expected_revision is not None:
+            row = conn.execute(
+                "UPDATE user_templates SET data = ?, revision = ?, "
+                "updated_at = datetime('now', 'localtime') "
+                "WHERE user_id = ? AND name = ? AND revision = ? RETURNING revision",
+                (payload, revision, user_id, name, expected_revision),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "INSERT INTO user_templates (user_id, name, data, revision) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(user_id, name) DO UPDATE SET data = excluded.data, "
+                "revision = excluded.revision, updated_at = datetime('now', 'localtime') "
+                "RETURNING revision", (user_id, name, payload, revision),
+            ).fetchone()
+        if row is None:
+            raise TemplateConflict("模板已在其他设备修改或删除，本地版本已保留，请另存为新模板")
+        return row[0]
 
 
 def bulk_upsert_templates(user_id: int, templates: list) -> int:
-    """迁移用：批量 upsert，返回成功条数"""
+    """迁移只补充缺失模板，不能用旧设备数据覆盖服务端的新版本。"""
     n = 0
     with db() as conn:
         for t in templates:
             if not isinstance(t, dict) or not t.get("name"):
                 continue
-            payload = json.dumps(t, ensure_ascii=False)
-            conn.execute(
+            payload = _template_payload(t, t["name"])
+            revision = _next_template_revision(conn, user_id)
+            row = conn.execute(
                 """
-                INSERT INTO user_templates (user_id, name, data)
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id, name) DO UPDATE SET
-                    data = excluded.data,
-                    updated_at = datetime('now', 'localtime')
+                INSERT INTO user_templates (user_id, name, data, revision)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, name) DO NOTHING RETURNING revision
                 """,
-                (user_id, t["name"], payload),
-            )
-            n += 1
+                (user_id, t["name"], payload, revision),
+            ).fetchone()
+            n += int(row is not None)
     return n
 
 
-def delete_template(user_id: int, name: str) -> bool:
+def delete_template(user_id: int, name: str, expected_revision: Optional[int] = None) -> bool:
     with db() as conn:
+        _next_template_revision(conn, user_id)
+        revision_clause = " AND revision = ?" if expected_revision is not None else ""
+        params = (user_id, name, expected_revision) if expected_revision is not None else (user_id, name)
         cur = conn.execute(
-            "DELETE FROM user_templates WHERE user_id = ? AND name = ?",
-            (user_id, name),
+            "DELETE FROM user_templates WHERE user_id = ? AND name = ?" + revision_clause,
+            params,
         )
+        if not cur.rowcount and expected_revision is not None:
+            raise TemplateConflict("模板版本已变化，未删除任何数据，请刷新模板列表后确认")
         return cur.rowcount > 0
 
 

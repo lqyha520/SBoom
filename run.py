@@ -3,12 +3,27 @@
 - DEBUG=true（开发）时启用热重载，workers 配置被忽略（reload 与多 worker 互斥）。
 - 生产：WORKERS=1（默认）或 >1 开多进程；多 worker 建议配合 PostgreSQL 使用。
 """
+import socket
+
 import uvicorn
 from app.config import get_settings
 
 settings = get_settings()
 
+def ensure_port_available(host: str, port: int) -> None:
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
+        # Uvicorn uses SO_REUSEADDR; Windows can otherwise accept duplicate listeners.
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        try:
+            probe.bind((host, port))
+        except OSError as exc:
+            raise SystemExit(f"Cannot bind {host}:{port}. Stop the existing service or change PORT. ({exc})") from exc
+
+
 if __name__ == "__main__":
+    ensure_port_available(settings.host, settings.port)
     kwargs = dict(
         app="app.main:app",
         host=settings.host,

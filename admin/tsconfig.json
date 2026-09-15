@@ -14,5 +14,5 @@
     "noEmit": true,
     "noUnusedLocals": false
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "components.d.ts", "auto-imports.d.ts"]
 }

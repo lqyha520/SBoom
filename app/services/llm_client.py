@@ -8,16 +8,18 @@ import asyncio
 import json
 import logging
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
 import httpx
 from app.config import get_settings
+from app.services.generation_control import record_attempt, record_usage
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
-RETRYABLE = (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError, httpx.ConnectError)  # 连接层故障可安全重试
+RETRYABLE = (httpx.ConnectError,)  # Read/write/protocol errors may occur after the provider billed the request.
 # 注意：ReadTimeout/ConnectTimeout 不在重试之列——超时意味着请求很可能已到达
 # 服务端并计费，盲目重发会造成重复扣费（中转站按次计费场景尤其敏感）
 
@@ -36,16 +38,32 @@ class LLMClient:
 
     def __init__(self):
         self._clients: "OrderedDict[Tuple[str, str], httpx.AsyncClient]" = OrderedDict()
+        self._busy: Dict[httpx.AsyncClient, int] = {}
 
-    def _evict_oldest(self) -> None:
+    def _evict_oldest(self, free_slots: int = 1) -> None:
         """缓存超限时淘汰最久未用的 client（连接在后台异步关闭，不阻塞调用方）。"""
-        while len(self._clients) >= LLMClient.MAX_CACHED_CLIENTS:
-            _, old_client = self._clients.popitem(last=False)
+        while len(self._clients) > LLMClient.MAX_CACHED_CLIENTS - free_slots:
+            idle = next((key for key, value in self._clients.items() if not self._busy.get(value)), None)
+            if idle is None:
+                break
+            old_client = self._clients.pop(idle)
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(self._aclose_quietly(old_client))
             except RuntimeError:
                 pass  # 无事件循环（理论上不会发生），由 GC 兜底
+
+    @asynccontextmanager
+    async def _borrow_client(self, base_url: str, api_key: str):
+        client = self._get_client_for(base_url, api_key)
+        self._busy[client] = self._busy.get(client, 0) + 1
+        try:
+            yield client
+        finally:
+            self._busy[client] -= 1
+            if not self._busy[client]:
+                del self._busy[client]
+            self._evict_oldest(free_slots=0)
 
     def _get_client_for(self, base_url: str, api_key: str) -> httpx.AsyncClient:
         """按 base_url+api_key 复用（或创建）长连接 client，LRU 上限内复用。"""
@@ -104,41 +122,32 @@ class LLMClient:
             "stream": False,
         }
 
-        client = self._get_client_for(url, key)
-        response = None
-        for attempt in range(1, self.MAX_ATTEMPTS + 1):
-            try:
-                response = await client.post(
-                    "/chat/completions", json=payload, timeout=self._req_timeout(timeout))
-                response.raise_for_status()
-                break
-            except Exception as e:
-                if attempt == self.MAX_ATTEMPTS or not _should_retry(e):
-                    raise
-                wait = 2 ** attempt
-                logger.warning(f"LLM 请求失败（第 {attempt} 次，{type(e).__name__}），{wait}s 后重试：{e}")
-                await asyncio.sleep(wait)
-                # 断连后旧池化连接已失效：关闭旧 client 并强制重建
-                old = self._clients.pop((url, key), None)
-                if old is not None and not old.is_closed:
-                    await self._aclose_quietly(old)
-                if response is not None:
-                    await response.aclose()
-                    response = None
-                client = self._get_client_for(url, key)
+        async with self._borrow_client(url, key) as client:
+            response = None
+            for attempt in range(1, self.MAX_ATTEMPTS + 1):
+                try:
+                    record_attempt()
+                    response = await client.post(
+                        "/chat/completions", json=payload, timeout=self._req_timeout(timeout))
+                    response.raise_for_status()
+                    break
+                except Exception as e:
+                    if attempt == self.MAX_ATTEMPTS or not _should_retry(e):
+                        raise
+                    wait = 2 ** attempt
+                    logger.warning("模型连接失败（第 %s 次，%s），%s 秒后重试", attempt, type(e).__name__, wait)
+                    await asyncio.sleep(wait)
+                    # httpx retires broken connections; closing this shared client
+                    # would interrupt other users' in-flight requests.
 
-        try:
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
-            # LLM 返回了非 JSON 错误页或结构异常——翻译成统一异常，由调用方按 502 处理
-            body = ""
             try:
-                body = response.text[:300]
-            except Exception:
-                pass
-            logger.error(f"LLM 响应结构异常（{type(e).__name__}）: {body}")
-            raise RuntimeError(f"LLM 响应结构异常: {e}") from e
+                data = response.json()
+                record_usage(data.get("usage"))
+                return data["choices"][0]["message"]["content"]
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
+                # LLM 返回了非 JSON 错误页或结构异常——翻译成统一异常，由调用方按 502 处理
+                logger.error("模型响应结构异常: %s", type(e).__name__)
+                raise RuntimeError(f"LLM 响应结构异常: {e}") from e
 
     async def chat_stream(
         self,
@@ -155,7 +164,6 @@ class LLMClient:
         url = base_url or settings.llm_base_url
         key = api_key or settings.llm_api_key
         mdl = model or settings.llm_model
-        client = self._get_client_for(url, key)
 
         payload = {
             "model": mdl,
@@ -166,22 +174,25 @@ class LLMClient:
             "stream": True,
         }
 
-        async with client.stream(
-            "POST", "/chat/completions", json=payload, timeout=self._req_timeout(timeout)) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    data_str = line[6:].strip()
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        content = delta.get("content", "")
-                        if content:
-                            yield content
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
+        async with self._borrow_client(url, key) as client:
+            record_attempt()
+            async with client.stream(
+                "POST", "/chat/completions", json=payload, timeout=self._req_timeout(timeout)) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        data_str = line[6:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            record_usage(chunk.get("usage"))
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                yield content
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            continue
 
     async def close(self) -> None:
         """关闭全部缓存的连接池（应用关停时调用）。"""

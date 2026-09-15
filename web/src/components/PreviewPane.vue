@@ -1,145 +1,120 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useExamStore } from '../stores/exam'
 import type { PaperData } from '../types'
 import PaperView from './PaperView.vue'
 import FormatBar from './FormatBar.vue'
+import ZoomControl from './ZoomControl.vue'
 import { useFitZoom } from '../useFitZoom'
 
+defineEmits<{ 'open-settings': [] }>()
 const store = useExamStore()
-
-/* ── 实时预览数据（搭建态：跟随大题列表） ── */
 const previewPaper = computed<PaperData>(() => ({
-  grade: store.grade || '',
-  subject: store.subject,
-  keyword: store.keyword,
-  title: store.title,
-  titleHtml: store.titleHtml || undefined,
-  difficulty: store.difficulty,
-  sections: store.sections.map(s => ({
-    type: s.type,
-    name: s.name,
-    data: s.data || { questions: [] },
-    layout: s.layout,
-    _sid: s.id,
-  })),
+  grade: store.grade, subject: store.subject, keyword: store.keyword, title: store.title,
+  titleHtml: store.titleHtml || undefined, difficulty: store.difficulty,
+  sections: store.sections.map(s => ({ type: s.type, name: s.name, data: s.data || { questions: [] }, layout: s.layout, _sid: s.id })),
   hiddenElements: [...store.hiddenElements],
-} as PaperData))
-
+}))
 const previewBox = ref<HTMLElement | null>(null)
 const paperViewEl = ref<InstanceType<typeof PaperView> | null>(null)
 const { zoom, manual, setManual } = useFitZoom(previewBox)
-
-/* ── 排版模式 ── */
 const layoutMode = ref(false)
-
 function toggleLayout() {
   if (layoutMode.value) {
-    // 完成：DOM 顺序/删除/编辑回写，并同步回 store（previewPaper 是 computed 快照）
-    const newSections = paperViewEl.value?.applyLayout()
-    if (newSections?.length) store.syncSections(newSections)
-    layoutMode.value = false
-  } else {
-    layoutMode.value = true
+    const sections = paperViewEl.value?.applyLayout()
+    if (sections) store.syncSections(sections)
   }
+  layoutMode.value = !layoutMode.value
 }
 function cancelLayout() {
   layoutMode.value = false
   paperViewEl.value?.repaginate()
 }
-
-/* ── 保存模板（独立按钮） ── */
-const showSaveTpl = ref(false)
+const saveOpen = ref(false)
 const saveName = ref('')
+const overwrite = ref(false)
+const saved = ref(false)
+const saving = ref(false)
+const saveError = ref('')
+const saveMessage = ref('')
+const saveSynced = ref(false)
+const exists = computed(() => store.myTemplates.some(t => t.name === saveName.value.trim()))
+watch(saveName, () => { overwrite.value = false })
 function openSave() {
-  if (!store.sections.length) return
-  saveName.value = ''
-  showSaveTpl.value = true
+  saveName.value = store.title.slice(0, 20)
+  overwrite.value = false
+  saveError.value = ''
+  saveOpen.value = true
 }
-function confirmSaveTpl() {
+async function save() {
   const name = saveName.value.trim()
-  if (name) {
-    store.saveMyTemplate(name)
-    showSaveTpl.value = false
-  }
+  if (saving.value || !name || (exists.value && !overwrite.value)) return
+  saving.value = true
+  saveError.value = ''
+  try {
+    const result = await store.saveMyTemplate(name)
+    if (!result.local && !result.synced) {
+      saveError.value = '保存失败，请检查网络或浏览器存储空间后重试'
+      return
+    }
+    saveSynced.value = result.synced
+    saveMessage.value = result.synced ? '模板已保存并同步' : '已保存到本机；' + (store.myTemplates.find(template => template.name === name)?._syncError || '等待同步')
+    saveOpen.value = false
+    saved.value = true
+  } catch (e: unknown) { saveError.value = e instanceof Error ? e.message : '模板保存失败' }
+  finally { saving.value = false }
 }
-function onTitleEdited(title: string, html: string) {
-  store.title = title
-  store.titleHtml = html
-}
+function onTitleEdited(title: string, html: string) { store.title = title; store.titleHtml = html }
 </script>
 
 <template>
-  <div class="card preview-pane">
-    <div class="card-head" style="flex: none; flex-wrap: wrap; gap: 8px;">
-      <h2 style="flex: none;">实时预览</h2>
-
-      <template v-if="!layoutMode">
-        <span style="font-size: 12px; color: var(--ink3); flex: none;">纸面文字可直接点击修改</span>
-        <FormatBar />
-        <span style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
-          <button class="btn mini" :class="{ 'btn-primary-on': manual === 0 }" title="缩放到容器宽度" @click="setManual(0)">适应</button>
-          <input
-            type="range" min="25" max="100" step="5"
-            :value="manual > 0 ? manual * 100 : Math.round(zoom * 100)"
-            @input="setManual(parseInt(($event.target as HTMLInputElement).value) / 100)"
-            style="width: 90px; accent-color: var(--primary);"
-            title="缩放比例"
-          >
-          <span style="font-size: 11px; color: var(--ink3); width: 36px;">{{ Math.round(zoom * 100) }}%</span>
-          <button class="btn mini" @click="toggleLayout">✏️ 排版模式</button>
-          <button class="btn mini primary" title="把当前卷面（排版/样式/装饰）保存为模板" @click="openSave">💾 保存模板</button>
-        </span>
-      </template>
-
-      <template v-else>
-        <span style="font-size: 12px; color: var(--amber); flex: 1;">⠿ 拖动排序 · 点击编辑 · ✕ 删除 · ⤡ 调整大小</span>
-        <button class="btn mini primary" @click="toggleLayout">✓ 完成排版</button>
-        <button class="btn mini" @click="cancelLayout">取消</button>
-      </template>
+  <section class="workspace-panel preview-panel" aria-labelledby="preview-title">
+    <div class="panel-heading">
+      <h2 id="preview-title"><UIcon name="i-lucide-file-text" class="size-4" />卷面预览</h2>
+      <div class="actions-row">
+        <UBadge color="neutral" variant="soft" size="xs">草稿</UBadge>
+        <UTooltip text="卷面设置"><UButton icon="i-lucide-settings-2" color="neutral" variant="ghost" size="xs" aria-label="预览卷面设置" @click="$emit('open-settings')" /></UTooltip>
+      </div>
+    </div>
+    <div class="preview-toolbar no-print">
+      <FormatBar />
+      <div class="actions-row">
+        <template v-if="!layoutMode">
+          <UTooltip text="排版模式"><UButton icon="i-lucide-move" color="neutral" variant="ghost" aria-label="排版模式" :disabled="!store.sections.length" class="icon-tool" @click="toggleLayout" /></UTooltip>
+          <div class="toolbar-divider"></div>
+          <UButton icon="i-lucide-bookmark-plus" label="保存模板" color="neutral" variant="outline" size="xs" :disabled="!store.sections.length" @click="openSave" />
+        </template>
+        <template v-else>
+          <UButton label="取消" color="neutral" variant="ghost" size="xs" @click="cancelLayout" />
+          <UButton label="完成排版" icon="i-lucide-check" size="xs" @click="toggleLayout" />
+        </template>
+      </div>
     </div>
     <div ref="previewBox" class="preview-fill">
-      <PaperView
-        ref="paperViewEl"
-        :paper="previewPaper"
-        :template="store.template"
-        :style="store.style"
-        :editable="true"
-        :layout-mode="layoutMode"
-        :zoom="zoom"
-        @toggle-element="store.toggleHiddenElement($event)"
-        @title-edited="onTitleEdited"
-        @title-offset="(v: number) => store.setStyle({ titleOffsetY: v })"
-        @layout-updated="(sid: string, lay: any) => store.syncSectionLayout(sid, lay)"
-      />
+      <PaperView ref="paperViewEl" :paper="previewPaper" :template="store.template" :style="store.style" :editable="true" :layout-mode="layoutMode" :zoom="zoom"
+        @toggle-element="store.toggleHiddenElement($event)" @title-edited="onTitleEdited"
+        @title-offset="(value: number) => store.setStyle({ titleOffsetY: value })"
+        @layout-updated="(id, layout) => store.syncSectionLayout(id, layout)" />
     </div>
-
-    <!-- 保存模板 -->
-    <teleport to="body">
-      <div v-if="showSaveTpl" class="modal-mask" @click.self="showSaveTpl = false">
-        <div class="modal" style="width: 400px;">
-          <div class="modal-head">
-            <h3>保存为模板</h3>
-            <button class="x-btn" @click="showSaveTpl = false">✕</button>
-          </div>
-          <div class="modal-body">
-            <p style="font-size: 12px; color: var(--ink3); margin-bottom: 12px; line-height: 1.7;">
-              将保存：题目文字与富文本样式、大题版式、装饰风格、已删元素。<br>同名保存会覆盖旧版本。
-            </p>
-            <input class="input" v-model="saveName" maxlength="20" placeholder="模板名称，如：三年级口算每日一练" @keyup.enter="confirmSaveTpl">
-          </div>
-          <div class="modal-foot">
-            <button class="btn" @click="showSaveTpl = false">取消</button>
-            <button class="btn primary" :disabled="!saveName.trim()" @click="confirmSaveTpl">保存</button>
-          </div>
-        </div>
-      </div>
-    </teleport>
-  </div>
+    <div class="preview-footer no-print">
+      <span>A4 <span class="mx-1 text-dimmed">/</span> 210 × 297 mm</span>
+      <ZoomControl :zoom="zoom" :manual="manual" @change="setManual" />
+    </div>
+    <UModal v-model:open="saveOpen" title="保存模板" :dismissible="!saving" :close="!saving">
+      <template #body>
+        <form id="save-template-form" class="field-stack" @submit.prevent="save">
+          <UFormField label="模板名称" required><UInput v-model="saveName" maxlength="20" placeholder="例如：三年级口算练习" autofocus /></UFormField>
+          <UAlert v-if="exists" color="warning" variant="soft" title="已存在同名模板" />
+          <UCheckbox v-if="exists" v-model="overwrite" label="覆盖已有模板" />
+          <UAlert v-if="saveError" :title="saveError" color="error" variant="soft" role="alert" />
+        </form>
+      </template>
+      <template #footer><UButton color="neutral" variant="outline" label="取消" :disabled="saving" @click="saveOpen = false" /><UButton type="submit" form="save-template-form" label="保存模板" :loading="saving" :disabled="saving || !saveName.trim() || (exists && !overwrite)" /></template>
+    </UModal>
+    <UAlert v-if="saved" class="save-notice no-print" :color="saveSynced ? 'success' : 'warning'" variant="soft" :title="saveMessage" close @update:open="saved = false" />
+  </section>
 </template>
 
 <style scoped>
-.preview-pane { height: 100%; display: flex; flex-direction: column; min-height: 0; }
-.preview-fill { flex: 1; min-height: 0; overflow: auto; }
-.btn-primary-on { border-color: var(--primary); color: var(--primary); }
+.save-notice { position: absolute; right: 20px; bottom: 50px; width: min(320px, calc(100vw - 40px)); z-index: 20; }
 </style>

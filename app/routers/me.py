@@ -6,21 +6,34 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.deps import require_user
 from app.services import user_store
 from app.services.user_store import CurrentUser
+from app.services.generation_control import usage_summary, request_status
+import asyncio
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/me", tags=["个人数据"])
+
+
+@router.get("/usage", summary="最近 24 小时的生成用量")
+async def generation_usage(user: CurrentUser = Depends(require_user)):
+    return await asyncio.to_thread(usage_summary, user.id)
+
+
+@router.get("/generations/{request_id}", summary="查询本人生成请求的状态及结果")
+async def generation_status(request_id: str, user: CurrentUser = Depends(require_user)):
+    return await asyncio.to_thread(request_status, user.id, request_id)
 
 
 # ─── 每用户模板 ───
 
 class TemplateIn(BaseModel):
     template: dict  # 前端 MyTemplate 完整结构，以 name 为唯一键
+    expected_revision: int | None = Field(None, ge=0)
 
 
 class BulkTemplatesIn(BaseModel):
@@ -39,22 +52,28 @@ def _check_template_size(template: dict) -> None:
 
 @router.get("/templates", summary="列出当前用户的模板")
 async def list_templates(user: CurrentUser = Depends(require_user)):
-    return {"templates": user_store.list_templates(user.id)}
+    return {"templates": await asyncio.to_thread(user_store.list_templates, user.id)}
 
 
 @router.put("/templates", summary="保存/覆盖模板（按 name upsert）")
 async def upsert_template(req: TemplateIn, user: CurrentUser = Depends(require_user)):
     name = (req.template or {}).get("name")
-    if not name or not isinstance(name, str):
-        raise HTTPException(status_code=400, detail={"error": "模板缺少 name 字段"})
+    if not isinstance(name, str) or not name.strip() or len(name) > 120:
+        raise HTTPException(status_code=400, detail={"error": "模板名称需为 1 至 120 个字符"})
     _check_template_size(req.template)
-    user_store.upsert_template(user.id, name, req.template)
-    return {"status": "ok"}
+    try:
+        revision = await asyncio.to_thread(user_store.upsert_template, user.id, name, req.template, req.expected_revision)
+    except user_store.TemplateConflict as exc:
+        raise HTTPException(409, detail={"error": str(exc), "code": "template_conflict"}) from exc
+    return {"status": "ok", "revision": revision}
 
 
 @router.delete("/templates", summary="删除模板")
-async def delete_template(name: str, user: CurrentUser = Depends(require_user)):
-    ok = user_store.delete_template(user.id, name)
+async def delete_template(name: str, expected_revision: int | None = Query(None, ge=0), user: CurrentUser = Depends(require_user)):
+    try:
+        ok = await asyncio.to_thread(user_store.delete_template, user.id, name, expected_revision)
+    except user_store.TemplateConflict as exc:
+        raise HTTPException(409, detail={"error": str(exc), "code": "template_conflict"}) from exc
     if not ok:
         raise HTTPException(status_code=404, detail={"error": "模板不存在"})
     return {"status": "ok"}
@@ -64,6 +83,8 @@ async def delete_template(name: str, user: CurrentUser = Depends(require_user)):
 async def bulk_upload(req: BulkTemplatesIn, user: CurrentUser = Depends(require_user)):
     templates = [t for t in (req.templates or []) if isinstance(t, dict) and t.get("name")]
     for t in templates:
+        if not isinstance(t["name"], str) or not t["name"].strip() or len(t["name"]) > 120:
+            raise HTTPException(400, detail={"error": "模板名称需为 1 至 120 个字符"})
         _check_template_size(t)
-    n = user_store.bulk_upsert_templates(user.id, templates)
+    n = await asyncio.to_thread(user_store.bulk_upsert_templates, user.id, templates)
     return {"status": "ok", "imported": n}

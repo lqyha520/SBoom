@@ -9,7 +9,46 @@
  */
 import { createApp, h } from 'vue'
 import type { PaperData, PaperStyle, PaperTemplate } from './types'
+import type { ArchiveSnapshot } from './library'
 import { answerOf, escHtml } from './utils'
+
+/* ── html2canvas 字体基线探针的环境修正 ──
+ *
+ * html2canvas@1.4.1 自己造一个探针来量「行盒顶 → 基线」的距离：在 <body> 下插一个
+ * 无 class/id 的裸 div（内联样式含 visibility:hidden、white-space:nowrap），里面放
+ * 一个 span 和一个 1×1 的 <img>，用 `img.offsetTop - span.offsetTop + 2` 当作基线。
+ * 这个算法只在「那个 img 是行内元素」时成立；而本项目的全局基础样式（Tailwind
+ * preflight）写了 `img,svg,video,…{display:block}`，img 变成块级盒、被排到文字行下方，
+ * 量出的基线被抬高约 1em（14.67px 字号下 ~21px，而真实值约 12px）。
+ *
+ * 后果：导出 PDF 时所有文字都比预览低。行高越紧偏移越大——普通段落约低 3~5px（不易
+ * 察觉），而 .split-box / .compare-expr 这类 line-height:1 的小方框会低 9~11px，数字
+ * 直接压到方框底边上（预览正常、导出错位）。
+ *
+ * 修法：只在导出期间给探针本身补回它预期的样式。选择器把范围卡死在
+ * 「body 的直接子级、无 class/id、内联样式带 visibility:hidden + white-space:nowrap
+ *  + font-family + font-size」的 div，以及它里面的 1×1 img——即 html2canvas 的探针，
+ * 不会命中页面任何其它元素；导出结束（含异常）立即移除，不留残留。
+ * 修好后实测残余偏移仅 +1~2px。 */
+const PROBE_SEL =
+  'body > div:not([class]):not([id])[style*="visibility: hidden"]' +
+  '[style*="white-space: nowrap"][style*="font-family"][style*="font-size"]'
+const PROBE_FIX_CSS =
+  `${PROBE_SEL} { line-height: normal !important; }\n` +
+  `${PROBE_SEL} > img[width="1"][height="1"] { display: inline !important; vertical-align: baseline !important; }`
+
+/** 在 html2canvas 渲染期间挂上探针样式修正（见 PROBE_FIX_CSS），结束后必定移除 */
+async function withProbeFix<T>(run: () => Promise<T>): Promise<T> {
+  const style = document.createElement('style')
+  style.setAttribute('data-lc-export', 'probe-fix')
+  style.textContent = PROBE_FIX_CSS
+  document.head.appendChild(style)
+  try {
+    return await run()
+  } finally {
+    style.remove()
+  }
+}
 
 /** 容器 → A4 页画布数组（在元素边界处断页）；按需关闭彩色装饰（省墨） */
 async function canvasesOf(holder: HTMLElement, style?: PaperStyle): Promise<HTMLCanvasElement[]> {
@@ -27,7 +66,8 @@ async function canvasesOf(holder: HTMLElement, style?: PaperStyle): Promise<HTML
   }
   const pages: HTMLCanvasElement[] = []
   for (const paper of Array.from(holder.querySelectorAll('.paper:not(.measure)'))) {
-    const canvas = await html2canvas(paper as HTMLElement, { scale: 3, backgroundColor: '#ffffff' })
+    const canvas = await withProbeFix(() =>
+      html2canvas(paper as HTMLElement, { scale: 3, backgroundColor: '#ffffff' }))
     const W = canvas.width
     const pageH = Math.round(W * 297 / 210)
 
@@ -106,6 +146,7 @@ export function buildAnswerPaper(paper: PaperData): PaperData {
    子元素绝对定位溢出显示但不占布局，截图取的是子元素本身不受父 overflow 影响） */
 function makeHolder(): HTMLElement {
   const holder = document.createElement('div')
+  holder.setAttribute('aria-hidden', 'true')
   holder.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;overflow:hidden;'
   const inner = document.createElement('div')
   inner.style.cssText = 'position:absolute;left:0;top:0;background:#fff;'
@@ -129,7 +170,8 @@ function canvasesToJpegs(pages: HTMLCanvasElement[], quality = 0.92): string[] {
 
 /* ── JPEG dataURL → PDF（增量添加，画布侧已释放；jspdf 动态加载，模块缓存命中时零开销） ── */
 type jsPDF = import('jspdf').jsPDF
-async function imagesToPDF(images: string[]): Promise<jsPDF> {
+async function imagesToPDF(images: string[], stampNumbers = true): Promise<jsPDF> {
+  if (!images.length) throw new Error('试卷没有可导出的页面')
   const { jsPDF: JsPDF } = await import('jspdf')
   const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
   images.forEach((img, i) => {
@@ -139,7 +181,7 @@ async function imagesToPDF(images: string[]): Promise<jsPDF> {
   const total = images.length
   doc.setFont('times', 'normal')
   doc.setFontSize(9)
-  for (let i = 1; i <= total; i++) {
+  for (let i = 1; stampNumbers && i <= total; i++) {
     doc.setPage(i)
     doc.text(`- ${i} / ${total} -`, 105, 292.5, { align: 'center' })
   }
@@ -159,6 +201,44 @@ function baseTitle(paper: PaperData, template: PaperTemplate): string {
     paper.title ||
     (template.titlePrefix ? `${template.titlePrefix}·${paper.grade}${paper.subject}` : `${paper.grade}${paper.subject}`) + (template.titleSuffix || '测试卷')
   )
+}
+
+/** The same fixed page pixels feed both the PDF and its private mobile previews. */
+export async function createArchiveBundle(snapshot: ArchiveSnapshot, progress?: (message: string) => void): Promise<Blob> {
+  const { paper, template, style, export_options: options } = snapshot
+  const { default: JSZip } = await import('jszip')
+  const zip = new JSZip()
+  const pages: HTMLCanvasElement[] = []
+  try {
+    if (options.mode !== 'answersOnly') pages.push(...await studentCanvases(paper, template, style, options.addDay))
+    if (options.mode !== 'student') pages.push(...await answerCanvases(paper, template, style))
+    if (!pages.length || pages.length > 40) throw new Error('每份归档支持 1 至 40 页，请减少题目或答案页后重试')
+    const images: string[] = []
+    for (let index = 0; index < pages.length; index++) {
+      progress?.(`正在处理第 ${index + 1}/${pages.length} 页`)
+      const page = pages[index]
+      const ctx = page.getContext('2d')!
+      const pixelsPerMm = page.width / 210
+      ctx.fillStyle = '#000000'
+      ctx.font = `${9 * 25.4 / 72 * pixelsPerMm}px Times New Roman`
+      ctx.textAlign = 'center'
+      ctx.fillText(`- ${index + 1} / ${pages.length} -`, page.width / 2, 292.5 * pixelsPerMm)
+      images.push(page.toDataURL('image/jpeg', 0.92))
+      const preview = document.createElement('canvas')
+      preview.width = Math.min(1040, page.width)
+      preview.height = Math.round(preview.width * 297 / 210)
+      try {
+        preview.getContext('2d')!.drawImage(page, 0, 0, preview.width, preview.height)
+        const blob = await new Promise<Blob>((resolve, reject) => preview.toBlob(value => value ? resolve(value) : reject(new Error('预览图生成失败')), 'image/jpeg', 0.85))
+        zip.file(`page-${index + 1}.jpg`, blob)
+      } finally { preview.width = preview.height = 0 }
+      page.width = page.height = 0
+    }
+    zip.file('paper.pdf', (await imagesToPDF(images, false)).output('arraybuffer'))
+    const bundle = await zip.generateAsync({ type: 'blob', compression: 'STORE' })
+    if (bundle.size > 40 * 1024 * 1024) throw new Error('文件包超过 40 MB，请减少页数后重试')
+    return bundle
+  } finally { pages.forEach(page => { page.width = page.height = 0 }) }
 }
 
 /* ── 单份导出 ── */
@@ -252,6 +332,7 @@ async function renderPaperCanvases(
   })
   app.mount(mountPoint)
   try {
+    await document.fonts?.ready
     const totalQ = paper.sections.reduce((s, x) => s + (x.data.questions?.length || 0), 0)
     const deadline = Date.now() + 10000
     let lastSig = ''
@@ -270,6 +351,7 @@ async function renderPaperCanvases(
         lastSig = sig
       }
     }
+    if (stableFrames < 3) throw new Error('试卷分页尚未完成，请稍后重试导出')
     return await canvasesOf(holder, style)
   } finally {
     app.unmount()

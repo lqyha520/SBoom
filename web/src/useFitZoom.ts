@@ -17,7 +17,10 @@ export function useFitZoom(container: Ref<HTMLElement | null>) {
   function update() {
     const el = container.value
     if (!el) return
-    auto.value = Math.min(1, Math.max(0.25, (el.clientWidth - 20) / PAPER_W))
+    if (!el.clientWidth) return
+    const style = getComputedStyle(el)
+    const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
+    auto.value = Math.min(1, Math.max(0.25, (el.clientWidth - padding - 12) / PAPER_W))
     apply()
   }
 
@@ -26,7 +29,7 @@ export function useFitZoom(container: Ref<HTMLElement | null>) {
   }
 
   function setManual(v: number) {
-    manual.value = Math.min(1, Math.max(0.25, v))
+    manual.value = !Number.isFinite(v) || v <= 0 ? 0 : Math.min(1, Math.max(0.25, v))
     apply()
   }
 

@@ -1,6 +1,8 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 from functools import lru_cache
+from typing import Literal
 
 APP_VERSION = "0.5.0"  # 唯一版本号来源（main.py / admin stats 都引用这里）
 
@@ -20,7 +22,13 @@ class Settings(BaseSettings):
 
     # 题目生成
     default_question_count: int = 5
-    max_question_count: int = 10  # 单题型题目数上限（models 的 Field(le=) 与此保持一致）
+    max_question_count: int = 30
+    generation_daily_limit: int = Field(100, ge=1, le=100000)
+    generation_user_concurrency: int = Field(3, ge=1, le=100)
+    generation_global_concurrency: int = Field(6, ge=1, le=1000)
+    generation_repair_limit: int = Field(3, ge=0, le=10)
+    generation_lease_seconds: int = Field(3600, ge=60, le=86400)
+    generation_result_days: int = Field(7, ge=1, le=365)
 
     # 服务
     host: str = "127.0.0.1"
@@ -34,11 +42,27 @@ class Settings(BaseSettings):
 
     # 注册开关
     registration_enabled: bool = True  # 关闭后 /auth/register 返回 403
+    mini_registration_enabled: bool = True
 
     # 多用户
     secret_key: str = ""  # 会话签名/加密密钥；空则自动生成并持久化到 data/secret_key.txt
     cors_origins: str = ""  # 逗号分隔的跨域白名单；空 = 仅同源（默认，最安全）
     force_https: bool = False  # HTTPS 部署时设 true：会话 Cookie 加 Secure 标志
+
+    # Paper library: private local files for development, private COS for deployment.
+    archive_storage: Literal["local", "cos"] = "local"
+    archive_local_dir: str = ""
+    archive_max_papers: int = Field(1000, ge=1, le=100000)
+    archive_storage_mb: int = Field(512, ge=16, le=102400)
+    archive_max_bundle_mb: int = Field(40, ge=1, le=64)
+    cos_region: str = ""
+    cos_bucket: str = ""
+    cos_secret_id: str = ""
+    cos_secret_key: str = ""
+
+    wechat_app_id: str = ""
+    wechat_app_secret: str = ""
+    mini_session_days: int = Field(7, ge=1, le=30)
 
     # 后台管理
     admin_username: str = ""  # 种子管理员用户名（可选；设置后启动时自动创建/对齐）

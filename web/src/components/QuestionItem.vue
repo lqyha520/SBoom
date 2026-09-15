@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Question, SecLayout } from '../types'
-import { answerOf, cirNum, escHtml, isBlankVal, stripOptPrefix, tfStem } from '../utils'
+import { answerOf, cirNum, escHtml, isBlankVal, spaceOps, stripOptPrefix, tfStem } from '../utils'
 import { sanitizeRich } from '../sanitize'
 
 const props = defineProps<{
@@ -30,7 +30,8 @@ const stemNoQuestion = computed(() => {
   return s.trim() !== '' && !/[？?]\s*$/.test(s.trim())
 })
 
-const stemText = computed(() => (isTf.value ? tfStem(props.q.stem || '') : props.q.stem || ''))
+// 算式类题干（口算/竖式/脱式…）的运算符补空格；含汉字的题干原样返回
+const stemText = computed(() => spaceOps(isTf.value ? tfStem(props.q.stem || '') : props.q.stem || ''))
 const noTag = computed(() => (props.layout.showNo === false ? '' : cirNum(props.no) + ' '))
 const lvTag = computed(() => (props.q.difficulty_level ? `[第${props.q.difficulty_level}关] ` : ''))
 const fs = computed(() => (props.layout.fontSize ? { fontSize: props.layout.fontSize } : {}))
@@ -42,7 +43,7 @@ const stemHtml = computed(() =>
 function optHtml(j: number): string {
   const cached = props.q._optsHtml?.[j]
   if (cached != null) return sanitizeRich(cached)
-  return `${String.fromCharCode(65 + j)}. ${escHtml(stripOptPrefix(props.q.options?.[j] ?? ''))}`
+  return `${String.fromCharCode(65 + j)}. ${escHtml(spaceOps(stripOptPrefix(props.q.options?.[j] ?? '')))}`
 }
 
 /* ── 编辑回写（同时捕获富文本 HTML 和纯文本） ── */
@@ -104,9 +105,9 @@ function onExprBlur(e: FocusEvent, field: 'left_expr' | 'right_expr') {
     <template v-else-if="isCompare">
       <span v-if="layout.showNo !== false">{{ noTag }}</span>
       <div class="compare-row">
-        <span class="compare-expr" :contenteditable="editable" @blur="onExprBlur($event, 'left_expr')" @keydown.stop>{{ q.left_expr }}</span>
+        <span class="compare-expr" :contenteditable="editable" @blur="onExprBlur($event, 'left_expr')" @keydown.stop>{{ spaceOps(q.left_expr) }}</span>
         <span class="compare-circle"></span>
-        <span class="compare-expr" :contenteditable="editable" @blur="onExprBlur($event, 'right_expr')" @keydown.stop>{{ q.right_expr }}</span>
+        <span class="compare-expr" :contenteditable="editable" @blur="onExprBlur($event, 'right_expr')" @keydown.stop>{{ spaceOps(q.right_expr) }}</span>
       </div>
     </template>
 
@@ -135,8 +136,8 @@ function onExprBlur(e: FocusEvent, field: 'left_expr' | 'right_expr') {
       <table v-else-if="q.left_items" class="match-table" data-e="match">
         <tr><th style="width:50%">左栏</th><th style="width:50%">右栏</th></tr>
         <tr v-for="(_, i) in q.left_items" :key="i">
-          <td :contenteditable="editable" @blur="onMatchBlur($event, 'left', i)">{{ `（${i + 1}）` }}{{ q.left_items![i] }}</td>
-          <td :contenteditable="editable" @blur="onMatchBlur($event, 'right', i)">{{ `（${i + 1}）` }}{{ q.right_items?.[i] }}</td>
+          <td :contenteditable="editable" @blur="onMatchBlur($event, 'left', i)">{{ `（${i + 1}）` }}{{ spaceOps(q.left_items![i]) }}</td>
+          <td :contenteditable="editable" @blur="onMatchBlur($event, 'right', i)">{{ `（${i + 1}）` }}{{ spaceOps(q.right_items?.[i]) }}</td>
         </tr>
       </table>
     </template>

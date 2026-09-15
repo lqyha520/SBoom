@@ -1,7 +1,7 @@
 """认证路由 —— 注册 / 登录 / 登出 / 当前用户
 
-角色规则：数据库中尚无管理员时，新注册的第一个用户自动成为管理员；
-也可以用 .env 的 ADMIN_USERNAME / ADMIN_PASSWORD 在启动时种子一个管理员。
+注册始终创建普通用户；管理员由 .env 的 ADMIN_USERNAME / ADMIN_PASSWORD
+在启动时创建，或由已有管理员明确授予权限。
 
 注：REGISTRATION_ENABLED=false 可关闭注册（管理员可在后台开用户）。
 """
@@ -64,8 +64,7 @@ async def register(req: Credentials, request: Request, response: Response):
     if user_store.get_user_by_username(req.username):
         raise HTTPException(status_code=409, detail={"error": "用户名已被占用"})
 
-    # 首个用户自动成为管理员（此后注册的都是普通用户）
-    role = "admin" if user_store.count_admins() == 0 else "user"
+    role = "user"
     try:
         user = user_store.create_user(req.username, req.password, role=role)
     except Exception:

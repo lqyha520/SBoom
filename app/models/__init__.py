@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Dict, List, Literal, Optional, Union
 from enum import Enum
 
@@ -77,7 +77,8 @@ class ValidateRequest(BaseModel):
 
 class BatchItem(BaseModel):
     """批量生成里的单个题型任务"""
-    game_type: str  # 自定义题型名可能是任意字符串，不用枚举约束
+    game_type: str = Field(min_length=1, max_length=80)
+    section_id: Optional[str] = Field(None, min_length=1, max_length=80)
     question_count: int = Field(5, ge=1, le=30)
 
 
@@ -87,7 +88,14 @@ class BatchGenerateRequest(BaseModel):
     subject: Subject
     keyword: str = Field(..., min_length=1, max_length=100)
     difficulty: Difficulty = Field(Difficulty.MEDIUM)
-    items: List[BatchItem] = Field(..., min_items=1, max_items=10)
+    items: List[BatchItem] = Field(..., min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def unique_section_ids(self):
+        ids = [item.section_id or f"section-{i + 1}" for i, item in enumerate(self.items)]
+        if len(ids) != len(set(ids)):
+            raise ValueError("section_id must be unique within a batch")
+        return self
 
 
 class FeedbackRequest(BaseModel):
@@ -113,6 +121,7 @@ class Question(BaseModel):
     left_expr: Optional[str] = None           # 比大小：左边表达式
     right_expr: Optional[str] = None          # 比大小：右边表达式
     answer: Union[str, int, float, List[List[int]]]  # 正确答案（口算题可能是小数；配对题为索引数组）
+    acceptable_answers: Optional[List[str]] = None
     analysis: str = ""                        # 解析
     tags: List[str] = []                      # 知识点标签
     difficulty_level: Optional[int] = None    # 闯关题的关卡
@@ -122,7 +131,10 @@ class Question(BaseModel):
 class GameResult(BaseModel):
     """LLM 生成结果"""
     game_type: str
+    section_id: Optional[str] = None
+    request_id: Optional[str] = None
     topic: str
+    passage: Optional[str] = None
     difficulty: str
     grade: str
     subject: str
@@ -130,11 +142,13 @@ class GameResult(BaseModel):
     total_score: int = 100
     pass_score: int = 60
     missing_count: int = 0  # 质检拦截后补生成仍缺的题数（>0 时前端应提示重试）
+    quality_warnings: List[str] = Field(default_factory=list)
 
 
 class BatchGenerateResponse(BaseModel):
     """批量生成结果：每项对应一个题型的一套题"""
     sections: List[GameResult] = []
+    request_id: Optional[str] = None
 
 
 class ValidateResult(BaseModel):
@@ -142,6 +156,7 @@ class ValidateResult(BaseModel):
     is_oob: bool                               # 是否超纲
     oob_points: List[str] = []                 # 超纲的知识点
     suggestion: Optional[str] = None           # 修改建议
+    request_id: Optional[str] = None
 
 
 class KnowledgeScope(BaseModel):

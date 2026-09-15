@@ -1,6 +1,8 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
+import ui from '@nuxt/ui/vue-plugin'
 import App from './App.vue'
+import { useAuthStore } from './stores/auth'
 import './styles/tokens.css'
 import './styles/base.css'
 import './styles/paper.css'
@@ -10,8 +12,8 @@ async function bootstrap() {
   const app = createApp(App)
   const pinia = createPinia()
   app.use(pinia)
+  app.use(ui)
 
-  const { useAuthStore } = await import('./stores/auth')
   const auth = useAuthStore()
   await auth.init()
 

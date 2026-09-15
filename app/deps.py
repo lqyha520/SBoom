@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from fastapi import Cookie, Depends, HTTPException
+from fastapi import Cookie, Depends, HTTPException, Header
 
 from app.security import parse_token
 from app.services.user_store import CurrentUser, get_user_by_id
@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 SESSION_COOKIE = "lc_session"
 
 
-async def require_user(token: Optional[str] = Cookie(None, alias=SESSION_COOKIE)) -> CurrentUser:
+async def require_user(token: Optional[str] = Cookie(None, alias=SESSION_COOKIE),
+                       workspace_user: Optional[str] = Header(None, alias="X-Workspace-User")) -> CurrentUser:
     """从 httpOnly Cookie 中解析会话令牌，返回当前用户；未登录/过期抛 401。"""
     if not token:
         raise HTTPException(status_code=401, detail={"error": "请先登录"})
@@ -28,6 +29,8 @@ async def require_user(token: Optional[str] = Cookie(None, alias=SESSION_COOKIE)
         raise HTTPException(status_code=401, detail={"error": "账号不存在"})
     if not user.is_active:
         raise HTTPException(status_code=403, detail={"error": "账号已被禁用，请联系管理员"})
+    if workspace_user is not None and workspace_user != str(user.id):
+        raise HTTPException(status_code=409, detail={"error": "登录账号已变化，请刷新后继续", "code": "account_changed"})
     # 改密/重置密码后吊销旧会话：早于 token_valid_after 签发的令牌不再有效
     if user.token_valid_after and payload.get("iat", 0) < user.token_valid_after:
         raise HTTPException(status_code=401, detail={"error": "会话已失效，请重新登录"})

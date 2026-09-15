@@ -13,8 +13,7 @@
     "skipLibCheck": true,
     "noEmit": true,
     "noUnusedLocals": false,
-    "baseUrl": ".",
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "components.d.ts", "auto-imports.d.ts"]
 }

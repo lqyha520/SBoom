@@ -19,6 +19,11 @@ export interface AdminStats {
   llmConfigured: number
   feedbacks: number
   feedbacksOob: number
+  generationUsage?: {
+    requests: number; succeeded: number; running: number; unknown: number
+    model_calls: number; reported_calls: number; prompt_tokens: number; completion_tokens: number; daily_limit: number
+  }
+  securityWarnings?: string[]
   server: { model: string; encryption: string; version: string }
 }
 
@@ -43,7 +48,7 @@ export const AUTH_EXPIRED_EVENT = 'lc-admin:auth-expired'
 const DEFAULT_TIMEOUT_MS = 30_000
 const TEST_LLM_TIMEOUT_MS = 120_000
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
+export async function request<T>(url: string, init?: RequestInit): Promise<T> {
   let r: Response
   try {
     r = await fetch(url, {
@@ -97,10 +102,12 @@ export async function fetchAdminStats(): Promise<AdminStats> {
   return request('/api/v1/admin/stats')
 }
 
-export async function fetchAdminUsers(query = ''): Promise<AdminUser[]> {
-  const d = await request<{ users: AdminUser[] }>(
-    `/api/v1/admin/users${query ? `?query=${encodeURIComponent(query)}` : ''}`,
-  )
+export async function fetchAdminUsers(query = '', role: '' | 'user' | 'admin' = ''): Promise<AdminUser[]> {
+  const params = new URLSearchParams()
+  if (query) params.set('query', query)
+  if (role) params.set('role', role)
+  const suffix = params.toString()
+  const d = await request<{ users: AdminUser[] }>(`/api/v1/admin/users${suffix ? `?${suffix}` : ''}`)
   return d.users || []
 }
 

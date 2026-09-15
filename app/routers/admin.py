@@ -14,10 +14,11 @@ from pydantic import BaseModel
 
 from app.config import get_settings, APP_VERSION
 from app.deps import require_admin, require_user
-from app.security import encryption_backend
+from app.security import encryption_backend, security_warnings
 from app.services import app_config, user_store
 from app.services.llm_client import llm_client
 from app.services.user_store import CurrentUser
+from app.services.generation_control import usage_summary
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin", tags=["后台管理"])
@@ -40,9 +41,11 @@ async def stats(admin: CurrentUser = Depends(require_admin)):
         fb_oob = conn.execute("SELECT COUNT(*) c FROM feedbacks WHERE is_oob = 1").fetchone()["c"]
     return {
         **s,
-        "llmConfigured": g["hasKey"] or bool(g["baseUrl"]),
+        "llmConfigured": g["hasKey"] or bool(settings.llm_api_key),
         "feedbacks": fb_total,
         "feedbacksOob": fb_oob,
+        "generationUsage": usage_summary(),
+        "securityWarnings": security_warnings(),
         "server": {
             "model": g["model"] or settings.llm_model or "（未配置）",
             "encryption": encryption_backend(),
@@ -73,9 +76,11 @@ async def list_feedbacks(
 
 # ─── 用户管理 ───
 
-@router.get("/users", summary="用户列表（可按用户名搜索）")
-async def list_users(query: str = "", admin: CurrentUser = Depends(require_admin)):
-    return {"users": user_store.list_users(query.strip())}
+@router.get("/users", summary="用户列表（可按用户名搜索、按角色筛选）")
+async def list_users(query: str = "", role: str = "", admin: CurrentUser = Depends(require_admin)):
+    if role and role not in ("user", "admin"):
+        raise HTTPException(status_code=400, detail={"error": "role 只能是 user 或 admin"})
+    return {"users": user_store.list_users(query.strip(), role)}
 
 
 class AdminCreateUser(BaseModel):
@@ -136,7 +141,10 @@ async def update_user(user_id: int, req: AdminUpdateUser, admin: CurrentUser = D
 async def delete_user(user_id: int, admin: CurrentUser = Depends(require_admin)):
     if user_id == admin.id:
         raise HTTPException(status_code=400, detail={"error": "不能删除自己的账号"})
-    ok = user_store.delete_user(user_id)
+    try:
+        ok = user_store.delete_user(user_id)
+    except user_store.UserHasCatalogPapers as exc:
+        raise HTTPException(409, detail={"error": str(exc)}) from exc
     if not ok:
         raise HTTPException(status_code=404, detail={"error": "用户不存在"})
     logger.info(f"管理员 {admin.username} 删除了用户 id={user_id}")

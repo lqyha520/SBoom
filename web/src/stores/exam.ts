@@ -1,6 +1,9 @@
 import { defineStore } from 'pinia'
+import { watch, type WatchStopHandle } from 'vue'
 import {
   DEFAULT_LAYOUT,
+  MAX_QUESTIONS_PER_TYPE,
+  MAX_GENERATION_TYPES,
   LS,
   TEMPLATES,
   TYPE_DEFAULT,
@@ -20,13 +23,16 @@ import type {
   SecLayout,
   Section,
 } from '../types'
-import { ensureQids, gradeNumOf, mockQuestions, uid } from '../utils'
-import { UID_KEY, userPrefix } from './auth'
+import { deepClone, ensureQids, gradeNumOf, mockQuestions, uid } from '../utils'
+import { useAuthStore, userPrefix } from './auth'
+import { createGenerationRun, runGenerationJob, type GenerationContext, type GenerationMode, type GenerationRun } from '../generation'
+import * as persistence from '../persistence'
+import type { HistoryEntry, HistoryReason, WorkspaceSnapshot } from '../persistence'
+export { deepClone } from '../utils'
 
 /** 当前登录用户的 localStorage 命名空间前缀（多用户数据隔离）。
  *  localStorage 被禁用（隐私模式/权限策略）时不至于在模块加载期抛错白屏 */
-const _uid = (() => { try { return localStorage.getItem(UID_KEY) || '' } catch { return '' } })()
-const K = (k: string): string => (_uid ? userPrefix(_uid) + k : k)
+const K = (owner: string, key: string): string => userPrefix(owner || 'guest') + key
 
 /** 安全写入 localStorage：配额超限（Safari 5MB / 隐私模式）不再抛穿调用链 */
 function safeSet(key: string, val: string): boolean {
@@ -40,25 +46,18 @@ function safeSet(key: string, val: string): boolean {
 }
 
 /** 结构化深拷贝（可含 Date 等类型；极老浏览器退回 JSON 深拷贝） */
-export function deepClone<T>(v: T): T {
+function load<T>(owner: string, key: string, fallback: T): T {
   try {
-    return structuredClone(v)
-  } catch {
-    return JSON.parse(JSON.stringify(v))
-  }
-}
-
-function load<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(K(key))
+    const raw = localStorage.getItem(K(owner, key))
     return raw ? { ...fallback, ...JSON.parse(raw) } : fallback
   } catch {
     return fallback
   }
 }
-function loadArr<T>(key: string): T[] {
+function loadArr<T>(owner: string, key: string): T[] {
   try {
-    return JSON.parse(localStorage.getItem(K(key)) || '[]')
+    const value = JSON.parse(localStorage.getItem(K(owner, key)) || '[]')
+    return Array.isArray(value) ? value : []
   } catch {
     return []
   }
@@ -70,6 +69,9 @@ function migrateMyTemplates(raw: any[]): MyTemplate[] {
     .filter(t => t && t.name)
     .map(t => ({
       name: t.name,
+      _revision: Number.isInteger(t._revision) ? t._revision : 0,
+      _syncState: t._syncState || (t._revision ? 'synced' : 'pending'),
+      _syncError: t._syncError || '',
       grade: t.grade || '',
       subject: t.subject || '',
       keyword: t.keyword || '',
@@ -81,6 +83,7 @@ function migrateMyTemplates(raw: any[]): MyTemplate[] {
       hiddenElements: t.hiddenElements || [],
       cards: (t.cards || []).map((c: any) => ({
         type: c.type,
+        name: c.name,
         count: c.count ?? 1,
         layout: { ...DEFAULT_LAYOUT, ...(c.layout || c._layout || {}) },
       })),
@@ -123,9 +126,10 @@ function applyOldSnapshot(cards: { type: string; count: number; data: GameData }
 }
 
 /** 旧版装饰设置迁移：lc_paper_bg + lc_paper_kid → 统一的 paper style（只读全局旧键） */
-function migratePaperStyle(): Partial<PaperStyle> | null {
-  if (localStorage.getItem(K(LS.paperStyle))) return null // 新格式已存在，不迁移
+function migratePaperStyle(owner: string): Partial<PaperStyle> | null {
   try {
+    if (localStorage.getItem(K(owner, LS.paperStyle))) return null
+    if (localStorage.getItem('lc_legacy_owner') !== owner) return null
     const bg = JSON.parse(localStorage.getItem('lc_paper_bg') || 'null')
     const kid = JSON.parse(localStorage.getItem('lc_paper_kid') || 'null')
     if (!bg && !kid) return null
@@ -164,24 +168,51 @@ const STYLE_DEFAULTS: PaperStyle = {
 }
 
 /** 卷面样式持久化的防抖句柄（模块级，store 重建也共用） */
-let _styleSaveTimer: ReturnType<typeof setTimeout> | undefined
+interface DraftRuntime {
+  owner: string
+  id: string
+  sequence: number
+  pending: Promise<unknown>
+  timer?: ReturnType<typeof setTimeout>
+  stop?: WatchStopHandle
+}
+const draftRuntimes = new WeakMap<object, DraftRuntime>()
+const styleSaveTimers = new WeakMap<object, ReturnType<typeof setTimeout>>()
+
+function sameTemplate(a: MyTemplate, b: MyTemplate) {
+  const content = ({ _revision, _syncState, _syncError, ...rest }: MyTemplate) => rest
+  return JSON.stringify(content(a)) === JSON.stringify(content(b))
+}
 
 export const useExamStore = defineStore('exam', {
   state: () => {
+    const ownerId = String(useAuthStore().user?.id || '')
     // 自定义模板存为响应式 state（历史实现直接改模块常量 TEMPLATES 的 custom 项，
     // 它不是响应式对象——正在使用 custom 模板时编辑配置，卷面不更新，要切走再切回才生效）
     const customTpl: PaperTemplate = { ...TEMPLATES.find(t => t.id === 'custom')! }
     try {
-      const savedCustom = JSON.parse(localStorage.getItem(K(LS.customTemplate)) || 'null')
+      const savedCustom = JSON.parse(localStorage.getItem(K(ownerId, LS.customTemplate)) || 'null')
       if (savedCustom) Object.assign(customTpl, savedCustom)
     } catch { /* ignore */ }
     let templateId = 'exam'
     try {
-      const p = JSON.parse(localStorage.getItem(K(LS.template)) || 'null')
+      const p = JSON.parse(localStorage.getItem(K(ownerId, LS.template)) || 'null')
       if (p?.id && TEMPLATES.some(t => t.id === p.id)) templateId = p.id
     } catch { /* ignore */ }
 
     return {
+      ownerId,
+      accountChanged: false,
+      persistenceReady: false,
+      draftState: 'loading' as 'loading' | 'saving' | 'saved' | 'error',
+      draftSavedAt: 0,
+      storageError: '',
+      history: [] as HistoryEntry[],
+      historyBusy: false,
+      pendingRun: null as GenerationRun | null,
+      usage: null as api.GenerationUsage | null,
+      templatesSyncing: false,
+      templateBusy: [] as string[],
       /* 当前视图：搭建 | 结果 */
       view: 'build' as 'build' | 'result',
 
@@ -231,16 +262,16 @@ export const useExamStore = defineStore('exam', {
       /** 自定义模板的当前配置（响应式；template getter 在 id=custom 时返回它） */
       customTemplate: customTpl,
       style: (() => {
-        const s = load<PaperStyle>(LS.paperStyle, STYLE_DEFAULTS)
+        const s = load<PaperStyle>(ownerId, LS.paperStyle, { ...STYLE_DEFAULTS })
         // 大字号不再默认跟随年级：已存的 auto 归一为 off
         if (s.kidFont === 'auto') s.kidFont = 'off'
-        const migrated = migratePaperStyle()
+        const migrated = migratePaperStyle(ownerId)
         return migrated ? { ...s, ...migrated } : s
       })(),
 
       /* 自定义题型 / 我的模板（模型配置已收归后台 /admin 统一管理） */
-      customTypes: loadArr<CustomType>(LS.customTypes),
-      myTemplates: migrateMyTemplates(loadArr<any>(LS.myTemplates)),
+      customTypes: loadArr<CustomType>(ownerId, LS.customTypes),
+      myTemplates: migrateMyTemplates(loadArr<any>(ownerId, LS.myTemplates)),
     }
   },
 
@@ -274,61 +305,299 @@ export const useExamStore = defineStore('exam', {
     errorCount(state): number {
       return state.sections.filter(s => s.status === 'error').length
     },
+    generationIssue(state): string {
+      if (state.sections.some(s => !Number.isInteger(s.count) || s.count < 1 || s.count > MAX_QUESTIONS_PER_TYPE)) {
+        return `每个大题需设置 1 至 ${MAX_QUESTIONS_PER_TYPE} 道题`
+      }
+      if (new Set(state.sections.map(s => s.type)).size > MAX_GENERATION_TYPES) {
+        return `一次最多生成 ${MAX_GENERATION_TYPES} 种题型`
+      }
+      return ''
+    },
     canGenerate(state): boolean {
-      return state.sections.length > 0 && !state.generating
+      return !!state.grade && !!state.subject && !!state.keyword.trim()
+        && state.sections.length > 0 && !state.generating && !state.accountChanged && !this.generationIssue
     },
   },
 
   actions: {
-    /* ── 初始化 ── */
+    /* ── 初始化与本地版本 ── */
     async init() {
+      await this.initPersistence()
       this.availableLoading = true
       this.availableError = ''
-      try {
-        this.available = await api.fetchAvailable()
-      } catch (e: any) {
-        this.availableError = '年级加载失败，请刷新重试'
-      } finally {
-        this.availableLoading = false
-      }
-      // 多用户：从服务端同步「我的模板」（服务端优先，保留本地独有）
-      this.syncTemplatesFromServer()
+      try { this.available = await api.fetchAvailable() }
+      catch { this.availableError = '年级加载失败，请刷新重试' }
+      finally { this.availableLoading = false }
+      if (this.grade && this.subject) void this.selectSubject(this.subject)
+      void this.syncTemplatesFromServer()
+      void this.refreshUsage()
     },
 
-    /** 与服务端模板列表合并（服务端版本优先，本地独有的追加） */
-    async syncTemplatesFromServer() {
+    captureSnapshot(): WorkspaceSnapshot {
+      return deepClone({
+        version: 1, grade: this.grade, subject: this.subject, keyword: this.keyword,
+        selectedTags: this.selectedTags, title: this.title, titleHtml: this.titleHtml,
+        difficulty: this.difficulty, hiddenElements: this.hiddenElements,
+        sections: this.sections, papers: this.papers, view: this.view,
+        paperCount: this.paperCount, addDayLabel: this.addDayLabel,
+        templateId: this.templateId, customTemplate: this.customTemplate, style: this.style,
+        generateWarn: this.generateWarn, generateError: this.generateError, pendingRun: this.pendingRun,
+      })
+    },
+
+    applySnapshot(snapshot: WorkspaceSnapshot) {
+      const value = deepClone(snapshot)
+      this.grade = value.grade
+      this.subject = value.subject
+      this.keyword = value.keyword
+      this.selectedTags = value.selectedTags
+      this.title = value.title
+      this.titleHtml = value.titleHtml
+      this.difficulty = value.difficulty
+      this.hiddenElements = value.hiddenElements
+      this.sections = value.sections.map(section => ({
+        ...section,
+        status: section.status === 'loading' ? 'error' : section.status,
+        error: section.status === 'loading' ? '生成请求已中断，可查询原请求结果' : section.error,
+      }))
+      this.papers = value.papers
+      this.view = value.view === 'result' && value.papers.length ? 'result' : 'build'
+      this.paperCount = value.paperCount
+      this.addDayLabel = value.addDayLabel
+      this.templateId = value.templateId
+      this.customTemplate = value.customTemplate
+      this.style = value.style
+      this.generateWarn = value.generateWarn
+      this.generateError = value.generateError
+      this.pendingRun = value.pendingRun
+      this.pendingRun?.jobs.forEach(job => job.chunks.forEach(chunk => {
+        if (chunk.state === 'running' || chunk.state === 'new') chunk.state = 'unknown'
+      }))
+      this.failedCount = this.pendingRun?.jobs.length || 0
+      this.generating = false
+      this.layoutMode = false
+      this.scope = null
+    },
+
+    async initPersistence() {
+      if (this.persistenceReady) return
+      if (!this.ownerId) { this.persistenceReady = true; this.draftState = 'saved'; return }
+      const session = persistence.draftSession(this.ownerId)
+      const runtime: DraftRuntime = { owner: this.ownerId, id: session.current, sequence: 0, pending: Promise.resolve() }
+      draftRuntimes.set(this, runtime)
       try {
-        const server = await api.fetchTemplates()
-        if (!server.length) return
-        const local = this.myTemplates
-        const names = new Set(server.map(t => t.name))
-        const merged = [...server, ...local.filter(t => !names.has(t.name))]
-        if (merged.length > 20) console.warn(`模板超过 20 份，仅保留前 20（服务端 ${server.length} + 本地独有 ${merged.length - server.length}）`)
-        this.myTemplates = merged.slice(0, 20)
-        safeSet(K(LS.myTemplates), JSON.stringify(this.myTemplates))
-      } catch { /* 离线/后端不可达时用本地数据 */ }
+        const draft = await persistence.loadDraft(runtime.owner, session.previous)
+        if (draft) {
+          this.applySnapshot(draft.snapshot)
+          this.draftSavedAt = draft.updatedAt
+        }
+        this.history = await persistence.listHistory(runtime.owner)
+        this.draftState = 'saved'
+      } catch (error) {
+        this.draftState = 'error'
+        this.storageError = error instanceof Error ? error.message : '本地草稿读取失败'
+      }
+      this.persistenceReady = true
+      runtime.stop = watch(() => [
+        this.grade, this.subject, this.keyword, this.selectedTags, this.title, this.titleHtml,
+        this.difficulty, this.hiddenElements, this.sections, this.papers, this.view,
+        this.paperCount, this.addDayLabel, this.templateId, this.customTemplate, this.style,
+        this.generateWarn, this.generateError, this.pendingRun,
+      ], () => this.queueDraft(), { deep: true })
+    },
+
+    queueDraft() {
+      const runtime = draftRuntimes.get(this)
+      if (!runtime || this.accountChanged) return
+      clearTimeout(runtime.timer)
+      this.draftState = 'saving'
+      runtime.timer = setTimeout(() => { void this.flushDraft() }, 350)
+    },
+
+    async flushDraft(): Promise<boolean> {
+      const runtime = draftRuntimes.get(this)
+      if (!runtime) return false
+      clearTimeout(runtime.timer)
+      const snapshot = this.captureSnapshot()
+      const sequence = ++runtime.sequence
+      this.draftState = 'saving'
+      const write = runtime.pending.catch(() => {}).then(() => persistence.saveDraft(runtime.owner, runtime.id, snapshot))
+      runtime.pending = write
+      try {
+        const updated = await write
+        if (runtime.sequence === sequence) {
+          this.draftSavedAt = updated
+          this.draftState = 'saved'
+          this.storageError = ''
+        }
+        return true
+      } catch {
+        this.draftState = 'error'
+        this.storageError = '本地保存失败，可能存储空间不足或浏览器禁用了存储；当前内容仍在页面中'
+        return false
+      }
+    },
+
+    async suspendForAccountChange(): Promise<boolean> {
+      this.accountChanged = true
+      const saved = await this.flushDraft()
+      draftRuntimes.get(this)?.stop?.()
+      return saved
+    },
+
+    disposePersistence() {
+      const runtime = draftRuntimes.get(this)
+      if (runtime) { clearTimeout(runtime.timer); runtime.stop?.(); draftRuntimes.delete(this) }
+      clearTimeout(styleSaveTimers.get(this))
+    },
+
+    async refreshHistory() {
+      if (!this.ownerId) return
+      try { this.history = await persistence.listHistory(this.ownerId) }
+      catch { this.storageError = '历史记录读取失败，现有数据未删除' }
+    },
+
+    async saveHistory(reason: HistoryReason = 'manual'): Promise<boolean> {
+      if (!this.ownerId || this.accountChanged) return false
+      try {
+        await persistence.addHistory(this.ownerId, this.captureSnapshot(), reason)
+        await this.refreshHistory()
+        return true
+      } catch {
+        this.storageError = '历史版本保存失败，可能存储空间不足；现有历史未删除'
+        return false
+      }
+    },
+
+    async saveVersion(): Promise<boolean> {
+      if (this.historyBusy || this.generating || this.accountChanged) return false
+      this.historyBusy = true
+      try { return await this.saveHistory('manual') }
+      finally { this.historyBusy = false }
+    },
+
+    async restoreHistory(id: string): Promise<boolean> {
+      if (this.generating || this.historyBusy || this.accountChanged) return false
+      this.historyBusy = true
+      try {
+        const snapshot = await persistence.getHistory(this.ownerId, id)
+        if ((this.sections.length || this.papers.length || this.keyword) && !await this.saveHistory('before-restore')) return false
+        this.applySnapshot(snapshot)
+        await this.flushDraft()
+        if (this.subject) await this.selectSubject(this.subject)
+        return true
+      } catch (error) {
+        this.storageError = error instanceof Error ? error.message : '历史版本恢复失败'
+        return false
+      } finally { this.historyBusy = false }
+    },
+
+    async deleteHistory(id: string) {
+      await persistence.removeHistory(this.ownerId, id)
+      await this.refreshHistory()
+    },
+
+    async refreshUsage() {
+      try { this.usage = await api.fetchGenerationUsage() }
+      catch { this.usage = null }
+    },
+
+    persistTemplates(): boolean {
+      const saved = safeSet(K(this.ownerId, LS.myTemplates), JSON.stringify(this.myTemplates))
+      if (!saved) this.storageError = '模板本地保存失败，请检查浏览器存储空间'
+      return saved
+    },
+
+    async syncTemplate(name: string): Promise<boolean> {
+      if (this.templateBusy.includes(name) || this.accountChanged) return false
+      const template = this.myTemplates.find(value => value.name === name)
+      if (!template || template._syncState === 'conflict') return false
+      const sent = deepClone(template)
+      this.templateBusy.push(name)
+      try {
+        const revision = await api.upsertTemplate(sent)
+        if (this.accountChanged) return false
+        const current = this.myTemplates.find(value => value.name === name)
+        if (current) {
+          const unchanged = sameTemplate(current, sent)
+          current._revision = revision
+          current._syncState = unchanged ? 'synced' : 'pending'
+          current._syncError = ''
+          this.persistTemplates()
+        }
+        return true
+      } catch (error) {
+        const current = this.myTemplates.find(value => value.name === name)
+        if (current) {
+          current._syncState = error instanceof api.ApiError && error.status === 409 ? 'conflict' : 'pending'
+          current._syncError = error instanceof Error ? error.message : '同步失败'
+          this.persistTemplates()
+        }
+        return false
+      } finally { this.templateBusy = this.templateBusy.filter(value => value !== name) }
+    },
+
+    async syncTemplatesFromServer() {
+      if (this.templatesSyncing || this.accountChanged) return
+      this.templatesSyncing = true
+      try {
+        const server = migrateMyTemplates(await api.fetchTemplates())
+        if (this.accountChanged) return
+        const local = new Map(this.myTemplates.map(template => [template.name, template]))
+        const merged = server.map(remote => {
+          const own = local.get(remote.name)
+          local.delete(remote.name)
+          if (!own || own._syncState === 'synced' || sameTemplate(own, remote)) return { ...remote, _syncState: 'synced' as const }
+          if ((own._revision || 0) !== remote._revision) {
+            own._syncState = 'conflict'
+            own._syncError = '服务端存在其他版本，本地修改已保留；请另存为新模板'
+          }
+          return own
+        })
+        for (const own of local.values()) {
+          if (own._revision) {
+            own._syncState = 'conflict'
+            own._syncError = '服务端模板已删除，本地副本已保留'
+          }
+          merged.push(own)
+        }
+        this.myTemplates = merged
+        this.persistTemplates()
+        for (const template of this.myTemplates.filter(value => value._syncState === 'pending')) await this.syncTemplate(template.name)
+      } catch { /* Offline edits remain pending and visible. */ }
+      finally { this.templatesSyncing = false }
     },
 
     /* ── 条件选择 ── */
     selectGrade(g: string) {
-      if (this.grade === g) return
+      if (this.generating || this.grade === g) return
       this.grade = g
       this.subject = ''
       this.scope = null
+      this.scopeLoading = false
       this.selectedTags = []
       this.keyword = ''
     },
 
     async selectSubject(s: string) {
+      if (this.generating) return
+      if (this.subject !== s) {
+        this.keyword = ''
+        this.selectedTags = []
+      }
       this.subject = s
+      this.scope = null
       if (!this.grade || !s) return
+      const grade = this.grade
       this.scopeLoading = true
       try {
-        this.scope = await api.fetchScope(this.grade, s)
+        const scope = await api.fetchScope(grade, s)
+        if (this.grade === grade && this.subject === s) this.scope = scope
       } catch {
-        this.scope = null
+        if (this.grade === grade && this.subject === s) this.scope = null
       } finally {
-        this.scopeLoading = false
+        if (this.grade === grade && this.subject === s) this.scopeLoading = false
       }
     },
 
@@ -347,7 +616,8 @@ export const useExamStore = defineStore('exam', {
 
     /* ── 搭建区 ── */
     addSection(type: string, count?: number, customName?: string) {
-      const cnt = Math.min(99, Math.max(1, count ?? TYPE_DEFAULT[type] ?? 4))
+      if (this.generating || this.accountChanged) return
+      const cnt = Math.min(MAX_QUESTIONS_PER_TYPE, Math.max(1, Math.round(count || TYPE_DEFAULT[type] || 4)))
       const sec: Section = {
         id: uid('s'),
         type,
@@ -361,19 +631,23 @@ export const useExamStore = defineStore('exam', {
     },
 
     removeSection(id: string) {
+      if (this.generating || this.accountChanged) return
       const i = this.sections.findIndex(s => s.id === id)
       if (i >= 0) this.sections.splice(i, 1)
     },
 
     moveSection(from: number, to: number) {
+      if (this.generating || this.accountChanged) return
       if (from === to || from < 0 || to < 0 || from >= this.sections.length || to >= this.sections.length) return
       const [item] = this.sections.splice(from, 1)
       this.sections.splice(to, 0, item)
     },
 
     setSectionCount(id: string, n: number) {
+      if (this.generating || this.accountChanged) return
       const sec = this.sections.find(s => s.id === id)
       if (!sec || !sec.data) return
+      n = Math.min(MAX_QUESTIONS_PER_TYPE, Math.max(1, Math.round(n) || 1))
       let qs = sec.data.questions
       if (n < qs.length) {
         qs = qs.slice(0, n)
@@ -384,256 +658,149 @@ export const useExamStore = defineStore('exam', {
       sec.data.questions = qs
     },
 
-    async retrySection(id: string) {
-      const sec = this.sections.find(s => s.id === id)
-      if (!sec) return
-      sec.status = 'loading'
-      sec.error = ''
+    async retrySection(id: string, mode: 'retry' | 'recover' = 'retry') {
+      if (this.generating || this.accountChanged) return
+      const section = this.sections.find(value => value.id === id)
+      if (!section || !this.grade || !this.subject || !this.keyword.trim()) return
+      const context: GenerationContext = {
+        grade: this.grade, subject: this.subject, keyword: this.keyword, title: this.title,
+        titleHtml: this.titleHtml, difficulty: this.difficulty, hiddenElements: [...this.hiddenElements],
+        count: 1, sections: [{ id: section.id, type: section.type, name: section.name, count: section.count, layout: deepClone(section.layout) }],
+      }
+      const existing = section.pendingGeneration
+      if (mode === 'recover' && !existing) {
+        section.error = '没有可查询的原请求，未发送新请求'
+        return
+      }
+      if (existing && (existing.context.grade !== this.grade || existing.context.subject !== this.subject
+          || existing.context.keyword !== this.keyword || existing.context.sections[0].count !== section.count)) {
+        section.error = '原请求的条件已变化，请恢复原草稿或重新生成整卷'
+        return
+      }
+      const run = existing || createGenerationRun(context)
+      section.pendingGeneration = run
+      section.status = 'loading'
+      section.error = ''
+      this.generating = true
       try {
-        const data = await api.generateOne({
-          grade: this.grade,
-          subject: this.subject,
-          keyword: this.keyword,
-          game_type: sec.type,
-          difficulty: this.difficulty,
-          question_count: sec.count,
+        const paper = await runGenerationJob(run.context, run.jobs[0], existing ? mode : 'send', async () => {
+          if (this.accountChanged) throw new Error('账号已变化，未发送请求')
+          if (this.persistenceReady) await this.flushDraft()
         })
-        sec.data = { questions: data.questions || [], passage: (data as any).passage, topic: data.topic }
-        ensureQids(sec.data)
-        sec.count = (data.questions || []).length || sec.count
-        sec.status = 'ready'
-      } catch (e: any) {
-        sec.status = 'error'
-        sec.error = e.message || '生成失败'
+        if (this.accountChanged) return
+        section.data = deepClone(paper.sections[0].data)
+        section.warn = paper.sections[0].warn
+        section.status = 'ready'
+        delete section.pendingGeneration
+      } catch (error) {
+        section.status = 'error'
+        section.error = error instanceof Error ? error.message : '生成失败，未自动重试'
+      } finally {
+        this.generating = false
+        if (this.persistenceReady) await this.flushDraft()
+        void this.refreshUsage()
       }
     },
 
     /* ── 生成整卷 ── */
     async generate() {
-      if (!this.sections.length || this.generating) return
+      if (!this.canGenerate) return
       this.generating = true
-      this.generateError = ''
       try {
-        // 合并同题型（取最大题数）
-        const byType = new Map<string, number>()
-        this.sections.forEach(s => {
-          byType.set(s.type, Math.max(byType.get(s.type) || 0, s.count))
-        })
-        const items = [...byType.entries()].map(([game_type, question_count]) => ({ game_type, question_count }))
-
-        const nPapers = Math.max(1, Math.min(20, this.paperCount))
-
-        // 单份生成：调用一次批量出题，组装一份独立试卷数据
-        let cardsFilled = false
-        const genOne = async (k: number): Promise<PaperData> => {
-          const sections = await api.generateBatch({
-            grade: this.grade,
-            subject: this.subject,
-            keyword: this.keyword,
-            difficulty: this.difficulty,
-            items,
-          })
-          // 第一份完成的结果回填到搭建区卡片（并发下只回填一次，避免互相覆盖）
-          if (!cardsFilled) {
-            cardsFilled = true
-            for (const resp of sections) {
-              const data = { questions: resp.questions || [], passage: (resp as any).passage, topic: resp.topic }
-              ensureQids(data)
-              const miss = (resp as any).missing_count || 0
-              this.sections
-                .filter(s => s.type === resp.game_type)
-                .forEach(s => {
-                  s.data = data
-                  s.status = 'ready'
-                  s.error = ''
-                  s.count = (resp.questions || []).length || s.count
-                  s.warn = miss > 0 ? `有 ${miss} 道题未通过质量检查且补生成失败，建议重试该大题` : ''
-                })
-            }
-            // 没覆盖到的题型标记失败
-            this.sections.forEach(s => {
-              if (!sections.some(r => r.game_type === s.type)) {
-                s.status = 'error'
-                s.error = '生成失败'
-              }
-            })
-          }
-          // 组装这一份试卷：按卡片逐个映射，保留每张卡的名称/布局，数据独立
-          const respByType = new Map<string, any>(sections.map(r => [r.game_type, r]))
-          const paperSections = this.sections.map(s => {
-            const r = respByType.get(s.type)
-            const data = r
-              ? { questions: r.questions || [], passage: (r as any).passage, topic: r.topic }
-              : { questions: [] }
-            ensureQids(data)
-            return { type: s.type, name: s.name, data, layout: { ...s.layout }, _sid: s.id }
-          })
-          return {
-            grade: this.grade,
-            subject: this.subject,
-            keyword: this.keyword,
-            title: this.title,
-            titleHtml: this.titleHtml || undefined,
-            difficulty: this.difficulty,
-            sections: paperSections,
-            day: nPapers > 1 ? k + 1 : undefined,
-            hiddenElements: [...this.hiddenElements],
-          } as PaperData
-        }
-
-        // 并发生成多份：最多 3 份同时出题（兼顾速度与模型服务的并发/限流承受能力）
-        const MAX_PARALLEL = 3
-        this.generateWarn = ''
-        this.failedCount = 0
-        this.generateProgress = nPapers > 1 ? `正在生成 0/${nPapers} 份…` : 'AI 出题中…'
-        const results: (PaperData | null)[] = new Array(nPapers).fill(null)
-        const failedIdx: number[] = []
-        let doneCount = 0
-        const pending = Array.from({ length: nPapers }, (_, i) => i)
-
-        // 单份失败不影响其他份：每份独立捕获错误，自动重试 1 次后再失败才放弃
-        const genOneWithRetry = async (k: number): Promise<PaperData> => {
-          try {
-            return await genOne(k)
-          } catch (firstErr) {
-            console.warn(`第 ${k + 1} 份生成失败，自动重试 1 次：`, firstErr)
-            return await genOne(k)
-          }
-        }
-
-        const workers = Array.from(
-          { length: Math.min(MAX_PARALLEL, nPapers) },
-          async () => {
-            while (pending.length) {
-              const k = pending.shift()!
-              try {
-                results[k] = await genOneWithRetry(k)
-              } catch (e) {
-                console.warn(`第 ${k + 1} 份重试后仍失败：`, e)
-                failedIdx.push(k + 1)
-              }
-              doneCount++
-              if (nPapers > 1) this.generateProgress = `正在生成 ${doneCount}/${nPapers} 份…`
-            }
-          },
-        )
-        await Promise.all(workers)
-
-        // 只保留成功的份，day 序号重排为连续的 1..n
-        const papers = results.filter((r): r is PaperData => r !== null)
-        papers.forEach((p, i) => { p.day = nPapers > 1 ? i + 1 : undefined })
-
-        if (!papers.length) {
-          // 一份都没成：走整体报错
-          const detail = failedIdx.length ? `（第 ${failedIdx.join('、')} 份，含自动重试）` : ''
-          throw new Error(`全部生成失败${detail}，请检查模型配置或稍后重试`)
-        }
-        this.papers = papers
-        this.showAnswers = false
-        this.view = 'result'
-        if (failedIdx.length) {
-          this.failedCount = failedIdx.length
-          this.generateWarn = `${papers.length}/${nPapers} 份生成成功；第 ${failedIdx.join('、')} 份失败（已自动重试仍失败，可能是模型服务超时），已跳过。可点「补齐失败的 ${failedIdx.length} 份」只补缺失的部分。`
-        }
-      } catch (e: any) {
-        this.generateError = e.message || '生成失败，请重试'
-      } finally {
-        this.generating = false
-        this.generateProgress = ''
+        if ((this.papers.length || this.pendingRun || this.sections.some(section => section.pendingGeneration))
+            && this.persistenceReady && this.ownerId && !await this.saveHistory('before-generate')) return
+        if (this.accountChanged) return
+      const context: GenerationContext = {
+        grade: this.grade, subject: this.subject, keyword: this.keyword.trim(),
+        title: this.title, titleHtml: this.titleHtml || undefined, difficulty: this.difficulty,
+        hiddenElements: [...this.hiddenElements], count: Math.max(1, Math.min(20, Math.round(this.paperCount) || 1)),
+        sections: this.sections.map(section => ({
+          id: section.id, type: section.type, name: section.name, count: section.count, layout: deepClone(section.layout),
+        })),
       }
+      this.pendingRun = createGenerationRun(context)
+      this.papers = []
+      this.failedCount = 0
+      } finally { this.generating = false }
+      await this.runPendingGeneration('send')
     },
 
-    /**
-     * 补齐上一批生成失败的份数：只补 failedCount 缺口，成功后追加并重排编号。
-     * 不会动已经生成好的试卷。
-     */
-    async retryFailed() {
-      if (this.generating || !this.failedCount) return
+    async runPendingGeneration(mode: GenerationMode) {
+      const run = this.pendingRun
+      if (!run || this.generating || this.accountChanged) return
       this.generating = true
       this.generateError = ''
       this.generateWarn = ''
+      const pending = [...run.jobs]
+      const completed = new Set<number>()
+      const errors: string[] = []
+      const total = pending.length
+      let finished = 0
+      let filled = false
+      const prefix = mode === 'recover' ? '正在查询' : mode === 'retry' ? '正在补齐' : '正在生成'
+      this.generateProgress = prefix + ' 0/' + total + ' 份'
       try {
-        // 与 generate() 相同的题型合并逻辑
-        const byType = new Map<string, number>()
-        this.sections.forEach(s => {
-          byType.set(s.type, Math.max(byType.get(s.type) || 0, s.count))
-        })
-        const items = [...byType.entries()].map(([game_type, question_count]) => ({ game_type, question_count }))
-
-        const need = this.failedCount
-        this.generateProgress = `正在补齐 0/${need} 份…`
-
-        const genPaper = async (): Promise<PaperData> => {
-          const sections = await api.generateBatch({
-            grade: this.grade,
-            subject: this.subject,
-            keyword: this.keyword,
-            difficulty: this.difficulty,
-            items,
-          })
-          const respByType = new Map<string, any>(sections.map(r => [r.game_type, r]))
-          const paperSections = this.sections.map(s => {
-            const r = respByType.get(s.type)
-            const data = r
-              ? { questions: r.questions || [], passage: (r as any).passage, topic: r.topic }
-              : { questions: [] }
-            ensureQids(data)
-            return { type: s.type, name: s.name, data, layout: { ...s.layout }, _sid: s.id }
-          })
-          return {
-            grade: this.grade,
-            subject: this.subject,
-            keyword: this.keyword,
-            title: this.title,
-            titleHtml: this.titleHtml || undefined,
-            difficulty: this.difficulty,
-            sections: paperSections,
-            hiddenElements: [...this.hiddenElements],
-          } as PaperData
-        }
-
-        const MAX_PARALLEL = 3
-        const results: (PaperData | null)[] = new Array(need).fill(null)
-        let doneCount = 0
-        const pending = Array.from({ length: need }, (_, i) => i)
-        const workers = Array.from(
-          { length: Math.min(MAX_PARALLEL, need) },
-          async () => {
-            while (pending.length) {
-              const k = pending.shift()!
-              try {
-                results[k] = await genPaper()
-              } catch {
-                try {
-                  results[k] = await genPaper()  // 自动重试 1 次
-                } catch {
-                  /* 两次都失败，留空待下次补齐 */
-                }
+        await Promise.all(Array.from({ length: Math.min(3, total) }, async () => {
+          while (pending.length && !this.accountChanged) {
+            const job = pending.shift()!
+            try {
+              const paper = await runGenerationJob(run.context, job, mode, async () => {
+                if (this.accountChanged) throw new Error('账号已变化，未发送新请求')
+                if (this.persistenceReady) await this.flushDraft()
+              })
+              if (this.accountChanged) return
+              completed.add(job.index)
+              this.papers.push(paper)
+              run.jobs = run.jobs.filter(value => value.index !== job.index)
+              this.papers.sort((a, b) => (a.day || 1) - (b.day || 1))
+              if (!filled && this.grade === run.context.grade && this.subject === run.context.subject && this.keyword.trim() === run.context.keyword) {
+                filled = true
+                paper.sections.forEach(result => {
+                  const section = this.sections.find(value => value.id === result._sid)
+                  if (!section) return
+                  section.data = deepClone(result.data)
+                  section.warn = result.warn
+                  section.status = result.data.questions.length ? 'ready' : 'error'
+                  section.error = result.data.questions.length ? '' : '该大题没有可用题目'
+                })
               }
-              doneCount++
-              this.generateProgress = `正在补齐 ${doneCount}/${need} 份…`
+            } catch (error) {
+              errors.push(error instanceof Error ? error.message : '生成失败')
             }
-          },
-        )
-        await Promise.all(workers)
-
-        const ok = results.filter((r): r is PaperData => r !== null)
-        if (ok.length) {
-          this.papers.push(...ok)
-          // 全部重排为连续编号 1..n（day 用于「第X天」标题与导出文件名）
-          this.papers.forEach((p, i) => { p.day = i + 1 })
+            finished++
+            this.generateProgress = prefix + ' ' + finished + '/' + total + ' 份'
+          }
+        }))
+        if (this.accountChanged) return
+        run.jobs = run.jobs.filter(job => !completed.has(job.index))
+        this.failedCount = run.jobs.length
+        if (!run.jobs.length) this.pendingRun = null
+        const warningCount = this.papers.reduce((count, paper) => count + paper.sections.filter(section => section.warn).length, 0)
+        const warnings = []
+        if (this.failedCount) warnings.push(this.failedCount + ' 份尚未完成，未自动重发；可查询原请求或手动补齐')
+        if (warningCount) warnings.push(warningCount + ' 个大题有质量或缺题提示，请核对后使用')
+        this.generateWarn = warnings.join('；')
+        if (this.papers.length) {
+          this.showAnswers = false
+          this.view = 'result'
+          if (completed.size) await this.saveHistory('generated')
+        } else {
+          this.generateError = errors[0] || '没有可用试卷'
         }
-        const stillMissing = need - ok.length
-        this.failedCount = stillMissing
-        if (stillMissing) {
-          this.generateWarn = `补齐后共 ${this.papers.length} 份；仍有 ${stillMissing} 份失败（已自动重试），可再次点「补齐」继续尝试。`
-        }
-      } catch (e: any) {
-        this.generateError = e.message || '补齐失败，请重试'
       } finally {
         this.generating = false
         this.generateProgress = ''
+        if (this.persistenceReady) await this.flushDraft()
+        void this.refreshUsage()
       }
+    },
+
+    async recoverPending() {
+      await this.runPendingGeneration('recover')
+    },
+
+    async retryFailed() {
+      await this.runPendingGeneration('retry')
     },
 
     /** 卷头/卷尾元素删除切换（搭建态） */
@@ -669,7 +836,7 @@ export const useExamStore = defineStore('exam', {
         if (orig) {
           // 保留原卡片身份，替换题目数据
           orig.data = ns.data
-          orig.count = (ns.data.questions || []).length
+          if (!ns.data.missing_count) orig.count = (ns.data.questions || []).length
           out.push(orig)
         } else {
           out.push({
@@ -694,13 +861,13 @@ export const useExamStore = defineStore('exam', {
     /* ── 卷面配置 ── */
     setTemplate(id: string) {
       this.templateId = id
-      safeSet(K(LS.template), JSON.stringify({ id }))
+      safeSet(K(this.ownerId, LS.template), JSON.stringify({ id }))
     },
 
     saveCustomTemplate(cfg: Partial<PaperTemplate>) {
       // 写响应式 state（而非模块常量）：编辑中的卷面立即生效
       Object.assign(this.customTemplate, cfg)
-      safeSet(K(LS.customTemplate), JSON.stringify(cfg))
+      safeSet(K(this.ownerId, LS.customTemplate), JSON.stringify(cfg))
       this.setTemplate('custom')
     },
 
@@ -708,10 +875,12 @@ export const useExamStore = defineStore('exam', {
       Object.assign(this.style, patch)
       // 持久化防抖：标题拖拽/字号滑条每个 mousemove 都会调 setStyle，
       // 立即写盘会以 60+/s 的频率序列化整份样式（且触发重分页测量键变化）
-      clearTimeout(_styleSaveTimer)
-      _styleSaveTimer = setTimeout(() => {
-        safeSet(K(LS.paperStyle), JSON.stringify(this.style))
-      }, 300)
+      clearTimeout(styleSaveTimers.get(this))
+      const owner = this.ownerId
+      const style = { ...this.style }
+      styleSaveTimers.set(this, setTimeout(() => {
+        safeSet(K(owner, LS.paperStyle), JSON.stringify(style))
+      }, 300))
     },
 
     applyStylePreset(preset: 'standard' | 'colorful' | 'fun') {
@@ -723,18 +892,23 @@ export const useExamStore = defineStore('exam', {
     /* ── 自定义题型 ── */
     addCustomType(name: string, baseType: string, defaultCount: number) {
       this.customTypes.push({ id: 'custom_' + Date.now().toString(36), name, baseType, defaultCount })
-      safeSet(K(LS.customTypes), JSON.stringify(this.customTypes))
+      safeSet(K(this.ownerId, LS.customTypes), JSON.stringify(this.customTypes))
     },
 
     removeCustomType(id: string) {
       this.customTypes = this.customTypes.filter(t => t.id !== id)
-      safeSet(K(LS.customTypes), JSON.stringify(this.customTypes))
+      safeSet(K(this.ownerId, LS.customTypes), JSON.stringify(this.customTypes))
     },
 
     /* ── 我的模板 ── */
-    saveMyTemplate(name: string) {
+    async saveMyTemplate(name: string) {
+      if (!name.trim() || name.length > 120 || this.accountChanged) return { local: false, synced: false }
+      const existing = this.myTemplates.find(template => template.name === name)
       const tpl: MyTemplate = {
         name,
+        _revision: existing?._revision || 0,
+        _syncState: existing?._syncState === 'conflict' ? 'conflict' : 'pending',
+        _syncError: existing?._syncState === 'conflict' ? existing._syncError : '',
         grade: this.grade,
         subject: this.subject,
         keyword: this.keyword,
@@ -757,13 +931,13 @@ export const useExamStore = defineStore('exam', {
       const idx = this.myTemplates.findIndex(t => t.name === name)
       if (idx >= 0) this.myTemplates[idx] = tpl
       else this.myTemplates.unshift(tpl)
-      this.myTemplates = this.myTemplates.slice(0, 20)
-      safeSet(K(LS.myTemplates), JSON.stringify(this.myTemplates))
-      // 同步到服务端（失败不影响本地使用，下次登录会再合并）
-      api.upsertTemplate(tpl).catch(() => {})
+      const local = this.persistTemplates()
+      const synced = await this.syncTemplate(name)
+      return { local, synced }
     },
 
     loadMyTemplate(name: string): boolean {
+      if (this.generating || this.accountChanged) return false
       const tpl = this.myTemplates.find(t => t.name === name)
       if (!tpl) return false
       if (!tpl.cards.length && !tpl.sections?.length) return false
@@ -813,10 +987,32 @@ export const useExamStore = defineStore('exam', {
       return true
     },
 
-    deleteMyTemplate(name: string) {
-      this.myTemplates = this.myTemplates.filter(t => t.name !== name)
-      safeSet(K(LS.myTemplates), JSON.stringify(this.myTemplates))
-      api.deleteTemplateOnServer(name).catch(() => {})
+    async deleteMyTemplate(name: string) {
+      if (this.accountChanged || this.templateBusy.includes(name)) throw new Error('模板正在同步，请稍后再试')
+      const template = this.myTemplates.find(value => value.name === name)
+      if (!template) return
+      let revision = template._revision || 0
+      if (!revision) {
+        const remote = (await api.fetchTemplates()).find(value => value.name === name)
+        if (remote) {
+          if (!sameTemplate(template, migrateMyTemplates([remote])[0])) throw new Error('服务端存在同名的其他版本，未删除任何数据')
+          revision = remote._revision || 0
+        }
+      }
+      if (revision) await api.deleteTemplateOnServer(name, revision)
+      if (this.accountChanged) return
+      this.myTemplates = this.myTemplates.filter(template => template.name !== name)
+      this.persistTemplates()
+    },
+
+    async copyMyTemplate(name: string, newName: string): Promise<boolean> {
+      const original = this.myTemplates.find(template => template.name === name)
+      if (!original || !newName.trim() || newName.length > 120 || this.accountChanged) return false
+      if (this.myTemplates.some(template => template.name === newName.trim())) throw new Error('已有同名模板，请更换名称')
+      this.myTemplates.unshift({ ...deepClone(original), name: newName.trim(), _revision: 0, _syncState: 'pending', _syncError: '' })
+      const local = this.persistTemplates()
+      const synced = await this.syncTemplate(newName.trim())
+      return local || synced
     },
   },
 })

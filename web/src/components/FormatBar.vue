@@ -140,7 +140,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocMouseDown))
 
 <template>
   <span class="fmt-bar">
-    <button class="fmt-btn" :title="`加粗（${targetHint}）`" @mousedown.prevent @click="applyBold"><b>B</b></button>
+    <UTooltip text="加粗"><button class="fmt-btn" aria-label="加粗" :disabled="!hasSelection" @mousedown.prevent @click="applyBold"><UIcon name="i-lucide-bold" class="size-4" /></button></UTooltip>
     <span class="fmt-size" :title="`字号：选中文字时改选中文字，否则改${hasSelection ? '选中文字' : '试卷标题'}`">
       <span class="fmt-size-label">{{ targetHint }}</span>
       <input
@@ -149,6 +149,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocMouseDown))
         :value="sizeVal"
         @input="applyFontSize(parseInt(($event.target as HTMLInputElement).value))"
         class="fmt-size-range"
+        aria-label="选中文字字号"
       >
       <input
         v-else
@@ -156,6 +157,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocMouseDown))
         :value="Math.round((store.style.titleScale ?? 1) * 100)"
         @input="store.setStyle({ titleScale: parseInt(($event.target as HTMLInputElement).value) / 100 })"
         class="fmt-size-range"
+        aria-label="试卷标题字号"
       >
       <span class="fmt-size-val">{{ hasSelection ? (SIZE_NAMES[sizeVal] || sizeVal) : Math.round((store.style.titleScale ?? 1) * 100) + '%' }}</span>
     </span>
@@ -166,10 +168,13 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocMouseDown))
         class="fmt-btn fmt-color-btn"
         :title="`文字颜色（${targetHint}）：点开色板选择`"
         :class="{ on: paletteOpen }"
+        :aria-expanded="paletteOpen"
+        aria-label="文字颜色"
+        :disabled="!hasSelection"
         @mousedown.prevent
         @click="togglePalette"
-      >🎨</button>
-      <div v-if="paletteOpen" class="fmt-palette" @mousedown.prevent>
+      ><UIcon name="i-lucide-palette" class="size-4" /></button>
+      <div v-if="paletteOpen" class="fmt-palette" role="group" aria-label="文字颜色" @mousedown.prevent @keydown.esc="paletteOpen = false">
         <div class="fmt-pal-grid">
           <button
             v-for="c in COLORS"
@@ -177,6 +182,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocMouseDown))
             class="fmt-pal-cell"
             :style="{ background: c }"
             :title="c"
+            :aria-label="'颜色 ' + c"
             @click="pickColor(c)"
           ></button>
         </div>
@@ -196,13 +202,18 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocMouseDown))
   border: 1px solid var(--border2);
   background: var(--surface);
   border-radius: 4px;
-  font-size: 11px;
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   color: var(--ink2);
   cursor: pointer;
   line-height: 1.5;
 }
 .fmt-btn:hover, .fmt-btn.on { border-color: var(--primary); color: var(--primary); }
+.fmt-btn:disabled { opacity: .4; cursor: not-allowed; }
 .fmt-size { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px; }
 .fmt-size-label { font-size: 11px; color: var(--primary); white-space: nowrap; }
 .fmt-size-range { width: 70px; accent-color: var(--primary); height: 14px; cursor: pointer; }

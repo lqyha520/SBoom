@@ -14,10 +14,15 @@ from app.routers.admin import router as admin_router
 from app.routers.auth import router as auth_router
 from app.routers.generate import router as generate_router
 from app.routers.me import router as me_router
+from app.routers.library import router as library_router
+from app.routers.mini import router as mini_router
+from app.routers.catalog import router as catalog_router, admin_router as catalog_admin_router
+from app.routers.site import router as site_router, admin_router as site_admin_router
 from app.services.llm_client import llm_client
 from app.services import user_store
 from app.config import get_settings, APP_VERSION
 from app.db import init_db, close_pg_pool
+from app.security import security_warnings
 
 settings = get_settings()
 
@@ -39,6 +44,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """应用启动/关闭时的管理"""
     init_db()  # 用户库建表 + 迁移（幂等）
+    for warning in security_warnings():
+        logger.warning("Security configuration: %s", warning)
     # 环境变量种子管理员（可选）：确保存在并对齐角色/状态/密码
     if settings.admin_username and settings.admin_password:
         user_store.ensure_admin(settings.admin_username, settings.admin_password)
@@ -91,6 +98,12 @@ _web_built = _web_dir.is_dir()
 # ─── API 路由（必须在静态挂载之前注册，否则会被 StaticFiles 遮蔽） ───
 app.include_router(auth_router)
 app.include_router(me_router)
+app.include_router(library_router)
+app.include_router(mini_router)
+app.include_router(catalog_router)
+app.include_router(catalog_admin_router)
+app.include_router(site_router)
+app.include_router(site_admin_router)
 app.include_router(generate_router)
 app.include_router(admin_router)
 

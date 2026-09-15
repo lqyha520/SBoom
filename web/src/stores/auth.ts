@@ -23,37 +23,39 @@ export function userPrefix(uid: string | number): string {
  * 2. 清除本地遗留的 LLM 明文密钥（模型配置已收归后台统一管理）
  * 3. 「我的模板」批量上传到服务端（跨设备同步）
  */
-async function migrateLegacyData(uid: number) {
-  const flag = `${userPrefix(uid)}migrated`
-  if (localStorage.getItem(flag)) return
-  const P = userPrefix(uid)
-
-  // 1) 拷贝旧键到用户命名空间
-  for (const k of LEGACY_KEYS) {
-    if (localStorage.getItem(P + k)) continue // 已有该用户数据，不覆盖
-    const v = localStorage.getItem(k)
-    if (v != null) localStorage.setItem(P + k, v)
-  }
-
-  // 2) 模型配置已收归后台（/admin）：清除本地遗留的明文密钥
-  localStorage.removeItem('lc_llm_cfg')
-  localStorage.removeItem(P + 'lc_llm_cfg')
-
-  // 3) 模板上传服务端，并与服务端列表合并（服务端优先）
+function rememberUser(uid: number | null) {
+  api.bindWorkspaceOwner(uid == null ? '' : String(uid))
   try {
-    const localTpls = JSON.parse(localStorage.getItem(P + LS.myTemplates) || '[]')
-    const serverTpls = await api.fetchTemplates()
-    if (localTpls.length && !serverTpls.length) {
-      await api.bulkUploadTemplates(localTpls)
-    } else if (serverTpls.length) {
-      // 服务端有数据（其他设备同步过）：服务端优先，补充本地独有的
-      const names = new Set(serverTpls.map(t => t.name))
-      const merged = [...serverTpls, ...localTpls.filter((t: any) => t && t.name && !names.has(t.name))]
-      localStorage.setItem(P + LS.myTemplates, JSON.stringify(merged))
-    }
-  } catch { /* 忽略 */ }
+    if (uid == null) localStorage.removeItem(UID_KEY)
+    else localStorage.setItem(UID_KEY, String(uid))
+  } catch { /* Storage restrictions must not turn a valid session into a login failure. */ }
+}
 
-  localStorage.setItem(flag, '1')
+async function migrateLegacyData(uid: number) {
+  try {
+    const prefix = userPrefix(uid)
+    const flag = prefix + 'migrated'
+    const priorOwner = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+      .find(key => /^lc_u\d+_migrated$/.test(key || ''))?.match(/^lc_u(\d+)_/)?.[1]
+    const owner = localStorage.getItem('lc_legacy_owner') || priorOwner || String(uid)
+    localStorage.setItem('lc_legacy_owner', owner)
+    if (localStorage.getItem(flag)) return
+    if (owner === String(uid)) {
+      for (const key of LEGACY_KEYS) {
+        if (localStorage.getItem(prefix + key)) continue
+        const value = localStorage.getItem(key)
+        if (value != null) localStorage.setItem(prefix + key, value)
+      }
+    }
+    localStorage.removeItem('lc_llm_cfg')
+    localStorage.removeItem(prefix + 'lc_llm_cfg')
+    const localTemplates = JSON.parse(localStorage.getItem(prefix + LS.myTemplates) || '[]')
+    if (Array.isArray(localTemplates) && localTemplates.length) {
+      try { await api.bulkUploadTemplates(localTemplates) }
+      catch { /* The exam store keeps unsynchronized local templates pending. */ }
+    }
+    localStorage.setItem(flag, '1')
+  } catch { /* A disabled localStorage does not prevent using the account. */ }
 }
 
 export const useAuthStore = defineStore('auth', {
@@ -68,14 +70,14 @@ export const useAuthStore = defineStore('auth', {
         const u = await api.fetchMe()
         if (u) {
           this.user = u
-          localStorage.setItem(UID_KEY, String(u.id))
+          rememberUser(u.id)
           await migrateLegacyData(u.id)
         } else {
-          localStorage.removeItem(UID_KEY)
+          rememberUser(null)
         }
       } catch {
         // 后端不可达：保持未登录，让登录页展示错误
-        localStorage.removeItem(UID_KEY)
+        rememberUser(null)
       } finally {
         this.ready = true
       }
@@ -84,7 +86,7 @@ export const useAuthStore = defineStore('auth', {
     async login(username: string, password: string) {
       const u = await api.login(username, password)
       this.user = u
-      localStorage.setItem(UID_KEY, String(u.id))
+      rememberUser(u.id)
       await migrateLegacyData(u.id)
       location.reload() // 整页刷新，让所有 store 按新用户命名空间重新初始化
     },
@@ -92,16 +94,14 @@ export const useAuthStore = defineStore('auth', {
     async register(username: string, password: string) {
       const u = await api.register(username, password)
       this.user = u
-      localStorage.setItem(UID_KEY, String(u.id))
+      rememberUser(u.id)
       location.reload()
     },
 
     async logout() {
-      try {
-        await api.logout()
-      } catch { /* 即使后端失败也继续本地登出 */ }
+      await api.logout()
       this.user = null
-      localStorage.removeItem(UID_KEY)
+      rememberUser(null)
       location.reload()
     },
   },

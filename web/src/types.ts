@@ -70,6 +70,7 @@ export interface Section {
   error?: string
   /** 非致命告警（如质检补生成后仍缺题），不影响使用 */
   warn?: string
+  pendingGeneration?: import('./generation').GenerationRun
 }
 
 /** 结果卷中的大题 */
@@ -81,10 +82,14 @@ export interface PaperSection {
   layout: SecLayout
   /** 稳定 id（排版模式 DOM 回写用） */
   _sid?: string
+  requestedCount?: number
+  warn?: string
 }
 
 /** 一份完整试卷 */
 export interface PaperData {
+  /** Stable local source identity for immutable cloud archive versions. */
+  archiveSourceId?: string
   grade: string
   subject: string
   keyword: string
@@ -151,6 +156,9 @@ export interface ScopeData {
 
 /** 我保存的卷面模板 */
 export interface MyTemplate {
+  _revision?: number
+  _syncState?: 'synced' | 'pending' | 'conflict'
+  _syncError?: string
   name: string
   grade: string
   subject: string

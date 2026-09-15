@@ -58,6 +58,18 @@ build/
 # ============================
 web/node_modules/
 admin/node_modules/
+miniprogram/node_modules/
+miniprogram/.env.local
+miniprogram/.env.*.local
+miniprogram/src/project.private.config.json
+miniprogram/project.private.config.json
+artifacts/miniprogram/
+artifacts/miniprogram-ui/
+artifacts/ui-refactor/
+artifacts/pdf-layout-check/
+artifacts/admin-mini-e2e/
+# 账号删除备份含微信标识哈希与密码哈希，属用户数据，绝不入库
+artifacts/account-delete-backup/
 # 注：web/admin 的 pnpm-workspace.yaml 需要入库（含 pnpm v10+ 构建脚本白名单，
 # 缺失时新 clone 的 esbuild postinstall 会被拒绝，vite 无法使用）
 
@@ -68,6 +80,8 @@ math-question-bank/
 # 本地工作文件（不入库）
 # ============================
 .workbuddy/
+# 工程审查工作区（临时分析产物 + 运行日志）
+.review/
 _*.py
 _*.js
 _*.txt

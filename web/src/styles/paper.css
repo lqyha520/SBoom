@@ -1,6 +1,16 @@
 /* ═══════════ A4 纸（试卷排版核心样式 —— 打印效果，勿随意改动） ═══════════ */
 
 .paper {
+  /* Keep the export tree independent of OKLCH UI themes and inherited resets. */
+  --primary: #2563eb;
+  --border2: #d9dce3;
+  --ink2: #646a73;
+  --red: #e5484d;
+  --shadow-xs: 0 1px 2px rgba(31, 35, 41, .04);
+  --shadow-md: 0 4px 12px rgba(31, 35, 41, .08), 0 1px 3px rgba(31, 35, 41, .05);
+  color: #1f2329;
+  font-size: 14px;
+  line-height: normal;
   background: #fff;
   width: 210mm;
   max-width: 210mm;
@@ -17,6 +27,8 @@
   flex-direction: column;
 }
 .paper + .paper { margin-top: 18px; }
+
+.paper *, .paper *::before, .paper *::after { border-color: #e5e7eb; }
 
 /* 测量用的纸（不限高） */
 .paper.measure { height: auto; overflow: visible; display: block; }
@@ -78,6 +90,7 @@
 /* ── 试卷内容 ── */
 .exam { position: relative; z-index: 1; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .exam h1 { text-align: center; font-size: 22pt; font-family: 'SimHei', 'Microsoft YaHei', sans-serif; letter-spacing: 2px; line-height: 1.4; }
+.exam h1, .exam h2.sec { font-weight: 700; }
 .exam .sub-line { text-align: center; font-size: 11pt; color: #555; margin-bottom: 4mm; }
 .exam .info-row { display: flex; justify-content: space-between; font-size: 10pt; border-bottom: 1px solid #000; padding-bottom: 2mm; margin-bottom: 4mm; }
 .exam h2.sec { font-size: 13pt; font-family: 'SimHei', 'Microsoft YaHei', sans-serif; display: flex; justify-content: space-between; align-items: center; margin: 5mm 0 2mm; }
@@ -228,6 +241,7 @@
 
 /* 纸面缩放容器（预览时整体缩小适配屏宽） */
 .paper-scaler { transform-origin: top center; }
+.paper-scaler-wrap { overflow: clip; overflow-clip-margin: 6px; }
 .paper-stack { display: flex; flex-direction: column; align-items: center; }
 .offscreen { position: fixed; left: -99999px; top: 0; z-index: -1; }
 
@@ -238,5 +252,5 @@
   /* 打印必须是原尺寸：重置预览缩放（transform 是内联样式，需 !important 覆盖），
      同时放开外层高度占位，避免缩放<100% 时打出缩小版卷面 */
   .pv-zoom { transform: none !important; }
-  .paper-scaler-wrap { height: auto !important; }
+  .paper-scaler-wrap { width: 210mm !important; height: auto !important; overflow: visible; }
 }

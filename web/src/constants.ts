@@ -1,5 +1,9 @@
 import type { Difficulty, PaperTemplate, SecLayout } from './types'
 
+// Keep in sync with BatchItem and BatchGenerateRequest in app/models/__init__.py.
+export const MAX_QUESTIONS_PER_TYPE = 30
+export const MAX_GENERATION_TYPES = 10
+
 /* ── 题型 ── */
 export const TYPE_NAME: Record<string, string> = {
   quiz: '选择题',

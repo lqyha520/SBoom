@@ -45,11 +45,34 @@ export function isBlankVal(v: unknown): boolean {
   return s === '' || /^_+$/.test(s) || s === '?' || s === '□'
 }
 
+/* ── 数学表达式的运算符两侧加空格 ──
+ * 提示词里已要求「运算符前后加空格」，但模型偶尔漏掉；这里是渲染期兜底，
+ * 好处是连历史已生成的试卷也能立刻显示成规范写法，不必重新生成。
+ * 只处理纯算式：含汉字（题干描述、解析）或含 HTML 标签（富文本题干的属性里
+ * 可能有 '-' 之类字符）的文本一律原样返回，绝不改动。 */
+const OPS_CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/
+// + - − × ÷ / * = 以及对应的全角形式
+const OPS_CHARS = '\\-+\\u2212\\u00d7\\u00f7/*=\\uff0b\\uff0d\\uff1d'
+const OPS_ANY = new RegExp(`[${OPS_CHARS}]`)
+const OPS_ALL = new RegExp(`\\s*([${OPS_CHARS}])\\s*`, 'g')
+const OPS_LEAD = new RegExp(`(^|[${OPS_CHARS}(\\uff08,])\\s+-\\s+(\\d)`, 'g')
+
+export function spaceOps(input: unknown): string {
+  const text = String(input ?? '')
+  if (!text || text.includes('<') || OPS_CJK.test(text) || !OPS_ANY.test(text)) return text
+  return text
+    .replace(OPS_ALL, ' $1 ')
+    // 一元负号不收成二元：把「= - 3」和行首的「- 3」粘回去
+    .replace(OPS_LEAD, (_m, pre: string, digit: string) => `${pre ? pre + ' ' : ''}-${digit}`)
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
 /* ── 答案文字 ── */
 export function ansText(q: Question): string {
   if (q.options && typeof q.answer === 'number') return String.fromCharCode(65 + q.answer)
   if (Array.isArray(q.answer)) return (q.answer as [number, number][]).map(p => `${p[0] + 1}－${p[1] + 1}`).join('，')
-  return String(q.answer ?? '')
+  return spaceOps(String(q.answer ?? ''))
 }
 
 /** 统一的答案展示（含选择题选项文字） */
@@ -60,7 +83,7 @@ export function answerOf(q: Question): string {
     const r = isBlankVal(q.right) ? q.answer : q.right
     return `${t} 分成 ${l} 和 ${r}`
   }
-  if (q.left_expr != null) return `${q.left_expr} ○ ${q.right_expr} → ${q.answer}`
+  if (q.left_expr != null) return `${spaceOps(q.left_expr)} ○ ${spaceOps(q.right_expr)} → ${q.answer}`
   if (q.left_items) return ((q.answer as [number, number][]) || []).map(p => `（${p[0] + 1}）→（${p[1] + 1}）`).join('；')
   let a = ansText(q)
   if (q.options && typeof q.answer === 'number') a += `（${stripOptPrefix(q.options[q.answer] || '')}）`
@@ -155,4 +178,8 @@ export function secTitle(type: string, si: number, name?: string): string {
 /** 确保题目都有 _qid（生成/回填后调用） */
 export function ensureQids(data: GameData): void {
   ;(data.questions || []).forEach(q => { if (!q._qid) q._qid = uid('q') })
+}
+export function deepClone<T>(value: T): T {
+  try { return structuredClone(value) }
+  catch { return JSON.parse(JSON.stringify(value)) }
 }

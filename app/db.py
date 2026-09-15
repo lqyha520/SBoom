@@ -262,7 +262,7 @@ def close_pg_pool() -> None:
 
 
 @contextmanager
-def db():
+def db(serialized: bool = False):
     """从连接池取连接（PG）或每请求新建（SQLite）；正常退出 commit，异常回滚并关闭。
 
     SQLite 路径：WAL 模式 + busy_timeout，多用户并发写不再互相锁死。
@@ -270,6 +270,8 @@ def db():
     """
     if _use_pg():
         with _get_pg_pool().connection() as conn:
+            if serialized:
+                conn.execute("SELECT pg_advisory_xact_lock(70634191)")
             yield _PgConn(conn)
             conn.commit()
         return
@@ -281,6 +283,8 @@ def db():
     # 注：journal_mode=WAL 是持久化设置，init_db() 已执行一次，
     # 不在每连接重复执行（避免短暂持锁放大写竞争）
     try:
+        if serialized:
+            conn.execute("BEGIN IMMEDIATE")
         yield conn
         conn.commit()
     except Exception:
@@ -323,11 +327,53 @@ def _migrate_pg(conn) -> None:
         logger.info("迁移：users 表新增 token_valid_after 列（PG，改密吊销旧会话）")
 
 
-def init_db() -> None:
+def _init_reliability_schema(conn) -> None:
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS generation_requests (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            request_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            payload_hash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at BIGINT NOT NULL,
+            finished_at BIGINT NOT NULL DEFAULT 0,
+            result_json TEXT NOT NULL DEFAULT '',
+            error_json TEXT NOT NULL DEFAULT '',
+            error_status INTEGER NOT NULL DEFAULT 0,
+            model_calls INTEGER NOT NULL DEFAULT 0,
+            reported_calls INTEGER NOT NULL DEFAULT 0,
+            prompt_tokens BIGINT NOT NULL DEFAULT 0,
+            completion_tokens BIGINT NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, request_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_generation_created ON generation_requests(created_at);
+        CREATE INDEX IF NOT EXISTS idx_generation_status ON generation_requests(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_generation_user_created ON generation_requests(user_id, created_at);
+        CREATE TABLE IF NOT EXISTS template_revision_counters (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            revision BIGINT NOT NULL
+        );
+    """)
     if _use_pg():
-        with db() as conn:
+        conn.execute("ALTER TABLE user_templates ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1")
+    else:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(user_templates)")}
+        if "revision" not in cols:
+            conn.execute("ALTER TABLE user_templates ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+
+
+def init_db() -> None:
+    from app.library_schema import init_library_schema
+    from app.site_schema import init_site_schema
+
+    if _use_pg():
+        # Multiple workers can start together; serialize additive DDL across them.
+        with db(serialized=True) as conn:
             conn.executescript(_SCHEMA_PG)
             _migrate_pg(conn)
+            _init_reliability_schema(conn)
+            init_library_schema(conn)
+            init_site_schema(conn)
         logger.info("PostgreSQL 数据库就绪")
         return
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -336,4 +382,7 @@ def init_db() -> None:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(_SCHEMA_SQLITE)
         _migrate_sqlite(conn)
+        _init_reliability_schema(conn)
+        init_library_schema(conn)
+        init_site_schema(conn)
     logger.info(f"用户数据库就绪: {DB_PATH}")

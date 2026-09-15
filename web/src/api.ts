@@ -1,6 +1,22 @@
 import type { Difficulty, MyTemplate, Question, ScopeData } from './types'
 
 const API = ''
+export const AUTH_CHANGED_EVENT = 'lc:auth-changed'
+let workspaceOwner = ''
+export function bindWorkspaceOwner(owner: string) { workspaceOwner = owner }
+export function captureWorkspaceGuard() {
+  const owner = workspaceOwner
+  return () => {
+    if (owner !== workspaceOwner) throw new ApiError('登录账号已变化，请刷新后重试', 409, 'account_changed')
+  }
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public status = 0, public code = '', public requestId = '') {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
 
 /** 401 未登录/会话过期 —— 由调用方（App）捕获后展示登录页 */
 export class AuthError extends Error {
@@ -15,31 +31,36 @@ export class AuthError extends Error {
 const DEFAULT_TIMEOUT_MS = 30_000
 const GENERATE_TIMEOUT_MS = 300_000
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const timeoutMs = url.includes('/generate') ? GENERATE_TIMEOUT_MS : DEFAULT_TIMEOUT_MS
+export async function request<T>(url: string, init?: RequestInit, timeoutOverrideMs?: number): Promise<T> {
+  const paid = url.startsWith('/api/v1/generate') || url === '/api/v1/validate'
+  const timeoutMs = timeoutOverrideMs ?? (paid ? GENERATE_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
+  const headers = new Headers(init?.headers)
+  if (workspaceOwner && !url.startsWith('/api/v1/auth/')) headers.set('X-Workspace-User', workspaceOwner)
+  const requestId = headers.get('X-Request-ID') || ''
   let r: Response
   try {
     r = await fetch(API + url, {
       ...init,
+      headers,
       signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (e: any) {
     if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
-      throw new Error('请求超时，请稍后重试')
+      throw new ApiError(paid ? '请求超时，未自动重发；可查询原请求结果' : '请求超时，请稍后重试', 0, 'network_unknown', requestId)
     }
-    throw new Error('网络异常，请检查网络连接后重试')
+    throw new ApiError(paid ? '网络中断，未自动重发；可查询原请求结果' : '网络异常，请检查连接', 0, 'network_unknown', requestId)
   }
   if (!r.ok) {
-    if (r.status === 401) throw new AuthError('请先登录')
+    if (r.status === 401) {
+      if (workspaceOwner) window.dispatchEvent(new Event(AUTH_CHANGED_EVENT))
+      throw new AuthError('请先登录')
+    }
     const e = await r.json().catch(() => ({} as any))
     // FastAPI 的 detail 可能是 {error, detail} 对象，也可能是纯字符串/校验数组
     const d = e?.detail
     const base = typeof d === 'string' ? d : (d?.error || d?.detail || `HTTP ${r.status}`)
-    // 只有生成类接口的 5xx 才指向 LLM 服务；auth/templates 等接口同码是其他故障
-    if ((r.status === 500 || r.status === 502 || r.status === 504) && url.includes('/generate')) {
-      throw new Error(`${base}（LLM 服务连接失败，请管理员检查后台「模型配置」的接口地址和密钥）`)
-    }
-    throw new Error(base)
+    if (d?.code === 'account_changed') window.dispatchEvent(new Event(AUTH_CHANGED_EVENT))
+    throw new ApiError(base, r.status, d?.code || '', d?.request_id || requestId)
   }
   if (r.status === 204) return undefined as T
   return r.json()
@@ -89,23 +110,27 @@ export async function fetchScope(grade: string, subject: string): Promise<ScopeD
 }
 
 /* ── 批量生成（整卷一次请求）。模型配置由管理员在后台统一管理，请求不携带密钥 ── */
-export interface BatchItemReq { game_type: string; question_count: number }
+export interface BatchItemReq { game_type: string; question_count: number; section_id: string }
 
 export interface BatchRespSection {
   game_type: string
+  section_id?: string | null
   topic?: string
   passage?: string
   questions: Question[]
   missing_count?: number
+  quality_warnings?: string[]
 }
 
-export async function generateBatch(params: {
+export interface BatchParams {
   grade: string
   subject: string
   keyword: string
   difficulty: Difficulty
   items: BatchItemReq[]
-}): Promise<BatchRespSection[]> {
+}
+
+export async function generateBatch(params: BatchParams, requestId: string = crypto.randomUUID()): Promise<BatchRespSection[]> {
   const body: Record<string, unknown> = {
     grade: params.grade,
     subject: params.subject,
@@ -115,7 +140,7 @@ export async function generateBatch(params: {
   }
   const d = await request<{ sections: BatchRespSection[] }>('/api/v1/generate-batch', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Request-ID': requestId },
     body: JSON.stringify(body),
   })
   return d.sections || []
@@ -129,7 +154,7 @@ export async function generateOne(params: {
   game_type: string
   difficulty: Difficulty
   question_count: number
-}) {
+}, requestId: string = crypto.randomUUID()) {
   const body: Record<string, unknown> = {
     grade: params.grade,
     subject: params.subject,
@@ -138,11 +163,40 @@ export async function generateOne(params: {
     difficulty: params.difficulty,
     question_count: params.question_count,
   }
-  return request<{ questions: Question[]; passage?: string; topic?: string }>('/api/v1/generate', {
+  return request<BatchRespSection>('/api/v1/generate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Request-ID': requestId },
     body: JSON.stringify(body),
   })
+}
+
+export interface GenerationStatus {
+  request_id: string
+  status: 'running' | 'succeeded' | 'failed' | 'unknown'
+  result: { sections: BatchRespSection[] } | null
+  error?: { error?: string } | null
+  error_status: number
+  cache_expired: boolean
+}
+
+export function fetchGenerationStatus(requestId: string) {
+  return request<GenerationStatus>('/api/v1/me/generations/' + encodeURIComponent(requestId))
+}
+
+export interface GenerationUsage {
+  requests: number
+  succeeded: number
+  running: number
+  unknown: number
+  model_calls: number
+  reported_calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  daily_limit: number
+}
+
+export function fetchGenerationUsage() {
+  return request<GenerationUsage>('/api/v1/me/usage')
 }
 
 /* ── 我的模板（服务端同步） ── */
@@ -151,16 +205,18 @@ export async function fetchTemplates(): Promise<MyTemplate[]> {
   return d.templates || []
 }
 
-export async function upsertTemplate(tpl: MyTemplate): Promise<void> {
-  await request('/api/v1/me/templates', {
+export async function upsertTemplate(tpl: MyTemplate): Promise<number> {
+  const { _revision, _syncState, _syncError, ...template } = tpl
+  const result = await request<{ revision: number }>('/api/v1/me/templates', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ template: tpl }),
+    body: JSON.stringify({ template, expected_revision: _revision || 0 }),
   })
+  return result.revision
 }
 
-export async function deleteTemplateOnServer(name: string): Promise<void> {
-  await request(`/api/v1/me/templates?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
+export async function deleteTemplateOnServer(name: string, revision: number): Promise<void> {
+  await request(`/api/v1/me/templates?name=${encodeURIComponent(name)}&expected_revision=${revision}`, { method: 'DELETE' })
 }
 
 export async function bulkUploadTemplates(templates: MyTemplate[]): Promise<number> {

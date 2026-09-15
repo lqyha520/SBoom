@@ -2,115 +2,55 @@
 import { ref } from 'vue'
 import * as api from '../api'
 
-const emit = defineEmits<{ (e: 'logined', u: api.UserInfo): void }>()
-
+const emit = defineEmits<{ logined: [user: api.UserInfo] }>()
 const username = ref('')
 const password = ref('')
+const visible = ref(false)
 const busy = ref(false)
 const error = ref('')
 
 async function submit() {
-  error.value = ''
   if (busy.value) return
-  if (!username.value.trim() || !password.value) {
-    error.value = '请输入用户名和密码'
-    return
-  }
+  error.value = ''
+  if (!username.value.trim() || !password.value) { error.value = '请输入用户名和密码'; return }
   busy.value = true
   try {
-    const u = await api.login(username.value.trim(), password.value)
-    if (u.role !== 'admin') {
-      // 非管理员：立即撤销会话并提示（后台系统仅管理员可用）
+    const user = await api.login(username.value.trim(), password.value)
+    if (user.role !== 'admin') {
       await api.logout()
-      error.value = `「${u.username}」不是管理员账号，无法登录后台`
+      error.value = '该账号没有管理员权限'
       return
     }
-    emit('logined', u)
-  } catch (e: any) {
-    error.value = e?.message || '登录失败，请重试'
-  } finally {
-    busy.value = false
-  }
+    emit('logined', user)
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : '登录失败，请重试'
+  } finally { busy.value = false }
 }
 </script>
 
 <template>
   <div class="auth-page">
-    <div class="auth-card">
-      <div class="auth-brand">
-        <span class="auth-logo">🛠</span>
-        <div>
-          <div class="auth-title">后台管理</div>
-          <div class="auth-sub">出题工作台 · Learning Coach</div>
-        </div>
+    <header class="auth-header">
+      <div class="brand"><span class="brand-mark"><UIcon name="i-lucide-notebook-pen" class="size-5" /></span><div><div class="brand-name">Learning Coach</div><div class="brand-caption">管理控制台</div></div></div>
+      <UButton href="/" icon="i-lucide-arrow-up-right" label="出题工作台" color="neutral" variant="ghost" size="sm" />
+    </header>
+    <main class="auth-main">
+      <div class="auth-form">
+        <div class="auth-emblem"><UIcon name="i-lucide-shield-check" class="size-6" /></div>
+        <h1>管理员登录</h1>
+        <p>Learning Coach 管理控制台</p>
+        <form @submit.prevent="submit">
+          <UFormField label="管理员账号" required><UInput v-model="username" autocomplete="username" placeholder="输入用户名" maxlength="32" size="lg" icon="i-lucide-user-round" :disabled="busy" /></UFormField>
+          <UFormField label="密码" required>
+            <UInput v-model="password" :type="visible ? 'text' : 'password'" autocomplete="current-password" placeholder="输入密码" size="lg" icon="i-lucide-lock-keyhole" :disabled="busy">
+              <template #trailing><UButton :icon="visible ? 'i-lucide-eye-off' : 'i-lucide-eye'" :aria-label="visible ? '隐藏密码' : '显示密码'" color="neutral" variant="link" size="xs" @click="visible = !visible" /></template>
+            </UInput>
+          </UFormField>
+          <UAlert v-if="error" :title="error" color="error" variant="soft" icon="i-lucide-circle-alert" role="alert" />
+          <UButton type="submit" :loading="busy" :disabled="busy" label="登录管理后台" trailing-icon="i-lucide-arrow-right" size="lg" block class="mt-2" />
+        </form>
       </div>
-
-      <form @submit.prevent="submit">
-        <div class="auth-field">
-          <label>管理员账号</label>
-          <input v-model="username" class="input" autocomplete="username" placeholder="用户名" />
-        </div>
-        <div class="auth-field">
-          <label>密码</label>
-          <input v-model="password" class="input" type="password" autocomplete="current-password" placeholder="密码" />
-        </div>
-
-        <div v-if="error" class="auth-error">{{ error }}</div>
-
-        <button class="btn primary auth-submit" :disabled="busy" type="submit">
-          {{ busy ? '登录中…' : '登 录' }}
-        </button>
-      </form>
-
-      <div class="auth-tip">
-        本系统仅供管理员使用。普通用户请前往
-        <a href="/" target="_self">出题工作台</a> 登录。
-      </div>
-    </div>
+    </main>
+    <footer class="auth-footer">Learning Coach</footer>
   </div>
 </template>
-
-<style scoped>
-.auth-page {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #232a3d, #1a2032);
-  padding: 16px;
-}
-.auth-card {
-  width: 360px;
-  max-width: 100%;
-  background: #fff;
-  border-radius: 16px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
-  padding: 30px 28px 22px;
-}
-.auth-brand { display: flex; gap: 12px; align-items: center; margin-bottom: 24px; }
-.auth-logo { font-size: 36px; }
-.auth-title { font-size: 20px; font-weight: 700; color: #22314f; }
-.auth-sub { font-size: 12px; color: #7b869e; margin-top: 2px; }
-.auth-field { margin-bottom: 14px; }
-.auth-field label { display: block; font-size: 12px; color: #5c6880; margin-bottom: 6px; }
-.auth-field .input { width: 100%; box-sizing: border-box; }
-.auth-error {
-  background: #fdecec;
-  color: #c0392b;
-  border-radius: 8px;
-  font-size: 13px;
-  padding: 8px 12px;
-  margin-bottom: 12px;
-}
-.auth-submit { width: 100%; padding: 11px 0; font-size: 15px; }
-.auth-tip {
-  margin-top: 18px;
-  font-size: 12px;
-  color: #97a1b7;
-  line-height: 1.7;
-  border-top: 1px dashed #e6eaf3;
-  padding-top: 12px;
-}
-.auth-tip a { color: #4b6ef5; }
-</style>

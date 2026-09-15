@@ -1,0 +1,17 @@
+{
+  "name": "习题库",
+  "appid": "",
+  "description": "Learning Coach 公共习题库",
+  "versionName": "0.1.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "vueVersion": "3",
+  "mp-weixin": {
+    "appid": "wx754635aaf3583729",
+    "setting": { "urlCheck": true, "es6": true, "minified": true },
+    "usingComponents": true,
+    "lazyCodeLoading": "requiredComponents"
+  },
+  "h5": { "router": { "mode": "hash" }, "title": "习题库" },
+  "uniStatistics": { "enable": false }
+}

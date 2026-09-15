@@ -1,6 +1,6 @@
 # Learning Coach API
 
-> AI+教育 课堂互动系统 —— 后端服务
+> AI 教育出题工作台、会员习题小程序、管理后台与 FastAPI 服务
 
 基于 FastAPI 的轻量后端，核心逻辑：接收前端请求 → 组装 Prompt（注入知识范围约束）→ 调用 LLM 生成趣味题目/知识游戏 → 返回结构化 JSON。
 
@@ -11,6 +11,7 @@
 - [快速开始](#快速开始)
 - [多用户与数据隔离](#多用户与数据隔离)
 - [后台管理](#后台管理)
+- [习题小程序](#习题小程序)
 - [项目结构](#项目结构)
 - [API 接口文档](#api-接口文档)
   - [1. 生成题目/游戏 `POST /api/v1/generate`](#1-生成题目游戏-post-apiv1generate)
@@ -22,7 +23,9 @@
   - [7. 健康检查 `GET /health`](#7-健康检查-get-health)
 - [枚举值速查表](#枚举值速查表)
 - [各游戏类型的响应结构](#各游戏类型的响应结构)
-- [生成策略（无缓存）](#生成策略无缓存)
+- [生成策略与请求恢复](#生成策略与请求恢复)
+- [草稿与模板](#草稿与模板)
+- [开发验证](#开发验证)
 - [错误处理](#错误处理)
 - [知识范围覆盖](#知识范围覆盖)
 - [前端对接指引](#前端对接指引)
@@ -33,26 +36,27 @@
 
 ### 环境要求
 
-- Python 3.9+
+- Python 3.11+（生成请求截止时间使用 `asyncio.timeout_at`）
+- Node.js 22.12+、pnpm 10
 - 已配置的 OpenAI 兼容 LLM API（如 DeepSeek / 通义千问 / GPT）
 
 ### 安装与启动
 
 ```bash
-cd backend
+# 在仓库根目录运行
 
 # 1. 安装依赖
 pip install -r requirements.txt
 
-# 2. 配置环境变量（复制模板并编辑）
-cp .env.example .env
-# 编辑 .env，填入 LLM_API_KEY=your-key
+# 2. 首次部署时创建配置，已有 .env 不要覆盖
+cp -n .env.example .env
+# 密钥可在 /admin/ 的「模型配置」中保存，.env 仅作兜底
 
-# 3. 构建前端（需要 Node.js 20+ 和 pnpm）
-cd web
-pnpm install
-pnpm build        # 产物输出到 web/dist/
-cd ..
+# 3. 构建前端（需要 Node.js 22.12+ 和 pnpm）
+pnpm --dir web install --frozen-lockfile
+pnpm --dir admin install --frozen-lockfile
+pnpm --dir web build
+pnpm --dir admin build
 
 # 4. 启动服务
 python run.py
@@ -64,7 +68,7 @@ python run.py
 
 ## 多用户与数据隔离
 
-系统支持多用户，每个账号的数据完全隔离：
+系统支持多用户，每个账号的私人数据独立保存；管理员明确发布的公共试卷供所有登录用户读取：
 
 | 数据 | 隔离方式 |
 |------|----------|
@@ -72,13 +76,17 @@ python run.py
 | 会话 | JWT（HS256）签名，httpOnly Cookie 下发（30 天有效），防 XSS 窃取 |
 | 我的模板 | 每用户独立（`user_templates` 表按 `user_id` 隔离），跨设备同步 |
 | 浏览器本地数据 | localStorage 按 `lc_u{用户id}_` 前缀命名空间隔离 |
+| 草稿与试卷历史 | IndexedDB 按账号隔离，每个页面使用独立草稿 ID |
+| 生成请求与用量 | 数据库按用户隔离请求 ID、执行状态和结果 |
+| 私人试卷与文件夹 | 按所有者鉴权，不会因升级或管理员发布其他试卷而自动公开 |
+| 公共试卷 | 只有已发布且文件就绪的条目对登录用户可见，收藏与下载记录按账号隔离 |
 
 **认证端点**：`POST /api/v1/auth/register|login|logout`、`GET /api/v1/auth/me`。
 所有业务 API（生成/范围查询/模板）均需登录，未登录返回 401。
 
 **模型服务由管理员统一配置**（见下方「后台管理」）：全体用户共用一份全局 LLM 配置，
 密钥 Fernet 加密存在服务端，前端不保存、接口不回传明文。配置优先级：
-请求显式传入 > 后台「模型配置」> `.env` 兜底。
+后台「模型配置」> `.env` 兜底。生成接口不接受客户端指定接口地址、模型或密钥。
 
 **单用户 → 多用户自动迁移**：老用户首次登录新版本时，本地 `lc_*` 数据自动
 拷贝到个人命名空间；本地遗留的 LLM 明文密钥自动清除；「我的模板」自动同步。
@@ -89,13 +97,16 @@ python run.py
 ```env
 SECRET_KEY=        # 留空自动生成 data/secret_key.txt；生产建议固定
 CORS_ORIGINS=      # 跨域白名单，留空=仅同源
+FORCE_HTTPS=false  # HTTPS 部署时设 true，为会话 Cookie 添加 Secure
 ```
 
 **运维提示**：`data/` 目录（users.db + secret_key.txt）包含全部用户数据与加密密钥，
-已被 .gitignore 排除——**请纳入备份，且绝不能提交到 git**。删除 secret_key.txt 会使
-所有会话失效、已存密钥无法解密（用户需重新保存密钥）。
+已被 .gitignore 排除。**请纳入备份，且绝不能提交到 git**；使用固定 `SECRET_KEY` 时也需安全备份该配置。
+更换有效密钥会使会话失效，并可能使已存 API Key 无法解密。旧版本忽略 `.env` 中
+`SECRET_KEY` 的问题已修复：升级后可能需要重新登录，旧文件密钥仅用于兼容解密历史配置。
+确认旧密文已重新保存前，请保留 `data/secret_key.txt`。
 
-多用户全链路测试：`python test_multiuser.py`（覆盖注册/登录/隔离等断言）。
+多用户回归请使用下文的隔离测试服务，勿将修改数据的测试指向现有用户数据库。
 
 ---
 
@@ -117,29 +128,29 @@ CORS_ORIGINS=      # 跨域白名单，留空=仅同源
 | 功能 | 说明 |
 |------|------|
 | ⚙ 模型配置 | **全局 LLM 服务**（接口地址/模型/密钥/超时），全体用户共用，密钥服务端加密存储，支持连通性测试 |
-| 📊 概览 | 用户/模板/模型服务统计，服务信息 |
+| 📊 概览 | 用户/模板统计、24 小时生成用量、供应商上报 token、部署安全提示 |
 | 👥 用户管理 | 搜索、创建用户、重置密码、启用/禁用、提升/降级管理员、删除（级联清理其数据）；**📄 查看任意用户的模板**（列表 + 内容预览 + 原始 JSON，用于排查与协助） |
 | 📄 系统日志 | 在线查看 server.log 尾部（100–1000 行） |
+| 公共试卷 | 从管理员自己的归档创建草稿、预览、分类、推荐、发布与下架，查看收藏和下载人数 |
 
 **模型配置说明**：模型服务由管理员在后台统一配置，普通用户无需也无法自行配置——
 所有账号的题目生成共用这一份配置（密钥加密存于 `app_config` 表，接口不回传明文）。
 未配置时生成请求会返回明确提示「请联系管理员配置模型服务」。
 老部署升级后，用户此前自配的 LLM 会在启动时自动迁移为全局配置。
 
-**如何成为管理员**（三选一）：
-1. 默认：**第一个注册的用户自动成为管理员**
-2. 在 `.env` 配置种子管理员（每次启动自动创建/对齐）：
+**如何成为管理员**：所有公开注册（包括第一个用户）都只创建普通账号。已有管理员不受升级影响。
+1. 在 `.env` 配置种子管理员（每次启动自动创建/对齐）：
    ```env
    ADMIN_USERNAME=boss
    ADMIN_PASSWORD=strong-password
    ```
-3. 由现有管理员在后台「用户管理」中提升
+2. 由现有管理员在后台「用户管理」中提升
 
 **安全护栏**：
 - 所有 `/api/v1/admin/*` 端点要求管理员角色（403），未登录 401
 - 管理员不能删除/禁用/降级**自己**（防止锁死系统）
 - 被禁用用户的现有会话**立即失效**（每次请求校验账号状态）
-- 删除用户时其模板、个人数据级联删除
+- 删除用户时其模板、个人数据级联删除；仍有源试卷被公共库引用时须先处理公共条目
 
 **独立构建**（admin/ 是独立 Vite 项目，可与 web/ 分开部署或单独迭代）：
 
@@ -152,13 +163,47 @@ pnpm dev
 ```
 
 测试：
-- `python test_admin.py` — 管理 API 全链路（40 项，需空库跑全量）
+- `python tests/run_ui_contracts.py`：自动启动隔离服务，检查权限、归档、公共发布和后台资源，不改真实数据库
 - `python test_admin_console.py` — 独立后台页面/资源/权限（12 项）
 - `python test_multiuser.py` — 多用户隔离回归（29 项）
 
 > 前端开发模式：`cd web && pnpm dev`（Vite 端口 5173，`/api` 自动代理到 8000）。
 
+工作台与管理后台采用 Vue 3、Nuxt UI 4、Tailwind CSS 4 和 Vite 8，共享 `ui/` 中的主题配置。
+同时启动两个前端开发服务后，可通过 `http://127.0.0.1:5173/admin/` 进入后台，保持同源会话。
+选型依据、迁移边界和验收记录见 [UI 重构说明](docs/ui-refactor.md)，
+生成可靠性、存储边界和部署检查见 [可靠性优化说明](docs/reliability.md)。
+
 ---
+
+## 习题小程序
+
+第一版位于独立的 `miniprogram/` 目录，使用 uni-app、Vue 3、TypeScript 和 Wot UI，
+有自己的依赖、锁文件、配置和构建产物，不从 `web/` 或 `ui/` 导入代码。
+
+面向独立的小程序账号，底部导航为「首页、习题库、收藏、我的」。支持年级、学科和分类筛选、
+搜索、分页、原稿预览、PDF 获取，以及收藏和下载记录。小程序不再提供私人习题、文件夹或工作台绑定。
+
+管理员用自己的出题账号在工作台生成并「保存到云端」，再到 `/admin/` 的「公共习题」中
+选择归档、创建草稿、检查文件并明确确认发布。未完成文件不能发布，下架后停止新访问。
+第一版不开放普通用户投稿或未经登录的公开下载。
+
+小程序用户分普通用户和 VIP，后台可设置会员有效期、禁用账号，按题型配置观看和下载权限，也可逐份覆盖。
+VIP 原稿、答案、缩略图和 PDF 均由服务端鉴权；支持免费预览、VIP 下载。会员暂由后台开通，不含支付。
+出题用户的私人归档继续仅保留在电脑工作台，不自动公开，也不复制给小程序用户。
+
+```bash
+pnpm --dir miniprogram install --frozen-lockfile
+pnpm --dir miniprogram dev:h5
+# 本机预览默认 http://127.0.0.1:5180，API 代理到 8000
+pnpm --dir miniprogram build:mp-weixin
+pnpm --dir miniprogram check:mp
+```
+
+本机 H5 可登录或注册独立的小程序账号，不接受工作台登录 Cookie。微信真机需要真实 AppID、服务端 AppSecret、HTTPS API 域名；
+首次微信登录自动创建普通小程序账号。旧版绑定入口已移除，旧小程序会话不再有效，历史出题数据保留。
+没有真实配置时不会绕过微信认证；正式发布还需完成隐私指引、合法域名和真机验收。
+详见 [小程序运行说明](miniprogram/README.md) 和 [习题库架构与部署](docs/paper-library.md)。
 
 ## 项目结构
 
@@ -234,7 +279,7 @@ backend/
 | `keyword` | `string` | ✅ | - | 知识点关键词，1-100 字符 |
 | `game_type` | `string` | - | `"quiz"` | 交互类型，见[枚举值速查表](#枚举值速查表) |
 | `difficulty` | `string` | - | `"medium"` | 难度，`"easy"` / `"medium"` / `"hard"` |
-| `question_count` | `int` | - | `5` | 生成题目数，范围 1-99 |
+| `question_count` | `int` | - | `5` | 生成题目数，范围 1-30 |
 
 #### 响应（200）
 
@@ -691,12 +736,53 @@ while (true) {
 
 ---
 
-## 生成策略（无缓存）
+## 生成策略与请求恢复
 
-系统**不使用任何题目缓存**：每次生成请求都会实时调用 LLM 生成全新试卷，相同参数重复生成也会得到内容不同的卷子。
+新请求实时调用 LLM，不按题目条件复用旧试卷；同一账号的同一 `X-Request-ID` 则只执行一次，
+用于防止网络重发造成重复调用。请求 ID 应在发送前保存，相同 ID 不能用于不同条件。
 
-- 整卷生成（`/generate-batch`）、单题型生成（`/generate`）、流式生成（`/generate/stream`）三条链路均无缓存
-- 代价是每次生成都要等待 LLM（通常 3-8 秒），前端请展示 loading 动画或骨架屏
+- `/generate-batch`、`/generate`、`/generate/stream`、`/validate` 共用额度、并发控制和请求去重。
+- 非流式成功结果默认保留 7 天；流式只记录状态，不重放 token。过期请求不会再次调用模型。
+- `GET /api/v1/me/generations/{request_id}` 只查询原请求结果，不消耗生成额度。
+- `GET /api/v1/me/usage` 返回滚动 24 小时用量。默认每账号 100 个请求、3 个并发，全站 6 个并发。
+- 工作台超时或断网后不自动重发。手动补齐会先查询原请求，跳过已完成部分，再以新 ID 提交未完成部分；可能产生新的模型费用。
+- 单次批量 API 最多 10 个大题，每大题 1-30 道题。工作台按大题 ID 映射结果，重复题型保持独立，超过 10 个大题分批发送。
+- 结构校验、确定性算术检查与重复过滤后，仍不足的题目返回 `missing_count` 和 `quality_warnings`，不伪造题干。
+- 缺题修复默认每请求最多追加 3 次模型调用，可设置 `GENERATION_REPAIR_LIMIT=0` 关闭；阅读题保留原文，不用另一篇文章补题。
+- token 统计仅使用供应商实际返回的 `usage`，不等于费用结算，也不覆盖供应商未报告的消耗。
+
+## 草稿与模板
+
+草稿自动保存到本机 IndexedDB，包含题目、富文本、卷面样式及未完成请求。历史记录可手动保存，
+生成后自动归档，恢复旧版本前先保存当前版本。不同账号隔离，不同页面不覆盖彼此草稿。
+本机存储不是云备份；清理浏览器数据会删除这些记录。保存失败时页面保留内容并给出提示。
+
+模板使用服务端版本号检查更新和删除。离线修改保留在本地，重连后同步；同名版本冲突时保留本地内容，
+可另存为新模板。旧版批量迁移仅创建不存在的模板，不覆盖服务端较新版本。
+
+## 开发验证
+
+在仓库根目录执行（先安装前后端依赖）：
+
+```bash
+pnpm --dir web typecheck
+pnpm --dir web test
+pnpm --dir web build
+pnpm --dir admin typecheck
+pnpm --dir admin build
+pnpm --dir miniprogram typecheck
+pnpm --dir miniprogram test
+pnpm --dir miniprogram build:mp-weixin
+pnpm --dir miniprogram check:mp
+pnpm --dir miniprogram build:h5
+python -m unittest discover -s tests -p 'test_backend*.py' -v
+python tests/run_ui_contracts.py
+git diff --check
+```
+
+`run_ui_contracts.py` 自动创建隔离 SQLite 数据库、启动随机本机端口、运行 7 项 API 契约与
+12 项管理后台检查，结束后关闭测试服务。不调用付费模型，不读取或修改现有用户数据库。
+GitHub Actions 工作流见 `.github/workflows/ci.yml`，覆盖以上前后端检查；远程 CI 需推送后执行。
 
 ---
 
@@ -706,11 +792,16 @@ while (true) {
 |-------------|------|----------|
 | `200` | 成功 | 正常业务数据 |
 | `400` | 请求参数错误（年级/科目不支持、参数校验失败） | `{"detail": {"error": "...", "detail": "..."}}` |
+| `409` | 原请求处理中、请求 ID 冲突、账号变化或模板版本冲突 | `{"detail": {"error": "..."}}` |
+| `410` | 原请求结果已过期或不支持重放 | `{"detail": {"error": "..."}}` |
 | `422` | 请求体格式校验失败（FastAPI 自动校验） | Pydantic 标准格式 |
+| `429` | 请求额度或并发达到上限 | `{"detail": {"error": "...", "code": "..."}}` |
 | `500` | 服务端内部错误 | `{"detail": {"error": "...", "detail": "..."}}` |
 | `502` | LLM 调用失败（API Key 错误、网络超时、返回格式异常） | `{"detail": {"error": "...", "detail": "..."}}` |
+| `503` / `504` | 请求中断或模型超时，结果可能不确定 | `{"detail": {"error": "...", "request_id": "..."}}` |
 
-前端应统一处理 `detail` 字段，对 502 错误给出"生成失败，请重试"的用户提示。
+前端应统一处理 `detail` 字段，保留 `request_id`；遇到超时、网络断开或 5xx 时先查询原请求，
+不要自动创建新请求。仅 LLM 建立连接失败（`ConnectError`）允许有限重试，读写和协议异常不自动重发。
 
 ---
 
@@ -761,11 +852,11 @@ while (true) {
 
 3. **reading 类型特殊处理**：响应中多了顶层 `passage` 字段，需要先渲染文章区域再展示题目
 
-4. **生成延迟**：每次生成都是实时调用 LLM（通常 3-8 秒），建议在前端展示 loading 动画或骨架屏。
+4. **生成延迟**：新请求耗时取决于模型、题量和修复次数；展示进度，保存请求 ID，不按固定等待时间自动重发。
 
 5. **流式降级**：如 `/generate/stream` 前端实现复杂，可先用 `/generate`，在响应回来前展示 loading 动画即可。
 
-6. **CORS**：开发阶段后端已开放全来源 CORS（`allow_origins=["*"]`），生产环境需限制为前端实际域名。
+6. **CORS**：默认仅同源。开发时通过 Vite 代理，跨域部署时用 `CORS_ORIGINS` 明确列出前端来源。
 
 ---
 
@@ -774,16 +865,25 @@ while (true) {
 `.env` 文件关键配置项：
 
 ```ini
-# LLM 服务（必填）
-LLM_API_KEY=sk-your-key           # API 密钥，必须配置
+# LLM 服务（后台配置优先；密钥可留空并在后台保存）
+LLM_API_KEY=
 LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-v4-pro
+LLM_MODEL=deepseek-chat
 
 # 生成参数
 LLM_TEMPERATURE=0.4               # 0-1，越低越稳定
 LLM_MAX_TOKENS=4096
+GENERATION_DAILY_LIMIT=100
+GENERATION_USER_CONCURRENCY=3
+GENERATION_GLOBAL_CONCURRENCY=6
+GENERATION_REPAIR_LIMIT=3
+GENERATION_LEASE_SECONDS=3600
+GENERATION_RESULT_DAYS=7
 
 # 服务
 HOST=127.0.0.1
 PORT=8000
+FORCE_HTTPS=false                 # HTTPS 部署时设 true
 ```
+
+完整配置见 `.env.example`。升级前备份数据库与密钥，再重启后端使新增接口和增量数据库迁移生效。

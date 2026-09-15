@@ -1,176 +1,108 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { useExamStore } from '../stores/exam'
-import { summaryText } from '../utils'
 import PaperView from './PaperView.vue'
 import FormatBar from './FormatBar.vue'
+import ZoomControl from './ZoomControl.vue'
+import RecoveryActions from './RecoveryActions.vue'
 import * as exporter from '../exporter'
 import { useFitZoom } from '../useFitZoom'
 
 const store = useExamStore()
-
+const emit = defineEmits<{ library: [] }>()
+const CloudSaveDialog = defineAsyncComponent(() => import('./CloudSaveDialog.vue'))
+const showCloudSave = ref(false)
+const archiving = ref(false)
 const stackEl = ref<HTMLElement | null>(null)
 const paperViewEl = ref<InstanceType<typeof PaperView> | null>(null)
 const { zoom, manual, setManual } = useFitZoom(stackEl)
-
-/** 结果页标题编辑 → 同步回 store（保存模板读 store.titleHtml） */
+const selected = ref(0)
+const paper = computed(() => store.papers[selected.value] || store.papers[0])
+const paperOptions = computed(() => store.papers.map((p, index) => ({ label: '第 ' + (p.day || index + 1) + ' 份试卷', value: index })))
+const questionCount = computed(() => paper.value?.sections.reduce((total, section) => total + section.data.questions.length, 0) || 0)
+const qualityWarnings = computed(() => paper.value?.sections.flatMap((section, index) => section.warn ? ['第 ' + (index + 1) + ' 大题：' + section.warn] : []) || [])
+const exporting = ref('')
+const busy = computed(() => !!exporting.value || archiving.value)
+const exportError = ref('')
+watch(() => store.papers, () => { selected.value = 0; store.layoutMode = false })
 function onTitleEdited(title: string, html: string) {
   store.title = title
   store.titleHtml = html
-  // 标题同步到每一份：批量导出 ZIP 的文件名/卷头读的是各份 paper.title
-  store.papers.forEach(p => {
-    p.title = title
-    ;(p as any).titleHtml = html
-  })
+  store.papers.forEach(p => { p.title = title; p.titleHtml = html })
 }
-
-const paper = computed(() => store.papers[0])
-const summary = computed(() => (paper.value ? summaryText(paper.value.grade, paper.value.subject, paper.value.keyword, paper.value.sections) : ''))
-
-/* ── 导出状态 ── */
-const exporting = ref('')
-const exportErr = ref('')
-
-async function run(btnLabel: string, job: () => Promise<void>) {
-  if (exporting.value) return
-  exportErr.value = ''
-  exporting.value = btnLabel
-  try {
-    await job()
-  } catch (e: any) {
-    exportErr.value = '导出失败：' + (e?.message || e)
-  } finally {
-    exporting.value = ''
-  }
+async function run(label: string, job: () => Promise<void>) {
+  if (busy.value) return
+  exportError.value = ''
+  exporting.value = label
+  try { await job() }
+  catch (e: unknown) { exportError.value = '导出失败：' + (e instanceof Error ? e.message : String(e)) }
+  finally { exporting.value = '' }
 }
-
-const busy = (label: string) => exporting.value === label
-
 function exportPdf(mode: 'student' | 'withAnswers' | 'answersOnly') {
-  if (!paper.value || !stackEl.value) return
-  run('pdf', () => exporter.exportPDF(paper.value!, store.template, store.style, mode))
+  if (paper.value) run('正在导出 PDF', () => exporter.exportPDF(paper.value!, store.template, store.style, mode))
 }
-
 function exportPng() {
-  if (!paper.value || !stackEl.value) return
-  run('png', () => exporter.exportPNG(paper.value!, store.template, store.style))
+  if (paper.value) run('正在导出 PNG', () => exporter.exportPNG(paper.value!, store.template, store.style))
 }
-
 function exportBatch(mergeOnly: boolean) {
-  if (!paper.value || !stackEl.value) return
-  run(mergeOnly ? 'merge' : 'zip', () =>
-    exporter.exportBatch(store.papers, store.template, store.style, {
-      addDay: store.addDayLabel,
-      mergeOnly,
-    }, msg => { exporting.value = msg }),
-  )
+  run(mergeOnly ? '正在合并 PDF' : '正在打包 ZIP', () => exporter.exportBatch(store.papers, store.template, store.style,
+    { addDay: store.addDayLabel, mergeOnly }, message => { exporting.value = message }))
 }
-
-function printPaper() {
-  if (!stackEl.value) return
-  exporter.printStack(stackEl.value)
+function printPaper() { if (stackEl.value) exporter.printStack(stackEl.value) }
+const pdfMenu = [
+  { label: '学生卷 PDF', icon: 'i-lucide-file-text', onSelect: () => exportPdf('student') },
+  { label: '试卷与答案 PDF', icon: 'i-lucide-files', onSelect: () => exportPdf('withAnswers') },
+  { label: '仅答案 PDF', icon: 'i-lucide-file-check', onSelect: () => exportPdf('answersOnly') },
+]
+const moreExports = computed(() => [
+  [{ label: '下载 PNG', icon: 'i-lucide-image', onSelect: exportPng }, { label: '打印试卷', icon: 'i-lucide-printer', onSelect: printPaper }],
+  ...(store.papers.length > 1 ? [[
+    { label: '全部试卷 ZIP', icon: 'i-lucide-file-archive', onSelect: () => exportBatch(false) },
+    { label: '合并全部 PDF', icon: 'i-lucide-files', onSelect: () => exportBatch(true) },
+  ]] : []),
+])
+function toggleLayout() {
+  if (store.layoutMode) paperViewEl.value?.applyLayout()
+  else store.showAnswers = false
+  store.layoutMode = !store.layoutMode
 }
-
-/* ── 排版模式 ── */
-async function toggleLayout() {
-  if (store.layoutMode) {
-    // 完成：DOM 回写数据
-    paperViewEl.value?.applyLayout()
-    store.layoutMode = false
-  } else {
-    store.showAnswers = false
-    store.layoutMode = true
-  }
-}
-function cancelLayout() {
-  store.layoutMode = false
-  paperViewEl.value?.repaginate()
-}
+function cancelLayout() { store.layoutMode = false; paperViewEl.value?.repaginate() }
 </script>
 
 <template>
-  <div class="result-view" v-if="paper">
-    <!-- 部分生成失败的告警（其余份正常展示） -->
-    <div v-if="store.generateWarn && !store.generating" class="card no-print" style="flex: none; padding: 10px 14px; border-color: var(--amber); color: var(--amber); font-size: 13px; margin-bottom: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-      <span>⚠️ {{ store.generateWarn }}</span>
-      <button v-if="store.failedCount" class="btn mini" :disabled="store.generating" @click="store.retryFailed()">
-        补齐失败的 {{ store.failedCount }} 份
-      </button>
+  <section v-if="paper" class="result-view" aria-label="生成的试卷">
+    <div v-if="store.generateWarn || store.generateError || exportError" class="result-notice no-print">
+      <UAlert v-if="store.generateWarn" color="warning" variant="soft" :title="store.generateWarn" />
+      <RecoveryActions />
+      <UAlert v-if="store.generateError || exportError" color="error" variant="soft" :title="exportError || store.generateError" role="alert" />
     </div>
-    <!-- 工具栏 -->
-    <div class="card no-print" style="flex: none;">
-      <div class="result-toolbar" style="margin-bottom: 0;">
-        <button class="btn primary" :disabled="!!exporting" @click="exportPdf('student')">
-          <template v-if="busy('pdf')"><span class="spin"></span> 导出中…</template>
-          <template v-else>下载 PDF</template>
-        </button>
-        <button class="btn" :disabled="!!exporting" @click="exportPng">下载 PNG</button>
-        <button class="btn" :disabled="!!exporting" @click="printPaper">打印</button>
-        <span class="sep"></span>
-        <button class="btn" @click="store.showAnswers = !store.showAnswers">
-          {{ store.showAnswers ? '隐藏答案' : '预览答案' }}
-        </button>
-        <FormatBar />
-        <button class="btn" :disabled="!!exporting" @click="exportPdf('answersOnly')">导出答案 PDF</button>
-        <span class="sep"></span>
-        <template v-if="!store.layoutMode">
-          <button class="btn" @click="toggleLayout">排版模式</button>
-        </template>
-        <template v-else>
-          <span style="font-size: 12px; color: var(--amber);">排版模式：⠿ 拖动排序 · 点击文字编辑 · ✕ 删除 · ⤡ 调整大小</span>
-          <button class="btn primary" @click="toggleLayout">✓ 完成排版</button>
-          <button class="btn" @click="cancelLayout">取消</button>
-        </template>
-        <span class="sep"></span>
-        <template v-if="store.papers.length > 1">
-          <button class="btn" :disabled="!!exporting" @click="exportBatch(false)">
-            <template v-if="busy('zip') || busy('正在打包…')"><span class="spin"></span> 处理中…</template>
-            <template v-else>导出全部（{{ store.papers.length }} 份 ZIP）</template>
-          </button>
-          <button class="btn" :disabled="!!exporting" @click="exportBatch(true)">合并 PDF</button>
-        </template>
-        <button class="btn" :disabled="store.generating" @click="store.regenerate()">
-          <template v-if="store.generating"><span class="spin"></span> {{ store.generateProgress || '生成中…' }}</template>
-          <template v-else>再来一批</template>
-        </button>
-        <span class="sep"></span>
-        <span style="display: flex; align-items: center; gap: 6px;">
-          <button class="btn mini" :style="manual === 0 ? 'border-color: var(--primary); color: var(--primary);' : ''" title="缩放到容器宽度" @click="setManual(0)">适应</button>
-          <input
-            type="range" min="25" max="100" step="5"
-            :value="manual > 0 ? manual * 100 : Math.round(zoom * 100)"
-            @input="setManual(parseInt(($event.target as HTMLInputElement).value) / 100)"
-            style="width: 80px; accent-color: var(--primary);"
-            title="缩放比例"
-          >
-          <span style="font-size: 11px; color: var(--ink3); width: 34px;">{{ Math.round(zoom * 100) }}%</span>
-        </span>
-        <span class="sep"></span>
-        <span class="result-summary" style="margin-bottom: 0; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="summary">
-          {{ summary }}<template v-if="store.papers.length > 1">（{{ store.papers.length }} 份）</template>
-        </span>
-        <span style="flex: 1;"></span>
-        <button class="btn ghost" @click="store.backToBuild()">← 返回调整</button>
+    <div v-if="qualityWarnings.length" class="result-quality no-print"><UAlert color="warning" variant="soft" title="当前试卷待核对" :description="qualityWarnings.join('；')" /></div>
+    <div class="result-toolbar no-print">
+      <UTooltip text="返回搭建"><UButton icon="i-lucide-arrow-left" color="neutral" variant="ghost" aria-label="返回搭建" :disabled="busy" @click="store.backToBuild()" /></UTooltip>
+      <USelect v-model="selected" :items="paperOptions" aria-label="选择试卷" class="paper-picker" :disabled="store.layoutMode || busy || store.generating" />
+      <span class="text-xs text-muted">共 {{ store.papers.length }} 份</span>
+      <div class="flex-1"></div>
+      <UButton icon="i-lucide-refresh-cw" label="重新生成" color="neutral" variant="outline" :loading="store.generating" :disabled="busy || store.layoutMode" @click="store.regenerate()" />
+      <UButton icon="i-lucide-cloud-upload" label="保存到云端" color="neutral" variant="outline" :loading="archiving" :disabled="busy || store.layoutMode || store.generating || store.accountChanged" @click="showCloudSave = true" />
+      <UButtonGroup>
+        <UButton icon="i-lucide-download" label="下载 PDF" :loading="!!exporting" :disabled="busy || store.layoutMode || store.generating" @click="exportPdf('student')" />
+        <UDropdownMenu :items="pdfMenu"><UButton icon="i-lucide-chevron-down" aria-label="PDF 导出选项" :disabled="busy || store.layoutMode || store.generating" /></UDropdownMenu>
+      </UButtonGroup>
+      <UDropdownMenu :items="moreExports"><UButton icon="i-lucide-ellipsis" color="neutral" variant="outline" aria-label="更多导出方式" :disabled="busy || store.layoutMode || store.generating" /></UDropdownMenu>
+    </div>
+    <div class="preview-toolbar result-editbar no-print">
+      <div class="actions-row"><FormatBar /><div class="toolbar-divider"></div><USwitch v-model="store.showAnswers" label="显示答案" size="sm" :disabled="store.layoutMode || busy" /></div>
+      <div class="actions-row">
+        <template v-if="!store.layoutMode"><UButton icon="i-lucide-move" label="排版模式" color="neutral" variant="ghost" size="xs" :disabled="busy" @click="toggleLayout" /></template>
+        <template v-else><UButton label="取消" color="neutral" variant="ghost" size="xs" @click="cancelLayout" /><UButton icon="i-lucide-check" label="完成排版" size="xs" @click="toggleLayout" /></template>
       </div>
-      <div v-if="exportErr" style="padding: 0 16px 12px; color: var(--red); font-size: 13px;">{{ exportErr }}</div>
     </div>
-
-    <!-- A4 纸 -->
-    <div ref="stackEl" class="preview-scroll" style="padding: 16px;">
-      <PaperView
-        ref="paperViewEl"
-        :paper="paper"
-        :template="store.template"
-        :style="store.style"
-        :show-answers="store.showAnswers"
-        :editable="true"
-        :layout-mode="store.layoutMode"
-        :add-day="store.addDayLabel"
-        :zoom="zoom"
-        @title-edited="onTitleEdited"
-        @toggle-element="store.toggleHiddenElement($event)"
-        @title-offset="(v: number) => store.setStyle({ titleOffsetY: v })"
-      />
+    <div v-if="exporting" class="px-5 py-2 text-xs text-primary bg-default no-print" role="status">{{ exporting }}</div>
+    <div ref="stackEl" class="preview-scroll">
+      <PaperView :key="selected" ref="paperViewEl" :paper="paper" :template="store.template" :style="store.style" :show-answers="store.showAnswers" :editable="!busy" :layout-mode="store.layoutMode" :add-day="store.addDayLabel" :zoom="zoom"
+        @title-edited="onTitleEdited" @toggle-element="store.toggleHiddenElement($event)" @title-offset="value => store.setStyle({ titleOffsetY: value })" />
     </div>
-  </div>
+    <div class="preview-footer no-print"><span>A4 <span class="mx-1 text-dimmed">/</span> {{ questionCount }} 道题目</span><ZoomControl :zoom="zoom" :manual="manual" @change="setManual" /></div>
+    <CloudSaveDialog v-if="showCloudSave" :open="showCloudSave" :selected="selected" @close="showCloudSave = false" @busy="archiving = $event" @library="showCloudSave = false; emit('library')" />
+  </section>
 </template>
