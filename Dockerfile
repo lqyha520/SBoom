@@ -10,7 +10,8 @@ RUN npm install -g pnpm@10
 # 先只拷贝清单，利用层缓存装依赖
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./web/
 COPY admin/package.json admin/pnpm-lock.yaml admin/pnpm-workspace.yaml ./admin/
-# admin 构建会 import 仓库根的 shared/mini-profile
+# 两个前端构建都会 import 仓库根的 ../ui/config.mts 与 shared/mini-profile
+COPY ui ./ui
 COPY shared ./shared
 RUN cd web && pnpm install --frozen-lockfile \
  && cd ../admin && pnpm install --frozen-lockfile
