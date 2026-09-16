@@ -27,6 +27,9 @@ async function submit() {
     else await auth.register(name, password.value)
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : '登录失败，请重试'
+    if (mode.value === 'login' && error.value.includes('用户名或密码错误')) {
+      error.value += '；还没有账号？切换到上方「注册」'
+    }
   } finally { busy.value = false }
 }
 </script>

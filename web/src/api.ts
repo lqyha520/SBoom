@@ -52,6 +52,14 @@ export async function request<T>(url: string, init?: RequestInit, timeoutOverrid
   }
   if (!r.ok) {
     if (r.status === 401) {
+      // 登录/注册接口的 401 是「用户名或密码错误」，要展示后端原文并提示可注册；
+      // 其余接口的 401 才是会话过期，转为「请先登录」让 App 弹登录页
+      if (url === '/api/v1/auth/login' || url === '/api/v1/auth/register') {
+        const e = await r.json().catch(() => ({} as any))
+        const d = e?.detail
+        const base = typeof d === 'string' ? d : (d?.error || d?.detail || '登录失败，请重试')
+        throw new ApiError(base, 401, d?.code || '')
+      }
       if (workspaceOwner) window.dispatchEvent(new Event(AUTH_CHANGED_EVENT))
       throw new AuthError('请先登录')
     }
