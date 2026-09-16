@@ -3,13 +3,13 @@
 import asyncio
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.deps import require_admin
 from app.library_deps import bearer_token, no_store, require_mini_user
-from app.models.mini import AdminProfileUpdate, MembershipUpdate, MiniCredentials, MiniPasswordUpdate, MiniProfileUpdate
-from app.services import mini_auth
+from app.models.mini import MAX_AVATAR_BASE64, AdminProfileUpdate, MembershipUpdate, MiniAvatarUpdate, MiniCredentials, MiniPasswordUpdate, MiniProfileUpdate, MiniRegistration
+from app.services import mini_auth, mini_avatars
 from app.services.mini_auth import MiniUser
 from app.services.rate_limit import allow
 from app.services.user_store import CurrentUser
@@ -32,8 +32,9 @@ def _limit(request: Request, name: str, count=30, seconds=300):
 @router.post("/mini/login-public")
 async def public_login(body: CodeInput, request: Request):
     _limit(request, "login")
-    identity = await mini_auth.exchange_code(body.code)
-    return await asyncio.to_thread(mini_auth.login_public_identity, identity)
+    identity = await mini_auth.exchange_code(body.code, with_openid=True)
+    credentials = identity if isinstance(identity, tuple) else (identity, "")
+    return await asyncio.to_thread(mini_auth.login_public_identity, *credentials)
 
 
 @router.post("/mini/login-password")
@@ -44,7 +45,7 @@ def password_login(body: MiniCredentials, request: Request):
 
 
 @router.post("/mini/register", status_code=201)
-def register(body: MiniCredentials, request: Request):
+def register(body: MiniRegistration, request: Request):
     _limit(request, "register", 10, 3600)
     return mini_auth.register(body.username, body.password)
 
@@ -55,10 +56,41 @@ def me(user: MiniUser = Depends(require_mini_user)):
 
 
 @router.patch("/mini/me")
+@router.put("/mini/me")
 def update_me(body: MiniProfileUpdate, request: Request, user: MiniUser = Depends(require_mini_user)):
     """用户自己改昵称与头像。只能改自己的账号——目标由登录态决定，接口不接受 user_id。"""
     _limit(request, "profile:" + user.id, 40, 300)
     return mini_auth.update_profile(user.id, body)
+
+
+@router.post("/mini/me/avatar")
+async def upload_avatar(request: Request, user: MiniUser = Depends(require_mini_user)):
+    _limit(request, "avatar:" + user.id, 20, 300)
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > MAX_AVATAR_BASE64 + 2048:
+            raise HTTPException(413, detail={"error": "头像不能超过 2 MB，请选择较小的图片"})
+    try:
+        body = MiniAvatarUpdate.model_validate_json(raw)
+    except ValidationError as exc:
+        message = str(exc.errors(include_input=False)[0]["msg"]).removeprefix("Value error, ")
+        raise HTTPException(422, detail={"error": message if "昵称" in message else "头像数据无效，请重新选择"}) from exc
+    return await asyncio.to_thread(mini_avatars.save, user.id, body)
+
+
+def _avatar_response(content: bytes):
+    return Response(content, media_type="image/jpeg", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/mini/me/avatar/{version}")
+def avatar(version: str, user: MiniUser = Depends(require_mini_user)):
+    return _avatar_response(mini_avatars.read(user.id, version))
+
+
+@router.get("/admin/mini-users/{user_id}/avatar/{version}")
+def admin_avatar(user_id: str, version: str, user: CurrentUser = Depends(require_admin)):
+    return _avatar_response(mini_avatars.read(user_id, version, admin=True))
 
 
 @router.post("/mini/password")
@@ -76,14 +108,14 @@ def logout(authorization: str | None = Header(None), user: MiniUser = Depends(re
 
 
 @router.get("/admin/mini-users")
-def users(q: str = Query("", max_length=120), membership: Literal["", "regular", "vip"] = "",
+def users(q: str = Query("", max_length=120), membership: Literal["", "regular", "vip", "expiring", "expired"] = "",
           limit: int = Query(20, ge=1, le=50), offset: int = Query(0, ge=0, le=100000),
           user: CurrentUser = Depends(require_admin)):
     return mini_auth.list_users(q, membership, limit, offset)
 
 
 @router.post("/admin/mini-users", status_code=201)
-def create_user(body: MiniCredentials, user: CurrentUser = Depends(require_admin)):
+def create_user(body: MiniRegistration, user: CurrentUser = Depends(require_admin)):
     result = mini_auth.register(body.username, body.password, admin=True)
     mini_auth.logout(result["token"])
     return mini_auth.admin_user(result["user"]["id"])

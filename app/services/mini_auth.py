@@ -13,15 +13,15 @@ from fastapi import HTTPException
 
 from app.config import get_settings
 from app.db import db
-from app.models.mini import AdminProfileUpdate, MembershipUpdate, MiniPasswordUpdate, MiniProfileUpdate
-from app.security import hash_password, verify_password
+from app.models.mini import NEW_USERNAME_PATTERN, AdminProfileUpdate, MembershipUpdate, MiniPasswordUpdate, MiniProfileUpdate
+from app.security import hash_password, verify_password, encrypt_secret
 
 
 class _RedactWeChatURL(logging.Filter):
     def filter(self, record):
         if isinstance(record.args, tuple):
-            record.args = tuple("https://api.weixin.qq.com/sns/jscode2session?[redacted]"
-                                if "api.weixin.qq.com/sns/jscode2session" in str(arg) else arg for arg in record.args)
+            record.args = tuple(str(arg).split("?", 1)[0] + "?[redacted]"
+                                if "api.weixin.qq.com/" in str(arg) and "?" in str(arg) else arg for arg in record.args)
         return True
 
 
@@ -38,21 +38,24 @@ class MiniUser:
     vip_expires_at: int | None
     avatar: str = ""
     has_password: bool = False
+    nickname: str = ""
+    has_wechat: bool = False
 
     @property
     def is_vip(self):
         return self.membership == "vip" and (self.vip_expires_at is None or self.vip_expires_at > time.time())
 
     def public(self):
-        return {"id": self.id, "username": self.username, "avatar": self.avatar,
-                "has_password": self.has_password, "membership": self.membership,
+        return {"id": self.id, "username": self.username, "nickname": self.nickname or self.username, "avatar": self.avatar,
+                "avatar_url": "/api/v1/mini/me/avatar/" + self.avatar[6:] if self.avatar.startswith("photo:") else None,
+                "has_password": self.has_password, "has_wechat": self.has_wechat, "membership": self.membership,
                 "is_vip": self.is_vip, "vip_expires_at": self.vip_expires_at,
                 "membership_status": "active" if self.is_vip else "expired" if self.membership == "vip" else "regular"}
 
 
 def _row_user(row) -> MiniUser:
     return MiniUser(row["id"], row["username"], row["membership"], row["vip_expires_at"],
-                    row["avatar"] or "", bool(row["password_hash"]))
+                    row["avatar"] or "", bool(row["password_hash"]), row["nickname"] or row["username"], bool(row["wechat_openid_enc"]))
 
 
 def digest(token: str) -> str:
@@ -108,6 +111,8 @@ def logout(token: str):
 def register(username: str, password: str, *, admin=False):
     if not admin and not get_settings().mini_registration_enabled:
         _error("小程序注册暂未开放，请联系管理员", 403)
+    if not NEW_USERNAME_PATTERN.fullmatch(username):
+        _error("账号需为 2-32 位英文字母、数字、下划线或短横线，不能使用中文", 422)
     password_hash = hash_password(password)
     now, user_id = int(time.time()), uuid.uuid4().hex
     with db(serialized=True) as conn:
@@ -127,7 +132,7 @@ def login_password(username: str, password: str):
         return _session(conn, row["id"])
 
 
-async def exchange_code(code: str) -> str:
+async def exchange_code(code: str, *, with_openid=False):
     settings = get_settings()
     if not settings.wechat_app_id or not settings.wechat_app_secret:
         _error("微信登录尚未配置，请联系管理员", 503)
@@ -143,13 +148,10 @@ async def exchange_code(code: str) -> str:
         raise HTTPException(502, detail={"error": "微信登录服务暂不可用，请稍后重试"}) from exc
     if not isinstance(value, dict) or value.get("errcode") or not isinstance(value.get("openid"), str) or not 1 <= len(value["openid"]) <= 128:
         _error("微信登录凭证无效，请重新登录")
-    return digest(settings.wechat_app_id + ":" + value["openid"])
+    identity = digest(settings.wechat_app_id + ":" + value["openid"])
+    return (identity, value["openid"]) if with_openid else identity
 
 
-_NICKNAME_QUALITIES = (
-    "认真", "勤奋", "好奇", "专注", "机灵", "勇敢", "踏实", "细心",
-    "向阳", "静心", "元气", "乐学", "爱读书", "爱思考",
-)
 _NICKNAME_SPIRITS = (
     "小海豚", "小松鼠", "小狐狸", "小鹿", "小熊猫", "小企鹅",
     "小刺猬", "小考拉", "小猫头鹰", "小海獭", "小羊驼", "小袋鼠",
@@ -157,40 +159,41 @@ _NICKNAME_SPIRITS = (
 
 
 def _default_username(conn) -> str:
-    """Human-friendly default nickname for a brand-new consumer account.
+    """Generate a short ASCII login identifier independent of the display name.
 
     Callers hold the cross-process transaction lock of ``db(serialized=True)``
     (pg_advisory_xact_lock on PostgreSQL, BEGIN IMMEDIATE on SQLite), so the
     availability check and the following INSERT cannot interleave with another
-    worker picking the same nickname.
+    worker picking the same login identifier. The editable nickname is separate.
     """
     for _ in range(20):
-        nickname = "%s的%s%d" % (secrets.choice(_NICKNAME_QUALITIES), secrets.choice(_NICKNAME_SPIRITS),
-                                 secrets.randbelow(9000) + 1000)
-        if not conn.execute("SELECT 1 FROM mini_users WHERE username = ?", (nickname,)).fetchone():
-            return nickname
-    return "小学员" + secrets.token_hex(4)
+        username = "wx%010d" % secrets.randbelow(10_000_000_000)
+        if not conn.execute("SELECT 1 FROM mini_users WHERE username = ?", (username,)).fetchone():
+            return username
+    return "wx" + uuid.uuid4().hex[:24]
 
 
-def login_public_identity(identity: str):
+def login_public_identity(identity: str, openid=""):
+    if openid and digest(get_settings().wechat_app_id + ":" + openid) != identity:
+        _error("微信身份不一致，请重新登录")
     with db(serialized=True) as conn:
         account = conn.execute("SELECT id FROM mini_users WHERE wechat_identity = ?", (identity,)).fetchone()
         if account:
+            if openid:
+                conn.execute("UPDATE mini_users SET wechat_openid_enc = ? WHERE id = ?", (encrypt_secret(openid), account["id"]))
             return _session(conn, account["id"])
         if not get_settings().mini_registration_enabled:
             _error("小程序注册暂未开放，请联系管理员", 403)
         user_id, now = uuid.uuid4().hex, int(time.time())
-        conn.execute("INSERT INTO mini_users(id, username, wechat_identity, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                     (user_id, _default_username(conn), identity, now, now))
+        conn.execute("INSERT INTO mini_users(id, username, nickname, wechat_identity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                     (user_id, _default_username(conn), secrets.choice(_NICKNAME_SPIRITS), identity, now, now))
+        if openid:
+            conn.execute("UPDATE mini_users SET wechat_openid_enc = ? WHERE id = ?", (encrypt_secret(openid), user_id))
         return _session(conn, user_id)
 
 
 def update_profile(user_id: str, body: MiniProfileUpdate):
-    """用户自助改昵称/头像：只落传上来的字段。
-
-    Callers hold ``db(serialized=True)``，所以昵称查重与随后的 UPDATE 不会被
-    另一个 worker 插进来抢同一个昵称（UNIQUE 约束是最后一道防线）。
-    """
+    """用户自助改昵称/头像；昵称允许重复，固定登录名不随资料编辑改变。"""
     with db(serialized=True) as conn:
         row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
         if not row:
@@ -198,15 +201,15 @@ def update_profile(user_id: str, body: MiniProfileUpdate):
         if not row["is_active"]:
             _error("账号已被禁用，请联系管理员", 403, "account_disabled")
         fields, args = [], []
-        if body.username is not None and body.username != row["username"]:
-            if conn.execute("SELECT id FROM mini_users WHERE username = ? AND id <> ?",
-                            (body.username, user_id)).fetchone():
-                _error("这个昵称已经有人在用了，换一个试试", 409, "nickname_taken")
-            fields.append("username = ?")
-            args.append(body.username)
+        # Legacy clients sent username for the display name. Never change the login identifier.
+        nickname = body.nickname if body.nickname is not None else body.username
+        if nickname is not None and nickname != (row["nickname"] or row["username"]):
+            fields.append("nickname = ?")
+            args.append(nickname)
         if body.avatar is not None and body.avatar != (row["avatar"] or ""):
             fields.append("avatar = ?")
             args.append(body.avatar)
+            conn.execute("DELETE FROM mini_user_avatars WHERE user_id = ?", (user_id,))
         if fields:
             now = int(time.time())
             conn.execute("UPDATE mini_users SET " + ", ".join(fields) + ", revision = revision + 1, updated_at = ? "
@@ -246,6 +249,7 @@ def update_password(user_id: str, body: MiniPasswordUpdate, current_token: str =
 def _admin_item(row):
     user = _row_user(row)
     return {**user.public(), "is_active": bool(row["is_active"]), "revision": row["revision"],
+            "avatar_url": f"/api/v1/admin/mini-users/{user.id}/avatar/{user.avatar[6:]}" if user.avatar.startswith("photo:") else None,
             "created_at": row["created_at"], "updated_at": row["updated_at"],
             "login_method": "wechat" if row["wechat_identity"] else "password"}
 
@@ -264,14 +268,20 @@ def _record_event(conn, admin_id, user_id, before, after):
 def list_users(q="", membership="", limit=20, offset=0):
     clauses, args = [], []
     if q.strip():
-        clauses.append("LOWER(username) LIKE ? ESCAPE '\\'")
-        args.append("%" + q.strip().lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+        clauses.append("(LOWER(username) LIKE ? ESCAPE '\\' OR LOWER(nickname) LIKE ? ESCAPE '\\')")
+        args.extend(["%" + q.strip().lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"] * 2)
     active_vip = "membership = 'vip' AND (vip_expires_at IS NULL OR vip_expires_at > ?)"
     if membership == "vip":
         clauses.append("(" + active_vip + ")")
         args.append(int(time.time()))
     elif membership == "regular":
         clauses.append("NOT (" + active_vip + ")")
+        args.append(int(time.time()))
+    elif membership == "expiring":
+        clauses.append("membership = 'vip' AND vip_expires_at > ? AND vip_expires_at <= ?")
+        args.extend([int(time.time()), int(time.time()) + 7 * 86400])
+    elif membership == "expired":
+        clauses.append("membership = 'vip' AND vip_expires_at <= ?")
         args.append(int(time.time()))
     where = " AND ".join(clauses) or "1 = 1"
     with db() as conn:
@@ -297,6 +307,8 @@ def update_membership(admin_id, user_id, body: MembershipUpdate):
         if row["revision"] != body.revision:
             _error("用户信息已更新，请刷新后重试", 409)
         now = int(time.time())
+        if row["membership"] != body.membership or row["vip_expires_at"] != body.vip_expires_at:
+            conn.execute("UPDATE mini_users SET entitlement_epoch = entitlement_epoch + 1 WHERE id = ?", (user_id,))
         conn.execute("UPDATE mini_users SET membership = ?, vip_expires_at = ?, is_active = ?, revision = revision + 1, "
                      "updated_at = ? WHERE id = ?", (body.membership, body.vip_expires_at, int(body.is_active), now, user_id))
         if not body.is_active:
@@ -319,15 +331,14 @@ def update_admin_profile(admin_id, user_id, body: AdminProfileUpdate):
         if row["revision"] != body.revision:
             _error("用户信息已更新，请刷新后重试", 409)
         fields, args = [], []
-        if body.username is not None and body.username != row["username"]:
-            if conn.execute("SELECT id FROM mini_users WHERE username = ? AND id <> ?",
-                            (body.username, user_id)).fetchone():
-                _error("这个昵称已经有人在用了", 409, "nickname_taken")
-            fields.append("username = ?")
-            args.append(body.username)
+        nickname = body.nickname if body.nickname is not None else body.username
+        if nickname is not None and nickname != (row["nickname"] or row["username"]):
+            fields.append("nickname = ?")
+            args.append(nickname)
         if body.avatar is not None and body.avatar != (row["avatar"] or ""):
             fields.append("avatar = ?")
             args.append(body.avatar)
+            conn.execute("DELETE FROM mini_user_avatars WHERE user_id = ?", (user_id,))
         reset_password = body.new_password is not None
         if reset_password:
             fields.append("password_hash = ?")
@@ -338,17 +349,32 @@ def update_admin_profile(admin_id, user_id, body: AdminProfileUpdate):
                      [*args, int(time.time()), user_id])
         if reset_password:
             conn.execute("DELETE FROM mini_user_sessions WHERE user_id = ?", (user_id,))
-        _record_event(conn, admin_id, user_id, _admin_item(row), _admin_item(
-            conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()))
+        after = _admin_item(conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone())
+        if reset_password:
+            after["password_reset"] = True
+        _record_event(conn, admin_id, user_id, _admin_item(row), after)
     logger.info("管理员 id=%s 更新了小程序账号 id=%s: 昵称=%s 头像=%s 重置密码=%s", admin_id, user_id,
-                body.username or "-", body.avatar if body.avatar is not None else "-", reset_password)
+                nickname or "-", body.avatar if body.avatar is not None else "-", reset_password)
     return admin_user(user_id)
 
 
 #: 删除小程序账号时要一并清理的从表。两张库都声明了 ON DELETE CASCADE（SQLite 连接
 #: 也开了 PRAGMA foreign_keys），这里显式删除是为了两库行为完全一致，同时能告诉
 #: 管理员究竟清掉了多少条关联数据。
-_OWNED_TABLES = ("mini_user_sessions", "mini_catalog_favorites", "mini_catalog_downloads", "mini_membership_events")
+_OWNED_TABLES = ("mini_user_sessions", "mini_user_avatars", "mini_catalog_favorites", "mini_catalog_downloads", "mini_membership_events",
+                 "mini_recent_views", "mini_favorite_groups", "mini_feedback", "mini_usage_events", "mini_notifications", "mini_content_requests", "mini_notice_subscriptions")
+
+
+def delete_user_data(conn, user_id):
+    from app.services.mini_orders import ensure_deletable
+    ensure_deletable(conn, user_id)
+    removed = {table: conn.execute(f"SELECT COUNT(*) FROM {table} WHERE user_id = ?", (user_id,)).fetchone()[0] for table in _OWNED_TABLES}
+    for table in _OWNED_TABLES:
+        conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+    conn.execute("UPDATE mini_orders SET payer_enc = '' WHERE user_id = ?", (user_id,))
+    conn.execute("UPDATE mini_account_closures SET account_name = '已注销用户', reason = '' WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM mini_users WHERE id = ?", (user_id,))
+    return removed
 
 
 def delete_user(admin_id, user_id):
@@ -357,10 +383,6 @@ def delete_user(admin_id, user_id):
         row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
         if not row:
             _error("小程序用户不存在", 404)
-        removed = {table: conn.execute(f"SELECT COUNT(*) FROM {table} WHERE user_id = ?", (user_id,)).fetchone()[0]
-                   for table in _OWNED_TABLES}
-        for table in _OWNED_TABLES:
-            conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
-        conn.execute("DELETE FROM mini_users WHERE id = ?", (user_id,))
+        removed = delete_user_data(conn, user_id)
     logger.info("管理员 id=%s 删除了小程序账号「%s」(id=%s)，清理 %s", admin_id, row["username"], user_id, removed)
     return {"status": "deleted", "username": row["username"], "removed": removed}

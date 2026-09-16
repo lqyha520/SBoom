@@ -2,15 +2,17 @@ import { request } from './api'
 
 export type PublicationStatus = 'draft' | 'published' | 'withdrawn'
 export interface CatalogPaper {
+  tags?: import('./growth').CatalogTag[]
   view_access: 'inherit' | 'free' | 'vip'; download_access: 'inherit' | 'free' | 'vip'
   required_view: 'free' | 'vip'; required_download: 'free' | 'vip'; question_types: string[]
   id: string; title: string; description: string; category: string; category_id?: string; status: PublicationStatus
   featured: boolean; revision: number; grade: string; subject: string; version: number
+  release_number?: number; update_note?: string; can_view?: boolean; can_download?: boolean
   question_count: number; page_count: number; file_status: string; thumbnail_url: string | null
   updated_at: number; favorite_count?: number; download_users?: number
 }
 export interface CatalogAsset { id: string; kind: 'pdf' | 'page'; page_number: number; url: string }
-export interface CatalogDetail extends CatalogPaper { assets: CatalogAsset[] }
+export interface CatalogDetail extends CatalogPaper { assets: CatalogAsset[]; editions?: import('./growth').Edition[]; versions?: { release_number: number; note: string; created_at: number }[] }
 export interface CatalogStats { total: number; published: number; draft: number; withdrawn: number; favorites: number; downloads: number }
 export interface CatalogSource { id: string; title: string; grade: string; subject: string; version: number; file_status: string; question_count: number }
 export interface Page<T> { items: T[]; total: number; has_more: boolean }

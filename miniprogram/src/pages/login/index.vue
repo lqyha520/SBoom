@@ -1,23 +1,28 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { onHide, onShow, onUnload } from '@dcloudio/uni-app'
+import { onHide, onLoad, onShow, onUnload } from '@dcloudio/uni-app'
 import PageChrome from '../../components/PageChrome.vue'
 import { errorMessage, request } from '../../services/api'
 import { ensureSession, loginMini } from '../../services/session'
 import type { Authenticated } from '../../types'
+import { HOME, safeDestination } from '../../services/return-route'
+import { visitDestination } from '../../services/navigation'
+import { registrationAccountError } from '../../../../shared/mini-profile'
 
 const agreed = ref(false)
 const busy = ref(false)
 const error = ref('')
 let active = true
 let revision = 0
+let returnTo = HOME
+onLoad(options => { returnTo = safeDestination(options?.returnTo) })
 // #ifdef H5
 const accountOpen = ref(false)
 const username = ref('')
 const password = ref('')
 const webMode = ref<'login' | 'register'>('login')
 // #endif
-function home() { uni.switchTab({ url: '/pages/home/index' }) }
+function home() { visitDestination(returnTo, true) }
 function legal(kind: 'privacy' | 'agreement') { uni.navigateTo({ url: '/pages/privacy/index?kind=' + kind }) }
 function requireConsent() {
   if (agreed.value) return true
@@ -39,6 +44,7 @@ async function submitWeb() {
   if (busy.value || !requireConsent()) return
   const name = username.value.trim()
   if (name.length < 2 || name.length > 32) { error.value = '用户名需为 2 至 32 位'; return }
+  if (webMode.value === 'register' && registrationAccountError(name)) { error.value = registrationAccountError(name); return }
   if (password.value.length < 6) { error.value = '密码至少需要 6 位'; return }
   const current = ++revision
   busy.value = true; error.value = ''
@@ -115,7 +121,7 @@ onUnload(leave)
         <view class="sheet-handle" />
         <view class="sheet-head"><text class="sheet-title">习题库账号</text><button class="bare-icon" role="button" aria-label="关闭账号登录" :disabled="busy" @click="closeAccount"><wd-icon name="close" size="20px" /></button></view>
         <wd-tabs v-model="webMode" line-theme="text" @change="error = ''"><wd-tab name="login" title="登录" :disabled="busy" /><wd-tab name="register" title="注册" :disabled="busy" /></wd-tabs>
-        <view class="login-form"><text class="field-label">账号</text><wd-input v-model="username" prefix-icon="user" custom-class="login-input" placeholder="用户名" aria-label="用户名" :maxlength="32" :disabled="busy" /><text class="field-label">密码</text><wd-input v-model="password" prefix-icon="lock" custom-class="login-input" show-password placeholder="密码" aria-label="密码" :maxlength="128" :disabled="busy" confirm-type="done" @confirm="submitWeb" /></view>
+        <view class="login-form"><text class="field-label">账号</text><wd-input v-model="username" prefix-icon="user" custom-class="login-input" :placeholder="webMode === 'register' ? '设置英文或数字账号' : '请输入登录账号'" aria-label="用户名" :maxlength="32" :disabled="busy" /><text v-if="webMode === 'register'" class="account-hint">2-32 位英文、数字、下划线或短横线；中文昵称可在个人资料中设置。</text><text class="field-label">密码</text><wd-input v-model="password" prefix-icon="lock" custom-class="login-input" show-password placeholder="密码" aria-label="密码" :maxlength="128" :disabled="busy" confirm-type="done" @confirm="submitWeb" /></view>
         <view v-if="error" class="error-strip" role="alert">{{ error }}</view>
         <view class="login-submit"><wd-button role="button" block :loading="busy" :disabled="!agreed || busy" @click="submitWeb">{{ webMode === 'register' ? '注册并登录' : '登录' }}</wd-button></view>
       </view>
@@ -125,6 +131,7 @@ onUnload(leave)
 </template>
 
 <style scoped>
+.account-hint { display:block;margin-top:8px;color:var(--lc-muted);font-size:12px;line-height:1.7; }
 .login-page { display: flex; flex-direction: column; min-height: 100vh; }
 .login-intro { padding: 0 24px 32px; text-align: center; background-color: var(--lc-hero); background-image: radial-gradient(58% 58% at 90% -8%, #ffffff75 0%, #ffffff00 68%), radial-gradient(46% 46% at 4% 106%, #ffffff40 0%, #ffffff00 70%), linear-gradient(168deg, #ebf6ed 0%, #daebde 62%, #e6f2e8 100%); border-radius: 0 0 47% 8% / 0 0 6% 2%; }
 .login-art { display: flex; align-items: center; justify-content: center; height: 226px; width: 100%; margin-top: 27px; }

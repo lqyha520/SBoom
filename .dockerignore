@@ -1,0 +1,23 @@
+# 语境无关的大目录，别进构建上下文
+math-question-bank/
+artifacts/
+data/
+node_modules/
+.git/
+.workbuddy/
+.review/
+__pycache__/
+**/__pycache__/
+**/node_modules/
+**/dist/
+miniprogram/
+# 本地日志与运行时文件
+server.log*
+server.pid
+*.log
+# 仓库根的一次性脚本
+_*.py
+_*.js
+_*.txt
+*.db
+*.dump

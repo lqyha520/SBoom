@@ -10,8 +10,9 @@ from app.db import db
 from app.models.catalog import CatalogCreate, CatalogUpdate
 from app.mini_schema import index_question_types
 from app.services import catalog_access, mini_auth
+from app.services import catalog_discovery, catalog_editions
 
-COLUMNS = """c.id, c.title, c.description, c.category, c.category_id, c.status, c.featured, c.revision,
+COLUMNS = """c.id, c.title, c.description, c.category, c.category_id, c.status, c.featured, c.revision, c.release_number, c.update_note,
     c.created_at, c.updated_at, c.published_at, a.grade, a.subject, a.keyword,
     a.question_count, a.version, a.page_count, a.file_status, a.file_error,
     (SELECT id FROM paper_assets WHERE paper_id = a.id AND kind = 'page' AND page_number = 1) AS thumbnail_id"""
@@ -100,8 +101,14 @@ def _snapshot(raw, title):
 
 
 def list_papers(user_id, q="", grade="", subject="", category="", favorite=False, downloaded=False,
-                limit=20, offset=0, admin=False, status="", sort="featured"):
+                limit=20, offset=0, admin=False, status="", sort="featured", only_free=False, recent=False, favorite_group="", topic="", textbook="", term="", unit="", knowledge=""):
+    if not admin and user_id is None and (favorite or downloaded or recent or favorite_group):
+        raise HTTPException(401, detail={"error": "请先登录后查看个人记录", "code": "login_required"})
     clauses, args = ([] if admin else [VISIBLE]), []
+    for kind, tag_id in (("textbook", textbook), ("term", term), ("unit", unit), ("knowledge", knowledge)):
+        if tag_id:
+            clauses.append("EXISTS (SELECT 1 FROM catalog_paper_tags pt JOIN catalog_tags t ON t.id = pt.tag_id WHERE pt.catalog_id = c.id AND t.id = ? AND t.kind = ? AND t.is_visible = 1)")
+            args.extend([tag_id, kind])
     if q.strip():
         clauses.append("(LOWER(c.title) LIKE ? ESCAPE '\\' OR LOWER(a.keyword) LIKE ? ESCAPE '\\' "
                        "OR LOWER(c.category) LIKE ? ESCAPE '\\')")
@@ -117,6 +124,21 @@ def list_papers(user_id, q="", grade="", subject="", category="", favorite=False
     if admin and status:
         clauses.append("c.status = ?")
         args.append(status)
+    if only_free:
+        for action in ("view", "download"):
+            policy = f"COALESCE((SELECT p.{action}_access FROM catalog_access p WHERE p.catalog_id = c.id), 'inherit')"
+            clauses.append(f"({policy} = 'free' OR ({policy} = 'inherit' AND NOT EXISTS (SELECT 1 FROM catalog_question_types t "
+                           f"JOIN catalog_type_rules r ON r.question_type = t.question_type WHERE t.catalog_id = c.id AND r.{action}_access = 'vip')))")
+    if recent:
+        clauses.append("EXISTS (SELECT 1 FROM mini_recent_views WHERE catalog_id = c.id AND user_id = ?)")
+        args.append(user_id)
+    if favorite_group:
+        clauses.append("EXISTS (SELECT 1 FROM mini_favorite_group_items WHERE catalog_id = c.id AND user_id = ? AND group_id = ?)")
+        args.extend([user_id, favorite_group])
+    if topic:
+        clauses.append("EXISTS (SELECT 1 FROM site_topic_items i JOIN site_topics t ON t.id = i.topic_id "
+                       "WHERE i.catalog_id = c.id AND t.id = ? AND t.is_visible = 1)")
+        args.append(topic)
     for enabled, table in ((favorite, "mini_catalog_favorites"), (downloaded, "mini_catalog_downloads")):
         if enabled:
             clauses.append(f"EXISTS (SELECT 1 FROM {table} WHERE catalog_id = c.id AND user_id = ?)")
@@ -124,33 +146,41 @@ def list_papers(user_id, q="", grade="", subject="", category="", favorite=False
     where = " AND ".join(clauses) or "1 = 1"
     fields = (", (SELECT COUNT(*) FROM mini_catalog_favorites WHERE catalog_id = c.id) AS favorite_count, "
               "(SELECT COUNT(*) FROM mini_catalog_downloads WHERE catalog_id = c.id) AS download_users" if admin else "")
-    activity_table = "mini_catalog_downloads" if downloaded else "mini_catalog_favorites" if favorite else ""
+    activity_table = "mini_recent_views" if recent else "mini_catalog_downloads" if downloaded else "mini_catalog_favorites" if favorite else ""
     activity_params = []
     order = "c.featured DESC, c.published_at DESC, c.created_at DESC, c.id DESC"
     if sort == "latest":
         order = "c.published_at DESC, c.created_at DESC, c.id DESC"
+    elif sort == "popular":
+        order = "((SELECT COUNT(*) FROM mini_catalog_favorites WHERE catalog_id = c.id) + (SELECT COUNT(*) FROM mini_catalog_downloads WHERE catalog_id = c.id)) DESC, c.published_at DESC, c.id DESC"
+    if topic:
+        # Validated IDs are still bound parameters, never SQL fragments.
+        fields += ", (SELECT sort_order FROM site_topic_items WHERE topic_id = ? AND catalog_id = c.id) AS topic_order"
+        activity_params.append(topic)
+        order = "topic_order, c.id"
     if activity_table:
-        stamp = "requested_at" if downloaded else "created_at"
+        stamp = "viewed_at" if recent else "requested_at" if downloaded else "created_at"
         fields += f", (SELECT {stamp} FROM {activity_table} WHERE catalog_id = c.id AND user_id = ?) AS activity_at"
         activity_params.append(user_id)
         order = "activity_at DESC, c.id DESC"
     with db() as conn:
-        user = None if admin else mini_auth._user(conn, user_id)
+        user = None if admin or user_id is None else mini_auth._user(conn, user_id)
         total = conn.execute(f"SELECT COUNT(*) FROM {JOIN} WHERE {where}", args).fetchone()[0]
         rows = conn.execute(f"SELECT {COLUMNS}, EXISTS (SELECT 1 FROM mini_catalog_favorites WHERE catalog_id = c.id "
                             f"AND user_id = ?) AS favorite {fields} FROM {JOIN} WHERE {where} "
                             f"ORDER BY {order} LIMIT ? OFFSET ?",
-                            [str(user_id), *activity_params, *args, limit, offset]).fetchall()
+                            [str(user_id) if user_id is not None else None, *activity_params, *args, limit, offset]).fetchall()
         access = catalog_access.access_map(conn, [row["id"] for row in rows], user, admin)
-    return {"items": [_item(row, admin, access[row["id"]]) for row in rows], "total": total, "has_more": offset + len(rows) < total}
+        labels = catalog_discovery.label_map(conn, [row["id"] for row in rows], admin)
+    return {"items": [{**_item(row, admin, access[row["id"]]), "tags": labels[row["id"]]} for row in rows], "total": total, "has_more": offset + len(rows) < total}
 
 
 def get_paper(user_id, catalog_id, admin=False):
     with db() as conn:
-        user = None if admin else mini_auth._user(conn, user_id)
+        user = None if admin or user_id is None else mini_auth._user(conn, user_id)
         row = conn.execute(f"SELECT {COLUMNS}, a.snapshot_json, a.id AS archive_id, "
                            "EXISTS (SELECT 1 FROM mini_catalog_favorites WHERE catalog_id = c.id AND user_id = ?) AS favorite "
-                           f"FROM {JOIN} WHERE c.id = ?" + ("" if admin else f" AND {VISIBLE}"), (str(user_id), catalog_id)).fetchone()
+                           f"FROM {JOIN} WHERE c.id = ?" + ("" if admin else f" AND {VISIBLE}"), (str(user_id) if user_id is not None else None, catalog_id)).fetchone()
         if not row:
             _missing()
         access = catalog_access.access_map(conn, [catalog_id], user, admin)[catalog_id]
@@ -162,17 +192,24 @@ def get_paper(user_id, catalog_id, admin=False):
                             "ORDER BY page_number", (result.pop("archive_id"),)).fetchall()
         result["assets"] = [{**dict(asset), "url": f"{prefix}/papers/{catalog_id}/assets/{asset['id']}"} for asset in rows
                             if access["can_download" if asset["kind"] == "pdf" else "can_view"]]
+        result["versions"] = [dict(row) for row in conn.execute(
+            "SELECT release_number, note, created_at FROM catalog_versions WHERE catalog_id = ? ORDER BY release_number DESC", (catalog_id,))]
+        result["tags"] = catalog_discovery.label_map(conn, [catalog_id], admin)[catalog_id]
+        result["editions"] = catalog_editions.listing(conn, catalog_id, admin, access["can_download"])
     return result
 
 
 def get_asset(catalog_id, asset_id, admin=False, user_id=None):
     with db() as conn:
-        row = conn.execute(f"SELECT s.*, c.title FROM {JOIN} JOIN paper_assets s ON s.paper_id = a.id "
+        row = conn.execute(f"SELECT s.*, c.title FROM {JOIN} JOIN paper_assets s ON (s.paper_id = a.id OR "
+                           "(s.kind = 'pdf' AND EXISTS (SELECT 1 FROM catalog_print_editions e JOIN paper_archives p ON p.id = e.paper_id WHERE e.catalog_id = c.id AND e.paper_id = s.paper_id AND p.file_status = 'ready'))) "
                            "WHERE c.id = ? AND s.id = ? AND a.file_status = 'ready'" +
                            ("" if admin else " AND c.status = 'published'"), (catalog_id, asset_id)).fetchone()
         if not row:
             _missing()
-        user = None if admin else mini_auth._user(conn, user_id)
+        if not admin and user_id is None and row["kind"] == "pdf":
+            raise HTTPException(401, detail={"error": "请先登录后下载", "code": "login_required"})
+        user = None if admin or user_id is None else mini_auth._user(conn, user_id)
         access = catalog_access.access_map(conn, [catalog_id], user, admin)[catalog_id]
         catalog_access.require_access(access, "download" if row["kind"] == "pdf" else "view")
         return dict(row)
@@ -189,13 +226,14 @@ def favorite_paper(user_id, catalog_id, favorite):
     return {"favorite": favorite}
 
 
-def request_download(user_id, catalog_id):
+def request_download(user_id, catalog_id, edition="original"):
     with db(serialized=True) as conn:
         row = _visible(conn, catalog_id)
         user = mini_auth._user(conn, user_id)
         catalog_access.require_access(catalog_access.access_map(conn, [catalog_id], user)[catalog_id], "download")
+        paper_id = catalog_editions.source_id(conn, catalog_id, row["paper_id"], edition)
         asset = conn.execute("SELECT id, kind, page_number, mime_type, byte_size FROM paper_assets WHERE paper_id = ? AND kind = 'pdf'",
-                             (row["paper_id"],)).fetchone()
+                             (paper_id,)).fetchone()
         if not asset:
             _missing()
         conn.execute("INSERT INTO mini_catalog_downloads(user_id, catalog_id, requested_at) VALUES (?, ?, ?) "
@@ -238,7 +276,8 @@ def admin_summary():
 
 
 def list_sources(user_id, q="", limit=20, offset=0):
-    where = "a.user_id = ? AND NOT EXISTS (SELECT 1 FROM catalog_papers WHERE paper_id = a.id)"
+    where = "a.user_id = ? AND NOT EXISTS (SELECT 1 FROM catalog_papers WHERE paper_id = a.id) AND NOT EXISTS (SELECT 1 FROM catalog_versions WHERE paper_id = a.id)"
+    where += " AND NOT EXISTS (SELECT 1 FROM catalog_edition_history WHERE paper_id = a.id)"
     args = [user_id]
     if q.strip():
         where += " AND (LOWER(a.title) LIKE ? ESCAPE '\\' OR LOWER(a.keyword) LIKE ? ESCAPE '\\')"
@@ -259,6 +298,10 @@ def create_paper(user_id, body: CatalogCreate):
             raise HTTPException(404, detail={"error": "只能选择当前管理员自己保存的试卷"})
         if conn.execute("SELECT id FROM catalog_papers WHERE paper_id = ?", (body.paper_id,)).fetchone():
             raise HTTPException(409, detail={"error": "该版本已加入公共库，请编辑已有条目"})
+        if conn.execute("SELECT 1 FROM catalog_versions WHERE paper_id = ?", (body.paper_id,)).fetchone():
+            raise HTTPException(409, detail={"error": "该原稿属于修订历史，请另存新的归档版本"})
+        if catalog_editions.referenced(conn, body.paper_id):
+            raise HTTPException(409, detail={"error": "该原稿属于公共资料的打印版本，请另存新的归档"})
         category_id, category_name = _resolve_category(conn, body)
         conn.execute("INSERT INTO catalog_papers(id, paper_id, publisher_id, title, description, category, category_id, created_at, updated_at) "
                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",

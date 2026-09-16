@@ -48,24 +48,24 @@ export function apiUrl(path: string) {
   return base + path
 }
 
-export function request<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' = 'GET', data?: unknown): Promise<T> {
-  // uni 的 RequestOptions 类型里没列 PATCH，但 H5(XHR) 和小程序(wx.request) 运行时都照传不误，
-  // 所以只在调用处转一下类型，保留 PATCH 的语义（部分更新 ≠ PUT 全量替换）。
+export function request<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: unknown): Promise<T> {
   const epoch = generation
   const loginRequest = path.startsWith('/api/v1/mini/login') || path === '/api/v1/mini/register'
   return new Promise((resolve, reject) => {
     let url: string
     try { url = apiUrl(path) } catch (error) { reject(error); return }
     uni.request({
-      url, method: method as UniApp.RequestOptions['method'], data: data as Record<string, unknown> | undefined,
+      url, method, data: data as Record<string, unknown> | undefined,
       header: { ...authHeaders(), 'Content-Type': 'application/json' }, timeout: 20000,
       success(response) {
         if (epoch !== generation) { reject(new ApiError('登录状态已变化', 409)); return }
         if (response.statusCode >= 200 && response.statusCode < 300) { resolve(response.data as T); return }
-        const payload = response.data as { detail?: { error?: string; code?: string } | string }
+        const payload = response.data as { detail?: { error?: string; code?: string } | { msg?: string }[] | string }
         const detail = payload?.detail
-        const code = typeof detail === 'object' ? detail?.code || '' : ''
-        const message = typeof detail === 'string' ? detail : detail?.error || `请求失败 (${response.statusCode})`
+        const code = detail && typeof detail === 'object' && !Array.isArray(detail) ? detail.code || '' : ''
+        const message = typeof detail === 'string' ? detail : Array.isArray(detail)
+          ? detail[0]?.msg?.replace(/^Value error, /, '') || '填写内容不符合要求，请检查后重试'
+          : detail?.error || `请求失败 (${response.statusCode})`
         if (!loginRequest) handleAuthFailure(response.statusCode, code)
         reject(new ApiError(message, response.statusCode, code))
       },
@@ -89,8 +89,8 @@ export function fetchCatalogPaper(id: string) { return request<PaperDetail>('/ap
 export function favoriteCatalogPaper(id: string, favorite: boolean) {
   return request<{ favorite: boolean }>('/api/v1/catalog/papers/' + encodeURIComponent(id) + '/favorite', 'PUT', { favorite })
 }
-export function requestCatalogDownload(id: string) {
-  return request<Asset>('/api/v1/catalog/papers/' + encodeURIComponent(id) + '/download', 'POST')
+export function requestCatalogDownload(id: string, edition: 'original' | 'student' | 'answers' = 'original') {
+  return request<Asset>('/api/v1/catalog/papers/' + encodeURIComponent(id) + '/download?edition=' + edition, 'POST')
 }
 
 /** 后台配置的运营内容：Banner、公告、分类、年级科目字典，一次请求拿全 */
@@ -100,8 +100,8 @@ export function fetchSiteDocument(key: 'agreement' | 'privacy') {
 }
 
 /** 用户自助改资料：只传要改的字段（avatar 传空串表示恢复成默认形象）。 */
-export function patchProfile(payload: { username?: string; avatar?: string }) {
-  return request<User>('/api/v1/mini/me', 'PATCH', payload)
+export function patchProfile(payload: { nickname?: string; avatar?: string }) {
+  return request<User>('/api/v1/mini/me', 'PUT', payload)
 }
 export function patchPassword(currentPassword: string, newPassword: string) {
   return request<User>('/api/v1/mini/password', 'POST', { current_password: currentPassword, new_password: newPassword })

@@ -85,3 +85,10 @@ math-question-bank/
 _*.py
 _*.js
 _*.txt
+# 本机运行的日志与 PID 文件
+server.log*
+server.pid
+# 截图/压测/回归产物（子目录白名单见上）
+artifacts/
+# 生产环境密钥
+deploy/.env.production

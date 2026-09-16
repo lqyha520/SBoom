@@ -64,7 +64,7 @@ async function save() {
     <view class="sheet password-sheet" role="dialog" aria-modal="true" :aria-label="hasPassword ? '修改密码' : '设置密码'">
       <view class="sheet-handle" />
       <view class="sheet-head"><text class="sheet-title">{{ hasPassword ? '修改密码' : '设置密码' }}</text><button class="bare-icon" role="button" aria-label="关闭密码设置" :disabled="busy" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
-      <text class="password-intro">{{ hasPassword ? '修改后，其它设备上的登录会失效，这台设备保持登录状态。' : '设置密码后，这串昵称也能用来登录习题库。' }}</text>
+      <text class="password-intro">{{ hasPassword ? '修改后，其它设备上的登录会失效，这台设备保持登录状态。' : '设置密码后，可使用账号 ' + session.user?.username + ' 登录习题库。' }}</text>
       <text v-if="hasPassword" class="field-label">当前密码</text>
       <wd-input v-if="hasPassword" v-model="current" prefix-icon="lock" show-password custom-class="field-input" placeholder="请输入当前密码" aria-label="当前密码" :maxlength="128" :disabled="busy" @input="input" />
       <text class="field-label">新密码</text>
@@ -72,7 +72,7 @@ async function save() {
       <text class="field-label">确认新密码</text>
       <wd-input v-model="confirm" prefix-icon="lock" show-password custom-class="field-input" placeholder="再输入一次" aria-label="确认新密码" :maxlength="128" confirm-type="done" :disabled="busy" @input="input" @confirm="save" />
       <text v-if="touched && localError" class="field-hint error-text">{{ localError }}</text>
-      <text v-else class="field-hint">{{ hasPassword ? '密码至少 6 位，建议字母与数字混合；修改后其它设备会退出登录。' : '密码至少 6 位，建议字母与数字混合；设置后可用昵称加密码登录。' }}</text>
+      <text v-else class="field-hint">{{ hasPassword ? '密码至少 6 位，建议字母与数字混合；修改后其它设备会退出登录。' : '密码至少 6 位，建议字母与数字混合。登录时请填写账号。' }}</text>
       <view v-if="error" class="error-strip" role="alert">{{ error }}</view>
       <view class="sheet-actions"><wd-button role="button" block :loading="busy" :disabled="!canSave" @click="save">{{ hasPassword ? '保存新密码' : '设置密码' }}</wd-button></view>
     </view>

@@ -1,0 +1,6 @@
+# learn-coach 反向代理：自动申请/续期 Let's Encrypt 证书
+# 域名来自 docker-compose.yml 的 DOMAIN 变量（.env.production 里配置）
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy app:8000
+}

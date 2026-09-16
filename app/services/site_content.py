@@ -148,7 +148,7 @@ def reorder_categories(ids: list[str]) -> dict:
 def _banner_row(row) -> dict:
     item = dict(row)
     item["is_visible"] = bool(item["is_visible"])
-    item["image_url"] = f"/api/v1/site/banners/{item['id']}/image" if item["image_key"] else None
+    item["image_url"] = f"/api/v1/site/banners/{item['id']}/image?v={item['revision']}" if item["image_key"] else None
     return item
 
 
@@ -172,10 +172,10 @@ def create_banner(body: BannerInput) -> dict:
         order = body.sort_order or (conn.execute("SELECT COALESCE(MAX(sort_order), 0) + 10 FROM site_banners").fetchone()[0])
         banner_id = uuid.uuid4().hex
         conn.execute(
-            "INSERT INTO site_banners(id, kicker, title, subtitle, action_label, target_type, target_value, sort_order, "
-            "is_visible, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            "INSERT INTO site_banners(id, kicker, title, subtitle, action_label, target_type, target_value, image_fit, sort_order, "
+            "is_visible, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
             (banner_id, _clean(body.kicker), _clean(body.title), _clean(body.subtitle), _clean(body.action_label),
-             body.target_type, _clean(body.target_value), order, _as_int(body.is_visible), now, now),
+             body.target_type, _clean(body.target_value), body.image_fit, order, _as_int(body.is_visible), now, now),
         )
     return _one_banner(banner_id)
 
@@ -190,9 +190,9 @@ def update_banner(banner_id: str, body: BannerUpdate) -> dict:
             raise _conflict("Banner 已被其他操作更新，请刷新后重试")
         conn.execute(
             "UPDATE site_banners SET kicker = ?, title = ?, subtitle = ?, action_label = ?, target_type = ?, target_value = ?, "
-            "sort_order = ?, is_visible = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
+            "image_fit = ?, sort_order = ?, is_visible = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
             (_clean(body.kicker), _clean(body.title), _clean(body.subtitle), _clean(body.action_label), body.target_type,
-             _clean(body.target_value), body.sort_order, _as_int(body.is_visible), now, banner_id),
+             _clean(body.target_value), body.image_fit, body.sort_order, _as_int(body.is_visible), now, banner_id),
         )
     return _one_banner(banner_id)
 
@@ -218,7 +218,7 @@ def _drop_image(key: str, storage_name: str) -> None:
         pass
 
 
-def save_banner_image(banner_id: str, content_type: str, data: bytes) -> dict:
+def save_banner_image(banner_id: str, content_type: str, data: bytes, revision: int | None = None) -> dict:
     mime = (content_type or "").split(";")[0].strip().lower()
     if mime not in ALLOWED_IMAGE_MIMES:
         raise HTTPException(415, detail={"error": "Banner 图片仅支持 JPG、PNG 或 WebP"})
@@ -241,6 +241,8 @@ def save_banner_image(banner_id: str, content_type: str, data: bytes) -> dict:
         row = conn.execute("SELECT revision, image_key, image_storage FROM site_banners WHERE id = ?", (banner_id,)).fetchone()
         if not row:
             raise _missing("Banner 不存在")
+        if revision is not None and row["revision"] != revision:
+            raise _conflict("Banner 已被其他操作更新，请刷新后重试")
         try:
             storage_for(storage_name).put(key, data, mime)
         except HTTPException:
@@ -268,7 +270,7 @@ def clear_banner_image(banner_id: str, revision: int) -> dict:
 
 
 def banner_asset(banner_id: str, require_visible: bool = True) -> dict:
-    """给 asset_response 用的资产描述（小程序端需登录后才能取图）。"""
+    """给 asset_response 用的资产描述；游客也只能读取可见 Banner。"""
     with db() as conn:
         row = conn.execute("SELECT image_key, image_storage, image_mime, image_bytes, title FROM site_banners "
                            "WHERE id = ?" + (" AND is_visible = 1" if require_visible else ""), (banner_id,)).fetchone()
@@ -501,15 +503,11 @@ def home_payload() -> dict:
     now = _now()
     with db() as conn:
         banners = [dict(row) for row in conn.execute(
-            "SELECT id, kicker, title, subtitle, action_label, target_type, target_value FROM site_banners "
+            "SELECT id, kicker, title, subtitle, action_label, target_type, target_value, image_fit, revision, image_key FROM site_banners "
             "WHERE is_visible = 1 ORDER BY sort_order, created_at, id")]
         for banner in banners:
-            banner["image_url"] = f"/api/v1/site/banners/{banner['id']}/image"
-        # 无图 Banner 交由小程序回退到本地插画，不返回坏链接
-        with_image = {row[0] for row in conn.execute("SELECT id FROM site_banners WHERE image_key <> ''")}
-        for banner in banners:
-            if banner["id"] not in with_image:
-                banner["image_url"] = None
+            has_image = bool(banner.pop("image_key"))
+            banner["image_url"] = f"/api/v1/site/banners/{banner['id']}/image?v={banner['revision']}" if has_image else None
         categories = [{"id": row["id"], "name": row["name"], "description": row["description"], "icon": row["icon"]}
                       for row in conn.execute("SELECT id, name, description, icon FROM site_categories "
                                               "WHERE is_visible = 1 ORDER BY sort_order, name")]
@@ -573,9 +571,9 @@ def admin_analytics() -> dict:
         users = conn.execute(
             "SELECT COUNT(*) AS total, "
             "SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active, "
-            "SUM(CASE WHEN membership = 'vip' THEN 1 ELSE 0 END) AS vip, "
+            "SUM(CASE WHEN is_active = 1 AND membership = 'vip' AND (vip_expires_at IS NULL OR vip_expires_at > ?) THEN 1 ELSE 0 END) AS vip, "
             "SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS new_7d, "
-            "SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS new_30d FROM mini_users", (now - 7 * day, now - 30 * day)
+            "SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS new_30d FROM mini_users", (now, now - 7 * day, now - 30 * day)
         ).fetchone()
         daily = [dict(row) for row in conn.execute(
             "SELECT CAST(created_at / 86400 AS INTEGER) AS day_stamp, COUNT(*) AS total FROM mini_users "

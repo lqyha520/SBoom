@@ -1,17 +1,27 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, reactive, watch } from 'vue'
 import { exerciseText } from '../presentation'
 import { useTabBarOverlay } from '../services/tabbar-overlay'
 import type { SiteCategory } from '../types'
+import { emptyTags, tagKinds, type CatalogTag, type TagFilters } from '../services/growth'
 
-const props = defineProps<{ open: boolean; grade: string; category: string; grades: string[]; categories: SiteCategory[] }>()
-const emit = defineEmits<{ close: []; apply: [filters: { grade: string; category: string }] }>()
+const props = defineProps<{ open: boolean; grade: string; category: string; grades: string[]; categories: SiteCategory[]; tags: CatalogTag[]; tagFilters: TagFilters }>()
+const emit = defineEmits<{ close: []; apply: [filters: { grade: string; category: string; tags: TagFilters }] }>()
 const gradeDraft = ref('')
 const categoryDraft = ref('')
+const tagDraft = reactive(emptyTags())
+const tagPicker = ref(false)
+const activeTag = ref<CatalogTag['kind']>('textbook')
+const tagValue = ref<(string | number)[]>([''])
+const tagColumns = computed(() => tagOptions(activeTag.value).map(tag => ({ value: tag.id, label: tag.name })))
+const tagTitle = computed(() => `选择${tagKinds.find(item => item.kind === activeTag.value)?.label || '标签'}`)
 useTabBarOverlay(() => props.open)
-watch(() => props.open, open => { if (open) { gradeDraft.value = props.grade; categoryDraft.value = props.category } })
-function reset() { gradeDraft.value = ''; categoryDraft.value = '' }
-function apply() { emit('apply', { grade: gradeDraft.value, category: categoryDraft.value }); emit('close') }
+watch(() => props.open, open => { tagPicker.value = false; if (open) { gradeDraft.value = props.grade; categoryDraft.value = props.category; Object.assign(tagDraft, props.tagFilters) } })
+function reset() { gradeDraft.value = ''; categoryDraft.value = ''; Object.assign(tagDraft, emptyTags()) }
+function apply() { emit('apply', { grade: gradeDraft.value, category: categoryDraft.value, tags: { ...tagDraft } }); emit('close') }
+function tagOptions(kind: CatalogTag['kind']) { return [{ id: '', name: '不限' }, ...props.tags.filter(item => item.kind === kind)] }
+function openTag(kind: CatalogTag['kind']) { activeTag.value = kind; tagValue.value = [tagDraft[kind]]; tagPicker.value = true }
+function selectTag(event: { value: (string | number)[] }) { tagDraft[activeTag.value] = String(event.value[0] || '') }
 </script>
 
 <template>
@@ -29,10 +39,12 @@ function apply() { emit('apply', { grade: gradeDraft.value, category: categoryDr
           <wd-radio value="" custom-class="filter-radio" role="radio" :aria-checked="!categoryDraft">全部分类</wd-radio>
           <wd-radio v-for="item in categories" :key="item.id" :value="item.id" custom-class="filter-radio" role="radio" :aria-checked="categoryDraft === item.id">{{ exerciseText(item.name) }}</wd-radio>
         </wd-radio-group>
+        <view v-for="item in tagKinds" :key="item.kind"><text class="filter-label">{{ item.label }}</text><button class="tag-picker" role="button" :aria-label="`选择${item.label}`" @click="openTag(item.kind)">{{ tagOptions(item.kind).find(tag => tag.id === tagDraft[item.kind])?.name || '不限' }}<wd-icon name="down" /></button></view>
       </scroll-view>
       <view class="filter-sheet-actions"><wd-button type="info" variant="plain" block role="button" @click="reset">重置</wd-button><wd-button block role="button" @click="apply">查看习题</wd-button></view>
     </view>
   </wd-popup>
+  <wd-picker v-model="tagValue" v-model:visible="tagPicker" :title="tagTitle" :columns="tagColumns" :z-index="1400" root-portal @confirm="selectTag" />
 </template>
 
 <style scoped>
@@ -40,6 +52,8 @@ function apply() { emit('apply', { grade: gradeDraft.value, category: categoryDr
 .catalog-sheet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .catalog-sheet-head .sheet-title { margin: 0; }
 .filter-options { max-height: 54vh; }
+.tag-picker { display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;min-height:44px;margin:0;padding:10px 14px;border:0;border-radius:10px;background:var(--lc-background);font-size:13px;line-height:1.5;text-align:left;color:var(--lc-text); }
+.tag-picker::after { border:0; }
 .filter-label { display: block; margin: 18px 0 12px; font-size: 13px; font-weight: 600; color: var(--lc-secondary); }
 .filter-sheet-actions { display: grid; grid-template-columns: 1fr 2fr; gap: 12px; padding-top: 24px; }
 .catalog-sheet :deep(.filter-radio-group) { display: flex; flex-wrap: wrap; gap: 9px; }

@@ -1,0 +1,65 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import vm from 'node:vm'
+import ts from 'typescript'
+
+function fixture(platform = 'MP-WEIXIN', status = 'paid', nativeFailure = '') {
+  const code = readFileSync(new URL('../src/services/checkout.ts', import.meta.url), 'utf8')
+  let include = true
+  const filtered = code.split('\n').filter(line => {
+    const marker = /\/\/ #ifdef (.*)/.exec(line)
+    if (marker) { include = marker[1]!.trim() === platform; return false }
+    if (line.includes('// #endif')) { include = true; return false }
+    return include
+  }).join('\n')
+  const events: string[] = []
+  let valid = true
+  const exports: Record<string, any> = {}
+  const payment = { timeStamp: '123', nonceStr: 'nonce', package: 'prepay_id=fixture', signType: 'RSA', paySign: 'fixture-signature' }
+  const growth = {
+    async payOrder() { events.push('prepay'); return { order: { status: 'pending' }, payment } },
+    async syncOrder() { events.push('server-confirm'); return { id: 'order-one', status } },
+  }
+  vm.runInNewContext(ts.transpileModule(filtered, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
+    exports,
+    require: (id: string) => id === './growth' ? growth : { async refreshMembership() { events.push('membership') } },
+    uni: {
+      getSystemInfoSync: () => ({ platform: 'ios' }),
+      requestPayment(options: any) { assert.equal(options.paySign, payment.paySign); events.push('native-payment'); if (nativeFailure) options.fail({ errMsg: nativeFailure }); else options.success() },
+    },
+  })
+  return { api: exports as { checkout: (id: string, valid: () => boolean) => Promise<any>; checkoutSupport: (ios: boolean) => boolean }, events, growth, valid: () => valid, invalidate: () => { valid = false } }
+}
+
+test('native payment is followed by server confirmation and entitlement refresh', async () => {
+  const app = fixture()
+  const order = await app.api.checkout('order-one', app.valid)
+  assert.equal(order.status, 'paid')
+  assert.deepEqual(app.events, ['prepay', 'native-payment', 'server-confirm', 'membership'])
+})
+
+test('native success cannot manufacture paid state when server still says pending', async () => {
+  const app = fixture('MP-WEIXIN', 'pending')
+  assert.equal((await app.api.checkout('order-one', app.valid)).status, 'pending')
+})
+
+test('account/page changes prevent opening the old account payment sheet', async () => {
+  const app = fixture()
+  const original = app.growth.payOrder
+  app.growth.payOrder = async () => { const result = await original(); app.invalidate(); return result }
+  assert.equal(await app.api.checkout('order-one', app.valid), null)
+  assert.deepEqual(app.events, ['prepay'])
+})
+
+test('native cancellation and unsupported platforms do not grant membership', async () => {
+  const cancelled = fixture('MP-WEIXIN', 'paid', 'requestPayment:fail cancel')
+  await assert.rejects(cancelled.api.checkout('order-one', cancelled.valid), /已取消支付/)
+  assert.deepEqual(cancelled.events, ['prepay', 'native-payment'])
+  assert.equal(cancelled.api.checkoutSupport(false), false)
+  assert.equal(cancelled.api.checkoutSupport(true), true)
+  const web = fixture('H5')
+  await assert.rejects(web.api.checkout('order-one', web.valid), /微信小程序/)
+  assert.equal(web.api.checkoutSupport(true), false)
+  assert.deepEqual(web.events, [])
+})

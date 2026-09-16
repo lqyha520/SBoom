@@ -1,17 +1,87 @@
 {
   "easycom": {
     "autoscan": true,
-    "custom": { "^wd-(.*)": "@wot-ui/ui/components/wd-$1/wd-$1.vue" }
+    "custom": {
+      "^wd-(.*)": "@wot-ui/ui/components/wd-$1/wd-$1.vue"
+    }
   },
   "pages": [
-    { "path": "pages/home/index", "style": { "navigationBarTitleText": "首页", "enablePullDownRefresh": true } },
-    { "path": "pages/library/index", "style": { "navigationBarTitleText": "习题库", "enablePullDownRefresh": true, "onReachBottomDistance": 160 } },
-    { "path": "pages/favorites/index", "style": { "navigationBarTitleText": "我的收藏", "enablePullDownRefresh": true, "onReachBottomDistance": 160 } },
-    { "path": "pages/downloads/index", "style": { "navigationBarTitleText": "下载记录", "enablePullDownRefresh": true, "onReachBottomDistance": 160 } },
-    { "path": "pages/account/index", "style": { "navigationBarTitleText": "我的" } },
-    { "path": "pages/paper/index", "style": { "navigationBarTitleText": "习题详情", "enablePullDownRefresh": true } },
-    { "path": "pages/login/index", "style": { "navigationBarTitleText": "登录" } },
-    { "path": "pages/privacy/index", "style": { "navigationBarTitleText": "隐私政策" } }
+    {
+      "path": "pages/home/index",
+      "style": {
+        "navigationBarTitleText": "首页",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/library/index",
+      "style": {
+        "navigationBarTitleText": "习题库",
+        "enablePullDownRefresh": true,
+        "onReachBottomDistance": 160
+      }
+    },
+    {
+      "path": "pages/favorites/index",
+      "style": {
+        "navigationBarTitleText": "我的收藏",
+        "enablePullDownRefresh": true,
+        "onReachBottomDistance": 160
+      }
+    },
+    {
+      "path": "pages/downloads/index",
+      "style": {
+        "navigationBarTitleText": "下载记录",
+        "enablePullDownRefresh": true,
+        "onReachBottomDistance": 160
+      }
+    },
+    {
+      "path": "pages/account/index",
+      "style": {
+        "navigationBarTitleText": "我的"
+      }
+    },
+    {
+      "path": "pages/paper/index",
+      "style": {
+        "navigationBarTitleText": "习题详情",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/login/index",
+      "style": {
+        "navigationBarTitleText": "登录"
+      }
+    },
+    {
+      "path": "pages/privacy/index",
+      "style": {
+        "navigationBarTitleText": "隐私政策"
+      }
+    },
+    {
+      "path": "pages/support/index",
+      "style": {
+        "navigationBarTitleText": "服务与反馈",
+        "enablePullDownRefresh": false
+      }
+    },
+    { "path": "pages/topic/index", "style": { "navigationBarTitleText": "资料专题", "enablePullDownRefresh": true, "onReachBottomDistance": 160 } },
+    { "path": "pages/messages/index", "style": { "navigationBarTitleText": "消息中心", "enablePullDownRefresh": true, "onReachBottomDistance": 160 } },
+    { "path": "pages/requests/index", "style": { "navigationBarTitleText": "资料需求", "enablePullDownRefresh": true, "onReachBottomDistance": 160 } },
+    { "path": "pages/closure/index", "style": { "navigationBarTitleText": "注销账号", "enablePullDownRefresh": true } },
+    { "path": "pages/membership/index", "style": { "navigationBarTitleText": "会员服务", "enablePullDownRefresh": true } },
+    { "path": "pages/orders/index", "style": { "navigationBarTitleText": "我的订单", "enablePullDownRefresh": true, "onReachBottomDistance": 160 } },
+    {
+      "path": "pages/recent/index",
+      "style": {
+        "navigationBarTitleText": "最近浏览",
+        "enablePullDownRefresh": true
+      }
+    }
   ],
   "globalStyle": {
     "navigationStyle": "custom",
@@ -26,10 +96,30 @@
     "backgroundColor": "#ffffff",
     "borderStyle": "white",
     "list": [
-      { "pagePath": "pages/home/index", "text": "首页", "iconPath": "static/tabs/house.png", "selectedIconPath": "static/tabs/house-active.png" },
-      { "pagePath": "pages/library/index", "text": "习题库", "iconPath": "static/tabs/book-open.png", "selectedIconPath": "static/tabs/book-open-active.png" },
-      { "pagePath": "pages/favorites/index", "text": "收藏", "iconPath": "static/tabs/heart.png", "selectedIconPath": "static/tabs/heart-active.png" },
-      { "pagePath": "pages/account/index", "text": "我的", "iconPath": "static/tabs/user-round.png", "selectedIconPath": "static/tabs/user-round-active.png" }
+      {
+        "pagePath": "pages/home/index",
+        "text": "首页",
+        "iconPath": "static/tabs/house.png",
+        "selectedIconPath": "static/tabs/house-active.png"
+      },
+      {
+        "pagePath": "pages/library/index",
+        "text": "习题库",
+        "iconPath": "static/tabs/book-open.png",
+        "selectedIconPath": "static/tabs/book-open-active.png"
+      },
+      {
+        "pagePath": "pages/favorites/index",
+        "text": "收藏",
+        "iconPath": "static/tabs/heart.png",
+        "selectedIconPath": "static/tabs/heart-active.png"
+      },
+      {
+        "pagePath": "pages/account/index",
+        "text": "我的",
+        "iconPath": "static/tabs/user-round.png",
+        "selectedIconPath": "static/tabs/user-round-active.png"
+      }
     ]
   }
 }

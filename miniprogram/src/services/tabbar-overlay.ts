@@ -17,7 +17,7 @@ export function useTabBarOverlay(open: () => boolean) {
     if (value) {
       overlays.add(key)
       tabBarObscured.value = true
-      // Never restore a second native bar underneath the application's Wot tab bar.
+      // Never restore a second native bar underneath the application's custom tab bar.
       hideNativeTabBar()
     } else restore()
   }, { flush: 'sync', immediate: true })

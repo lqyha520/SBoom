@@ -36,3 +36,11 @@ async def require_mini_user(authorization: Optional[str] = Header(None),
     if mini_user is not None and mini_user != user.id:
         raise HTTPException(409, detail={"error": "登录账号已变化，请重新登录", "code": "account_changed"})
     return user
+
+
+async def optional_mini_user(authorization: Optional[str] = Header(None),
+                             mini_user: Optional[str] = Header(None, alias="X-Mini-User")):
+    """Anonymous reads are allowed; supplied credentials must still be valid."""
+    if authorization is None and mini_user is None:
+        return None
+    return await require_mini_user(authorization, mini_user)

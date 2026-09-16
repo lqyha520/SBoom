@@ -1,0 +1,13 @@
+<script setup lang="ts">
+import { onMounted, onBeforeUnmount, ref } from 'vue'
+import { catalogList, type CatalogPaper } from '../catalog'
+defineProps<{ modelValue: string | null; label?: string | null; disabled?: boolean }>()
+const emit = defineEmits<{ 'update:modelValue': [value: string | null]; selected: [item: CatalogPaper] }>()
+const q = ref(''), items = ref<CatalogPaper[]>([]), more = ref(false), loading = ref(false), error = ref('')
+let sequence = 0
+async function search(append = false) { const current = ++sequence; loading.value = true; error.value = ''; try { const result = await catalogList(q.value.trim(), 'published', append ? items.value.length : 0); if (current === sequence) { items.value = append ? [...items.value, ...result.items] : result.items; more.value = result.has_more } } catch (cause) { if (current === sequence) error.value = cause instanceof Error ? cause.message : '读取失败' } finally { if (current === sequence) loading.value = false } }
+function choose(item: CatalogPaper) { emit('update:modelValue', item.id); emit('selected', item) }
+onMounted(() => search()); onBeforeUnmount(() => { sequence++ })
+</script>
+<template><div class="field-stack"><div v-if="modelValue" class="actions-row"><UBadge color="success">已选择：{{ label || modelValue }}</UBadge><UButton label="清除选择" variant="ghost" size="xs" :disabled="disabled" @click="emit('update:modelValue', null)" /></div><div class="actions-row"><UInput v-model="q" placeholder="搜索已发布资料" :disabled="disabled" @keydown.enter.prevent="search()" /><UButton label="搜索资料" :loading="loading" :disabled="disabled" @click="search()" /></div><UAlert v-if="error" :title="error" color="error" /><div class="paper-choices"><button v-for="item in items" :key="item.id" type="button" class="paper-choice" :class="{ selected: modelValue === item.id }" :disabled="disabled || item.file_status !== 'ready'" @click="choose(item)"><strong>{{ item.title }}</strong><span>{{ item.grade }} · {{ item.subject }} · {{ item.question_count }} 题{{ item.file_status !== 'ready' ? ' · 文件未就绪' : '' }}</span></button><p v-if="!items.length && !loading" class="text-sm text-muted">暂无匹配的已发布资料</p></div><UButton v-if="more" label="更多资料" variant="outline" :loading="loading" :disabled="disabled" @click="search(true)" /></div></template>
+<style scoped>.paper-choices { display:grid;gap:8px;max-height:250px;overflow:auto; }.paper-choice { display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid var(--ui-border);border-radius:8px;text-align:left;white-space:normal;font-size:13px; }.paper-choice.selected { border-color:var(--ui-primary);background:var(--ui-bg-accented); }.paper-choice span { font-size:12px;color:var(--ui-text-muted); }</style>

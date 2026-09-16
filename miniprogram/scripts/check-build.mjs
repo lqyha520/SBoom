@@ -22,7 +22,7 @@ assert.equal(app.tabBar.list[1].text, '习题库', 'The public tab must use exer
 assert.equal(app.window.navigationStyle, 'custom', 'Custom navigation must also apply to WeChat')
 assert.ok(app.tabBar.list.length <= 5, 'WeChat supports at most five native tabs')
 for (const page of app.pages) {
-  for (const extension of ['.js', '.json', '.wxml']) await stat(path.join(output, page + extension))
+  for (const extension of ['.js', '.json', '.wxml', '.wxss']) await stat(path.join(output, page + extension))
 }
 await stat(path.join(output, 'app.wxss'))
 const banner = await readFile(path.join(output, 'static/banners/study.jpg'))

@@ -1,36 +1,34 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { onHide, onShow, onUnload } from '@dcloudio/uni-app'
 import AuthGate from '../../components/AuthGate.vue'
 import AppTabBar from '../../components/AppTabBar.vue'
 import PageChrome from '../../components/PageChrome.vue'
-import MembershipSheet from '../../components/MembershipSheet.vue'
 import PasswordSheet from '../../components/PasswordSheet.vue'
 import ProfileSheet from '../../components/ProfileSheet.vue'
+import ProfileAvatar from '../../components/ProfileAvatar.vue'
 import { errorMessage, fetchCatalogSummary } from '../../services/api'
 import { ensureSession, logout, refreshMembership, session } from '../../services/session'
 import { createLatestRequest } from '../../services/latest-request'
 import { useTabBarOverlay } from '../../services/tabbar-overlay'
-import { membershipBadge, membershipExpiry, profileAvatar } from '../../presentation'
+import { membershipExpiry } from '../../presentation'
+import { openSupport } from '../../services/experience'
 import type { CatalogSummary } from '../../types'
+import { inboxState, refreshUnread, openRequests } from '../../services/growth'
 
 const summary = ref<CatalogSummary | null>(null)
 const error = ref('')
 const busy = ref(false)
 const settingsOpen = ref(false)
-const membershipOpen = ref(false)
 const logoutOpen = ref(false)
 const profileOpen = ref(false)
 const passwordOpen = ref(false)
-// 头像：选了预设形象就用它，没选则回退到「首字 + 由账号 id 派生的配色」
-const avatar = computed(() => profileAvatar(session.user))
-const vipBadge = computed(() => membershipBadge(session.user))
 useTabBarOverlay(() => settingsOpen.value || logoutOpen.value)
 const requests = createLatestRequest()
 let active = true
 watch(() => session.user?.id, () => {
   requests.invalidate(); summary.value = null; error.value = ''
-  settingsOpen.value = false; membershipOpen.value = false; logoutOpen.value = false
+  settingsOpen.value = false; logoutOpen.value = false
   profileOpen.value = false; passwordOpen.value = false
 }, { flush: 'sync' })
 // 弹层之间不叠着开：先收起账号设置，再开编辑资料/改密码
@@ -43,7 +41,7 @@ async function load() {
   try {
     await refreshMembership()
     if (!current()) return
-    const result = await fetchCatalogSummary()
+    const [result] = await Promise.all([fetchCatalogSummary(), refreshUnread()])
     if (current()) summary.value = result
   } catch (cause) { if (current()) error.value = errorMessage(cause) }
 }
@@ -57,84 +55,94 @@ async function signOut() {
 }
 function privacy() { uni.navigateTo({ url: '/pages/privacy/index' }) }
 function favorites() { uni.switchTab({ url: '/pages/favorites/index' }) }
+function recent() { uni.navigateTo({ url: '/pages/recent/index' }) }
 function downloads() { uni.navigateTo({ url: '/pages/downloads/index' }) }
-function profileSaved() { profileOpen.value = false; uni.showToast({ title: '资料已更新', icon: 'none' }) }
-function passwordSaved() { passwordOpen.value = false; uni.showToast({ title: session.user?.has_password ? '密码已保存' : '密码已设置', icon: 'none' }) }
-onShow(() => { active = true; void load() })
-function leave() {
-  active = false; requests.invalidate()
-  settingsOpen.value = false; membershipOpen.value = false; logoutOpen.value = false
-  profileOpen.value = false; passwordOpen.value = false
+function messages() { uni.navigateTo({ url: '/pages/messages/index' }) }
+function orders() { uni.navigateTo({ url: '/pages/orders/index' }) }
+function membership() { uni.navigateTo({ url: '/pages/membership/index' }) }
+function copyAccount() {
+  if (!session.user) return
+  uni.setClipboardData({ data: session.user.username, success: () => uni.showToast({ title: '账号已复制', icon: 'none' }) })
 }
-onHide(leave)
-onUnload(leave)
+function closure() { settingsOpen.value = false; uni.navigateTo({ url: '/pages/closure/index' }) }
+function profileSaved() { profileOpen.value = false; void load(); uni.showToast({ title: '资料已更新', icon: 'none' }) }
+function passwordSaved() { passwordOpen.value = false; uni.showToast({ title: session.user?.has_password ? '密码已保存' : '密码已设置', icon: 'none' }) }
+onShow(() => { active = true; if (!profileOpen.value) void load() })
+function suspend() {
+  active = false; requests.invalidate()
+  settingsOpen.value = false; logoutOpen.value = false
+  passwordOpen.value = false
+}
+// WeChat's native avatar/album picker can hide the page. Keep the draft and
+// popup alive until the picker returns; only unloading discards the draft.
+onHide(suspend)
+onUnload(() => { suspend(); profileOpen.value = false })
 </script>
 
 <template>
   <view class="account-page has-tabbar">
-    <view class="profile-band" :class="{ guest: !session.user }">
+    <view class="profile-hero" :class="{ guest: !session.user }">
       <PageChrome />
-      <view class="content-width profile-content">
-        <view class="account-tools"><button v-if="session.user" class="bare-icon" role="button" aria-label="账号设置" title="账号设置" @click="settingsOpen = true"><wd-icon name="settings" size="22px" /></button></view>
-        <view class="profile">
-          <button v-if="session.user" class="avatar-button" role="button" aria-label="编辑资料：头像与昵称" @click="openProfile">
-            <view class="avatar" :style="{ background: avatar.background, color: avatar.color }"><text v-if="avatar.glyph" class="avatar-glyph">{{ avatar.glyph }}</text><text v-else>{{ avatar.initial }}</text></view>
-            <view class="avatar-edit" aria-hidden="true"><wd-icon name="camera" size="13px" /></view>
+      <view class="content-width hero-content">
+        <view class="identity-card">
+          <button v-if="session.user" class="avatar-button" role="button" aria-label="编辑头像和昵称" @click="openProfile">
+            <view class="avatar"><ProfileAvatar :user="session.user" /></view>
+            <view class="avatar-edit" aria-hidden="true"><wd-icon name="camera" size="12px" /></view>
           </button>
-          <view v-else class="avatar"><wd-icon name="user" size="29px" /></view>
-          <view class="grow">
-            <text class="profile-name">{{ session.user?.username || '欢迎来到习题库' }}</text>
-            <view v-if="session.user" class="membership-chip" :class="{ vip: session.user.is_vip }"><wd-icon :name="session.user.is_vip ? 'star-fill' : 'check-circle'" size="12px" /><text>{{ session.user.is_vip ? 'VIP 会员' : '普通用户' }}</text></view>
-            <text v-else class="profile-caption">每天一点进步</text>
+          <view v-else class="avatar guest-avatar"><wd-icon name="user" size="28px" /></view>
+          <view class="grow identity-copy">
+            <text class="profile-name">{{ session.user?.nickname || session.user?.username || '欢迎来到习题库' }}</text>
+            <button v-if="session.user" class="account-name copy-account" role="button" aria-label="复制登录账号" @click="copyAccount"><text>账号 {{ session.user.username }}</text><wd-icon name="copy" size="11px" /></button>
+            <text v-else class="account-name">登录后同步收藏、下载和会员权益</text>
+            <view v-if="session.user" class="membership-chip" :class="{ vip: session.user.is_vip }"><wd-icon :name="session.user.is_vip ? 'star-fill' : 'user'" size="11px" /><text>{{ session.user.is_vip ? 'VIP 会员' : '普通用户' }}</text></view>
           </view>
+          <button v-if="session.user" class="edit-button" role="button" aria-label="编辑个人资料" @click="openProfile"><text>编辑资料</text><wd-icon name="arrow-right" size="12px" /></button>
         </view>
       </view>
     </view>
     <AuthGate v-if="!session.user" />
     <template v-else>
       <view v-if="error" class="content-width"><view class="error-strip"><text class="grow">{{ error }}</text><wd-button icon="refresh" type="danger" variant="text" role="button" aria-label="重试" @click="load" /></view></view>
-      <view class="content-width stats-wrap">
-        <view class="stats-card" role="group" aria-label="账号概览">
-          <view class="stat"><text class="stat-value">{{ summary ? summary.favorites : '—' }}</text><text class="stat-label">收藏的题</text></view>
-          <view class="stat-sep" aria-hidden="true" />
-          <view class="stat"><text class="stat-value">{{ summary ? summary.downloads : '—' }}</text><text class="stat-label">下载过</text></view>
-          <view class="stat-sep" aria-hidden="true" />
-          <view class="stat"><text class="stat-value">{{ vipBadge }}</text><text class="stat-label">会员</text></view>
+      <view class="content-width dashboard">
+        <view class="quick-grid" role="group" aria-label="个人数据快捷入口">
+          <button class="quick-card" role="button" @click="favorites"><view class="quick-icon favorite"><wd-icon name="heart" size="20px" /></view><text class="quick-value">{{ summary ? summary.favorites : '—' }}</text><text class="quick-label">我的收藏</text></button>
+          <button class="quick-card" role="button" @click="downloads"><view class="quick-icon download"><wd-icon name="download" size="20px" /></view><text class="quick-value">{{ summary ? summary.downloads : '—' }}</text><text class="quick-label">下载记录</text></button>
+          <button class="quick-card" role="button" @click="recent"><view class="quick-icon recent"><wd-icon name="history" size="20px" /></view><text class="quick-value small">继续学习</text><text class="quick-label">最近浏览</text></button>
         </view>
-      </view>
-      <view class="content-width membership-section">
-        <button class="membership-entry" role="button" aria-label="查看会员状态" @click="membershipOpen = true">
-          <view class="membership-symbol"><wd-icon name="star-fill" size="22px" /></view>
-          <view class="grow"><text class="membership-title">{{ session.user.is_vip ? '我的 VIP 会员' : '开通 VIP 会员' }}</text><text class="membership-caption">{{ membershipExpiry(session.user) }}</text></view>
-          <view class="membership-go"><text>{{ session.user.is_vip ? '管理' : '了解' }}</text><wd-icon name="arrow-right" size="14px" /></view>
+        <button class="membership-card" :class="{ active: session.user.is_vip }" role="button" aria-label="查看会员服务" @click="membership">
+          <view class="membership-top"><view class="membership-mark"><wd-icon name="star-fill" size="19px" /></view><view class="grow"><text class="membership-title">{{ session.user.is_vip ? 'VIP 会员' : '会员服务' }}</text><text class="membership-caption">{{ session.user.is_vip || session.user.membership_status === 'expired' ? membershipExpiry(session.user) : '好资料，陪你每天进步' }}</text></view><view class="membership-action"><text>{{ session.user.is_vip ? '查看权益' : '去看看' }}</text><wd-icon name="arrow-right" size="13px" /></view></view>
+          <view class="perk-row"><view><wd-icon name="check" size="12px" /><text>专享资料</text></view><view><wd-icon name="check" size="12px" /><text>完整原稿</text></view><view><wd-icon name="check" size="12px" /><text>PDF 下载</text></view></view>
         </button>
-        <view class="membership-perks"><view><wd-icon name="check" size="14px" /><text>专享习题</text></view><view><wd-icon name="check" size="14px" /><text>原稿预览</text></view><view><wd-icon name="check" size="14px" /><text>PDF 下载</text></view></view>
-      </view>
-      <view class="content-width account-menu">
-        <view class="menu-card">
-          <wd-cell-group :border="false" center>
-            <wd-cell title="我的收藏" :label="summary ? summary.favorites + ' 份习题' : '收藏的习题'" is-link role="button" aria-label="我的收藏" @click="favorites"><template #prefix><view class="menu-symbol favorite-symbol"><wd-icon name="heart" size="21px" /></view></template></wd-cell>
-            <wd-cell title="下载记录" :label="summary ? summary.downloads + ' 份习题' : '下载过的习题'" is-link role="button" aria-label="下载记录" @click="downloads"><template #prefix><view class="menu-symbol download-symbol"><wd-icon name="download" size="21px" /></view></template></wd-cell>
-            <wd-cell title="隐私与服务" is-link role="button" aria-label="隐私与服务" @click="privacy"><template #prefix><view class="menu-symbol privacy-symbol"><wd-icon name="safe" size="21px" /></view></template></wd-cell>
-          </wd-cell-group>
+        <view class="section-head"><text>常用服务</text></view>
+        <view class="service-grid">
+          <button class="service-item" role="button" @click="messages"><view class="service-icon message"><wd-icon name="notification" size="22px" /><text v-if="inboxState.unread" class="unread-badge">{{ inboxState.unread > 99 ? '99+' : inboxState.unread }}</text></view><text>消息中心</text><text class="service-caption">{{ inboxState.unread ? inboxState.unread + ' 条未读' : '暂无未读' }}</text></button>
+          <button class="service-item" role="button" @click="openRequests()"><view class="service-icon request"><wd-icon name="list" size="22px" /></view><text>资料需求</text><text class="service-caption">提交与进度</text></button>
+          <button class="service-item" role="button" @click="orders"><view class="service-icon order"><wd-icon name="file" size="22px" /></view><text>会员订单</text><text class="service-caption">开通记录</text></button>
+          <button class="service-item" role="button" @click="openSupport()"><view class="service-icon support"><wd-icon name="headset" size="22px" /></view><text>联系客服</text><text class="service-caption">咨询与反馈</text></button>
+        </view>
+        <view class="section-head compact"><text>账号与帮助</text></view>
+        <view class="more-card">
+          <button role="button" aria-label="账号与安全" @click="settingsOpen = true"><view class="more-icon"><wd-icon name="lock" size="18px" /></view><view class="grow"><text>账号与安全</text><text>密码管理、退出登录</text></view><wd-icon name="arrow-right" size="15px" /></button>
+          <view class="more-divider" />
+          <button role="button" @click="privacy"><view class="more-icon privacy"><wd-icon name="safe" size="18px" /></view><view class="grow"><text>隐私与服务</text><text>隐私政策与服务说明</text></view><wd-icon name="arrow-right" size="15px" /></button>
         </view>
       </view>
-      <text class="account-foot">每天一点进步</text>
+      <text class="account-foot">每天一点进步 · 让学习更有方向</text>
     </template>
     <button v-if="!session.user" class="guest-privacy section-link" role="button" @click="privacy">隐私政策</button>
     <AppTabBar current="account" />
-    <MembershipSheet :open="membershipOpen" @close="membershipOpen = false" @refreshed="load" />
     <ProfileSheet :open="profileOpen" @close="profileOpen = false" @saved="profileSaved" />
     <PasswordSheet :open="passwordOpen" @close="passwordOpen = false" @saved="passwordSaved" />
-    <wd-popup v-model="settingsOpen" position="bottom" :z-index="1200" root-portal safe-area-inset-bottom custom-style="border-radius:8px 8px 0 0">
+    <wd-popup v-model="settingsOpen" position="bottom" :z-index="1200" root-portal safe-area-inset-bottom custom-style="border-radius:24px 24px 0 0">
       <view class="sheet" role="dialog" aria-modal="true" aria-label="账号设置">
         <view class="sheet-handle" />
         <view class="sheet-head"><text class="sheet-title">账号设置</text><button class="bare-icon" role="button" aria-label="关闭账号设置" @click="settingsOpen = false"><wd-icon name="close" size="20px" /></button></view>
         <wd-cell-group :border="false" center>
-          <wd-cell title="编辑资料" :label="session.user?.username" is-link role="button" aria-label="编辑头像与昵称" @click="openProfile"><template #prefix><view class="menu-symbol profile-symbol"><wd-icon name="user" size="21px" /></view></template></wd-cell>
-          <wd-cell :title="session.user?.has_password ? '修改密码' : '设置密码'" :label="session.user?.has_password ? '定期更换更安全' : '设置后也能用昵称登录'" is-link role="button" aria-label="密码设置" @click="openPassword"><template #prefix><view class="menu-symbol lock-symbol"><wd-icon name="lock" size="21px" /></view></template></wd-cell>
+          <wd-cell title="编辑资料" :label="session.user?.nickname || session.user?.username" is-link role="button" aria-label="编辑头像与昵称" @click="openProfile"><template #prefix><view class="menu-symbol profile-symbol"><wd-icon name="user" size="21px" /></view></template></wd-cell>
+          <wd-cell :title="session.user?.has_password ? '修改密码' : '设置密码'" :label="session.user?.has_password ? '定期更换更安全' : '设置后可使用固定账号登录'" is-link role="button" aria-label="密码设置" @click="openPassword"><template #prefix><view class="menu-symbol lock-symbol"><wd-icon name="lock" size="21px" /></view></template></wd-cell>
         </wd-cell-group>
-        <wd-cell title="应用版本" value="0.1.0" />
+        <wd-cell title="登录账号" :value="session.user?.username" /><wd-cell title="应用版本" value="0.1.0" />
+        <wd-cell title="注销账号" label="申请、查看审核进度或撤回" is-link role="button" @click="closure" />
         <view v-if="error" class="error-strip">{{ error }}</view>
         <view class="settings-logout"><wd-button type="info" variant="plain" block icon="poweroff" role="button" :disabled="busy" @click="error = ''; logoutOpen = true">退出登录</wd-button></view>
       </view>
@@ -151,53 +159,67 @@ onUnload(leave)
 </template>
 
 <style scoped>
-.profile-band { border-radius: 0 0 40% 5% / 0 0 10% 2%; background-color: var(--lc-hero); background-image: radial-gradient(58% 62% at 92% -10%, #ffffff78 0%, #ffffff00 68%), radial-gradient(46% 50% at 2% 108%, #ffffff42 0%, #ffffff00 70%), linear-gradient(168deg, #ebf6ed 0%, #d9ebdd 60%, #e6f2e8 100%); }
-.profile-content { padding-top: 13px; padding-bottom: 36px; }
-.profile-band.guest .profile-content { padding-bottom: 28px; }
-.account-tools { display: flex; justify-content: flex-end; height: 44px; }
-.profile { display: flex; align-items: center; gap: 14px; padding: 8px 0 14px; }
-.avatar { display: flex; align-items: center; justify-content: center; flex: none; width: 66px; height: 66px; border: 2px solid #ffffffcc; border-radius: 50%; color: var(--lc-primary); background: #fff; box-shadow: 0 8px 18px #2b453514; font-size: 25px; font-weight: 600; }
-.avatar-glyph { font-size: 33px; line-height: 1; font-weight: 400; }
-/* 头像即入口：右下角挂一个小小的相机标记，点它就能改头像和昵称 */
-.avatar-button { position: relative; display: block; flex: none; width: 66px; height: 66px; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 50%; line-height: 0; }
-.avatar-button::after { border: 0; }
-.avatar-button:active :deep(.avatar) { transform: scale(.96); }
-.avatar-edit { position: absolute; right: -2px; bottom: -2px; display: flex; align-items: center; justify-content: center; width: 25px; height: 25px; border: 2px solid #ffffff; border-radius: 50%; color: #fff; background: var(--lc-primary); box-shadow: 0 3px 8px #307e6133; }
-.profile-name { display: block; font-size: 22px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
-.profile-caption { display: block; margin-top: 8px; color: var(--lc-secondary); font-size: 12px; }
-.membership-chip { display: inline-flex; align-items: center; gap: 4px; margin-top: 9px; padding: 3px 10px; border-radius: 999px; background: #ffffffa8; color: var(--lc-primary); font-size: 11px; line-height: 1.6; }
-.membership-chip.vip { background: #fdf1d8; color: var(--lc-warning); }
-/* 概览卡片上移压住 hero 下沿，让「头像区 → 内容区」有层次而不是一刀切 */
-.stats-wrap { position: relative; z-index: 1; margin-top: -22px; }
-.stats-card { display: flex; align-items: center; padding: 16px 8px; border: 1px solid var(--lc-card-line); border-radius: 14px; background: var(--lc-card); box-shadow: var(--lc-card-shadow); }
-.stat { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
-.stat-value { font-size: 18px; font-weight: 650; line-height: 1.4; color: var(--lc-text); font-variant-numeric: tabular-nums; }
-.stat-label { font-size: 11px; color: var(--lc-muted); }
-.stat-sep { flex: none; width: 1px; height: 26px; background: var(--lc-border); }
-.membership-section { padding-top: 18px; padding-bottom: 4px; }
-.membership-entry { display: flex; align-items: center; gap: 12px; width: 100%; padding: 16px 18px; margin: 0; min-height: 48px; text-align: left; font-size: 14px; line-height: 1.5; border: 1px solid #f0e2c6; border-radius: 14px; background-color: #fffdf8; background-image: linear-gradient(135deg, #fdf4e3 0%, #fffdf8 58%, #fbf1dd 100%); box-shadow: 0 8px 20px #8a6a2a0f; }
-.membership-entry:active { transform: scale(.99); }
-.membership-symbol { display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 50%; flex: none; color: var(--lc-warning); background: #fff; box-shadow: 0 3px 10px #b58a2c1a; }
-.membership-title { display: block; font-size: 16px; font-weight: 600; color: var(--lc-text); }
-.membership-caption { display: block; color: var(--lc-muted); font-size: 12px; margin-top: 4px; }
-.membership-go { display: flex; align-items: center; gap: 2px; flex: none; color: var(--lc-warning); font-size: 12px; }
-.membership-perks { display: flex; flex-wrap: wrap; gap: 9px 18px; padding: 14px 4px 12px; }
-.membership-perks > view { display: flex; align-items: center; gap: 4px; color: var(--lc-muted); font-size: 11px; }
-.membership-perks :deep(.wd-icon) { color: var(--lc-primary); }
-.account-menu { padding-top: 0; padding-bottom: 18px; --wot-cell-padding: 12px 0; --wot-cell-title-font-size: 14px; --wot-cell-label-font-size: 11px; }
-.menu-card { padding: 2px 16px; border: 1px solid var(--lc-card-line); border-radius: 14px; background: var(--lc-card); box-shadow: var(--lc-card-shadow-soft); }
-.account-menu :deep(.wd-cell) { padding-left: 0; }
-.account-menu :deep(.wd-cell__wrapper) { padding: 12px 0; min-height: 68px; }
-.menu-symbol { display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; margin-right: 14px; border-radius: 50%; flex: none; }
-.favorite-symbol { color: #526eac; background: #e9effb; }
-.download-symbol { color: var(--lc-primary); background: var(--lc-primary-soft); }
-.privacy-symbol { color: #9772aa; background: #f1ebf6; }
+.profile-hero { padding-bottom:34px;background:radial-gradient(ellipse at 95% 0,#cce6d5 0,transparent 65%),linear-gradient(160deg,#e8f4eb,#f3f8f4); }
+.profile-hero.guest { padding-bottom: 28px; }
+.hero-content { padding-top:20px; }
+.identity-card { display:flex;align-items:center;gap:15px;min-height:86px; }
+.identity-copy { min-width:0; }
+.avatar,.avatar-button { width:68px;height:68px;border-radius:50%; }
+.avatar { display:flex;align-items:center;justify-content:center;overflow:hidden;border:3px solid #fff;color:var(--lc-primary);background:#fff;box-shadow:0 8px 20px #36594314;font-size:30px; }
+.avatar-button { position:relative;display:block;flex:none;overflow:visible;margin:0;padding:0;border:0;background:transparent;line-height:0; }
+.avatar-button::after { border:0; }
+.avatar-button:active { transform:scale(.97); }
+.avatar-edit { position:absolute;right:-4px;bottom:-4px;display:flex;align-items:center;justify-content:center;width:24px;height:24px;border:2px solid #fff;border-radius:50%;color:#fff;background:var(--lc-primary); }
+.guest-avatar { border-radius:50%; }
+.profile-name { display:block;overflow:hidden;color:var(--lc-text);font-size:22px;font-weight:700;line-height:1.4;text-overflow:ellipsis;white-space:nowrap; }
+.account-name { display:block;overflow:hidden;margin-top:3px;color:var(--lc-secondary);font-size:11px;line-height:1.5;text-overflow:ellipsis;white-space:nowrap; }
+.copy-account { display:flex;align-items:center;gap:6px;max-width:100%;margin:2px 0 0;padding:3px 0;background:transparent;text-align:left; }.copy-account text { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }.copy-account :deep(.wd-icon) { flex:none; }
+.membership-chip { display:inline-flex;align-items:center;gap:4px;margin-top:8px;padding:3px 9px;border-radius:999px;color:#52705f;background:#fff;font-size:10px;line-height:1.5; }
+.membership-chip.vip { color:#9a691e;background:#fff4d8; }
+.edit-button { display:flex;align-items:center;gap:2px;flex:none;min-height:44px;margin:0;padding:7px 0;color:var(--lc-primary);background:transparent;font-size:11px;line-height:1.4; }
+.dashboard { position:relative;z-index:2;margin-top:-20px;padding-bottom:18px; }
+.quick-grid { display:grid;grid-template-columns:repeat(3,1fr);padding:12px 0;border:1px solid var(--lc-card-line);border-radius:18px;background:var(--lc-card);box-shadow:var(--lc-card-shadow-soft); }
+.quick-card { display:flex;flex-direction:column;align-items:center;min-width:0;margin:0;padding:0 5px;border-radius:0;background:transparent; }.quick-card+.quick-card { border-left:1px solid var(--lc-border); }
+.quick-card:active,.service-item:active,.membership-card:active,.more-card button:active { transform:scale(.98); }
+.quick-icon { display:flex;align-items:center;justify-content:center;width:30px;height:30px;margin-bottom:5px;border-radius:10px; }
+.quick-icon.favorite { color:#c75e6b;background:#fbeaec; }.quick-icon.download { color:#397761;background:#e5f2eb; }.quick-icon.recent { color:#526eac;background:#e8eefb; }
+.quick-value { height:23px;color:var(--lc-text);font-size:17px;font-weight:700;line-height:23px;font-variant-numeric:tabular-nums; }
+.quick-value.small { font-size:12px;font-weight:600; }
+.quick-label { margin-top:3px;color:var(--lc-muted);font-size:11px;line-height:1.5; }
+.membership-card { display:block;width:100%;margin:15px 0 0;padding:17px;border:0;border-radius:18px;text-align:left;background:linear-gradient(135deg,#233d32 0%,#315945 58%,#3f7257 100%);box-shadow:0 12px 26px #29473824; }
+.membership-card.active { background:linear-gradient(135deg,#58401f 0%,#80602d 55%,#a67b36 100%); }
+.membership-top { display:flex;align-items:center;gap:11px; }
+.membership-mark { display:flex;align-items:center;justify-content:center;width:38px;height:38px;flex:none;border-radius:13px;color:#f8d88d;background:#ffffff18; }
+.membership-title { display:block;color:#fff;font-size:16px;font-weight:650;line-height:1.4; }
+.membership-caption { display:block;margin-top:4px;color:#d3e6db;font-size:11px;line-height:1.5; }
+.membership-action { display:flex;align-items:center;gap:2px;flex:none;color:#f8d88d;font-size:11px; }
+.perk-row { display:flex;justify-content:space-between;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid #ffffff1f; }
+.perk-row > view { display:flex;align-items:center;gap:4px;color:#ffffffc7;font-size:10px; }
+.section-head { display:flex;align-items:flex-end;justify-content:space-between;margin:20px 2px 11px; }
+.section-head > text:first-child { color:var(--lc-text);font-size:16px;font-weight:650; }.section-head > text+text { color:var(--lc-muted);font-size:11px; }.section-head.compact { margin-top:20px; }
+.service-grid { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;padding:16px 7px;border:1px solid var(--lc-card-line);border-radius:18px;background:var(--lc-card);box-shadow:var(--lc-card-shadow-soft); }
+.service-item { display:flex;flex-direction:column;align-items:center;min-width:0;margin:0;padding:0;background:transparent; }
+.service-icon { position:relative;display:flex;align-items:center;justify-content:center;width:40px;height:40px;margin-bottom:9px;border-radius:13px; }
+.service-icon.message { color:#526eac;background:#e9effb; }.service-icon.request { color:#8b6b36;background:#f7efdf; }.service-icon.order { color:#397761;background:#e5f2eb; }.service-icon.support { color:#92699f;background:#f2eaf5; }
+.service-item > text { overflow:hidden;color:var(--lc-text);font-size:12px;font-weight:600;line-height:1.5;text-overflow:ellipsis;white-space:nowrap; }
+.service-item .service-caption { color:var(--lc-muted);font-size:9px;font-weight:400; }
+.unread-badge { position:absolute;right:-7px;top:-7px;min-width:15px;height:15px;padding:0 3px;border:2px solid #fff;border-radius:9px;color:#fff;background:var(--lc-coral);font-size:8px;line-height:15px;text-align:center;box-sizing:content-box; }
+.more-card { overflow:hidden;padding:0 15px;border:1px solid var(--lc-card-line);border-radius:16px;background:var(--lc-card);box-shadow:var(--lc-card-shadow-soft); }
+.more-card button { display:flex;align-items:center;gap:11px;width:100%;min-height:66px;margin:0;padding:10px 0;text-align:left;background:transparent; }
+.more-card button > .grow > text { display:block;color:var(--lc-text);font-size:13px;line-height:1.5; }.more-card button > .grow > text:last-child { margin-top:3px;color:var(--lc-muted);font-size:11px; }
+.more-icon { display:flex;align-items:center;justify-content:center;width:36px;height:36px;flex:none;border-radius:12px;color:#397761;background:#e5f2eb; }.more-icon.privacy { color:#92699f;background:#f2eaf5; }
+.more-card button > :deep(.wd-icon):last-child { color:var(--lc-muted); }.more-divider { height:1px;margin-left:47px;background:var(--lc-border); }
+.menu-symbol { display:flex;align-items:center;justify-content:center;width:42px;height:42px;margin-right:14px;border-radius:50%;flex:none; }
 .profile-symbol { color: var(--lc-primary); background: var(--lc-primary-soft); }
 .lock-symbol { color: #8a6a3f; background: #f6efe4; }
-.account-foot { display: block; text-align: center; color: var(--lc-muted); font-size: 11px; padding: 6px 0 28px; }
+.account-foot { display:block;padding:2px 0 28px;color:var(--lc-muted);font-size:10px;text-align:center; }
 .settings-logout { padding-top: 24px; }
 .logout-confirm { padding: 25px 22px 22px; }
 .logout-caption { display: block; margin-top: 12px; font-size: 13px; line-height: 1.8; color: var(--lc-secondary); }
 .logout-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 23px; }
 .guest-privacy { display: flex; margin: 0 auto; }
+@media (max-width:350px) {
+  .identity-card { gap:11px; }.avatar,.avatar-button { width:58px;height:58px; }.profile-name { font-size:20px; }.edit-button { font-size:10px; }
+  .quick-card { padding-left:2px;padding-right:2px; }.service-grid { padding-right:3px;padding-left:3px; }.service-item > text { font-size:11px; }
+}
 </style>

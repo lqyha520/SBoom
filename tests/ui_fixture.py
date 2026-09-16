@@ -28,6 +28,7 @@ os.environ.update({
     "REGISTRATION_ENABLED": "true", "MINI_REGISTRATION_ENABLED": "true", "CORS_ORIGINS": "",
     "ARCHIVE_STORAGE": "local", "ARCHIVE_LOCAL_DIR": str(Path(TEMP.name) / "private-papers"),
     "WECHAT_APP_ID": "", "WECHAT_APP_SECRET": "",
+    "WECHAT_PAY_ENABLED": "false", "WECHAT_SUBSCRIBE_TEMPLATE_ID": "", "WECHAT_PAY_AUTO_RECONCILE": "false",
 })
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -35,7 +36,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from app.db import db, init_db
 from app.deps import require_admin, require_user
-from app.routers import admin, auth, generate, me, library, mini, catalog
+from app.routers import admin, auth, generate, me, library, mini, catalog, site, experience, engagement, commerce
 from app.services import app_config, mini_auth, user_store
 from app.models.mini import MembershipUpdate
 from app.services.user_store import CurrentUser
@@ -161,6 +162,11 @@ fixture.include_router(catalog.router)
 fixture.include_router(catalog.admin_router)
 fixture.include_router(generate.router)
 fixture.include_router(admin.router)
+fixture.include_router(site.router)
+fixture.include_router(site.admin_router)
+fixture.include_router(experience.router)
+fixture.include_router(engagement.router)
+fixture.include_router(commerce.router)
 
 
 @fixture.get("/admin", include_in_schema=False)

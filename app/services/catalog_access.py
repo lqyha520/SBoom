@@ -42,7 +42,8 @@ def access_map(conn, ids, user=None, admin=False):
             download = "vip"
         result[catalog_id] = {"view_access": policy["view_access"], "download_access": policy["download_access"],
                               "required_view": view, "required_download": download,
-                              "can_view": view == "free" or vip, "can_download": download == "free" or vip,
+                              "can_view": view == "free" or vip,
+                              "can_download": bool(admin or user) and (download == "free" or vip),
                               "question_types": [kind["question_type"] for kind in types]}
     return result
 

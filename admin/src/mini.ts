@@ -2,7 +2,7 @@ import { request } from './api'
 import type { Page } from './catalog'
 
 export interface MiniUser {
-  id: string; username: string; avatar: string; has_password: boolean
+  id: string; username: string; nickname?: string; avatar: string; avatar_url?: string | null; has_password: boolean
   membership: 'regular' | 'vip'; is_vip: boolean
   membership_status: 'regular' | 'active' | 'expired'; vip_expires_at: number | null
   is_active: boolean; revision: number; created_at: number; updated_at: number
@@ -27,7 +27,7 @@ export interface MembershipEdit {
 }
 /** 管理员改小程序用户资料。三个字段都可选，只提交真正要改的；new_password 为重置密码（无需原密码） */
 export interface MiniProfileEdit {
-  revision: number; username?: string; avatar?: string; new_password?: string
+  revision: number; nickname?: string; avatar?: string; new_password?: string
 }
 export interface TypeRule {
   question_type: string; label: string; paper_count: number; view_access: 'free' | 'vip'

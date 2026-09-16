@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.deps import require_admin
-from app.library_deps import no_store, require_mini_user
+from app.library_deps import no_store, optional_mini_user
 from app.library_files import asset_response
 from app.models.site import (
     BannerInput,
@@ -49,18 +49,18 @@ async def _image_body(request: Request) -> tuple[str, bytes]:
 # ─── 小程序端 ───
 
 @router.get("/home")
-def home(user: MiniUser = Depends(require_mini_user)):
+def home(user: MiniUser | None = Depends(optional_mini_user)):
     """首页一次性拿全：Banner、公告、分类、年级科目字典。"""
     return site.home_payload()
 
 
 @router.get("/banners/{banner_id}/image")
-def banner_image(banner_id: str, user: MiniUser = Depends(require_mini_user)):
+def banner_image(banner_id: str, user: MiniUser | None = Depends(optional_mini_user)):
     return asset_response(site.banner_asset(banner_id))
 
 
 @router.get("/documents/{key}")
-def document(key: str, user: MiniUser = Depends(require_mini_user)):
+def document(key: str):
     row = site.get_document(key)
     return {"key": row["key"], "title": row["title"], "body": row["body"], "updated_at": row["updated_at"]}
 
@@ -118,9 +118,9 @@ def delete_banner(banner_id: str, revision: int = Query(ge=1), user: CurrentUser
 
 
 @admin_router.put("/banners/{banner_id}/image")
-async def upload_banner_image(banner_id: str, request: Request, user: CurrentUser = Depends(require_admin)):
+async def upload_banner_image(banner_id: str, request: Request, revision: int | None = Query(default=None, ge=1), user: CurrentUser = Depends(require_admin)):
     content_type, content = await _image_body(request)
-    return site.save_banner_image(banner_id, content_type, content)
+    return site.save_banner_image(banner_id, content_type, content, revision=revision)
 
 
 @admin_router.delete("/banners/{banner_id}/image")

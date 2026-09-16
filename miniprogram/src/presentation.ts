@@ -71,18 +71,18 @@ export function membershipBadge(user: User | null, now = Date.now()) {
 
 /* ── 头像 ── */
 
-export interface AvatarChoice { key: string; glyph: string; label: string; background: string; color: string }
+export interface AvatarChoice { key: string; glyph: string; label: string; background: string; color: string; image?: string }
 
 /**
  * 预设头像。key 必须和后端 app/models/mini.py 的 PROFILE_AVATARS 一致，
- * 新增时两端一起改；glyph 用 emoji 是因为它在小程序和 H5 上都不需要额外图片资源。
+ * 新增时两端一起改。五个可选头像使用本地图片，历史头像保留 emoji 回退。
  */
 export const AVATAR_CHOICES: AvatarChoice[] = [
-  { key: 'fox', glyph: '🦊', label: '小狐狸', background: '#fdeee2', color: '#b3653a' },
-  { key: 'panda', glyph: '🐼', label: '小熊猫', background: '#eef1f4', color: '#55606d' },
-  { key: 'penguin', glyph: '🐧', label: '小企鹅', background: '#e8f1fa', color: '#3f6f9c' },
-  { key: 'deer', glyph: '🦌', label: '小鹿', background: '#f4ecdf', color: '#8a6a3f' },
-  { key: 'rabbit', glyph: '🐰', label: '小兔子', background: '#fdeef4', color: '#b3567f' },
+  { key: 'fox', glyph: '🦊', label: '小狐狸', background: '#fdeee2', color: '#b3653a', image: '/static/avatars/fox.png' },
+  { key: 'panda', glyph: '🐼', label: '小熊猫', background: '#eef1f4', color: '#55606d', image: '/static/avatars/panda.png' },
+  { key: 'penguin', glyph: '🐧', label: '小企鹅', background: '#e8f1fa', color: '#3f6f9c', image: '/static/avatars/penguin.png' },
+  { key: 'deer', glyph: '🦌', label: '小鹿', background: '#f4ecdf', color: '#8a6a3f', image: '/static/avatars/deer.png' },
+  { key: 'rabbit', glyph: '🐰', label: '小兔子', background: '#fdeef4', color: '#b3567f', image: '/static/avatars/rabbit.png' },
   { key: 'koala', glyph: '🐨', label: '小考拉', background: '#edf0f7', color: '#4f6183' },
   { key: 'owl', glyph: '🦉', label: '小猫头鹰', background: '#f0ecf9', color: '#6b5399' },
   { key: 'dolphin', glyph: '🐬', label: '小海豚', background: '#e6f3f6', color: '#2f7a8c' },
@@ -96,6 +96,9 @@ export const AVATAR_CHOICES: AvatarChoice[] = [
   { key: 'squirrel', glyph: '🐿️', label: '小松鼠', background: '#f7ecdf', color: '#96603a' },
 ]
 
+/** Five visible presets; historical choices remain readable for existing users. */
+export const DEFAULT_AVATAR_CHOICES = AVATAR_CHOICES.slice(0, 5)
+
 export function avatarChoice(key: string | null | undefined) {
   return AVATAR_CHOICES.find(choice => choice.key === key) || null
 }
@@ -106,8 +109,8 @@ export interface AvatarLook { glyph: string; initial: string; background: string
  * 头像的最终呈现：选了预设就用预设的图案与配色；没选则回退到「首字 + 由账号
  * id 派生的稳定配色」——同一账号每次进来颜色一致，不同账号彼此区分，不用配图。
  */
-export function profileAvatar(user: Pick<User, 'id' | 'username' | 'avatar'> | null): AvatarLook {
-  const initial = (user?.username || '').trim().slice(0, 1).toUpperCase()
+export function profileAvatar(user: Pick<User, 'id' | 'username' | 'nickname' | 'avatar'> | null): AvatarLook {
+  const initial = (Array.from((user?.nickname || user?.username || '').trim())[0] || '').toUpperCase()
   const choice = avatarChoice(user?.avatar)
   if (choice) return { glyph: choice.glyph, initial, background: choice.background, color: choice.color, preset: true }
   let hue = 0

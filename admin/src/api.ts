@@ -48,12 +48,12 @@ export const AUTH_EXPIRED_EVENT = 'lc-admin:auth-expired'
 const DEFAULT_TIMEOUT_MS = 30_000
 const TEST_LLM_TIMEOUT_MS = 120_000
 
-export async function request<T>(url: string, init?: RequestInit): Promise<T> {
+export async function request<T>(url: string, init?: RequestInit, responseType: 'json' | 'blob' = 'json'): Promise<T> {
   let r: Response
   try {
     r = await fetch(url, {
       ...init,
-      signal: AbortSignal.timeout(url.includes('test-llm') ? TEST_LLM_TIMEOUT_MS : DEFAULT_TIMEOUT_MS),
+      signal: AbortSignal.timeout(url.endsWith('/reconciliations') && init?.method === 'POST' ? 180000 : url.includes('test-llm') ? TEST_LLM_TIMEOUT_MS : DEFAULT_TIMEOUT_MS),
     })
   } catch (e: any) {
     if (e?.name === 'TimeoutError' || e?.name === 'AbortError') throw new Error('请求超时，请稍后重试')
@@ -72,6 +72,7 @@ export async function request<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(base)
   }
   if (r.status === 204) return undefined as T
+  if (responseType === 'blob') return await r.blob() as T
   return r.json()
 }
 

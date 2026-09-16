@@ -14,7 +14,7 @@ export type BannerTarget = 'none' | 'keyword' | 'category' | 'subject' | 'paper'
 export interface Banner {
   id: string; kicker: string; title: string; subtitle: string; action_label: string
   target_type: BannerTarget; target_value: string
-  image_url: string | null; image_mime: string; image_bytes: number
+  image_url: string | null; image_mime: string; image_bytes: number; image_fit: 'contain' | 'cover'
   sort_order: number; is_visible: boolean; revision: number; created_at: number; updated_at: number
 }
 
@@ -94,8 +94,8 @@ export function deleteBanner(adminId: number, id: string, revision: number) {
 }
 
 /** 图片以原始字节 PUT 上传，服务端按 Content-Type 校验格式与尺寸 */
-export function uploadBannerImage(adminId: number, id: string, file: File) {
-  return request<Banner>(base + '/banners/' + encodeURIComponent(id) + '/image', {
+export function uploadBannerImage(adminId: number, id: string, file: File, revision: number) {
+  return request<Banner>(base + '/banners/' + encodeURIComponent(id) + '/image?revision=' + revision, {
     method: 'PUT',
     headers: { 'Content-Type': file.type || 'image/jpeg', 'X-Workspace-User': String(adminId) },
     body: file,
@@ -106,7 +106,7 @@ export function clearBannerImage(adminId: number, id: string, revision: number) 
   return request<Banner>(base + '/banners/' + encodeURIComponent(id) + '/image?revision=' + revision, mutation('DELETE', adminId))
 }
 
-export function bannerImageUrl(id: string) { return base + '/banners/' + encodeURIComponent(id) + '/image' }
+export function bannerImageUrl(id: string, revision?: number) { return base + '/banners/' + encodeURIComponent(id) + '/image' + (revision ? '?v=' + revision : '') }
 
 /* ── 公告与弹窗 ── */
 

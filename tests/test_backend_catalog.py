@@ -1,6 +1,7 @@
 """Public catalog publication, privacy and self-service login contracts."""
 
 import copy
+import json
 import tempfile
 import time
 import unittest
@@ -91,8 +92,8 @@ class PublicCatalogContracts(unittest.TestCase):
         self.assertEqual(self.client.get(draft["assets"][0]["url"]).status_code, 401)
         self.client.cookies.clear()
         self.client.headers.pop("Authorization", None)
-        self.assertEqual(self.client.get("/api/v1/catalog/papers").status_code, 401)
-        self.assertEqual(self.client.get("/api/v1/catalog/summary").status_code, 401)
+        self.assertEqual(self.client.get("/api/v1/catalog/papers").json()["total"], 0)
+        self.assertEqual(self.client.get("/api/v1/catalog/summary").json()["papers"], 0)
 
     def test_published_content_and_files_are_available_to_other_users(self):
         source = self.source()
@@ -293,7 +294,7 @@ class PublicCatalogContracts(unittest.TestCase):
         return response.json()
 
     def test_account_domains_and_registration_are_independent(self):
-        self.assertEqual(self.client.get("/api/v1/catalog/papers").status_code, 401)
+        self.assertEqual(self.client.get("/api/v1/catalog/papers").status_code, 200)
         self.assertEqual(self.client.get("/api/v1/mini/me").status_code, 401)
         self.client.cookies.clear()
         wrong = self.client.post("/api/v1/mini/login-password", json={"username": self.author.username, "password": "author-password"})
@@ -315,26 +316,20 @@ class PublicCatalogContracts(unittest.TestCase):
 
     def test_consumers_edit_their_own_nickname_and_avatar(self):
         self.sign_in(self.viewer)
-        self.assertEqual(self.client.get("/api/v1/mini/me").json()["avatar"], "")
-        self.assertTrue(self.client.get("/api/v1/mini/me").json()["has_password"])
-        changed = self.client.patch("/api/v1/mini/me", json={"username": "向阳的小海豚", "avatar": "fox"})
+        changed = self.client.patch("/api/v1/mini/me", json={"nickname": "向阳的小海豚", "avatar": "fox"})
         self.assertEqual(changed.status_code, 200, changed.text)
-        self.assertEqual(changed.json()["username"], "向阳的小海豚")
+        self.assertEqual(changed.json()["nickname"], "向阳的小海豚")
+        self.assertEqual(changed.json()["username"], self.viewer.username)
         self.assertEqual(changed.json()["avatar"], "fox")
-        self.assertEqual(self.client.get("/api/v1/mini/me").json()["avatar"], "fox")
-        # 只改一个字段时另一个保持不变；重复提交同一份内容也不会报错
         only_avatar = self.client.patch("/api/v1/mini/me", json={"avatar": "panda"})
-        self.assertEqual(only_avatar.json()["username"], "向阳的小海豚")
+        self.assertEqual(only_avatar.json()["nickname"], "向阳的小海豚")
         self.assertEqual(self.client.patch("/api/v1/mini/me", json={"avatar": "panda"}).status_code, 200)
-        # 昵称撞库给可读的 409，而不是 500，也不接受被人抢走
-        self.assertEqual(self.client.patch("/api/v1/mini/me", json={"username": self.other.username}).status_code, 409)
-        self.assertEqual(self.client.patch("/api/v1/mini/me", json={"username": self.other.username}).json()["detail"]["code"], "nickname_taken")
-        # 非法昵称/未知头像/空请求都被拒
-        for payload in ({"username": "一"}, {"username": "bad name!"}, {"avatar": "dragon"}, {}):
+        # Display names can repeat, and the legacy username field changes only the display name.
+        self.assertEqual(self.client.patch("/api/v1/mini/me", json={"username": self.other.username}).status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/mini/me").json()["username"], self.viewer.username)
+        for payload in ({"nickname": " "}, {"nickname": "bad\nname"}, {"nickname": "长" * 33}, {"avatar": "dragon"}, {}):
             self.assertEqual(self.client.patch("/api/v1/mini/me", json=payload).status_code, 422, payload)
-        # 昵称改动同时会影响列表接口里显示的名字
-        self.assertEqual(self.client.get("/api/v1/mini/me").json()["username"], "向阳的小海豚")
-        self.assertEqual(self.client.patch("/api/v1/mini/me", json={"username": "x", "membership": "vip"}).status_code, 422)
+        self.assertEqual(self.client.patch("/api/v1/mini/me", json={"nickname": "测试昵称", "membership": "vip"}).status_code, 422)
 
     def test_profile_edits_are_scoped_to_the_signed_in_account(self):
         self.sign_in(self.viewer)
@@ -385,8 +380,8 @@ class PublicCatalogContracts(unittest.TestCase):
         # 设置密码后昵称（微信注册时的默认昵称）没有被改动
         username = self.client.get("/api/v1/mini/me").json()["username"]
         self.assertTrue(username)
-        self.assertEqual(self.client.patch("/api/v1/mini/me", json={"username": "小读者"}).json()["username"], "小读者")
-        self.assertEqual(self.client.post("/api/v1/mini/login-password", json={"username": "小读者", "password": "reader-password"}).status_code, 200)
+        self.assertEqual(self.client.patch("/api/v1/mini/me", json={"nickname": "小读者"}).json()["nickname"], "小读者")
+        self.assertEqual(self.client.post("/api/v1/mini/login-password", json={"username": username, "password": "reader-password"}).status_code, 200)
         # 设置密码不会把微信登录这条链路顶掉
         with patch.object(mini_auth, "exchange_code", new=AsyncMock(return_value="wx-openid-edit")):
             self.assertEqual(self.client.post("/api/v1/mini/login", json={"code": "wx-code"}).status_code, 200)
@@ -518,28 +513,33 @@ class PublicCatalogContracts(unittest.TestCase):
         path = f"/api/v1/admin/mini-users/{self.viewer.id}"
         changed = self.client.patch(path, json={"revision": 1, "username": "后台改的名", "avatar": "owl"})
         self.assertEqual(changed.status_code, 200, changed.text)
-        self.assertEqual((changed.json()["username"], changed.json()["avatar"]), ("后台改的名", "owl"))
+        self.assertEqual((changed.json()["nickname"], changed.json()["avatar"]), ("后台改的名", "owl"))
         self.assertEqual(changed.json()["revision"], 2)
         # 乐观锁：拿着旧 revision 再提交会被挡住
         self.assertEqual(self.client.patch(path, json={"revision": 1, "username": "又一次改名"}).status_code, 409)
-        # 昵称仍要全局唯一；头像必须在预设键表里；必须真的改了东西
-        self.assertEqual(self.client.patch(path, json={"revision": 2, "username": self.other.username}).status_code, 409)
+        # 登录账号不随昵称改变；头像必须在预设键表里；必须真的改了东西
+        self.assertEqual(changed.json()["username"], self.viewer.username)
         self.assertEqual(self.client.patch(path, json={"revision": 2, "avatar": "dragon"}).status_code, 422)
         self.assertEqual(self.client.patch(path, json={"revision": 2}).status_code, 422)
         self.assertEqual(self.client.patch(path, json={"revision": 2, "new_password": "123"}).status_code, 422)
         self.assertEqual(self.client.patch("/api/v1/admin/mini-users/missing-account", json={"revision": 1, "avatar": "owl"}).status_code, 404)
 
         # 后台改名不该动用户自己的登录态，重置密码才让旧会话与旧密码一起失效
-        token = mini_auth.login_password("后台改的名", "test-password")["token"]
+        token = mini_auth.login_password(self.viewer.username, "test-password")["token"]
         self.assertEqual(self.client.get("/api/v1/mini/me", headers={"Authorization": "Bearer " + token}).status_code, 200)
         reset = self.client.patch(path, json={"revision": 2, "new_password": "new-password"})
         self.assertEqual(reset.status_code, 200, reset.text)
         self.assertTrue(reset.json()["has_password"])
+        with database.db() as conn:
+            records = [json.loads(row[0]) for row in conn.execute(
+                "SELECT after_json FROM mini_membership_events WHERE user_id = ?", (self.viewer.id,))]
+        self.assertTrue(any(item.get("password_reset") for item in records))
+        self.assertNotIn("new-password", json.dumps(records))
         self.assertEqual(self.client.get("/api/v1/mini/me", headers={"Authorization": "Bearer " + token}).status_code, 401)
         self.assertEqual(self.client.post("/api/v1/mini/login-password",
-                                          json={"username": "后台改的名", "password": "test-password"}).status_code, 401)
+                                          json={"username": self.viewer.username, "password": "test-password"}).status_code, 401)
         self.assertEqual(self.client.post("/api/v1/mini/login-password",
-                                          json={"username": "后台改的名", "password": "new-password"}).status_code, 200)
+                                          json={"username": self.viewer.username, "password": "new-password"}).status_code, 200)
 
         # 普通小程序用户拿着自己的 token 打不动后台接口
         self.sign_in(self.other)

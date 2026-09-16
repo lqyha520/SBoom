@@ -63,6 +63,21 @@ class Settings(BaseSettings):
     wechat_app_id: str = ""
     wechat_app_secret: str = ""
     mini_session_days: int = Field(7, ge=1, le=30)
+    # Consumer commerce and subscription delivery remain opt-in until deployment is configured.
+    wechat_pay_enabled: bool = False
+    wechat_pay_mchid: str = ""
+    wechat_pay_serial_no: str = ""
+    wechat_pay_private_key_path: str = ""
+    wechat_pay_platform_serial: str = ""
+    wechat_pay_platform_key_path: str = ""
+    wechat_pay_api_v3_key: str = ""
+    wechat_pay_notify_origin: str = ""
+    wechat_pay_ios_enabled: bool = False
+    wechat_pay_auto_reconcile: bool = False
+    wechat_subscribe_template_id: str = ""
+    wechat_subscribe_title_field: str = ""
+    wechat_subscribe_body_field: str = ""
+    wechat_subscribe_time_field: str = ""
 
     # 后台管理
     admin_username: str = ""  # 种子管理员用户名（可选；设置后启动时自动创建/对齐）

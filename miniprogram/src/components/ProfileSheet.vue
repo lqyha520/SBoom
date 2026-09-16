@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { errorMessage } from '../services/api'
-import { saveProfile, session } from '../services/session'
+import { saveAvatar, saveProfile, session } from '../services/session'
 import { useTabBarOverlay } from '../services/tabbar-overlay'
-import { avatarChoice, profileAvatar, AVATAR_CHOICES } from '../presentation'
+import { prepareProfilePhoto, type ProfilePhoto } from '../services/profile-photo'
+import { DEFAULT_AVATAR_CHOICES } from '../presentation'
+import { nicknameError as validateNickname } from '../../../shared/mini-profile'
+import ProfileAvatar from './ProfileAvatar.vue'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: []; saved: [] }>()
 const nickname = ref('')
 const avatar = ref('')
+const photo = ref<ProfilePhoto | null>(null)
 const busy = ref(false)
+const processing = ref(false)
 const error = ref('')
 let revision = 0
 useTabBarOverlay(() => props.open)
@@ -21,31 +26,58 @@ let nicknameType: 'text' | 'nickname' = 'text'
 nicknameType = 'nickname'
 // #endif
 
-const look = computed(() => profileAvatar(session.user))
-// 没选头像时的「默认形象」预览：首字 + 由账号 id 派生的配色
-const fallback = computed(() => profileAvatar({ id: session.user?.id || '', username: session.user?.username || '', avatar: '' }))
-const chosen = computed(() => avatarChoice(avatar.value))
-const shown = computed(() => chosen.value || fallback.value)
-const nicknameError = computed(() => {
-  const value = nickname.value.trim()
-  if (!value) return '昵称不能为空'
-  if (value.length < 2 || value.length > 32) return '昵称需为 2-32 位'
-  if (!/^[\w\u4e00-\u9fa5-]{2,32}$/.test(value)) return '昵称只能用中文、字母、数字、下划线或短横线'
-  return ''
-})
+const previewUser = computed(() => session.user ? {
+  ...session.user, nickname: nickname.value, avatar: avatar.value,
+  avatar_url: avatar.value === session.user.avatar ? session.user.avatar_url : null,
+} : null)
+const nicknameError = computed(() => validateNickname(nickname.value))
 const dirty = computed(() => !!session.user &&
-  (nickname.value.trim() !== session.user.username || avatar.value !== (session.user.avatar || '')))
+  (nickname.value.trim() !== (session.user.nickname || session.user.username) || avatar.value !== (session.user.avatar || '') || !!photo.value))
 const canSave = computed(() => !busy.value && dirty.value && !nicknameError.value)
 
 watch(() => props.open, value => {
   revision++
   error.value = ''
   busy.value = false
+  processing.value = false
+  photo.value = null
   if (value) {
-    nickname.value = session.user?.username || ''
+    nickname.value = session.user?.nickname || session.user?.username || ''
     avatar.value = session.user?.avatar || ''
   }
 })
+
+function editNickname(event: Event | { detail: { value: string } }) {
+  const value = 'detail' in event && typeof event.detail === 'object'
+    ? event.detail.value : (('target' in event ? event.target : null) as HTMLInputElement | null)?.value
+  if (typeof value === 'string') { nickname.value = value; error.value = '' }
+}
+function choosePreset(key: string) {
+  if (busy.value) return
+  avatar.value = key; photo.value = null; error.value = ''
+}
+async function selectPhoto(path: string) {
+  if (!props.open || busy.value || !path) return
+  const current = ++revision
+  busy.value = true; processing.value = true; error.value = ''
+  try {
+    const selected = await prepareProfilePhoto(path)
+    if (current === revision) photo.value = selected
+  } catch (cause) { if (current === revision) error.value = errorMessage(cause) }
+  finally { if (current === revision) { busy.value = false; processing.value = false } }
+}
+function chooseWechatAvatar(event: { detail: { avatarUrl?: string } }) {
+  if (event.detail.avatarUrl) void selectPhoto(event.detail.avatarUrl)
+  else error.value = '未能获取头像，请重新选择'
+}
+function choosePhoto() {
+  if (busy.value) return
+  uni.chooseImage({
+    count: 1, sizeType: ['compressed'], sourceType: ['album'],
+    success: result => { if (result.tempFilePaths[0]) void selectPhoto(result.tempFilePaths[0]) },
+    fail: cause => { if (!cause.errMsg?.includes('cancel')) error.value = '图片选择失败，请重试' },
+  })
+}
 
 async function save() {
   if (busy.value || !canSave.value || !session.user) return
@@ -55,10 +87,13 @@ async function save() {
   try {
     const name = nickname.value.trim()
     // 只提交真正改过的字段，免得白写一次库、白涨一次 revision
-    const payload: { username?: string; avatar?: string } = {}
-    if (name !== session.user.username) payload.username = name
-    if (avatar.value !== (session.user.avatar || '')) payload.avatar = avatar.value
-    await saveProfile(payload)
+    const payload: { nickname?: string; avatar?: string } = {}
+    if (name !== (session.user.nickname || session.user.username)) payload.nickname = name
+    if (photo.value) await saveAvatar({ image: photo.value.image, ...(payload.nickname !== undefined ? { nickname: payload.nickname } : {}) })
+    else {
+      if (avatar.value !== (session.user.avatar || '')) payload.avatar = avatar.value
+      await saveProfile(payload)
+    }
     if (current !== revision) return
     emit('saved')
   } catch (cause) { if (current === revision) error.value = errorMessage(cause) }
@@ -67,52 +102,66 @@ async function save() {
 </script>
 
 <template>
-  <wd-popup :model-value="open" position="bottom" :z-index="1250" :close-on-click-modal="!busy" root-portal safe-area-inset-bottom custom-style="border-radius:8px 8px 0 0" @update:model-value="!$event && emit('close')">
+  <wd-popup :model-value="open" position="bottom" :z-index="1250" :close-on-click-modal="!busy" root-portal safe-area-inset-bottom custom-style="border-radius:24px 24px 0 0" @update:model-value="!$event && emit('close')">
     <view class="sheet profile-sheet" role="dialog" aria-modal="true" aria-label="编辑资料">
       <view class="sheet-handle" />
-      <view class="sheet-head"><text class="sheet-title">编辑资料</text><button class="bare-icon" role="button" aria-label="关闭编辑资料" :disabled="busy" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
+      <view class="sheet-head"><view><text class="sheet-title">编辑资料</text><text class="profile-intro">换个喜欢的头像，认识一下新的自己</text></view><button class="bare-icon" role="button" aria-label="关闭编辑资料" :disabled="busy" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
       <view class="profile-preview">
-        <view class="preview-avatar" :style="{ background: shown.background, color: shown.color }">
-          <text v-if="chosen" class="preview-glyph">{{ chosen.glyph }}</text>
-          <text v-else class="preview-initial">{{ fallback.initial || '学' }}</text>
-        </view>
-        <text class="preview-name">{{ nickname.trim() || look.initial || '我的昵称' }}</text>
+        <view class="preview-avatar"><ProfileAvatar :user="previewUser" :preview-src="photo?.path" /></view>
+        <text class="preview-name">{{ processing ? '正在处理图片…' : nickname.trim() || '我的昵称' }}</text>
       </view>
-      <text class="field-label">选择头像</text>
-      <view class="avatar-grid" role="radiogroup" aria-label="选择头像">
-        <button v-for="choice in AVATAR_CHOICES" :key="choice.key" class="avatar-option" :class="{ selected: avatar === choice.key }" role="radio" :aria-checked="avatar === choice.key" :aria-label="choice.label" :disabled="busy" @click="avatar = choice.key; error = ''">
-          <text class="avatar-glyph" :style="{ background: choice.background, color: choice.color }">{{ choice.glyph }}</text>
-          <wd-icon v-if="avatar === choice.key" name="check-circle-fill" size="15px" class="avatar-tick" />
+      <view class="avatar-actions">
+        <!-- #ifdef MP-WEIXIN -->
+        <button class="choose-avatar" role="button" aria-label="使用微信头像" open-type="chooseAvatar" :disabled="busy" @chooseavatar="chooseWechatAvatar"><wd-icon name="camera" size="18px" /><text>使用微信头像</text></button>
+        <!-- #endif -->
+        <!-- #ifdef H5 -->
+        <button class="choose-avatar" role="button" aria-label="选择头像图片" :disabled="busy" @click="choosePhoto"><wd-icon name="camera" size="18px" /><text>选择头像图片</text></button>
+        <!-- #endif -->
+      </view>
+      <view class="avatar-label"><text class="field-label">默认头像</text><text>选一个你喜欢的</text></view>
+      <view class="preset-grid" role="radiogroup" aria-label="选择默认头像">
+        <button v-for="choice in DEFAULT_AVATAR_CHOICES" :key="choice.key" class="preset-option" :class="{ selected: !photo && avatar === choice.key }" role="radio" :aria-label="choice.label" :aria-checked="!photo && avatar === choice.key" :disabled="busy" @click="choosePreset(choice.key)">
+          <view class="preset-picture" :style="{ background: choice.background }"><image :src="choice.image" mode="aspectFill" /><view v-if="!photo && avatar === choice.key" class="preset-check"><wd-icon name="check" size="11px" /></view></view>
+          <text>{{ choice.label }}</text>
         </button>
       </view>
-      <button v-if="session.user?.avatar" class="text-link reset-avatar" role="button" :disabled="busy" @click="avatar = ''; error = ''">恢复默认形象</button>
-      <text class="field-label">昵称</text>
-      <wd-input v-model="nickname" :type="nicknameType" :maxlength="32" :show-word-limit="true" clearable prefix-icon="user" custom-class="field-input" placeholder="请输入昵称" aria-label="昵称" :disabled="busy" @input="error = ''" />
+      <view class="nickname-label"><text class="field-label">昵称</text><text>{{ Array.from(nickname.trim()).length }}/32</text></view>
+      <view class="nickname-field"><wd-icon name="user" size="18px" /><input :value="nickname" :type="nicknameType" :maxlength="64" placeholder="请输入昵称" aria-label="昵称" :disabled="busy" @input="editNickname" @blur="editNickname" /></view>
       <text v-if="nickname && nicknameError" class="field-hint error-text">{{ nicknameError }}</text>
-      <text v-else class="field-hint">2-32 位，支持中文、字母、数字、下划线；昵称会显示在「我的」页面，也是账号密码登录时用的账号名。</text>
+      <text v-else class="field-hint">支持中文和表情，简短一点更好记。</text>
+      <!-- #ifdef MP-WEIXIN -->
+      <text class="field-hint">点击输入框可使用微信昵称，头像和昵称会在保存后更新。</text>
+      <!-- #endif -->
+      <!-- #ifdef H5 -->
+      <text class="field-hint">支持 JPG、PNG、WebP，图片会自动压缩。</text>
+      <!-- #endif -->
       <view v-if="error" class="error-strip" role="alert">{{ error }}</view>
-      <view class="sheet-actions"><wd-button role="button" block :loading="busy" :disabled="!canSave" @click="save">保存</wd-button></view>
+      <view class="sheet-actions"><wd-button role="button" block :loading="busy" :disabled="!canSave" @click="save">{{ processing ? '正在处理图片' : '保存资料' }}</wd-button></view>
     </view>
   </wd-popup>
 </template>
 
 <style scoped>
-.profile-sheet { max-height: 88vh; overflow-y: auto; }
-.profile-preview { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 6px 0 4px; }
-.preview-avatar { display: flex; align-items: center; justify-content: center; width: 76px; height: 76px; border: 2px solid #ffffff; border-radius: 50%; box-shadow: 0 8px 18px #23392d14; }
-.preview-glyph { font-size: 40px; line-height: 1; }
-.preview-initial { font-size: 30px; font-weight: 650; line-height: 1; }
-.preview-name { font-size: 15px; font-weight: 600; color: var(--lc-text); overflow-wrap: anywhere; }
-.avatar-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-.avatar-option { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; min-height: 66px; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; line-height: 1.5; }
-.avatar-option::after { border: 0; }
-.avatar-glyph { display: flex; align-items: center; justify-content: center; width: 54px; height: 54px; border: 2px solid transparent; border-radius: 50%; font-size: 27px; line-height: 1; }
-.avatar-option.selected .avatar-glyph { border-color: var(--lc-primary); box-shadow: 0 4px 12px #307e611f; }
-.avatar-option:active .avatar-glyph { transform: scale(.94); }
-.avatar-tick { position: absolute; right: 12px; bottom: 4px; color: var(--lc-primary); background: #fff; border-radius: 50%; }
-.reset-avatar { display: flex; align-items: center; justify-content: center; margin: 6px auto 0; }
-.field-input :deep(.wd-input) { background: var(--lc-background); border-radius: 8px; --wot-input-padding: 14px; --wot-input-inner-height: 24px; --wot-input-bg: transparent; }
-.field-hint { display: block; margin-top: 8px; color: var(--lc-muted); font-size: 11px; line-height: 1.7; }
-.field-hint.error-text { color: #a34040; }
-@media (max-width: 359px) { .avatar-grid { gap: 8px; } .avatar-glyph { width: 48px; height: 48px; font-size: 24px; } }
+.profile-sheet { max-height:90vh;overflow-y:auto; }
+.profile-intro { display:block;margin-top:4px;color:var(--lc-muted);font-size:12px; }
+.profile-preview { display:flex;flex-direction:column;align-items:center;gap:8px;padding:4px 0; }
+.preview-avatar { width:78px;height:78px;overflow:hidden;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 1px var(--lc-card-line),0 8px 18px #23392d14;font-size:32px; }
+.preview-name { font-size:15px;font-weight:600;color:var(--lc-text);overflow-wrap:anywhere; }
+.avatar-actions { display:flex;align-items:center;justify-content:center;margin:10px 0 20px; }
+.choose-avatar { display:flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:8px 18px;margin:0;border-radius:999px;color:var(--lc-primary);background:var(--lc-primary-soft);font-size:13px;line-height:1.5; }
+.choose-avatar::after { border:0; }
+.avatar-label,.nickname-label { display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px; }
+.avatar-label .field-label,.nickname-label .field-label { margin:0; }
+.avatar-label > text:last-child,.nickname-label > text:last-child { color:var(--lc-muted);font-size:11px; }
+.preset-grid { display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:24px; }
+.preset-option { display:flex;flex-direction:column;align-items:center;gap:7px;margin:0;padding:5px 0;background:transparent;color:var(--lc-secondary);font-size:11px;line-height:1.4; }
+.preset-picture { position:relative;width:48px;height:48px;border:2px solid transparent;border-radius:50%; }
+.preset-picture image { width:100%;height:100%;border-radius:50%; }
+.preset-option.selected { color:var(--lc-primary);font-weight:600; }.preset-option.selected .preset-picture { border-color:var(--lc-primary);box-shadow:0 0 0 3px var(--lc-primary-soft); }
+.preset-check { position:absolute;right:-3px;bottom:-2px;display:flex;align-items:center;justify-content:center;width:17px;height:17px;border:2px solid #fff;border-radius:50%;color:#fff;background:var(--lc-primary); }
+.nickname-field { display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--lc-card-line);border-radius:12px;color:var(--lc-muted);background:var(--lc-background); }
+.nickname-field:focus-within { border-color:var(--lc-primary); }
+.nickname-field input { flex:1;min-width:0;height:26px;font-size:15px;color:var(--lc-text); }
+.field-hint { display:block;margin-top:8px;color:var(--lc-muted);font-size:11px;line-height:1.7; }
+.field-hint.error-text { color:#a34040; }
 </style>

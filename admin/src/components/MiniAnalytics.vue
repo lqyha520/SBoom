@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, ref } from 'vue'
+import UsageTrends from './UsageTrends.vue'
 import type { UserInfo } from '../api'
 import { siteAnalytics, type Analytics } from '../site'
 
@@ -97,6 +98,7 @@ onDeactivated(() => { sequence++; loading.value = false })
         </ul>
       </div>
     </template>
+    <UsageTrends />
   </section>
 </template>
 

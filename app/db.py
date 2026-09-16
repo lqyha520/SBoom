@@ -365,6 +365,9 @@ def _init_reliability_schema(conn) -> None:
 def init_db() -> None:
     from app.library_schema import init_library_schema
     from app.site_schema import init_site_schema
+    from app.experience_schema import init_experience_schema
+    from app.engagement_schema import init_engagement_schema
+    from app.commerce_schema import init_commerce_schema
 
     if _use_pg():
         # Multiple workers can start together; serialize additive DDL across them.
@@ -374,6 +377,9 @@ def init_db() -> None:
             _init_reliability_schema(conn)
             init_library_schema(conn)
             init_site_schema(conn)
+            init_experience_schema(conn)
+            init_engagement_schema(conn)
+            init_commerce_schema(conn)
         logger.info("PostgreSQL 数据库就绪")
         return
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -385,4 +391,7 @@ def init_db() -> None:
         _init_reliability_schema(conn)
         init_library_schema(conn)
         init_site_schema(conn)
+        init_experience_schema(conn)
+        init_engagement_schema(conn)
+        init_commerce_schema(conn)
     logger.info(f"用户数据库就绪: {DB_PATH}")

@@ -17,7 +17,8 @@ button::after, uni-button::after { border: 0 !important; }
   background-color: var(--lc-canvas);
   background-image: linear-gradient(180deg, var(--lc-canvas) 0%, var(--lc-canvas-mid) 340px, #f6faf7 100%);
 }
-.has-tabbar { padding-bottom: calc(108px + env(safe-area-inset-bottom)); }
+/* 50px navigation content + 20px clearance; the gesture inset replaces the minimum bottom padding. */
+.has-tabbar { --lc-tabbar-safe-bottom: env(safe-area-inset-bottom, 0px); padding-bottom: calc(70px + max(4px, var(--lc-tabbar-safe-bottom))); }
 .content-width { width: 100%; padding-left: 22px; padding-right: 22px; margin: 0 auto; }
 .page-shell { width: 100%; max-width: 720px; margin: 0 auto; padding: 24px 22px 36px; }
 /* 浮在底色上的白色卡片：列表、菜单、概览都靠它把层次拉出来 */

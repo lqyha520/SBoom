@@ -56,10 +56,11 @@ test('membership copy distinguishes ordinary, active, permanent and expired acco
 })
 
 test('subject, grade and category entry points clear unrelated filters', () => {
-  assert.deepEqual(catalogFilters({ subject: '英语' }), { q: '', grade: '', subject: '英语', category: '' })
-  assert.deepEqual(catalogFilters({ grade: '小学三年级' }), { q: '', grade: '小学三年级', subject: '', category: '' })
-  assert.deepEqual(catalogFilters({ category: '期末复习' }), { q: '', grade: '', subject: '', category: '期末复习' })
-  assert.deepEqual(catalogFilters(), { q: '', grade: '', subject: '', category: '' })
+  assert.deepEqual(catalogFilters({ subject: '英语' }), { q: '', grade: '', subject: '英语', category: '', topic: '' })
+  assert.deepEqual(catalogFilters({ grade: '小学三年级' }), { q: '', grade: '小学三年级', subject: '', category: '', topic: '' })
+  assert.deepEqual(catalogFilters({ category: '期末复习' }), { q: '', grade: '', subject: '', category: '期末复习', topic: '' })
+  assert.deepEqual(catalogFilters(), { q: '', grade: '', subject: '', category: '', topic: '' })
+  assert.deepEqual(catalogFilters({ topic: 'revision-week' }), { q: '', grade: '', subject: '', category: '', topic: 'revision-week' })
 })
 
 test('home search trims input and stays within the API query limit', () => {

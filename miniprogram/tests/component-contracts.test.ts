@@ -41,7 +41,7 @@ test('Wot v2 empty states keep their actions in supported named slots', () => {
 test('consumer routes and UI do not expose workbench accounts or private spaces', () => {
   const root = new URL('../src/', import.meta.url)
   const pages = JSON.parse(readFileSync(new URL('pages.json', root), 'utf8'))
-  assert.equal(pages.pages.length, 8)
+  for (const path of ['topic', 'messages', 'requests', 'closure', 'membership', 'orders']) assert.ok(pages.pages.some((page: { path: string }) => page.path === `pages/${path}/index`), path)
   assert.ok(!pages.pages.some((page: { path: string }) => /pages\/(private|folders)\//.test(page.path)))
   for (const file of ['pages/account/index.vue', 'pages/login/index.vue', 'pages/paper/index.vue', 'services/api.ts', 'services/session.ts']) {
     const source = readFileSync(new URL(file, root), 'utf8')
@@ -53,7 +53,7 @@ test('detail content and downloads are gated by server-provided permissions', ()
   const source = readFileSync(new URL('../src/pages/paper/index.vue', import.meta.url), 'utf8')
   assert.ok(source.includes('v-if="!paper.can_view"'))
   assert.ok(source.includes('if (!paper.value.can_download)'))
-  assert.ok(source.includes('await requestCatalogDownload(id.value)'))
+  assert.ok(source.includes('await requestCatalogDownload(id.value, edition.value)'))
   assert.ok(!source.includes('fetchPaper('))
 })
 

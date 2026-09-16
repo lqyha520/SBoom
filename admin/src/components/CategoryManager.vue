@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onActivated, onDeactivated, ref } from 'vue'
+import { computed, onActivated, onDeactivated, ref } from 'vue'
 import type { UserInfo } from '../api'
 import { createCategory, deleteCategory, reorderCategories, siteCategories, updateCategory, type Category } from '../site'
 
@@ -19,7 +19,7 @@ let sequence = 0
 
 // 取值必须是 wot-design-uni 图标名（小程序端用 wd-icon 渲染），改这里前先确认图标字体里有该名字
 const iconOptions = [
-  { label: '无图标', value: '' },
+  { label: '无图标', value: 'none' },
   { label: 'book · 书本', value: 'book' },
   { label: 'formula · 公式', value: 'formula' },
   { label: 'translate · 翻译', value: 'translate' },
@@ -41,6 +41,10 @@ const iconOptions = [
   { label: 'archive · 归档', value: 'archive' },
 ]
 const form = ref({ name: '', description: '', icon: '', sort_order: 0, is_visible: true })
+const selectedIcon = computed({
+  get: () => form.value.icon || 'none',
+  set: (value: string) => { form.value.icon = value === 'none' ? '' : value },
+})
 const message = (cause: unknown) => (cause instanceof Error ? cause.message : '操作失败，请重试')
 
 async function load() {
@@ -141,14 +145,14 @@ onDeactivated(() => { sequence++; loading.value = false; dialog.value = false; r
         <td><UBadge :color="item.is_visible ? 'success' : 'neutral'" variant="soft">{{ item.is_visible ? '展示中' : '已隐藏' }}</UBadge></td>
         <td><div class="row-actions"><UTooltip text="编辑分类"><UButton icon="i-lucide-pencil" color="neutral" variant="ghost" :aria-label="'编辑 ' + item.name" @click="edit(item)" /></UTooltip><UTooltip :text="item.is_visible ? '隐藏' : '展示'"><UButton :icon="item.is_visible ? 'i-lucide-eye-off' : 'i-lucide-eye'" color="neutral" variant="ghost" :aria-label="(item.is_visible ? '隐藏 ' : '展示 ') + item.name" @click="toggleVisible(item)" /></UTooltip><UTooltip text="删除分类"><UButton icon="i-lucide-trash-2" color="error" variant="ghost" :aria-label="'删除 ' + item.name" @click="askRemove(item)" /></UTooltip></div></td>
       </tr>
-      <tr v-if="!items.length"><td colspan="7"><div class="empty-state"><UIcon :name="loading ? 'i-lucide-loader-circle' : 'i-lucide-folder-tree'" class="size-7" :class="{ 'animate-spin': loading }" /><h3>{{ loading ? '正在加载' : '还没有分类' }}</h3><p v-if="!loading">先在「公共习题」里发布习题时选择分类，历史分类会自动收编到这里。</p></div></td></tr>
+      <tr v-if="!items.length"><td colspan="7"><div class="empty-state"><UIcon :name="loading ? 'i-lucide-loader-circle' : 'i-lucide-folder-tree'" class="size-7" :class="{ 'animate-spin': loading }" /><h3>{{ loading ? '正在加载' : '还没有分类' }}</h3><p v-if="!loading">点击「新建分类」创建分类，再到「公共习题」分配资料。历史分类会在服务启动时自动收编。</p></div></td></tr>
     </tbody></table></div>
     <div class="table-footer"><span>共 {{ items.length }} 个分类</span></div>
 
     <UModal v-model:open="dialog" :title="target ? '编辑分类' : '新建分类'" :dismissible="!busy" :close="!busy"><template #body><form id="category-form" class="field-stack" @submit.prevent="save">
       <UFormField label="分类名" required hint="展示在小程序筛选器与首页专题入口"><UInput v-model="form.name" maxlength="60" :disabled="busy" required class="w-full" /></UFormField>
       <UFormField label="一句话简介" hint="显示在首页专题卡片的副标题"><UInput v-model="form.description" maxlength="300" :disabled="busy" class="w-full" /></UFormField>
-      <UFormField label="图标"><USelect v-model="form.icon" :items="iconOptions" :disabled="busy" class="w-full" /></UFormField>
+      <UFormField label="图标"><USelect v-model="selectedIcon" :items="iconOptions" :disabled="busy" class="w-full" /></UFormField>
       <UFormField label="展示顺序" hint="数值小的排前面，也可以用列表里的上下箭头调整"><UInput v-model.number="form.sort_order" type="number" min="0" :disabled="busy" class="w-full" /></UFormField>
       <USwitch v-model="form.is_visible" label="在小程序展示" :disabled="busy" />
       <UAlert v-if="formError" :title="formError" color="error" variant="soft" />

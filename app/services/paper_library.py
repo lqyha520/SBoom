@@ -182,6 +182,10 @@ def delete_paper(user_id: int, paper_id: str):
         _owned(conn, user_id, paper_id)
         if conn.execute("SELECT id FROM catalog_papers WHERE paper_id = ?", (paper_id,)).fetchone():
             raise HTTPException(409, detail={"error": "试卷已加入公共库，请先在管理后台删除对应条目"})
+        if conn.execute("SELECT id FROM catalog_versions WHERE paper_id = ?", (paper_id,)).fetchone():
+            raise HTTPException(409, detail={"error": "此原稿属于公共资料的修订历史，请先处理公共条目"})
+        if conn.execute("SELECT 1 FROM catalog_edition_history WHERE paper_id = ?", (paper_id,)).fetchone():
+            raise HTTPException(409, detail={"error": "此原稿属于公共资料的打印版本，请先处理公共条目"})
         assets = conn.execute("SELECT storage, storage_key FROM paper_assets WHERE paper_id = ?", (paper_id,)).fetchall()
         conn.execute("DELETE FROM paper_archives WHERE id = ? AND user_id = ?", (paper_id, user_id))
     _cleanup([(row["storage"], row["storage_key"]) for row in assets])

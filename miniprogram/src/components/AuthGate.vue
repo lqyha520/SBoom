@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { session } from '../services/session'
-function login() { uni.navigateTo({ url: '/pages/login/index' }) }
+import { requireLogin, session } from '../services/session'
+function login() { requireLogin() }
 </script>
 
 <template>

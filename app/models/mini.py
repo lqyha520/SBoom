@@ -5,8 +5,25 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-#: 可选昵称格式：字母、数字、下划线或中文，2-32 位（与注册保持一致，避免同一账号两套规则）。
+#: 登录账号保持固定格式；展示昵称单独接受微信昵称（含空格和表情）。
 USERNAME_PATTERN = re.compile(r"[\w\u4e00-\u9fa5-]{2,32}")
+NEW_USERNAME_PATTERN = re.compile(r"[A-Za-z0-9_-]{2,32}")
+NICKNAME_CONTROLS = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
+MAX_AVATAR_BYTES = 2 * 1024 * 1024
+MAX_AVATAR_BASE64 = 4 * ((MAX_AVATAR_BYTES + 2) // 3)
+
+
+def normalize_nickname(value):
+    if not isinstance(value, str):
+        return value
+    if NICKNAME_CONTROLS.search(value):
+        raise ValueError("昵称不能包含换行或控制字符")
+    value = value.strip()
+    if not value:
+        raise ValueError("昵称不能为空")
+    if len(value) > 32:
+        raise ValueError("昵称需为 1-32 个字符")
+    return value
 
 
 def _check_username(value, label):
@@ -33,17 +50,29 @@ class MiniCredentials(BaseModel):
         return _check_username(value, "用户名")
 
 
-class MiniProfileUpdate(BaseModel):
-    """用户自助改资料：只更新传上来的字段，至少传一个。"""
-
-    model_config = ConfigDict(extra="forbid")
-    username: str | None = Field(None, min_length=2, max_length=32)
-    avatar: str | None = Field(None, max_length=32)
+class MiniRegistration(MiniCredentials):
+    """New login identifiers are ASCII; existing Chinese accounts can still log in."""
 
     @field_validator("username")
     @classmethod
     def username_format(cls, value):
-        return value if value is None else _check_username(value, "昵称")
+        if not NEW_USERNAME_PATTERN.fullmatch(value):
+            raise ValueError("账号需为 2-32 位英文字母、数字、下划线或短横线，不能使用中文")
+        return value
+
+
+class MiniProfileUpdate(BaseModel):
+    """用户自助改资料：只更新传上来的字段，至少传一个。"""
+
+    model_config = ConfigDict(extra="forbid")
+    username: str | None = Field(None, min_length=1, max_length=32)
+    nickname: str | None = Field(None, min_length=1, max_length=32)
+    avatar: str | None = Field(None, max_length=32)
+
+    @field_validator("username", "nickname", mode="before")
+    @classmethod
+    def username_format(cls, value):
+        return normalize_nickname(value)
 
     @field_validator("avatar")
     @classmethod
@@ -55,7 +84,7 @@ class MiniProfileUpdate(BaseModel):
 
     @model_validator(mode="after")
     def has_something_to_update(self):
-        if self.username is None and self.avatar is None:
+        if self.username is None and self.nickname is None and self.avatar is None:
             raise ValueError("没有需要更新的内容")
         return self
 
@@ -68,6 +97,19 @@ class MiniPasswordUpdate(BaseModel):
     new_password: str = Field(min_length=6, max_length=128)
 
 
+class MiniAvatarUpdate(BaseModel):
+    """The selected image and optional nickname are saved in one transaction."""
+
+    model_config = ConfigDict(extra="forbid")
+    image: str = Field(min_length=1, max_length=MAX_AVATAR_BASE64)
+    nickname: str | None = Field(None, min_length=1, max_length=32)
+
+    @field_validator("nickname", mode="before")
+    @classmethod
+    def nickname_format(cls, value):
+        return normalize_nickname(value)
+
+
 class AdminProfileUpdate(BaseModel):
     """管理员改小程序用户资料：昵称 / 头像 / 重置密码，至少传一个。
 
@@ -77,14 +119,15 @@ class AdminProfileUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     revision: int = Field(ge=1)
-    username: str | None = Field(None, min_length=2, max_length=32)
+    username: str | None = Field(None, min_length=1, max_length=32)
+    nickname: str | None = Field(None, min_length=1, max_length=32)
     avatar: str | None = Field(None, max_length=32)
     new_password: str | None = Field(None, min_length=6, max_length=128)
 
-    @field_validator("username")
+    @field_validator("username", "nickname", mode="before")
     @classmethod
     def username_format(cls, value):
-        return value if value is None else _check_username(value, "昵称")
+        return normalize_nickname(value)
 
     @field_validator("avatar")
     @classmethod
@@ -95,7 +138,7 @@ class AdminProfileUpdate(BaseModel):
 
     @model_validator(mode="after")
     def has_something_to_update(self):
-        if self.username is None and self.avatar is None and self.new_password is None:
+        if self.username is None and self.nickname is None and self.avatar is None and self.new_password is None:
             raise ValueError("没有需要更新的内容")
         return self
 

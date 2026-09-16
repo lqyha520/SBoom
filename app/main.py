@@ -18,6 +18,9 @@ from app.routers.library import router as library_router
 from app.routers.mini import router as mini_router
 from app.routers.catalog import router as catalog_router, admin_router as catalog_admin_router
 from app.routers.site import router as site_router, admin_router as site_admin_router
+from app.routers.experience import router as experience_router
+from app.routers.engagement import router as engagement_router
+from app.routers.commerce import router as commerce_router
 from app.services.llm_client import llm_client
 from app.services import user_store
 from app.config import get_settings, APP_VERSION
@@ -55,7 +58,14 @@ async def lifespan(app: FastAPI):
     seed_llm_from_user_configs()
     logger.info("🚀 Learning Coach API 启动（多用户模式）")
     logger.info(f"   LLM 模型（全局兜底）: {settings.llm_model}")
-    yield
+    from app.services.mini_jobs import start
+    maintenance_stop, maintenance_task = start()
+    try:
+        yield
+    finally:
+        maintenance_stop.set()
+        if maintenance_task:
+            await maintenance_task
     logger.info("🛑 应用关闭，清理资源...")
     await llm_client.close()
     close_pg_pool()
@@ -104,6 +114,9 @@ app.include_router(catalog_router)
 app.include_router(catalog_admin_router)
 app.include_router(site_router)
 app.include_router(site_admin_router)
+app.include_router(experience_router)
+app.include_router(engagement_router)
+app.include_router(commerce_router)
 app.include_router(generate_router)
 app.include_router(admin_router)
 

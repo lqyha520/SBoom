@@ -164,7 +164,7 @@ class UiContracts(unittest.TestCase):
         admin_path = f"/api/v1/admin/catalog/papers/{publication_id}"
         update = {"revision": 1, "title": "Public HTTP contract", "category": "Contract", "status": "published", "confirm_publication": True}
         self.assertEqual(self.reader.get(path).status_code, 404)
-        self.assertEqual(self.user.get(path).status_code, 401)  # 工作台 cookie 进不了读者接口：两个账号域互不相通
+        self.assertEqual(self.user.get(path).status_code, 404)  # 工作台 cookie 按游客处理，不能读取未发布资料。
         self.assertEqual(self.admin.put(admin_path, json=update).status_code, 409)
 
         image, files = io.BytesIO(), io.BytesIO()
@@ -176,6 +176,11 @@ class UiContracts(unittest.TestCase):
                        headers={"Content-Type": "application/zip"}).raise_for_status()
         published = self.admin.put(admin_path, json=update)
         published.raise_for_status()
+        guest_detail = self.user.get(path)
+        self.assertEqual(guest_detail.status_code, 200)
+        self.assertTrue(guest_detail.json()["can_view"])
+        self.assertFalse(guest_detail.json()["can_download"])
+        self.assertEqual(self.user.post(path + "/download").status_code, 401)
         detail = self.reader.get(path)
         detail.raise_for_status()
         self.assertNotIn("private-source-metadata", detail.text)

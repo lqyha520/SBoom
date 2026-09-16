@@ -1,0 +1,64 @@
+# learn-coach 生产部署编排（在服务器上执行）
+#
+# 前置：把整个仓库 clone 到服务器，进入本目录：
+#   cd learn-coach/deploy
+#   cp .env.production.example .env.production   # 填好再继续
+#   docker compose up -d --build
+#   docker compose logs -f app                   # 看到 Uvicorn running 即成功
+#
+# 首次启动会自动建表（幂等迁移）。默认用 Caddy 自动签 HTTPS 证书；
+# 数据库只在 compose 内网监听，不对外暴露端口。
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-learncoach}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-learncoach}
+      POSTGRES_DB: ${POSTGRES_DB:-learncoach}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-learncoach} -d $${POSTGRES_DB:-learncoach}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      # 容器内固定项：监听全部网卡、连 compose 网络里的 db、开多 worker（Linux 支持）
+      HOST: 0.0.0.0
+      PORT: "8000"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-learncoach}:${POSTGRES_PASSWORD:-learncoach}@db:5432/${POSTGRES_DB:-learncoach}
+    volumes:
+      - appdata:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  pgdata:
+  appdata:
+  caddy_data:
+  caddy_config:

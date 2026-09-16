@@ -4,10 +4,11 @@
 DDL（不使用方言专有类型），由 app.db 负责占位符与时间函数翻译。
 """
 
+import hashlib
 import time
 import uuid
 
-from app.site_defaults import DEFAULT_DOCUMENTS, DEFAULT_GRADES, DEFAULT_SUBJECTS
+from app.site_defaults import DEFAULT_DOCUMENTS, DEFAULT_GRADES, DEFAULT_SUBJECTS, PREVIOUS_DOCUMENT_HASHES
 
 SITE_TABLES = """
 CREATE TABLE IF NOT EXISTS site_categories (
@@ -34,6 +35,7 @@ CREATE TABLE IF NOT EXISTS site_banners (
     image_storage TEXT NOT NULL DEFAULT '',
     image_mime   TEXT NOT NULL DEFAULT '',
     image_bytes  BIGINT NOT NULL DEFAULT 0,
+    image_fit    TEXT NOT NULL DEFAULT 'contain',
     sort_order   INTEGER NOT NULL DEFAULT 0,
     is_visible   INTEGER NOT NULL DEFAULT 1,
     revision     INTEGER NOT NULL DEFAULT 1,
@@ -117,6 +119,10 @@ def _seed_documents(conn, now: int) -> None:
             "ON CONFLICT(key) DO NOTHING",
             (key, doc["title"], doc["body"], now),
         )
+        row = conn.execute("SELECT title, body, revision FROM site_documents WHERE key = ?", (key,)).fetchone()
+        if row["revision"] == 1 and row["title"] == doc["title"] and hashlib.sha256(row["body"].encode()).hexdigest() == PREVIOUS_DOCUMENT_HASHES.get(key):
+            conn.execute("UPDATE site_documents SET body = ?, revision = revision + 1, updated_at = ? WHERE key = ? AND revision = 1",
+                         (doc["body"], now, key))
 
 
 def _backfill_categories(conn, now: int) -> int:
@@ -145,6 +151,8 @@ def _backfill_categories(conn, now: int) -> int:
 def init_site_schema(conn) -> None:
     now = int(time.time())
     conn.executescript(SITE_TABLES)
+    if "image_fit" not in _columns(conn, "site_banners"):
+        conn.execute("ALTER TABLE site_banners ADD COLUMN image_fit TEXT NOT NULL DEFAULT 'contain'")
     _add_category_column(conn)
     _seed_dictionary(conn, now)
     _seed_documents(conn, now)

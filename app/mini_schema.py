@@ -43,6 +43,12 @@ def init_mini_schema(conn):
             expires_at BIGINT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_mini_user_sessions ON mini_user_sessions(user_id);
+        CREATE TABLE IF NOT EXISTS mini_user_avatars (
+            user_id TEXT PRIMARY KEY REFERENCES mini_users(id) ON DELETE CASCADE,
+            version TEXT NOT NULL,
+            content_base64 TEXT NOT NULL,
+            updated_at BIGINT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS mini_catalog_favorites (
             user_id TEXT NOT NULL REFERENCES mini_users(id) ON DELETE CASCADE,
             catalog_id TEXT NOT NULL REFERENCES catalog_papers(id) ON DELETE CASCADE,

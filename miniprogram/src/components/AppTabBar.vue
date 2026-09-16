@@ -1,18 +1,26 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { hideNativeTabBar, tabBarObscured } from '../services/tabbar-overlay'
+import { inboxState } from '../services/growth'
 
-const props = defineProps<{ current: 'home' | 'library' | 'favorites' | 'account' }>()
+type TabName = 'home' | 'library' | 'favorites' | 'account'
+const props = defineProps<{ current: TabName }>()
+const switching = ref(false)
 const tabs = [
   { name: 'home', label: '首页', icon: 'house' },
   { name: 'library', label: '习题库', icon: 'book-open' },
   { name: 'favorites', label: '收藏', icon: 'heart' },
   { name: 'account', label: '我的', icon: 'user-round' },
-]
-function change(event: { value: string | number }) {
-  const tab = tabs.find(item => item.name === event.value)
-  if (tab && tab.name !== props.current) uni.switchTab({ url: '/pages/' + tab.name + '/index' })
+] as const
+function change(name: TabName) {
+  if (name === props.current || switching.value) return
+  switching.value = true
+  uni.switchTab({
+    url: '/pages/' + name + '/index',
+    fail: () => uni.showToast({ title: '页面打开失败，请重试', icon: 'none' }),
+    complete: () => { switching.value = false },
+  })
 }
 onMounted(hideNativeTabBar)
 onShow(hideNativeTabBar)
@@ -20,17 +28,38 @@ onShow(hideNativeTabBar)
 
 <template>
   <view v-if="!tabBarObscured" class="app-tabbar" role="navigation" aria-label="主导航">
-    <wd-tabbar :model-value="current" shape="round" active-color="#307e61" inactive-color="#637168" custom-class="app-tabbar-inner" @change="change">
-      <wd-tabbar-item v-for="tab in tabs" :key="tab.name" :name="tab.name" :title="tab.label" role="button" :aria-label="tab.label" :aria-current="current === tab.name ? 'page' : undefined" :custom-class="current === tab.name ? 'app-tab-active' : ''"><template #icon><image class="tab-icon" :src="'/static/tabs/' + tab.icon + (current === tab.name ? '-active' : '') + '.png'" mode="aspectFit" aria-hidden="true" /></template></wd-tabbar-item>
-    </wd-tabbar>
+    <button
+      v-for="tab in tabs"
+      :key="tab.name"
+      class="app-tab-item"
+      :class="{ 'app-tab-active': current === tab.name }"
+      hover-class="app-tab-pressed"
+      :hover-start-time="0"
+      :hover-stay-time="80"
+      role="button"
+      :aria-label="tab.name === 'account' && inboxState.unread ? tab.label + '，' + inboxState.unread + ' 条未读消息' : tab.label"
+      :aria-current="current === tab.name ? 'page' : undefined"
+      @click="change(tab.name)"
+    >
+      <view class="tab-icon-wrap">
+        <image class="tab-icon" :src="'/static/tabs/' + tab.icon + (current === tab.name ? '-active' : '') + '.png'" mode="aspectFit" aria-hidden="true" />
+        <view v-if="tab.name === 'account' && inboxState.unread" class="tab-unread" aria-hidden="true" />
+      </view>
+      <text class="tab-label">{{ tab.label }}</text>
+    </button>
   </view>
 </template>
 
 <style scoped>
-.app-tabbar { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); z-index: 50; width: 100%; max-width: 520px; padding: 8px 18px calc(14px + env(safe-area-inset-bottom)); background: #ffffffed; }
-.app-tabbar :deep(.app-tabbar-inner) { --wot-tabbar-height: 60px; --wot-tabbar-round-margin-horizontal: 0; --wot-tabbar-round-shadow: 0 4px 20px #24352b08; border: 1px solid var(--lc-border); padding: 6px 7px; gap: 3px; }
-.app-tabbar :deep(.wd-tabbar-item) { border-radius: 999px; min-width: 0; min-height: 46px; }
-.app-tabbar :deep(.app-tab-active) { background: var(--lc-primary-soft); }
-.app-tabbar :deep(.wd-tabbar-item__body) { gap: 4px; }
-.tab-icon { display: block; width: 19px; height: 19px; }
+.app-tabbar, .app-tab-item, .tab-unread { box-sizing: border-box; }
+.app-tabbar { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); z-index: 50; display: flex; align-items: stretch; width: 100%; max-width: 520px; padding: 3px 12px max(4px, var(--lc-tabbar-safe-bottom, env(safe-area-inset-bottom, 0px))); border-top: 1px solid #e6ece6; background: #fff; box-shadow: 0 -4px 18px #24352b04; }
+.app-tab-item { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-width: 0; min-height: 46px; margin: 0; padding: 0; border: 0; border-radius: 12px; background: transparent; color: #6c7b72; font-size: 12px; font-weight: 400; line-height: 16px; }
+.tab-icon-wrap { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 48px; height: 28px; border-radius: 10px; transition: background-color .16s, transform .16s; }
+.tab-icon { display: block; width: 24px; height: 24px; }
+.tab-label { display: block; max-width: 100%; line-height: 16px; white-space: nowrap; }
+.app-tab-active { color: var(--lc-primary); font-weight: 600; }
+.app-tab-active .tab-icon-wrap { background: var(--lc-primary-soft); }
+.app-tab-item:active .tab-icon-wrap, .app-tab-pressed .tab-icon-wrap { transform: scale(.92); background: var(--lc-primary-soft); }
+.tab-unread { position: absolute; right: 6px; top: 1px; width: 8px; height: 8px; border: 2px solid #fff; border-radius: 50%; background: var(--lc-coral); }
+@media (hover: hover) { .app-tab-item:hover .tab-icon-wrap { background: var(--lc-primary-soft); } }
 </style>

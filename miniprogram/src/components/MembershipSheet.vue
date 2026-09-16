@@ -3,12 +3,20 @@ import { onBeforeUnmount, ref, watch } from 'vue'
 import { errorMessage } from '../services/api'
 import { refreshMembership, session } from '../services/session'
 import { useTabBarOverlay } from '../services/tabbar-overlay'
+import { fetchSupport, type SupportSettings } from '../services/experience'
+import { computed } from 'vue'
 import { membershipExpiry } from '../presentation'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: []; refreshed: [] }>()
 const busy = ref(false)
 const error = ref('')
+const contact = ref<SupportSettings | null>(null)
+const expiresSoon = computed(() => session.user?.is_vip && session.user.vip_expires_at && session.user.vip_expires_at - Date.now() / 1000 <= 7 * 86400)
+let contactSequence = 0
+watch(() => props.open, async value => { const current = ++contactSequence; if (!value) return; try { const result = await fetchSupport(); if (props.open && current === contactSequence) contact.value = result } catch { /* The service page also offers an authenticated inquiry form. */ } })
+function service() { emit('close'); uni.navigateTo({ url: '/pages/membership/index' }) }
+function contactService() { service() }
 let revision = 0
 useTabBarOverlay(() => props.open)
 watch(() => props.open, () => { revision++; error.value = ''; busy.value = false })
@@ -32,7 +40,7 @@ async function refresh() {
       <view class="sheet-head"><text class="sheet-title">会员状态</text><button class="bare-icon" role="button" aria-label="关闭会员状态" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
       <view class="membership-identity"><view class="membership-symbol"><wd-icon name="star-fill" size="25px" /></view><view class="grow"><text class="membership-name">{{ session.user?.is_vip ? 'VIP 会员' : '普通用户' }}</text><text class="membership-expiry">{{ membershipExpiry(session.user) }}</text></view></view>
       <view class="membership-perks"><view><wd-icon name="book" size="17px" /><text>VIP 专享习题</text></view><view><wd-icon name="file-pdf" size="17px" /><text>完整原稿与 PDF</text></view></view>
-      <text class="membership-contact">开通与续期请联系运营管理员</text>
+      <text v-if="expiresSoon" class="membership-contact">会员将在 7 天内到期，可提前查看续期套餐。</text><text v-if="contact" class="membership-contact">{{ contact.benefits }}</text><view class="membership-refresh"><wd-button role="button" block variant="plain" @click="service">会员套餐与卡密</wd-button><wd-button role="button" block variant="text" @click="contactService">查看联系方式</wd-button></view>
       <view v-if="error" class="error-strip">{{ error }}</view>
       <view class="membership-refresh"><wd-button block icon="refresh" role="button" :loading="busy" :disabled="busy || !session.user" @click="refresh">刷新会员状态</wd-button></view>
     </view>

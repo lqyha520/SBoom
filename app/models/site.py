@@ -32,6 +32,7 @@ class BannerInput(BaseModel):
     action_label: str = Field("", max_length=20)
     target_type: Literal["none", "keyword", "category", "subject", "paper"] = "none"
     target_value: str = Field("", max_length=64)
+    image_fit: Literal["contain", "cover"] = "contain"
     sort_order: int = Field(0, ge=0, le=100000)
     is_visible: bool = True
 

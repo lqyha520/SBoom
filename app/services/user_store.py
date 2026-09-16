@@ -142,6 +142,11 @@ def delete_user(user_id: int) -> bool:
         if conn.execute("SELECT c.id FROM catalog_papers c JOIN paper_archives a ON a.id = c.paper_id WHERE a.user_id = ? LIMIT 1",
                         (user_id,)).fetchone():
             raise UserHasCatalogPapers("该用户的试卷仍在公共库中，请先在公共试卷管理中处理对应条目")
+        if conn.execute("SELECT v.id FROM catalog_versions v JOIN paper_archives a ON a.id = v.paper_id WHERE a.user_id = ? LIMIT 1",
+                        (user_id,)).fetchone():
+            raise UserHasCatalogPapers("该用户的原稿仍被公共资料的修订历史引用，请先处理公共条目")
+        if conn.execute("SELECT 1 FROM catalog_edition_history e JOIN paper_archives a ON a.id = e.paper_id WHERE a.user_id = ? LIMIT 1", (user_id,)).fetchone():
+            raise UserHasCatalogPapers("该用户的原稿仍被公共资料的打印版本引用，请先处理公共条目")
         cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         return cur.rowcount > 0
 

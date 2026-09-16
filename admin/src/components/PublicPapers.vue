@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, ref, watch } from 'vue'
+import CatalogBatchDialog from './CatalogBatchDialog.vue'
+import CatalogRevisionDialog from './CatalogRevisionDialog.vue'
+import PaperMetadataDialog from './PaperMetadataDialog.vue'
+import { previewCatalog } from '../experience'
 import type { UserInfo } from '../api'
 import { catalogDetail, catalogList, catalogSources, catalogStats, createPublication, deletePublication, updatePublication,
   type CatalogDetail, type CatalogPaper, type CatalogSource, type CatalogStats, type PublicationEdit, type PublicationStatus } from '../catalog'
@@ -7,6 +11,15 @@ import { siteCategories } from '../site'
 
 const props = defineProps<{ user: UserInfo }>()
 const items = ref<CatalogPaper[]>([])
+const selectedIds = ref<string[]>([])
+const selectedItems = computed(() => items.value.filter(item => selectedIds.value.includes(item.id)))
+const batchOpen = ref(false)
+const revisionOpen = ref(false)
+const metadataOpen = ref(false)
+const metadataTarget = ref<CatalogPaper | null>(null)
+const revisionTarget = ref<CatalogPaper | null>(null)
+function toggleSelection(id: string) { selectedIds.value = selectedIds.value.includes(id) ? selectedIds.value.filter(value => value !== id) : [...selectedIds.value, id] }
+function batchSaved(count: number) { notice.value = '已更新 ' + count + ' 份资料'; selectedIds.value = []; void load() }
 const stats = ref<CatalogStats | null>(null)
 const categories = ref<{ label: string; value: string }[]>([])
 const q = ref('')
@@ -37,6 +50,8 @@ const publishing = computed(() => !!target.value && form.value.status === 'publi
 const valid = computed(() => !!form.value.title.trim() && !!form.value.category_id && (!!target.value || !!sourceId.value) && (!publishing.value || form.value.confirm_publication))
 const categoryNames = computed(() => new Map(categories.value.map(item => [item.value, item.label])))
 const preview = ref<CatalogDetail | null>(null)
+const previewTarget = ref<CatalogPaper | null>(null)
+const previewRole = ref('admin')
 const previewOpen = ref(false)
 const previewLoading = ref(false)
 const previewError = ref('')
@@ -55,7 +70,7 @@ async function loadCategories() {
 
 async function load() {
   const current = ++sequence
-  loading.value = true; error.value = ''
+  loading.value = true; error.value = ''; selectedIds.value = []
   try {
     const result = await catalogList(q.value.trim(), status.value === 'all' ? '' : status.value, (page.value - 1) * 20)
     if (current !== sequence) return
@@ -70,7 +85,7 @@ function search() { if (page.value !== 1) page.value = 1; else void load() }
 watch(page, load)
 watch(status, search)
 onActivated(() => { void loadCategories(); void load() })
-onDeactivated(() => { sequence++; sourceSequence++; loading.value = false; previewOpen.value = false; dialog.value = false })
+onDeactivated(() => { sequence++; sourceSequence++; loading.value = false; previewOpen.value = false; dialog.value = false; batchOpen.value = false; revisionOpen.value = false; metadataOpen.value = false })
 
 async function loadSources(more = false) {
   const current = ++sourceSequence
@@ -106,10 +121,11 @@ async function save() {
   } catch (cause) { dialogError.value = message(cause) }
   finally { busy.value = false }
 }
-async function showPreview(item: CatalogPaper) {
+async function showPreview(item: CatalogPaper, role = 'admin') {
+  previewRole.value = role; previewTarget.value = item
   preview.value = null; previewPages.value = 4; previewError.value = ''; previewOpen.value = true; previewLoading.value = true
   const current = ++sourceSequence
-  try { const value = await catalogDetail(item.id); if (current === sourceSequence) preview.value = value }
+  try { const value = await (role === 'admin' ? catalogDetail(item.id) : previewCatalog(item.id, role)); if (current === sourceSequence) preview.value = value }
   catch (cause) { if (current === sourceSequence) previewError.value = message(cause) }
   finally { if (current === sourceSequence) previewLoading.value = false }
 }
@@ -132,11 +148,11 @@ async function remove() {
     </div>
     <UAlert v-if="error" :title="error" color="error" variant="soft" class="notice" />
     <UAlert v-if="notice" :title="notice" color="success" variant="soft" close class="notice" @update:open="notice = ''" />
-    <div class="data-scroll" :aria-busy="loading"><table class="data-table catalog-table"><thead><tr><th>习题</th><th>分类</th><th>发布状态</th><th>收藏</th><th>下载用户</th><th>更新于</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
-      <tr v-for="item in items" :key="item.id"><td><div class="catalog-paper"><img v-if="item.thumbnail_url" :src="item.thumbnail_url" alt="" class="catalog-thumb" loading="lazy" /><UIcon v-else name="i-lucide-file-text" class="size-9 text-dimmed" /><div><div class="catalog-name"><span>{{ item.title }}</span><UIcon v-if="item.featured" name="i-lucide-pin" class="catalog-featured size-3 text-primary" title="优先展示" /></div><div class="catalog-meta">{{ item.grade }} · {{ item.subject }} · {{ item.question_count }} 题 · v{{ item.version }}</div><div v-if="item.file_status !== 'ready'" class="text-warning text-xs">文件未完成</div></div></div></td>
+    <div class="actions-row mb-3"><UButton :label="'批量管理（' + selectedItems.length + '）'" :disabled="!selectedItems.length" variant="outline" @click="batchOpen = true" /><span class="text-sm text-muted">勾选资料后可批量分类、上下架或调整权限</span></div><div class="data-scroll" :aria-busy="loading"><table class="data-table catalog-table"><thead><tr><th><UCheckbox aria-label="选择当前页" :model-value="!!items.length && selectedItems.length === items.length" :disabled="loading" @update:model-value="selectedIds = $event ? items.map(item => item.id) : []" /></th><th>习题</th><th>分类</th><th>发布状态</th><th>收藏</th><th>下载用户</th><th>更新于</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
+      <tr v-for="item in items" :key="item.id"><td><UCheckbox :aria-label="'选择 ' + item.title" :model-value="selectedIds.includes(item.id)" :disabled="loading" @update:model-value="toggleSelection(item.id)" /></td><td><div class="catalog-paper"><img v-if="item.thumbnail_url" :src="item.thumbnail_url" alt="" class="catalog-thumb" loading="lazy" /><UIcon v-else name="i-lucide-file-text" class="size-9 text-dimmed" /><div><div class="catalog-name"><span>{{ item.title }}</span><UIcon v-if="item.featured" name="i-lucide-pin" class="catalog-featured size-3 text-primary" title="优先展示" /></div><div class="catalog-meta">{{ item.grade }} · {{ item.subject }} · {{ item.question_count }} 题 · 第 {{ item.release_number || 1 }} 版 · 原稿 v{{ item.version }}</div><div v-if="item.file_status !== 'ready'" class="text-warning text-xs">文件未完成</div></div></div></td>
         <td>{{ categoryText(item) }}<div v-if="!item.category_id" class="missing-category">未关联分类</div><div class="access-caption">{{ item.required_view === 'vip' ? 'VIP 专享' : item.required_download === 'vip' ? '免费预览 · VIP 下载' : '普通用户可用' }}</div></td><td><UBadge :color="item.status === 'published' ? 'success' : item.status === 'draft' ? 'warning' : 'neutral'" variant="soft">{{ labels[item.status] }}</UBadge></td><td>{{ item.favorite_count || 0 }}</td><td>{{ item.download_users || 0 }}</td><td class="date-cell">{{ date(item.updated_at) }}</td>
-        <td><div class="actions-row"><UTooltip text="预览习题"><UButton icon="i-lucide-eye" color="neutral" variant="ghost" :aria-label="'预览 ' + item.title" @click="showPreview(item)" /></UTooltip><UTooltip text="编辑与发布"><UButton icon="i-lucide-square-pen" color="neutral" variant="ghost" :aria-label="'编辑 ' + item.title" @click="edit(item)" /></UTooltip><UTooltip text="删除公共条目"><UButton icon="i-lucide-trash-2" color="error" variant="ghost" :aria-label="'删除公共条目 ' + item.title" @click="askRemove(item)" /></UTooltip></div></td></tr>
-      <tr v-if="!items.length"><td colspan="7"><div class="empty-state"><UIcon :name="loading ? 'i-lucide-loader-circle' : 'i-lucide-library'" class="size-7" :class="{ 'animate-spin': loading }" /><h3>{{ loading ? '正在加载' : error ? '习题列表暂不可用' : '暂无公共习题' }}</h3></div></td></tr>
+        <td><div class="actions-row"><UTooltip text="预览习题"><UButton icon="i-lucide-eye" color="neutral" variant="ghost" :aria-label="'预览 ' + item.title" @click="showPreview(item)" /></UTooltip><UTooltip text="编辑与发布"><UButton icon="i-lucide-square-pen" color="neutral" variant="ghost" :aria-label="'编辑 ' + item.title" @click="edit(item)" /></UTooltip><UTooltip text="标签与打印"><UButton icon="i-lucide-tags" color="neutral" variant="ghost" :aria-label="'标签与打印 ' + item.title" @click="metadataTarget = item; metadataOpen = true" /></UTooltip><UTooltip text="更新修订稿"><UButton icon="i-lucide-file-clock" color="neutral" variant="ghost" :aria-label="'修订 ' + item.title" @click="revisionTarget = item; revisionOpen = true" /></UTooltip><UTooltip text="删除公共条目"><UButton icon="i-lucide-trash-2" color="error" variant="ghost" :aria-label="'删除公共条目 ' + item.title" @click="askRemove(item)" /></UTooltip></div></td></tr>
+      <tr v-if="!items.length"><td colspan="8"><div class="empty-state"><UIcon :name="loading ? 'i-lucide-loader-circle' : 'i-lucide-library'" class="size-7" :class="{ 'animate-spin': loading }" /><h3>{{ loading ? '正在加载' : error ? '习题列表暂不可用' : '暂无公共习题' }}</h3></div></td></tr>
     </tbody></table></div>
     <div class="table-footer"><span>共 {{ total }} 份习题</span><UPagination v-if="total > 20" v-model:page="page" :total="total" :items-per-page="20" :sibling-count="1" size="sm" /></div>
 
@@ -155,9 +171,11 @@ async function remove() {
         <UAlert v-if="dialogError" :title="dialogError" color="error" variant="soft" />
       </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="dialog = false" /><UButton type="submit" form="publication-form" :label="publishing ? '确认发布' : target ? '保存更改' : '创建草稿'" :loading="busy" :disabled="busy || !valid" /></template></UModal>
 
-    <UModal v-model:open="previewOpen" :title="preview?.title || '习题预览'" :ui="{ content: 'sm:max-w-3xl' }"><template #body><div v-if="previewLoading" class="empty-state"><UIcon name="i-lucide-loader-circle" class="size-6 animate-spin" /></div><UAlert v-if="previewError" :title="previewError" color="error" variant="soft" /><template v-if="preview"><UAlert v-if="!preview.assets.length" title="原卷文件尚未完成，请先在工作台重试文件。" color="warning" variant="soft" /><div class="catalog-preview"><img v-for="asset in preview.assets.filter(asset => asset.kind === 'page').slice(0, previewPages)" :key="asset.id" :src="asset.url" :alt="'第 ' + asset.page_number + ' 页'" /></div><UButton v-if="preview.page_count > previewPages" label="更多页面" icon="i-lucide-chevron-down" variant="outline" @click="previewPages += 4" /></template></template><template #footer><UButton v-if="preview?.assets.some(asset => asset.kind === 'pdf')" :href="preview.assets.find(asset => asset.kind === 'pdf')?.url" label="下载 PDF" icon="i-lucide-download" color="neutral" variant="outline" /><UButton label="关闭" @click="previewOpen = false" /></template></UModal>
+    <UModal v-model:open="previewOpen" :title="preview?.title || '习题预览'" :ui="{ content: 'sm:max-w-3xl' }"><template #body><div v-if="previewLoading" class="empty-state"><UIcon name="i-lucide-loader-circle" class="size-6 animate-spin" /></div><UAlert v-if="previewError" :title="previewError" color="error" variant="soft" /><div v-if="previewTarget" class="actions-row mb-4"><UButton v-for="role in [{ value: 'admin', label: '管理员' }, { value: 'regular', label: '普通用户' }, { value: 'vip', label: 'VIP' }]" :key="role.value" :label="role.label" :variant="previewRole === role.value ? 'solid' : 'outline'" :disabled="previewLoading" @click="showPreview(previewTarget, role.value)" /></div><template v-if="preview"><UAlert v-if="previewRole !== 'admin'" :title="(preview.can_view ? '可查看原稿' : '原稿受限') + ' · ' + (preview.can_download ? '可下载 PDF' : 'PDF 受限')" color="info" class="mb-4" /><UAlert v-if="previewRole !== 'admin' && !preview.can_view" title="普通用户查看这份资料需要 VIP，可切换 VIP 预览检查会员可见内容。" color="info" variant="soft" /><UAlert v-else-if="!preview.assets.length" title="原卷文件尚未完成，请先在工作台重试文件。" color="warning" variant="soft" /><div class="catalog-preview"><img v-for="asset in preview.assets.filter(asset => asset.kind === 'page').slice(0, previewPages)" :key="asset.id" :src="asset.url" :alt="'第 ' + asset.page_number + ' 页'" /></div><UButton v-if="preview.can_view && preview.page_count > previewPages" label="更多页面" icon="i-lucide-chevron-down" variant="outline" @click="previewPages += 4" /></template></template><template #footer><UButton v-if="preview?.assets.some(asset => asset.kind === 'pdf')" :href="preview.assets.find(asset => asset.kind === 'pdf')?.url" label="下载 PDF" icon="i-lucide-download" color="neutral" variant="outline" /><UButton label="关闭" @click="previewOpen = false" /></template></UModal>
 
     <UModal v-model:open="removeOpen" title="删除公共条目" :dismissible="!busy" :close="!busy"><template #body><UAlert color="warning" variant="soft" :title="'确认删除「' + removeTarget?.title + '」的公共条目？'" description="该条目的收藏和下载记录会被删除，工作台中的原始习题与文件仍保留。" /><UAlert v-if="removeError" :title="removeError" color="error" variant="soft" class="mt-3" /></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="removeOpen = false" /><UButton label="删除条目" icon="i-lucide-trash-2" color="error" :loading="busy" @click="remove" /></template></UModal>
+    <CatalogBatchDialog :open="batchOpen" :admin-id="user.id" :items="selectedItems" :categories="categories" @close="batchOpen = false" @saved="batchSaved" /><CatalogRevisionDialog :open="revisionOpen" :target="revisionTarget" :admin-id="user.id" @close="revisionOpen = false" @saved="load" />
+    <PaperMetadataDialog :open="metadataOpen" :target="metadataTarget" :admin-id="user.id" @close="metadataOpen = false" @saved="load" />
   </section>
 </template>
 
