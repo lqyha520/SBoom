@@ -12,7 +12,7 @@ from app.services.wechat_pay import PaymentError, WeChatPay
 
 
 def request(order_id, user_id, body):
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         order = mini_orders.owned(conn, order_id, user_id)
         if order["status"] != "paid":
             fail("仅已付款订单可以申请退款", 409)
@@ -25,7 +25,7 @@ def request(order_id, user_id, body):
 
 
 def review(admin_id, identifier, body):
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         refund = conn.execute("SELECT * FROM mini_refunds WHERE id = ?", (identifier,)).fetchone()
         if not refund:
             fail("退款申请不存在", 404)
@@ -48,7 +48,7 @@ def review(admin_id, identifier, body):
 
 def dispatch(identifier):
     now, lease = int(time.time()), uuid.uuid4().hex
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         refund = conn.execute("SELECT * FROM mini_refunds WHERE id = ?", (identifier,)).fetchone()
         if not refund or refund["status"] != "processing":
             fail("退款不在处理中", 409)
@@ -62,7 +62,7 @@ def dispatch(identifier):
         value = WeChatPay().refund(order, snapshot)
         apply(value, expected=identifier)
     finally:
-        with db(serialized=True) as conn:
+        with db(serialized="accounts") as conn:
             conn.execute("UPDATE mini_refunds SET lease_key = '', lease_until = 0 WHERE id = ? AND lease_key = ?", (identifier, lease))
 
 
@@ -90,7 +90,7 @@ def apply(value, event_id=None, expected=None):
                 raise ValueError("Future refund")
         except (KeyError, ValueError, TypeError, OverflowError, AttributeError):
             fail("退款完成时间无效", 400)
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         refund = conn.execute("SELECT * FROM mini_refunds WHERE id = ?", (identifier,)).fetchone()
         if not refund:
             fail("退款申请不存在", 404)

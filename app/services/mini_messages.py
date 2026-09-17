@@ -37,7 +37,7 @@ def expiry_notice(conn, user_id):
 
 
 def inbox(user_id, unread=False, limit=20, offset=0):
-    with db(serialized=True) as conn:
+    with db(serialized=("content", "accounts")) as conn:
         expiry_notice(conn, user_id)
         unread_count = conn.execute("SELECT COUNT(*) FROM mini_notifications WHERE user_id = ? AND read_at IS NULL", (user_id,)).fetchone()[0]
         where = "user_id = ?" + (" AND read_at IS NULL" if unread else "")
@@ -50,7 +50,7 @@ def inbox(user_id, unread=False, limit=20, offset=0):
 
 
 def read(user_id, identifier=None):
-    with db(serialized=True) as conn:
+    with db(serialized=("content", "accounts")) as conn:
         if identifier and not conn.execute("SELECT 1 FROM mini_notifications WHERE id = ? AND user_id = ?", (identifier, user_id)).fetchone():
             raise HTTPException(404, detail={"error": "消息不存在"})
         query = "UPDATE mini_notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL"

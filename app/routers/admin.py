@@ -5,12 +5,14 @@
 - 被禁用用户的现有会话立即失效（require_user 每次校验 is_active）
 """
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from psycopg.errors import UniqueViolation
 
 from app.config import get_settings, APP_VERSION
 from app.deps import require_admin, require_user
@@ -31,7 +33,7 @@ _LOG_PATH = Path(__file__).resolve().parent.parent.parent / "server.log"
 # ─── 数据概览 ───
 
 @router.get("/stats", summary="后台概览数据")
-async def stats(admin: CurrentUser = Depends(require_admin)):
+def stats(admin: CurrentUser = Depends(require_admin)):
     from app.db import db
 
     s = user_store.admin_stats()
@@ -57,7 +59,7 @@ async def stats(admin: CurrentUser = Depends(require_admin)):
 # ─── 用户反馈查看 ───
 
 @router.get("/feedbacks", summary="用户反馈列表（最新在前）")
-async def list_feedbacks(
+def list_feedbacks(
     limit: int = 100,
     oob_only: bool = False,
     admin: CurrentUser = Depends(require_admin),
@@ -77,10 +79,11 @@ async def list_feedbacks(
 # ─── 用户管理 ───
 
 @router.get("/users", summary="用户列表（可按用户名搜索、按角色筛选）")
-async def list_users(query: str = "", role: str = "", admin: CurrentUser = Depends(require_admin)):
+def list_users(query: str = "", role: str = "", limit: int = Query(20, ge=1, le=100),
+               offset: int = Query(0, ge=0), admin: CurrentUser = Depends(require_admin)):
     if role and role not in ("user", "admin"):
         raise HTTPException(status_code=400, detail={"error": "role 只能是 user 或 admin"})
-    return {"users": user_store.list_users(query.strip(), role)}
+    return user_store.list_users(query.strip(), role, limit, offset)
 
 
 class AdminCreateUser(BaseModel):
@@ -90,7 +93,7 @@ class AdminCreateUser(BaseModel):
 
 
 @router.post("/users", summary="创建用户")
-async def create_user(req: AdminCreateUser, admin: CurrentUser = Depends(require_admin)):
+def create_user(req: AdminCreateUser, admin: CurrentUser = Depends(require_admin)):
     import re
     if not re.match(r"^[\w\u4e00-\u9fa5-]{2,32}$", req.username):
         raise HTTPException(status_code=400, detail={"error": "用户名需为 2-32 位字母、数字、下划线、中文"})
@@ -100,7 +103,10 @@ async def create_user(req: AdminCreateUser, admin: CurrentUser = Depends(require
         raise HTTPException(status_code=400, detail={"error": "role 只能是 user 或 admin"})
     if user_store.get_user_by_username(req.username):
         raise HTTPException(status_code=409, detail={"error": "用户名已被占用"})
-    user = user_store.create_user(req.username, req.password, role=req.role)
+    try:
+        user = user_store.create_user(req.username, req.password, role=req.role)
+    except UniqueViolation as exc:
+        raise HTTPException(409, detail={"error": "用户名已被占用"}) from exc
     logger.info(f"管理员 {admin.username} 创建了用户 {user.username} (role={req.role})")
     return {"id": user.id, "username": user.username, "role": user.role}
 
@@ -112,7 +118,7 @@ class AdminUpdateUser(BaseModel):
 
 
 @router.put("/users/{user_id}", summary="更新用户（重置密码 / 改角色 / 启用禁用）")
-async def update_user(user_id: int, req: AdminUpdateUser, admin: CurrentUser = Depends(require_admin)):
+def update_user(user_id: int, req: AdminUpdateUser, admin: CurrentUser = Depends(require_admin)):
     if req.role is not None and req.role not in ("user", "admin"):
         raise HTTPException(status_code=400, detail={"error": "role 只能是 user 或 admin"})
     if req.password is not None and len(req.password) < 6:
@@ -138,7 +144,7 @@ async def update_user(user_id: int, req: AdminUpdateUser, admin: CurrentUser = D
 
 
 @router.delete("/users/{user_id}", summary="删除用户（模板与配置级联删除）")
-async def delete_user(user_id: int, admin: CurrentUser = Depends(require_admin)):
+def delete_user(user_id: int, admin: CurrentUser = Depends(require_admin)):
     if user_id == admin.id:
         raise HTTPException(status_code=400, detail={"error": "不能删除自己的账号"})
     try:
@@ -154,7 +160,7 @@ async def delete_user(user_id: int, admin: CurrentUser = Depends(require_admin))
 # ─── 管理端查看用户模板 ───
 
 @router.get("/users/{user_id}/templates", summary="列出指定用户的模板（元信息）")
-async def list_user_templates(user_id: int, admin: CurrentUser = Depends(require_admin)):
+def list_user_templates(user_id: int, admin: CurrentUser = Depends(require_admin)):
     if not user_store.get_user_by_id(user_id):
         raise HTTPException(status_code=404, detail={"error": "用户不存在"})
     templates = user_store.list_templates_for_admin(user_id)
@@ -162,7 +168,7 @@ async def list_user_templates(user_id: int, admin: CurrentUser = Depends(require
 
 
 @router.get("/users/{user_id}/templates/{tpl_id}", summary="查看指定模板的完整内容")
-async def get_user_template(user_id: int, tpl_id: int, admin: CurrentUser = Depends(require_admin)):
+def get_user_template(user_id: int, tpl_id: int, admin: CurrentUser = Depends(require_admin)):
     """管理端查看模板内容（只读，用于排查/协助；内容含题目文字与配置）"""
     if not user_store.get_user_by_id(user_id):
         raise HTTPException(status_code=404, detail={"error": "用户不存在"})
@@ -178,7 +184,7 @@ async def get_user_template(user_id: int, tpl_id: int, admin: CurrentUser = Depe
 # ─── 日志查看 ───
 
 @router.get("/logs", summary="查看服务日志（尾部 N 行）")
-async def tail_logs(lines: int = 200, admin: CurrentUser = Depends(require_admin)):
+def tail_logs(lines: int = 200, admin: CurrentUser = Depends(require_admin)):
     lines = max(10, min(1000, lines))
     try:
         # deque 只保留尾部 N 行，日志文件再大也只读一遍流，不整文件进内存
@@ -200,7 +206,7 @@ class AdminLlmConfigIn(BaseModel):
 
 
 @router.get("/llm-config", summary="获取全局模型配置（不含密钥明文）")
-async def get_llm_config(admin: CurrentUser = Depends(require_admin)):
+def get_llm_config(admin: CurrentUser = Depends(require_admin)):
     g = app_config.get_llm()
     return {
         "baseUrl": g["baseUrl"],
@@ -211,7 +217,7 @@ async def get_llm_config(admin: CurrentUser = Depends(require_admin)):
 
 
 @router.put("/llm-config", summary="保存全局模型配置（密钥服务端加密存储，全体用户生效）")
-async def save_llm_config(req: AdminLlmConfigIn, admin: CurrentUser = Depends(require_admin)):
+def save_llm_config(req: AdminLlmConfigIn, admin: CurrentUser = Depends(require_admin)):
     app_config.save_llm(
         base_url=req.baseUrl.rstrip("/"),
         model=req.model,
@@ -224,7 +230,7 @@ async def save_llm_config(req: AdminLlmConfigIn, admin: CurrentUser = Depends(re
 
 
 @router.delete("/llm-config", summary="清除全局模型配置（含已存密钥）")
-async def clear_llm_config(admin: CurrentUser = Depends(require_admin)):
+def clear_llm_config(admin: CurrentUser = Depends(require_admin)):
     """整行删除全局 LLM 配置。用于部署纠错/安全清理（如密钥泄露后重置）。"""
     app_config.clear_llm()
     logger.info(f"管理员 {admin.username} 清除了全局模型配置")
@@ -237,7 +243,7 @@ async def test_llm(req: Optional[AdminLlmConfigIn] = None, admin: CurrentUser = 
     超时耐心 = 配置的 timeout（中转站拥堵时首 token 可能 20-60s，不宜截断）。"""
     import httpx as _httpx
 
-    g = app_config.get_llm(with_key=True)
+    g = await asyncio.to_thread(app_config.get_llm, with_key=True)
     base_url = (req.baseUrl if req and req.baseUrl else g["baseUrl"]) or settings.llm_base_url
     model = (req.model if req and req.model else g["model"]) or settings.llm_model
     api_key = (req.apiKey if req and req.apiKey else g["api_key"]) or settings.llm_api_key

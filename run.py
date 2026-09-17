@@ -1,7 +1,7 @@
 """启动入口
 
 - DEBUG=true（开发）时启用热重载，workers 配置被忽略（reload 与多 worker 互斥）。
-- 生产：WORKERS=1（默认）或 >1 开多进程；多 worker 建议配合 PostgreSQL 使用。
+- 生产：WORKERS=1（默认）或 >1 开多进程；数据库必须配置 DATABASE_URL（PostgreSQL）。
 """
 import socket
 

@@ -9,6 +9,7 @@
 import asyncio
 import logging
 import re
+from psycopg.errors import UniqueViolation
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -51,7 +52,7 @@ def _set_session_cookie(response: Response, user_id: int) -> str:
 
 
 @router.post("/register", summary="注册新用户")
-async def register(req: Credentials, request: Request, response: Response):
+def register(req: Credentials, request: Request, response: Response):
     if not settings.registration_enabled:
         raise HTTPException(status_code=403, detail={"error": "注册已关闭，请联系管理员开通账号"})
     if not allow(f"register:{_client_ip(request)}", 10, 3600):
@@ -67,7 +68,7 @@ async def register(req: Credentials, request: Request, response: Response):
     role = "user"
     try:
         user = user_store.create_user(req.username, req.password, role=role)
-    except Exception:
+    except UniqueViolation:
         # 并发注册同名用户：UNIQUE 约束冲突 → 友好 409（而非 500）
         raise HTTPException(status_code=409, detail={"error": "用户名已被占用"})
     _set_session_cookie(response, user.id)

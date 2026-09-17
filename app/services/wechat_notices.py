@@ -31,7 +31,7 @@ def grant(user_id, body):
         fail("微信提醒暂未开启或模板已更新，请刷新后重试", 409)
     now = int(time.time())
     identifier = hashlib.sha256((user_id + ":" + body.request_id).encode()).hexdigest()
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         user = conn.execute("SELECT wechat_openid_enc FROM mini_users WHERE id = ?", (user_id,)).fetchone()
         if not user or not user[0]:
             fail("请在微信小程序登录后订阅提醒", 422)
@@ -66,7 +66,7 @@ def access_token():
     if not isinstance(value, dict) or value.get("errcode") or not isinstance(value.get("access_token"), str):
         raise ValueError("WECHAT_ACCESS_UNAVAILABLE")
     expires = min(7200, max(60, int(value.get("expires_in", 7200))))
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         conn.execute("INSERT INTO app_config(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, json.dumps({"token": encrypt_secret(value["access_token"]), "expires_at": int(time.time()) + expires})))
     return value["access_token"]
 
@@ -99,7 +99,7 @@ def dispatch_one():
     if not configuration()["available"]:
         return False
     now = int(time.time())
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         # A timed-out send may already have reached WeChat. Never blindly retry it.
         conn.execute("UPDATE mini_notice_deliveries SET status = 'unknown', error_code = 'INTERRUPTED' WHERE status = 'sending' AND lease_until < ?", (now,))
         row = conn.execute("SELECT n.*, u.wechat_openid_enc, u.is_active FROM mini_notice_deliveries d JOIN mini_notifications n ON n.id = d.notification_id JOIN mini_users u ON u.id = n.user_id WHERE d.status = 'pending' ORDER BY n.created_at, n.id LIMIT 1").fetchone()
@@ -117,7 +117,7 @@ def dispatch_one():
         state, error = ("sent", "") if code == 0 else ("failed", str(code))
     except (httpx.HTTPError, ValueError, TypeError):
         state, error = "unknown", "DELIVERY_UNCONFIRMED"
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         conn.execute("UPDATE mini_notice_deliveries SET status = ?, error_code = ?, lease_until = 0, updated_at = ? WHERE notification_id = ? AND status = 'sending'", (state, error, int(time.time()), message["id"]))
     return True
 

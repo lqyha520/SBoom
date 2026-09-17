@@ -115,7 +115,7 @@ def register(username: str, password: str, *, admin=False):
         _error("账号需为 2-32 位英文字母、数字、下划线或短横线，不能使用中文", 422)
     password_hash = hash_password(password)
     now, user_id = int(time.time()), uuid.uuid4().hex
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         if conn.execute("SELECT id FROM mini_users WHERE username = ?", (username,)).fetchone():
             _error("小程序用户名已被占用", 409)
         conn.execute("INSERT INTO mini_users(id, username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
@@ -128,7 +128,7 @@ def login_password(username: str, password: str):
         row = conn.execute("SELECT id, password_hash FROM mini_users WHERE username = ?", (username,)).fetchone()
     if not row or not row["password_hash"] or not verify_password(password, row["password_hash"]):
         _error("小程序用户名或密码错误")
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         return _session(conn, row["id"])
 
 
@@ -161,8 +161,8 @@ _NICKNAME_SPIRITS = (
 def _default_username(conn) -> str:
     """Generate a short ASCII login identifier independent of the display name.
 
-    Callers hold the cross-process transaction lock of ``db(serialized=True)``
-    (pg_advisory_xact_lock on PostgreSQL, BEGIN IMMEDIATE on SQLite), so the
+    Callers hold the cross-process transaction lock of ``db(serialized="accounts")``
+    (pg_advisory_xact_lock), so the
     availability check and the following INSERT cannot interleave with another
     worker picking the same login identifier. The editable nickname is separate.
     """
@@ -176,7 +176,7 @@ def _default_username(conn) -> str:
 def login_public_identity(identity: str, openid=""):
     if openid and digest(get_settings().wechat_app_id + ":" + openid) != identity:
         _error("微信身份不一致，请重新登录")
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         account = conn.execute("SELECT id FROM mini_users WHERE wechat_identity = ?", (identity,)).fetchone()
         if account:
             if openid:
@@ -194,7 +194,7 @@ def login_public_identity(identity: str, openid=""):
 
 def update_profile(user_id: str, body: MiniProfileUpdate):
     """用户自助改昵称/头像；昵称允许重复，固定登录名不随资料编辑改变。"""
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
         if not row:
             _error()
@@ -223,7 +223,7 @@ def update_password(user_id: str, body: MiniPasswordUpdate, current_token: str =
     改完吊销该账号的其它会话（当前会话保留），这样密码泄露后改密能立刻把
     别处的登录踢下线，而用户自己不用重新登录。
     """
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
         if not row:
             _error()
@@ -300,7 +300,7 @@ def admin_user(user_id):
 
 
 def update_membership(admin_id, user_id, body: MembershipUpdate):
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
         if not row:
             _error("小程序用户不存在", 404)
@@ -324,7 +324,7 @@ def update_admin_profile(admin_id, user_id, body: AdminProfileUpdate):
     只落传上来的字段；带 ``revision`` 乐观锁，避免两个管理员互相覆盖。
     重置密码会吊销该账号的全部会话——旧密码对应的登录态立刻失效。
     """
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
         if not row:
             _error("小程序用户不存在", 404)
@@ -358,8 +358,8 @@ def update_admin_profile(admin_id, user_id, body: AdminProfileUpdate):
     return admin_user(user_id)
 
 
-#: 删除小程序账号时要一并清理的从表。两张库都声明了 ON DELETE CASCADE（SQLite 连接
-#: 也开了 PRAGMA foreign_keys），这里显式删除是为了两库行为完全一致，同时能告诉
+#: 删除小程序账号时要一并清理的从表。外键声明了 ON DELETE CASCADE，
+#: 这里显式删除是为了行为明确不依赖连接参数，同时能告诉
 #: 管理员究竟清掉了多少条关联数据。
 _OWNED_TABLES = ("mini_user_sessions", "mini_user_avatars", "mini_catalog_favorites", "mini_catalog_downloads", "mini_membership_events",
                  "mini_recent_views", "mini_favorite_groups", "mini_feedback", "mini_usage_events", "mini_notifications", "mini_content_requests", "mini_notice_subscriptions")
@@ -379,7 +379,7 @@ def delete_user_data(conn, user_id):
 
 def delete_user(admin_id, user_id):
     """彻底删除小程序账号（不可恢复），连带会话、收藏、下载记录与操作留痕。"""
-    with db(serialized=True) as conn:
+    with db(serialized=("content", "accounts")) as conn:
         row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
         if not row:
             _error("小程序用户不存在", 404)

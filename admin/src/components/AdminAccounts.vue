@@ -10,7 +10,8 @@ const error = ref('')
 const notice = ref('')
 const page = ref(1)
 const pageSize = 20
-const rows = computed(() => accounts.value.slice((page.value - 1) * pageSize, page.value * pageSize))
+const rows = accounts
+const total = ref(0)
 type Action = 'create' | 'password' | 'revoke' | 'active' | 'delete'
 const action = ref<Action>('create')
 const target = ref<api.AdminUser | null>(null)
@@ -28,14 +29,17 @@ const valid = computed(() => action.value === 'create'
   : action.value !== 'password' || form.value.password.length >= 6)
 let request = 0
 async function load(resetPage = false) {
+  if (resetPage) page.value = 1
   const id = ++request
   loading.value = true
   error.value = ''
   try {
-    const result = await api.fetchAdminUsers(query.value.trim(), 'admin')
+    const result = await api.fetchAdminUsers(query.value.trim(), 'admin', page.value, pageSize)
     if (id !== request) return
-    accounts.value = result
-    page.value = resetPage ? 1 : Math.min(page.value, Math.max(1, Math.ceil(result.length / pageSize)))
+    accounts.value = result.users
+    total.value = result.total
+    const lastPage = Math.max(1, Math.ceil(result.total / pageSize))
+    if (page.value > lastPage) { page.value = lastPage; await load() }
   } catch (e: unknown) {
     if (id === request) error.value = e instanceof Error ? e.message : '管理员列表加载失败'
   } finally { if (id === request) loading.value = false }
@@ -99,7 +103,7 @@ onMounted(() => load())
       </tr>
       <tr v-if="!rows.length"><td colspan="4"><div class="empty-state"><UIcon :name="loading ? 'i-lucide-loader-circle' : 'i-lucide-shield-check'" class="size-7" :class="{ 'animate-spin': loading }" /><h3>{{ loading ? '正在加载管理员' : error ? '管理员列表暂不可用' : query ? '没有匹配的管理员' : '暂无管理员账号' }}</h3></div></td></tr>
     </tbody></table></div>
-    <div class="table-footer"><span>共 {{ accounts.length }} 个管理员账号</span><UPagination v-if="accounts.length > pageSize" v-model:page="page" :total="accounts.length" :items-per-page="pageSize" :sibling-count="1" size="sm" /></div>
+    <div class="table-footer"><span>共 {{ total }} 个管理员账号</span><UPagination v-if="total > pageSize" :page="page" :total="total" :disabled="loading" @update:page="page = $event; load()" :items-per-page="pageSize" :sibling-count="1" size="sm" /></div>
     <UModal v-model:open="dialogOpen" :title="dialogTitle" :dismissible="!busy" :close="!busy">
       <template #body>
         <form id="admin-account-form" class="field-stack" @submit.prevent="submit">

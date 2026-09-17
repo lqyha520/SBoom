@@ -11,7 +11,8 @@ const error = ref('')
 const notice = ref('')
 const page = ref(1)
 const pageSize = 20
-const rows = computed(() => users.value.slice((page.value - 1) * pageSize, page.value * pageSize))
+const rows = users
+const total = ref(0)
 const templateUser = ref<api.AdminUser | null>(null)
 type Action = 'create' | 'password' | 'role' | 'active' | 'delete'
 const action = ref<Action>('create')
@@ -30,14 +31,17 @@ const valid = computed(() => action.value === 'create'
   : action.value !== 'password' || form.value.password.length >= 6)
 let request = 0
 async function load(resetPage = false) {
+  if (resetPage) page.value = 1
   const id = ++request
   loading.value = true
   error.value = ''
   try {
-    const result = await api.fetchAdminUsers(query.value.trim(), 'user')
+    const result = await api.fetchAdminUsers(query.value.trim(), 'user', page.value, pageSize)
     if (id !== request) return
-    users.value = result
-    page.value = resetPage ? 1 : Math.min(page.value, Math.max(1, Math.ceil(result.length / pageSize)))
+    users.value = result.users
+    total.value = result.total
+    const lastPage = Math.max(1, Math.ceil(result.total / pageSize))
+    if (page.value > lastPage) { page.value = lastPage; await load() }
   } catch (e: unknown) {
     if (id === request) error.value = e instanceof Error ? e.message : '用户列表加载失败'
   } finally { if (id === request) loading.value = false }
@@ -101,7 +105,7 @@ onMounted(() => load())
       </tr>
       <tr v-if="!rows.length"><td colspan="5"><div class="empty-state"><UIcon :name="loading ? 'i-lucide-loader-circle' : 'i-lucide-users-round'" class="size-7" :class="{ 'animate-spin': loading }" /><h3>{{ loading ? '正在加载用户' : error ? '用户列表暂不可用' : query ? '没有匹配的用户' : '暂无用户' }}</h3></div></td></tr>
     </tbody></table></div>
-    <div class="table-footer"><span>共 {{ users.length }} 位出题用户</span><UPagination v-if="users.length > pageSize" v-model:page="page" :total="users.length" :items-per-page="pageSize" :sibling-count="1" size="sm" /></div>
+    <div class="table-footer"><span>共 {{ total }} 位出题用户</span><UPagination v-if="total > pageSize" :page="page" :total="total" :disabled="loading" @update:page="page = $event; load()" :items-per-page="pageSize" :sibling-count="1" size="sm" /></div>
     <UModal v-model:open="dialogOpen" :title="dialogTitle" :dismissible="!busy" :close="!busy">
       <template #body>
         <form id="user-action-form" class="field-stack" @submit.prevent="submit">

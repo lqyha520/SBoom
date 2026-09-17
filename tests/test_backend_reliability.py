@@ -11,8 +11,10 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-os.environ.update({"DATABASE_URL": "", "SECRET_KEY": "test-reliability-secret-not-for-production",
-                   "LLM_API_KEY": "", "ADMIN_USERNAME": "", "ADMIN_PASSWORD": ""})
+import pg_support  # noqa: E402  建一次性测试库，必须在 import app 之前
+
+pg_support.install_module_database({"SECRET_KEY": "test-reliability-secret-not-for-production",
+                                    "LLM_API_KEY": "", "ADMIN_USERNAME": "", "ADMIN_PASSWORD": ""})
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -41,7 +43,7 @@ class BackendReliability(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="lc-test-")))
-        self.stack.enter_context(patch.object(database, "DB_PATH", root / "test.db"))
+        pg_support.case_database(self.stack)
         self.stack.enter_context(patch.object(get_settings(), "generation_repair_limit", 0))
         self.stack.enter_context(patch.object(get_settings(), "generation_daily_limit", 100))
         self.stack.enter_context(patch.object(get_settings(), "generation_user_concurrency", 3))

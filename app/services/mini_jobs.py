@@ -30,11 +30,11 @@ def tick(stop):
                     function(identifier)
                 except (PaymentError, HTTPException):
                     table = "mini_orders" if function is mini_orders.cancel else "mini_refunds"
-                    with db(serialized=True) as conn:
+                    with db(serialized="accounts") as conn:
                         conn.execute(f"UPDATE {table} SET updated_at = ? WHERE id = ?", (int(time.time()), identifier))
                     logger.warning("Membership maintenance deferred for record %s", identifier)
     if wechat_notices.configuration()["available"] and not stop.is_set():
-        with db(serialized=True) as conn:
+        with db(serialized="accounts") as conn:
             cursor = conn.execute("SELECT value FROM app_config WHERE key = 'mini_expiry_cursor'").fetchone()
             rows = conn.execute("SELECT id FROM mini_users WHERE id > ? AND is_active = 1 AND membership = 'vip' AND vip_expires_at BETWEEN ? AND ? ORDER BY id LIMIT 200", (cursor[0] if cursor else "", now - 7 * 86400, now + 7 * 86400)).fetchall()
             for row in rows:

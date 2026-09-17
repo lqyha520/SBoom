@@ -49,7 +49,7 @@ def plans(admin=False):
 
 def save_plan(body, identifier=None):
     now = int(time.time())
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         if identifier:
             row = conn.execute("SELECT revision FROM mini_membership_plans WHERE id = ?", (identifier,)).fetchone()
             if not row:
@@ -70,7 +70,7 @@ def save_plan(body, identifier=None):
 def create(user_id, body):
     now = int(time.time())
     request_key = hashlib.sha256((user_id + ":" + body.request_id).encode()).hexdigest()
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         previous = conn.execute("SELECT * FROM mini_orders WHERE request_key = ?", (request_key,)).fetchone()
         if previous:
             if previous["plan_id"] != body.plan_id:
@@ -113,7 +113,7 @@ def ensure_tenant(order):
 def pay(identifier, user_id):
     now, lease = int(time.time()), uuid.uuid4().hex
     provider = WeChatPay()
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         order = owned(conn, identifier, user_id)
         ensure_tenant(order)
         if order["status"] not in ("created", "pending") or order["expires_at"] <= now:
@@ -131,10 +131,10 @@ def pay(identifier, user_id):
         result = provider.prepay(snapshot, decrypt_secret(snapshot["payer_enc"]))
         parameters = provider.payment_parameters(result.get("prepay_id"))
     except PaymentError:
-        with db(serialized=True) as conn:
+        with db(serialized="accounts") as conn:
             conn.execute("UPDATE mini_orders SET lease_key = '', lease_until = 0 WHERE id = ? AND lease_key = ?", (identifier, lease))
         raise
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         current = owned(conn, identifier, user_id)
         if current["lease_key"] != lease:
             fail("订单状态已变化，请刷新订单", 409)
@@ -165,7 +165,7 @@ def confirm_payment(value, event_id=None):
     if value.get("trade_state") != "SUCCESS":
         fail("支付尚未完成", 409)
     now = int(time.time())
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         order = owned(conn, value.get("out_trade_no", ""))
         transaction = validate_payment(order, value)
         if order["paid_at"] is not None:
@@ -206,14 +206,14 @@ def sync(identifier, user_id=None):
     if value.get("trade_state") == "SUCCESS":
         confirm_payment(value)
     elif value.get("trade_state") in ("CLOSED", "REVOKED", "PAYERROR"):
-        with db(serialized=True) as conn:
+        with db(serialized="accounts") as conn:
             conn.execute("UPDATE mini_orders SET status = 'closed', closed_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND paid_at IS NULL AND status IN ('created', 'pending')", (int(time.time()), int(time.time()), identifier))
     return detail(identifier, user_id)
 
 
 def cancel(identifier, user_id=None):
     now, lease = int(time.time()), uuid.uuid4().hex
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         order = dict(owned(conn, identifier, user_id))
         if order["status"] == "closed":
             return public_order(conn, order, user_id is None)
@@ -234,10 +234,10 @@ def cancel(identifier, user_id=None):
                 return sync(identifier, user_id)
             if error.code not in ("ORDER_NOT_EXIST", "ORDERNOTEXIST", "ORDERCLOSED"):
                 raise
-        with db(serialized=True) as conn:
+        with db(serialized="accounts") as conn:
             conn.execute("UPDATE mini_orders SET status = 'closed', closed_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND lease_key = ? AND paid_at IS NULL AND status IN ('created', 'pending')", (int(time.time()), int(time.time()), identifier, lease))
     finally:
-        with db(serialized=True) as conn:
+        with db(serialized="accounts") as conn:
             conn.execute("UPDATE mini_orders SET lease_key = '', lease_until = 0 WHERE id = ? AND lease_key = ?", (identifier, lease))
     return detail(identifier, user_id)
 

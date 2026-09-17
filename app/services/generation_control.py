@@ -67,7 +67,7 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
     settings = get_settings()
     now = int(time.time())
     # One short transaction serializes admission across workers, including PostgreSQL.
-    with db(serialized=True) as conn:
+    with db(serialized="generation") as conn:
         conn.execute(
             "UPDATE generation_requests SET status = 'unknown', finished_at = ? "
             "WHERE status = 'running' AND created_at < ?",

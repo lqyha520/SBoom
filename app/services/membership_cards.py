@@ -8,7 +8,7 @@ def _hash(code):
 
 def create(admin_id, days, quantity, expires_at=None):
     now = int(time.time()); items=[]
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         for _ in range(quantity):
             code = 'LC-' + secrets.token_hex(8).upper()
             conn.execute('INSERT INTO mini_membership_cards(id,code_hash,code_hint,days,status,created_by,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?)',
@@ -25,7 +25,7 @@ def listing(status='', limit=50, offset=0):
     return {'items':[dict(r) for r in rows], 'total':total, 'has_more':offset+len(rows)<total}
 
 def disable(identifier):
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         row=conn.execute('SELECT status FROM mini_membership_cards WHERE id=?',(identifier,)).fetchone()
         if not row: fail('卡密不存在',404)
         if row['status']=='redeemed': fail('已兑换卡密不能作废',409)
@@ -34,7 +34,7 @@ def disable(identifier):
 
 def redeem(user_id, code):
     now=int(time.time()); normalized=code.strip().upper()
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         row=conn.execute('SELECT * FROM mini_membership_cards WHERE code_hash=?',(_hash(normalized),)).fetchone()
         if not row or row['status']!='active': fail('卡密无效或已使用',422)
         if row['expires_at'] and row['expires_at'] < now: fail('卡密已过期',422)

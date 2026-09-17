@@ -15,7 +15,7 @@ def current(user_id):
 
 
 def request(user_id, body):
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         mini_orders.ensure_deletable(conn, user_id)
         user = conn.execute("SELECT username FROM mini_users WHERE id = ?", (user_id,)).fetchone()
         if not user:
@@ -32,7 +32,7 @@ def request(user_id, body):
 
 
 def cancel(user_id, revision):
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         row = conn.execute("SELECT * FROM mini_account_closures WHERE user_id = ?", (user_id,)).fetchone()
         if not row:
             fail("注销申请不存在", 404)
@@ -51,7 +51,7 @@ def listing(status="", limit=20, offset=0):
 
 
 def review(admin_id, identifier, body):
-    with db(serialized=True) as conn:
+    with db(serialized=("content", "accounts")) as conn:
         row = conn.execute("SELECT * FROM mini_account_closures WHERE id = ?", (identifier,)).fetchone()
         if not row:
             fail("注销申请不存在", 404)

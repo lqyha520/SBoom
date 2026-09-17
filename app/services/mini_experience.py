@@ -213,7 +213,7 @@ def usage_analytics():
 
 
 def renew_membership(admin_id, user_id, body):
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
         if not row:
             fail("小程序用户不存在", 404)

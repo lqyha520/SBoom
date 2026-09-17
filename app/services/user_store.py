@@ -81,10 +81,10 @@ def ensure_admin(username: str, password: str) -> None:
             )
 
 
-def list_users(query: str = "", role: str = "") -> list:
+def list_users(query: str = "", role: str = "", limit: int = 20, offset: int = 0) -> dict:
     """管理端用户列表：附带模板数。LIKE 通配符转义，搜索语义与用户输入一致。
 
-    role 为空时返回全部；后台把「出题用户」与「管理员账号」分成两页，各自只请求自己那一侧。
+    role 为空时匹配所有角色；始终只返回请求的一页。
     """
     with db() as conn:
         safe_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -93,17 +93,19 @@ def list_users(query: str = "", role: str = "") -> list:
         if role:
             clauses.append("u.role = ?")
             args.append(role)
+        where = ' AND '.join(clauses)
+        total = conn.execute(f"SELECT COUNT(*) FROM users u WHERE {where}", args).fetchone()[0]
         rows = conn.execute(
             f"""
             SELECT u.id, u.username, u.role, u.is_active, u.created_at,
                    (SELECT COUNT(*) FROM user_templates t WHERE t.user_id = u.id) AS template_count
             FROM users u
-            WHERE {' AND '.join(clauses)}
-            ORDER BY u.id DESC
+            WHERE {where}
+            ORDER BY u.id DESC LIMIT ? OFFSET ?
             """,
-            tuple(args),
+            (*args, limit, offset),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return {"users": [dict(r) for r in rows], "total": total, "limit": limit, "offset": offset}
 
 
 def update_user(

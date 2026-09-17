@@ -46,7 +46,7 @@ def normalize_image(encoded: str) -> str:
 def save(user_id: str, body: MiniAvatarUpdate):
     content = normalize_image(body.image)
     version, now = uuid.uuid4().hex[:24], int(time.time())
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         user = mini_auth._user(conn, user_id)
         conn.execute("INSERT INTO mini_user_avatars(user_id, version, content_base64, updated_at) VALUES (?, ?, ?, ?) "
                      "ON CONFLICT(user_id) DO UPDATE SET version = excluded.version, content_base64 = excluded.content_base64, updated_at = excluded.updated_at",

@@ -118,7 +118,7 @@ def reconcile(admin_id, bill_date):
     if day >= today or day < today - timedelta(days=90):
         fail("请选择最近 90 天内、昨天及以前的账单日期", 422)
     identifier, now = uuid.uuid4().hex, int(time.time())
-    with db(serialized=True) as conn:
+    with db(serialized="accounts") as conn:
         if conn.execute("SELECT 1 FROM mini_reconciliations WHERE bill_date = ? AND status = 'running' AND updated_at > ?", (bill_date, now - 300)).fetchone():
             fail("该日账单正在核对，请稍后刷新", 409)
         conn.execute("UPDATE mini_reconciliations SET status = 'error', error = '上次核对中断，可重新核对' WHERE bill_date = ? AND status = 'running'", (bill_date,))
@@ -133,13 +133,13 @@ def reconcile(admin_id, bill_date):
             except PaymentError as error:
                 if error.code != "NO_STATEMENT_EXIST":
                     raise
-        with db(serialized=True) as conn:
+        with db(serialized="accounts") as conn:
             summary, differences = compare(conn, rows, bill_date)
             conn.execute("UPDATE mini_reconciliations SET status = 'complete', summary_json = ?, differences_json = ?, updated_at = ? WHERE id = ?",
                          (json.dumps(summary), json.dumps(differences[:5000], ensure_ascii=False), int(time.time()), identifier))
     except (PaymentError, ValueError, csv.Error) as error:
         message = "微信账单暂不可用，请检查配置或在账单生成后重试"
-        with db(serialized=True) as conn:
+        with db(serialized="accounts") as conn:
             conn.execute("UPDATE mini_reconciliations SET status = 'error', error = ?, updated_at = ? WHERE id = ?", (message, int(time.time()), identifier))
         if isinstance(error, PaymentError):
             raise

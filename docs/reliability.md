@@ -93,16 +93,19 @@ pnpm --dir web typecheck
 pnpm --dir web test
 pnpm --dir web build
 pnpm --dir admin typecheck
+pnpm --dir admin test
 pnpm --dir admin build
 python -m unittest discover -s tests -p 'test_backend*.py' -v
 python tests/run_ui_contracts.py
 git diff --check
 ```
 
-Current local regression coverage: 47 frontend tests and 33 backend tests,
-including the 26-case QC fixture. The isolated API runner checks six API contracts
-and 12 existing admin-console cases. It binds a temporary loopback port, creates
-a disposable SQLite database, and shuts down the fixture even on test failure.
+The admin component suite exercises actual Vue event handlers for batch tag
+selection, publication consent, knowledge-point creation and server pagination.
+Backend tests use disposable PostgreSQL databases and cover independent lock
+domains, cross-domain exclusion, readiness timeouts and event-loop responsiveness.
+The isolated API runner checks eight API contracts and 12 admin-console cases.
+It binds a temporary loopback port and shuts down the fixture on test failure.
 LLM calls are stubbed below the real generation routes, so normalization, metering,
 request identity, and API responses are exercised without paid traffic.
 
@@ -126,3 +129,37 @@ workflow has not been executed as part of this local change. Paid model quality,
 PostgreSQL integration, and cross-instance load have not been verified locally.
 The quotas are admission protection, not a durable background job queue. Browser
 storage remains subject to user deletion, origin changes, and storage quotas.
+
+## Database concurrency and readiness
+
+Transactions use explicit PostgreSQL advisory-lock domains in `app/db.py`:
+
+- `content` (`serialized=True` for compatibility): archives, publication,
+  dictionaries, favorites and other content operations.
+- `accounts`: consumer sessions, orders, refunds, membership grants, manual
+  renewals and subscription delivery. These operations keep a shared lock so
+  refunds, manual changes and account closure cannot lose entitlement updates.
+- `generation`: request deduplication and global/user admission quotas.
+- `schema`: startup migrations acquire every domain before applying DDL.
+
+Account deletion, closure approval, permission-checked downloads and inbox
+operations acquire both content and account domains. `db()` sorts and deduplicates
+lock IDs before acquiring them. Do not nest a second locking `db()` inside an
+existing transaction: pass the connection to helpers instead. Any new operation
+that crosses domains must acquire all its domains at transaction entry. Deploy
+this change by restarting all app workers together; do not mix workers using the
+previous single-lock implementation with the new implementation.
+
+Synchronous database/hash/file operations run in FastAPI's worker thread pool;
+async generation handlers offload scope/config lookups with `asyncio.to_thread`.
+
+`GET /health` reports process liveness. `GET /readyz` probes the existing database
+pool (1 second to acquire a connection, 1 second statement timeout), returns 503
+on failure and never exposes connection details. The HTTP response is bounded to
+2.5 seconds; overlapping requests share a pending probe to avoid creating more
+threads when a connection is stuck. Docker uses readiness for its health check.
+
+`GET /api/v1/admin/users` accepts `limit` (1–100, default 20) and `offset` (>=0),
+and returns `{users, total, limit, offset}` with role/search filters applied to
+both the count and page. Clients must paginate instead of assuming `users`
+contains the complete account list.

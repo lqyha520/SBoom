@@ -227,7 +227,7 @@ def favorite_paper(user_id, catalog_id, favorite):
 
 
 def request_download(user_id, catalog_id, edition="original"):
-    with db(serialized=True) as conn:
+    with db(serialized=("content", "accounts")) as conn:
         row = _visible(conn, catalog_id)
         user = mini_auth._user(conn, user_id)
         catalog_access.require_access(catalog_access.access_map(conn, [catalog_id], user)[catalog_id], "download")

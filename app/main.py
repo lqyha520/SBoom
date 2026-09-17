@@ -14,6 +14,7 @@ from app.routers.admin import router as admin_router
 from app.routers.auth import router as auth_router
 from app.routers.generate import router as generate_router
 from app.routers.me import router as me_router
+from app.routers.health import router as health_router
 from app.routers.library import router as library_router
 from app.routers.mini import router as mini_router
 from app.routers.catalog import router as catalog_router, admin_router as catalog_admin_router
@@ -107,6 +108,7 @@ _web_built = _web_dir.is_dir()
 
 # ─── API 路由（必须在静态挂载之前注册，否则会被 StaticFiles 遮蔽） ───
 app.include_router(auth_router)
+app.include_router(health_router)
 app.include_router(me_router)
 app.include_router(library_router)
 app.include_router(mini_router)
@@ -146,12 +148,6 @@ else:
     logger.warning(
         "未找到 admin/dist —— 后台管理前端未构建。执行：cd admin && pnpm install && pnpm build"
     )
-
-
-@app.get("/health", tags=["系统"])
-async def health():
-    # 不暴露模型名等内部信息，仅状态探针
-    return {"status": "healthy"}
 
 
 # ─── 静态挂载（必须放最后：根路径 mount 会吃掉后注册的路由） ───
