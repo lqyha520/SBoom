@@ -5,6 +5,7 @@ ON CONFLICT upsert、RETURNING），由本模块统一翻译为 PostgreSQL 方�
 本项目已移除 SQLite 运行时支持：DATABASE_URL 必须配置为 PostgreSQL 连接串。
 """
 
+from hashlib import sha256
 import logging
 import threading
 from contextlib import contextmanager
@@ -218,7 +219,7 @@ _LOCK_IDS = {"content": 70634191, "accounts": 70634192, "generation": 70634193, 
 
 
 @contextmanager
-def db(serialized: bool | str | tuple[str, ...] = False):
+def db(serialized: bool | str | tuple[str, ...] = False, *, content_user: str | None = None):
     """从连接池取连接；正常退出 commit，异常回滚（连接归还池时自动清理）。
 
     True 兼容内容域；字符串指定业务域，元组用于跨域事务。
@@ -226,8 +227,15 @@ def db(serialized: bool | str | tuple[str, ...] = False):
     """
     with _get_pg_pool().connection() as conn:
         scopes = ("content",) if serialized is True else (serialized,) if isinstance(serialized, str) else serialized or ()
-        for lock_id in sorted({_LOCK_IDS[scope] for scope in scopes}):
-            conn.execute("SELECT pg_advisory_xact_lock(%s)", (lock_id,))
+        locks = {_LOCK_IDS[scope]: False for scope in scopes}
+        if content_user is not None:
+            locks.setdefault(_LOCK_IDS["content"], True)
+        for lock_id, shared in sorted(locks.items()):
+            function = "pg_advisory_xact_lock_shared" if shared else "pg_advisory_xact_lock"
+            conn.execute(f"SELECT {function}(%s)", (lock_id,))
+        if content_user is not None:
+            user_key = int.from_bytes(sha256(str(content_user).encode()).digest()[:4], signed=True)
+            conn.execute("SELECT pg_advisory_xact_lock(%s, %s)", (_LOCK_IDS["content"], user_key))
         yield _PgConn(conn)
         conn.commit()
 

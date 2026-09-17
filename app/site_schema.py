@@ -238,9 +238,12 @@ def _migrate_dictionary_v2(conn) -> None:
     """
     if "parent" not in _columns(conn, "site_dictionary"):
         conn.execute("ALTER TABLE site_dictionary ADD COLUMN parent TEXT NOT NULL DEFAULT ''")
-    conn.execute("ALTER TABLE site_dictionary DROP CONSTRAINT IF EXISTS site_dictionary_kind_value_key")
-    conn.execute("ALTER TABLE site_dictionary DROP CONSTRAINT IF EXISTS site_dictionary_kind_parent_value_key")
-    conn.execute("ALTER TABLE site_dictionary ADD CONSTRAINT site_dictionary_kind_parent_value_key UNIQUE (kind, parent, value)")
+    constraints = {row[0] for row in conn.execute(
+        "SELECT conname FROM pg_constraint WHERE conrelid = 'site_dictionary'::regclass AND contype = 'u'")}
+    if "site_dictionary_kind_value_key" in constraints:
+        conn.execute("ALTER TABLE site_dictionary DROP CONSTRAINT site_dictionary_kind_value_key")
+    if "site_dictionary_kind_parent_value_key" not in constraints:
+        conn.execute("ALTER TABLE site_dictionary ADD CONSTRAINT site_dictionary_kind_parent_value_key UNIQUE (kind, parent, value)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_site_dictionary_parent ON site_dictionary(kind, parent, is_visible, sort_order)")
 
 

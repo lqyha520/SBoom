@@ -31,10 +31,16 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file: .env.production
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
     environment:
       # 容器内固定项：监听全部网卡、连 compose 网络里的 db、开多 worker（Linux 支持）
       HOST: 0.0.0.0
       PORT: "8000"
+      LOG_TO_FILE: "false"
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env.production}
       DATABASE_URL: postgresql://${POSTGRES_USER:-learncoach}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}@db:5432/${POSTGRES_DB:-learncoach}
     ports:

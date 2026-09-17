@@ -185,6 +185,8 @@ def get_user_template(user_id: int, tpl_id: int, admin: CurrentUser = Depends(re
 
 @router.get("/logs", summary="查看服务日志（尾部 N 行）")
 def tail_logs(lines: int = 200, admin: CurrentUser = Depends(require_admin)):
+    if not get_settings().log_to_file:
+        return {"logs": "日志输出到标准输出，请查看启动终端或 docker compose logs app。单进程本地运行可设置 LOG_TO_FILE=true。"}
     lines = max(10, min(1000, lines))
     try:
         # deque 只保留尾部 N 行，日志文件再大也只读一遍流，不整文件进内存

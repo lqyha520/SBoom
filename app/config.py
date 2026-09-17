@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     port: int = 8000
     debug: bool = False  # 仅开发时设 true：启用热重载。生产必须为 false
     workers: int = 1  # worker 进程数；>1 时建议配合 PostgreSQL 使用
+    log_to_file: bool = False
 
     # 数据库：PostgreSQL 连接串（必填；本服务仅支持 PG），例如
     #   postgresql://learncoach:learncoach@127.0.0.1:5432/learncoach

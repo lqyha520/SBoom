@@ -16,9 +16,79 @@ from app import db as database, security
 from app.deps import SESSION_COOKIE
 from app.routers import admin
 from app.services import generation_control, user_store
+from app.services import app_config, mini_auth, mini_experience
+from app.models.experience import FeedbackCreate
+from fastapi import HTTPException
 
 
 class OptimizationContracts(unittest.TestCase):
+    def test_dictionary_migration_preserves_constraint_and_index_identity(self):
+        query = "SELECT oid, conindid FROM pg_constraint WHERE conrelid = 'site_dictionary'::regclass " \
+                "AND conname = 'site_dictionary_kind_parent_value_key'"
+        with database.db() as conn:
+            before = tuple(conn.execute(query).fetchone())
+        database.init_db()
+        with database.db() as conn:
+            after = tuple(conn.execute(query).fetchone())
+        self.assertEqual(before, after)
+
+    def test_save_preserves_database_key_not_stale_worker_cache(self):
+        self.addCleanup(app_config._invalidate_cache)
+        app_config.save_llm("https://example.invalid", "old", "old-key", 90)
+        app_config.get_llm()
+        with database.db(serialized="accounts") as conn:
+            app_config._save_llm_raw(conn, "https://example.invalid", "new", security.encrypt_secret("new-key"), 90)
+        app_config.save_llm("https://example.invalid", "edited", "", 60)
+        self.assertEqual(app_config.get_llm(with_key=True)["api_key"], "new-key")
+        self.assertEqual(app_config.get_llm()["model"], "edited")
+
+    def test_user_content_lock_allows_other_users_but_blocks_same_user_and_global_writes(self):
+        held, release = threading.Event(), threading.Event()
+        same_done, global_done = threading.Event(), threading.Event()
+        def hold():
+            with database.db(content_user="first-user"):
+                held.set()
+                release.wait(5)
+        def write(options, completed):
+            with database.db(**options):
+                completed.set()
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            owner = pool.submit(hold)
+            self.assertTrue(held.wait(2))
+            try:
+                other_done = threading.Event()
+                pool.submit(write, {"content_user": "other-user"}, other_done).result(timeout=2)
+                self.assertTrue(other_done.is_set())
+                same = pool.submit(write, {"content_user": "first-user"}, same_done)
+                global_write = pool.submit(write, {"serialized": True}, global_done)
+                self.assertFalse(same_done.wait(.1))
+                self.assertFalse(global_done.wait(.1))
+            finally:
+                release.set()
+            owner.result(timeout=2)
+            same.result(timeout=2)
+            global_write.result(timeout=2)
+
+    def test_concurrent_feedback_keeps_per_user_limit(self):
+        user_id = mini_auth.register("feedback-concurrency", "test-password")["user"]["id"]
+        body = FeedbackCreate(kind="other", body="Concurrent feedback test")
+        def submit():
+            try:
+                mini_experience.create_feedback(user_id, body)
+                return 200
+            except HTTPException as error:
+                return error.status_code
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            statuses = list(pool.map(lambda attempt: submit(), range(12)))
+        self.assertEqual(statuses.count(200), 10)
+        self.assertEqual(statuses.count(429), 2)
+
+    def test_stdout_logs_do_not_show_stale_log_files(self):
+        with patch.object(admin.get_settings(), "log_to_file", False):
+            result = self.client.get("/api/v1/admin/logs")
+        self.assertEqual(result.status_code, 200)
+        self.assertIn("docker compose logs", result.json()["logs"])
+
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)

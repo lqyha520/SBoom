@@ -22,7 +22,7 @@ def _feedback(row, admin=False):
 
 def create_feedback(user_id, body):
     now, identifier = int(time.time()), uuid.uuid4().hex
-    with db(serialized=True) as conn:
+    with db(content_user=user_id) as conn:
         # A database limit is shared by all workers, including when an IP changes.
         count = conn.execute("SELECT COUNT(*) FROM mini_feedback WHERE user_id = ? AND created_at > ?",
                              (user_id, now - 3600)).fetchone()[0]

@@ -2,6 +2,7 @@
 
 import logging
 import logging.handlers
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -31,14 +32,17 @@ from app.security import security_warnings
 settings = get_settings()
 
 
-# ─── 日志（滚动：单文件 5MB，保留 3 份备份，无上限增长） ───
 _LOG_FILE = Path(__file__).resolve().parent.parent / "server.log"
-_log_file_handler = logging.handlers.RotatingFileHandler(
-    _LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+_log_handlers = [logging.StreamHandler(sys.stdout)]
+if settings.log_to_file:
+    if settings.workers > 1:
+        raise RuntimeError("LOG_TO_FILE requires WORKERS=1; use container logs for multiple workers")
+    _log_handlers.append(logging.handlers.RotatingFileHandler(
+        _LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"))
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[_log_file_handler, logging.StreamHandler()],
+    handlers=_log_handlers,
 )
 logger = logging.getLogger(__name__)
 
