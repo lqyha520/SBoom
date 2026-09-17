@@ -185,7 +185,8 @@ describe('offline and conflicting templates', () => {
     store.myTemplates[0]._syncState = 'conflict'
     expect(await store.copyMyTemplate('Lesson', 'Lesson copy')).toBe(true)
     expect(store.myTemplates).toHaveLength(2)
-    const sent = vi.mocked(api.upsertTemplate).mock.calls.at(-1)![0]
+    const calls = vi.mocked(api.upsertTemplate).mock.calls
+    const sent = calls[calls.length - 1]![0]
     expect(sent.name).toBe('Lesson copy')
     expect(sent._revision).toBe(0)
   })

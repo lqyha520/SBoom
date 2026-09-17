@@ -18,6 +18,10 @@ let wrapper: VueWrapper
 function button(label: string) {
   return wrapper.findAll('button').find(item => item.text() === label)!
 }
+// admin 的 tsconfig lib 是 ES2020，Array.prototype.at 需 ES2022，这里用索引取末项
+function lastCall<T>(calls: readonly T[]): T | undefined {
+  return calls[calls.length - 1]
+}
 function batch() {
   wrapper = mount(CatalogBatchDialog, {
     props: { open: true, adminId: 1, items: [{ id: 'paper', revision: 3 } as CatalogPaper], categories: [{ value: 'cat', label: '分类' }] },
@@ -111,10 +115,10 @@ describe.each([[UsersPage, 'user'], [AdminAccounts, 'admin']] as const)('服务�
       expect(String(fetchMock.mock.calls[0]?.[0])).toContain(`role=${role}&limit=20&offset=0`)
       expect(wrapper.text()).toContain('43')
       await button('下一页').trigger('click'); await flushPromises()
-      expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('offset=20')
+      expect(String(lastCall(fetchMock.mock.calls)?.[0])).toContain('offset=20')
       await wrapper.get('form.table-search input').setValue('张老师')
       await wrapper.get('form.table-search').trigger('submit'); await flushPromises()
-      const url = new URL(String(fetchMock.mock.calls.at(-1)?.[0]), 'http://localhost')
+      const url = new URL(String(lastCall(fetchMock.mock.calls)?.[0]), 'http://localhost')
       expect(url.searchParams.get('offset')).toBe('0')
       expect(url.searchParams.get('query')).toBe('张老师')
     } finally { vi.unstubAllGlobals() }
