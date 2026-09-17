@@ -221,7 +221,7 @@ def publish_bundle(user_id: int, paper_id: str, data: bytes):
                          "upload_started_at = ?, upload_reserved_bytes = ? WHERE id = ?", (token, now, size, paper_id))
     if ready:
         return get_paper(user_id, paper_id)
-    backend = get_settings().archive_storage
+    backend = "local"
     written = []
     try:
         storage = storage_for(backend)

@@ -42,49 +42,11 @@ class LocalStorage:
         self.path(key).unlink(missing_ok=True)
 
 
-class CosStorage:
-    def __init__(self):
-        settings = get_settings()
-        if not all((settings.cos_region, settings.cos_bucket, settings.cos_secret_id, settings.cos_secret_key)):
-            raise HTTPException(503, detail={"error": "私有文件存储尚未配置，请联系管理员"})
-        try:
-            from qcloud_cos import CosConfig, CosS3Client
-        except ImportError as exc:
-            raise HTTPException(503, detail={"error": "COS 存储组件尚未安装，请联系管理员"}) from exc
-        self.bucket = settings.cos_bucket
-        self.client = CosS3Client(CosConfig(
-            Region=settings.cos_region, SecretId=settings.cos_secret_id,
-            SecretKey=settings.cos_secret_key, Scheme="https", Timeout=20,
-        ))
-
-    def put(self, key: str, data: bytes, mime: str):
-        self.client.put_object(Bucket=self.bucket, Key="learn-coach/" + _key(key), Body=data,
-                               ContentType=mime, ACL="private", EnableMD5=True)
-
-    def delete(self, key: str):
-        self.client.delete_object(Bucket=self.bucket, Key="learn-coach/" + _key(key))
-
-    def stream(self, key: str):
-        response = self.client.get_object(Bucket=self.bucket, Key="learn-coach/" + _key(key))
-        body = response["Body"].get_raw_stream()
-
-        def chunks():
-            try:
-                while chunk := body.read(64 * 1024):
-                    yield chunk
-            finally:
-                body.close()
-
-        return chunks()
-
-
 def storage_for(name: str | None = None):
-    name = name or get_settings().archive_storage
-    if name == "local":
-        return LocalStorage()
-    if name == "cos":
-        return CosStorage()
-    raise ValueError("Unsupported storage backend")
+    """私有文件存储后端。已移除 COS 支持，仅保留本地磁盘存储。"""
+    if name not in (None, "", "local"):
+        raise ValueError(f"Unsupported storage backend: {name!r}")
+    return LocalStorage()
 
 
 def unpack_bundle(data: bytes) -> list[tuple[str, int, str, bytes]]:

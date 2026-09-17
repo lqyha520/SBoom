@@ -30,7 +30,7 @@ vim .env.production   # 至少填：DOMAIN、POSTGRES_PASSWORD、SECRET_KEY、AD
 | 变量 | 说明 |
 | --- | --- |
 | `DOMAIN` | 你的域名，Caddy 据此自动签 Let's Encrypt 证书 |
-| `POSTGRES_PASSWORD` | 数据库密码，改成强密码 |
+| `POSTGRES_PASSWORD` | 使用 `python3 -c "import secrets;print(secrets.token_urlsafe(32))"` 生成 URL 安全的强密码（会嵌入连接 URL） |
 | `SECRET_KEY` | 会话签名密钥，`python3 -c "import secrets;print(secrets.token_urlsafe(48))"` 生成 |
 | `ADMIN_USERNAME/PASSWORD` | 后台种子管理员（首次启动创建，之后可删掉这两行） |
 | `WECHAT_APP_ID/SECRET` | 小程序凭证（与 `miniprogram/src/manifest.json` 的 mp-weixin.appid 一致） |
@@ -41,22 +41,24 @@ vim .env.production   # 至少填：DOMAIN、POSTGRES_PASSWORD、SECRET_KEY、AD
 ## 3. 启动
 
 ```bash
-docker compose up -d --build
-docker compose logs -f app        # 出现 "Uvicorn running on http://0.0.0.0:8000" 即成功
-curl https://你的域名/health       # {"status":"ok"}（需要后端返回的真实字段）
+docker compose --env-file .env.production up -d --build
+docker compose --env-file .env.production logs -f app        # 出现 "Uvicorn running on http://0.0.0.0:8000" 即成功
+curl --fail https://你的域名/readyz  # {"status":"ready"}，数据库不可用时返回 503
 ```
 
-首次启动自动幂等建表，无需手动迁移。之后更新版本：
+所有 Compose 命令都需显式传入 `--env-file .env.production`，这样域名、数据库密码和容器配置使用同一份文件。缺少域名、密码或签名密钥时启动会报错。`/health` 只检查进程存活，`/readyz` 检查数据库连接池和查询，探测最长等待 2.5 秒。
+
+首次启动自动幂等建表，无需手动迁移。本次锁域调整需要同时重启全部应用 worker，避免新旧锁协议混跑。之后更新版本：
 
 ```bash
-git pull && docker compose up -d --build   # 只重建应用层，前端 dist 在镜像内构建
+git pull && docker compose --env-file .env.production up -d --build   # 只重建应用层，前端 dist 在镜像内构建
 ```
 
 ## 4. 数据与备份
 
 | 卷 | 内容 | 备份建议 |
 | --- | --- | --- |
-| `pgdata` | PostgreSQL 全部业务数据 | `docker compose exec db pg_dump -U learncoach learncoach | gzip > backup.sql.gz` |
+| `pgdata` | PostgreSQL 全部业务数据 | `docker compose --env-file .env.production exec db pg_dump -U learncoach learncoach | gzip > backup.sql.gz` |
 | `appdata` | 试卷 PDF/图片实体、secret_key、支付密钥 | 直接 tar 这个卷 |
 | `caddy_data` | TLS 证书 | 不需要 |
 
@@ -70,6 +72,6 @@ git pull && docker compose up -d --build   # 只重建应用层，前端 dist �
 ## 6. 已知限制 / 注意
 
 - **多 worker 只在 Linux 可用**：`WORKERS=2` 在容器里没问题；Windows 本机仍是单 worker。
-- **COS 存储未内置**：`ARCHIVE_STORAGE=cos` 需要在 `requirements.txt` 加 `cos-python-sdk-v5` 后重新构建镜像，否则切换会 503。小规模用默认 `local`（文件落 `appdata` 卷）即可。
+- **文件存储固定为本地磁盘**（`appdata` 卷内的 `data/paper-files`，可用 `ARCHIVE_LOCAL_DIR` 调整）；COS 支持已移除，多实例部署需自行提供共享存储。
 - 域名必须备案，否则 443 会被云厂商拦截。
 - `.env.production` 含密钥，已在 `.gitignore` 排除，不要提交。

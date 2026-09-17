@@ -1,7 +1,7 @@
 """小程序运营内容（分类 / Banner / 公告 / 协议文档 / 年级科目字典）的读写与公开视图。
 
 管理端做增删改查 + 排序 + 上下线；小程序端只读，且只能拿到「可见且在有效期内」的数据。
-图片沿用试卷库的私有存储（LocalStorage / CosStorage），经由后端鉴权后转发，不暴露直链。
+图片沿用试卷库的私有本地存储（LocalStorage），经由后端鉴权后转发，不暴露直链。
 """
 
 import io
@@ -233,9 +233,7 @@ def save_banner_image(banner_id: str, content_type: str, data: bytes, revision: 
     if not (1 <= width <= MAX_IMAGE_WIDTH and 1 <= height <= MAX_IMAGE_HEIGHT):
         raise HTTPException(422, detail={"error": f"Banner 图片尺寸需在 {MAX_IMAGE_WIDTH}×{MAX_IMAGE_HEIGHT} 以内"})
 
-    from app.config import get_settings
-
-    storage_name = get_settings().archive_storage
+    storage_name = "local"
     key = f"site/banners/{uuid.uuid4().hex}.{ALLOWED_IMAGE_MIMES[mime]}"
     with db(serialized=True) as conn:
         row = conn.execute("SELECT revision, image_key, image_storage FROM site_banners WHERE id = ?", (banner_id,)).fetchone()
@@ -395,30 +393,52 @@ def _dictionary_row(row) -> dict:
     return item
 
 
-def list_dictionary(kind: str = "") -> dict:
-    where, args = "", []
+def list_dictionary(kind: str = "", parent: str = "") -> dict:
+    where, args = [], []
     if kind:
-        where, args = " WHERE kind = ?", [kind]
+        where.append("kind = ?")
+        args.append(kind)
+    if parent:
+        where.append("parent = ?")
+        args.append(parent)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
     with db() as conn:
-        rows = conn.execute(f"SELECT * FROM site_dictionary{where} ORDER BY kind, sort_order, value", args).fetchall()
+        rows = conn.execute(f"SELECT * FROM site_dictionary{clause} ORDER BY kind, parent, sort_order, value", args).fetchall()
     return {"items": [_dictionary_row(row) for row in rows]}
 
 
 def create_dictionary(body: DictionaryInput) -> dict:
     now = _now()
     value = _clean(body.value)
+    parent = body.parent.strip()
+    if body.kind == "knowledge_point":
+        _require_scope_pair(parent)
     with db(serialized=True) as conn:
-        if conn.execute("SELECT 1 FROM site_dictionary WHERE kind = ? AND value = ?", (body.kind, value)).fetchone():
+        if conn.execute("SELECT 1 FROM site_dictionary WHERE kind = ? AND parent = ? AND value = ?",
+                        (body.kind, parent, value)).fetchone():
             raise _conflict("该取值已在字典中")
         order = body.sort_order or conn.execute(
-            "SELECT COALESCE(MAX(sort_order), 0) + 10 FROM site_dictionary WHERE kind = ?", (body.kind,)).fetchone()[0]
+            "SELECT COALESCE(MAX(sort_order), 0) + 10 FROM site_dictionary WHERE kind = ? AND parent = ?",
+            (body.kind, parent)).fetchone()[0]
         item_id = uuid.uuid4().hex
         conn.execute(
-            "INSERT INTO site_dictionary(id, kind, value, label, sort_order, is_visible, revision, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
-            (item_id, body.kind, value, _clean(body.label), order, _as_int(body.is_visible), now, now),
+            "INSERT INTO site_dictionary(id, kind, parent, value, label, sort_order, is_visible, revision, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            (item_id, body.kind, parent, value, _clean(body.label), order, _as_int(body.is_visible), now, now),
         )
     return _one_dictionary(item_id)
+
+
+def _require_scope_pair(parent: str) -> None:
+    """校验「年级id|科目id」组合真实存在，返回 (grade_id, subject_id)。"""
+    from fastapi import HTTPException
+
+    grade_id, _, subject_id = parent.partition("|")
+    with db() as conn:
+        grade = conn.execute("SELECT 1 FROM site_dictionary WHERE id = ? AND kind = 'grade'", (grade_id,)).fetchone()
+        subject = conn.execute("SELECT 1 FROM site_dictionary WHERE id = ? AND kind = 'subject'", (subject_id,)).fetchone()
+    if not grade or not subject:
+        raise HTTPException(422, detail={"error": "所属年级或科目不存在，请刷新后重试"})
 
 
 def _one_dictionary(item_id: str) -> dict:
@@ -433,13 +453,13 @@ def update_dictionary(item_id: str, body: DictionaryUpdate) -> dict:
     now = _now()
     value = _clean(body.value)
     with db(serialized=True) as conn:
-        row = conn.execute("SELECT kind, revision FROM site_dictionary WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute("SELECT kind, parent, revision FROM site_dictionary WHERE id = ?", (item_id,)).fetchone()
         if not row:
             raise _missing("字典条目不存在")
         if row["revision"] != body.revision:
             raise _conflict("字典条目已被其他操作更新，请刷新后重试")
-        clash = conn.execute("SELECT id FROM site_dictionary WHERE kind = ? AND value = ? AND id <> ?",
-                             (row["kind"], value, item_id)).fetchone()
+        clash = conn.execute("SELECT id FROM site_dictionary WHERE kind = ? AND parent = ? AND value = ? AND id <> ?",
+                             (row["kind"], row["parent"], value, item_id)).fetchone()
         if clash:
             raise _conflict("该取值已在字典中")
         conn.execute("UPDATE site_dictionary SET value = ?, label = ?, sort_order = ?, is_visible = ?, "
@@ -456,6 +476,38 @@ def delete_dictionary(item_id: str, revision: int) -> None:
         if row["revision"] != revision:
             raise _conflict("字典条目已被其他操作更新，请刷新后重试")
         conn.execute("DELETE FROM site_dictionary WHERE id = ?", (item_id,))
+        # 同步清理关联与从属知识点（知识点 parent = 年级id|科目id）
+        conn.execute("DELETE FROM site_dict_links WHERE parent_id = ? OR child_id = ?", (item_id, item_id))
+        conn.execute("DELETE FROM site_dictionary WHERE parent LIKE ? OR parent LIKE ?",
+                     (item_id + "|%", "%|" + item_id))
+
+
+# ─── 年级 ↔ 科目关联 ───
+
+def list_dictionary_links() -> dict:
+    with db() as conn:
+        rows = conn.execute("SELECT parent_id, child_id FROM site_dict_links ORDER BY parent_id, child_id").fetchall()
+    return {"links": [dict(row) for row in rows]}
+
+
+def set_dictionary_links(grade_id: str, subject_ids: list[str]) -> dict:
+    """整体替换某年级关联的科目集合（前端一次提交完整勾选结果）。"""
+    wanted = list(dict.fromkeys(subject_ids))  # 去重且保序
+    with db(serialized=True) as conn:
+        grade = conn.execute("SELECT id FROM site_dictionary WHERE id = ? AND kind = 'grade'", (grade_id,)).fetchone()
+        if not grade:
+            raise _missing("年级不存在")
+        subjects = {row["id"]: row["value"] for row in conn.execute("SELECT id, value FROM site_dictionary WHERE kind = 'subject'")}
+        unknown = [item for item in wanted if item not in subjects]
+        if unknown:
+            raise HTTPException(422, detail={"error": "包含不存在的科目条目，请刷新后重试"})
+        conn.execute("DELETE FROM site_dict_links WHERE parent_id = ?", (grade_id,))
+        now = _now()
+        for subject_id in wanted:
+            conn.execute("INSERT INTO site_dict_links(parent_id, child_id, created_at) VALUES (?, ?, ?)",
+                         (grade_id, subject_id, now))
+    return {"grade_id": grade_id, "subject_ids": wanted,
+            "subject_values": [subjects[item] for item in wanted]}
 
 
 def unlisted_dictionary() -> dict:
@@ -515,13 +567,24 @@ def home_payload() -> dict:
             "SELECT value FROM site_dictionary WHERE kind = 'grade' AND is_visible = 1 ORDER BY sort_order, value")]
         subjects = [row["value"] for row in conn.execute(
             "SELECT value FROM site_dictionary WHERE kind = 'subject' AND is_visible = 1 ORDER BY sort_order, value")]
+        # 年级 → 关联科目（显式关联，按科目字典排序）；无关联的年级回退到全部可见科目
+        subject_value_by_id = {row["id"]: row["value"] for row in conn.execute(
+            "SELECT id, value FROM site_dictionary WHERE kind = 'subject' AND is_visible = 1")}
+        links: dict[str, list[str]] = {}
+        for row in conn.execute("SELECT parent_id, child_id FROM site_dict_links"):
+            value = subject_value_by_id.get(row["child_id"])
+            if value:
+                links.setdefault(row["parent_id"], []).append(value)
+        grade_id_by_value = {row["value"]: row["id"] for row in conn.execute(
+            "SELECT id, value FROM site_dictionary WHERE kind = 'grade' AND is_visible = 1")}
+        subjects_by_grade = {value: links.get(grade_id, subjects) for value, grade_id in grade_id_by_value.items()}
         popups = _active_notices(conn, now, "popup")
         strips = _active_notices(conn, now, "banner")
     return {
         "banners": banners,
         "notices": {"popup": popups, "banner": strips},
         "categories": categories,
-        "dictionaries": {"grades": grades, "subjects": subjects},
+        "dictionaries": {"grades": grades, "subjects": subjects, "subjects_by_grade": subjects_by_grade},
     }
 
 
