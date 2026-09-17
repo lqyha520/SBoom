@@ -52,31 +52,44 @@ def source_id(conn, catalog_id, original_id, kind):
     return row[0]
 
 
+def is_import(row) -> bool:
+    """手动导入的归档（source_id 以 import- 开头）：内容只有导入人清楚，关联打印版本时不做一致性校验。"""
+    return bool(row["source_id"]) and row["source_id"].startswith("import-")
+
+
 def sources(admin_id, catalog_id, q=""):
     with db() as conn:
         target = conn.execute("SELECT a.* FROM catalog_papers c JOIN paper_archives a ON a.id = c.paper_id WHERE c.id = ?", (catalog_id,)).fetchone()
         if not target:
             fail("资料不存在", 404)
-        match = fingerprint(target["snapshot_json"])
-        args = [admin_id, target["grade"], target["subject"], target["question_count"]]
-        where = "user_id = ? AND grade = ? AND subject = ? AND question_count = ? AND file_status = 'ready'"
+        if is_import(target):
+            # 导入的资料：列出自己全部导入的归档，不限年级科目题量，内容是否配套由导入人确认
+            args = [admin_id]
+            where = "user_id = ? AND file_status = 'ready' AND source_id LIKE 'import-%'"
+            match = None
+        else:
+            match = fingerprint(target["snapshot_json"])
+            args = [admin_id, target["grade"], target["subject"], target["question_count"]]
+            where = "user_id = ? AND grade = ? AND subject = ? AND question_count = ? AND file_status = 'ready'"
         if q:
             where += " AND LOWER(title) LIKE ? ESCAPE '\\'"
             args.append("%" + q.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
         rows = conn.execute(f"SELECT id, title, version, snapshot_json FROM paper_archives WHERE {where} ORDER BY created_at DESC, id DESC LIMIT 500", args)
         items = []
         for row in rows:
-            if fingerprint(row["snapshot_json"]) == match:
+            if match is None or fingerprint(row["snapshot_json"]) == match:
                 mode = json.loads(row["snapshot_json"])["export_options"]["mode"]
-                items.append({"id": row["id"], "title": row["title"], "version": row["version"], "mode": mode})
+                dupe = conn.execute("SELECT title FROM catalog_papers WHERE paper_id = ? AND id <> ?", (row["id"], catalog_id)).fetchone()
+                items.append({"id": row["id"], "title": row["title"], "version": row["version"], "mode": mode,
+                              "owned_by": dupe["title"] if dupe else ""})
             if len(items) == 50:
                 break
-    return {"items": items}
+    return {"items": items, "loose": match is None}
 
 
 def assign(admin_id, catalog_id, body):
     with db(serialized=True) as conn:
-        target = conn.execute("SELECT c.*, a.snapshot_json FROM catalog_papers c JOIN paper_archives a ON a.id = c.paper_id WHERE c.id = ?", (catalog_id,)).fetchone()
+        target = conn.execute("SELECT c.*, a.snapshot_json, a.source_id AS archive_source_id FROM catalog_papers c JOIN paper_archives a ON a.id = c.paper_id WHERE c.id = ?", (catalog_id,)).fetchone()
         if not target:
             fail("资料不存在", 404)
         if target["revision"] != body.revision:
@@ -89,12 +102,17 @@ def assign(admin_id, catalog_id, body):
                 fail("只能选择自己保存的原稿", 404)
             if source["file_status"] != "ready":
                 fail("该原稿的文件尚未就绪")
-            mode = json.loads(source["snapshot_json"])["export_options"]["mode"]
-            if (body.kind == "student" and mode != "student") or (body.kind == "answers" and mode not in ("answersOnly", "withAnswers")):
-                fail("文件的导出模式与所选打印版本不一致", 422)
-            if fingerprint(source["snapshot_json"]) != fingerprint(target["snapshot_json"]):
-                fail("打印版本必须与当前资料包含相同题目，请从同一份习题保存练习版或答案版", 422)
-            for table, field in (("catalog_papers", "id"), ("catalog_versions", "catalog_id"), ("catalog_edition_history", "catalog_id")):
+            if not (is_import(source) or target["archive_source_id"].startswith("import-")):
+                # 仅工作台产出做内容一致性校验；涉及手动导入的由导入人自行确认内容配套
+                mode = json.loads(source["snapshot_json"])["export_options"]["mode"]
+                if (body.kind == "student" and mode != "student") or (body.kind == "answers" and mode not in ("answersOnly", "withAnswers")):
+                    fail("文件的导出模式与所选打印版本不一致", 422)
+                if fingerprint(source["snapshot_json"]) != fingerprint(target["snapshot_json"]):
+                    fail("打印版本必须与当前资料包含相同题目，请从同一份习题保存练习版或答案版", 422)
+            dupe = conn.execute("SELECT title FROM catalog_papers WHERE paper_id = ? AND id <> ?", (body.paper_id, catalog_id)).fetchone()
+            if dupe:
+                fail(f"该文件已单独建了公共条目「{dupe['title']}」，请先删除该条目（原稿会保留），再关联为打印版本", 409)
+            for table, field in (("catalog_versions", "catalog_id"), ("catalog_edition_history", "catalog_id")):
                 if conn.execute(f"SELECT 1 FROM {table} WHERE paper_id = ? AND {field} <> ?", (body.paper_id, catalog_id)).fetchone():
                     fail("此原稿已属于另一公共条目，请另存版本")
             conn.execute("INSERT INTO catalog_print_editions(catalog_id, kind, paper_id) VALUES (?, ?, ?) ON CONFLICT(catalog_id, kind) DO UPDATE SET paper_id = excluded.paper_id", (catalog_id, body.kind, body.paper_id))

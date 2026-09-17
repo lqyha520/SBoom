@@ -15,10 +15,20 @@ from app.services import catalog_editions
 def batch(body):
     with db(serialized=True) as conn:
         category = None
+        tag_kinds = {}
         if body.action == "category":
             category = conn.execute("SELECT id, name FROM site_categories WHERE id = ?", (body.category_id,)).fetchone()
             if not category:
                 fail("所选分类不存在", 404)
+        elif body.action == "tags":
+            for identifier in body.tag_ids:
+                tag = conn.execute("SELECT kind FROM catalog_tags WHERE id = ?", (identifier,)).fetchone()
+                if not tag:
+                    fail("所选标签已删除，请刷新", 404)
+                tag_kinds[identifier] = tag[0]
+            for kind in ("textbook", "term", "unit"):
+                if sum(1 for kind_ in tag_kinds.values() if kind_ == kind) > 1:
+                    fail("教材、学期、单元各只能设置一个", 422)
         rows = []
         for item in body.items:
             row = conn.execute(f"SELECT c.*, a.file_status FROM {catalog.JOIN} WHERE c.id = ?", (item.id,)).fetchone()
@@ -38,6 +48,23 @@ def batch(body):
                 conn.execute("UPDATE catalog_papers SET status = ?, published_at = ? WHERE id = ?", (body.action, published_at, row["id"]))
             elif body.action == "access":
                 catalog_access.save_policy(conn, row["id"], body)
+            elif body.action == "tags":
+                # 合并语义：教材/学期/单元按类型覆盖，知识点追加去重，其余保留
+                merged: dict[str, list[str]] = {}
+                for item in conn.execute("SELECT p.tag_id, t.kind FROM catalog_paper_tags p JOIN catalog_tags t ON t.id = p.tag_id WHERE p.catalog_id = ?", (row["id"],)).fetchall():
+                    merged.setdefault(item["kind"], []).append(item["tag_id"])
+                for identifier, kind in tag_kinds.items():
+                    if kind == "knowledge":
+                        if identifier not in merged.setdefault("knowledge", []):
+                            merged["knowledge"].append(identifier)
+                    else:
+                        merged[kind] = [identifier]
+                if len(merged.get("knowledge", [])) > 20:
+                    fail("「" + row["title"] + "」合并后知识点将超过 20 个，本次未作修改", 422)
+                conn.execute("DELETE FROM catalog_paper_tags WHERE catalog_id = ?", (row["id"],))
+                for identifiers in merged.values():
+                    for identifier in identifiers:
+                        conn.execute("INSERT INTO catalog_paper_tags(catalog_id, tag_id) VALUES (?, ?)", (row["id"], identifier))
             conn.execute("UPDATE catalog_papers SET revision = revision + 1, updated_at = ? WHERE id = ?", (now, row["id"]))
     return {"updated": len(rows)}
 

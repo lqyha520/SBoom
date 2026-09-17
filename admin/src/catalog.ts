@@ -38,6 +38,29 @@ function mutation(method: string, userId: number, body?: unknown): RequestInit {
 export function createPublication(userId: number, body: { paper_id: string; title: string; description: string; category_id: string; view_access: string; download_access: string }) {
   return request<CatalogDetail>(base + '/papers', mutation('POST', userId, body))
 }
+export interface CatalogImportMeta {
+  title: string; grade: string; subject: string; description: string
+  category_id: string; mode: 'student' | 'answersOnly' | 'withAnswers'
+  view_access: string; download_access: string
+}
+/** 手动导入外部 PDF：服务端渲染预览页并直接创建草稿 */
+export function importPublication(userId: number, file: File, meta: CatalogImportMeta) {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(meta)) params.set(key, value)
+  return request<CatalogDetail>(base + '/import?' + params, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/pdf', 'X-Workspace-User': String(userId) },
+    body: file,
+  })
+}
+/** 导入一份外部 PDF 直接挂为该资料的打印版本（默认答案解析版），不单独创建公共条目 */
+export function attachImportedEdition(userId: number, catalogId: string, revision: number, kind: 'student' | 'answers', file: File) {
+  return request<{ revision: number; editions: { kind: string; label: string }[] }>(base + '/papers/' + encodeURIComponent(catalogId) + '/editions/import?kind=' + kind, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/pdf', 'X-Workspace-User': String(userId) },
+    body: file,
+  })
+}
 export function updatePublication(userId: number, id: string, body: PublicationEdit) {
   return request<CatalogDetail>(base + '/papers/' + encodeURIComponent(id), mutation('PUT', userId, body))
 }

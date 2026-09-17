@@ -7,3 +7,4 @@ python-dotenv==1.0.1
 cryptography>=42.0.0
 psycopg[binary,pool]>=3.2  # PostgreSQL（DATABASE_URL 启用时使用；pool 提供连接池）
 Pillow>=12.3.0,<13  # Validate and normalize private paper preview images.
+pypdfium2>=4.30,<5  # 手动导入习题：服务端把 PDF 渲染成预览页图

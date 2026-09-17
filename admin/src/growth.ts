@@ -4,7 +4,7 @@ export type TagKind = 'textbook' | 'term' | 'unit' | 'knowledge'
 export const tagKinds: { value: TagKind; label: string }[] = [{ value: 'textbook', label: '教材' }, { value: 'term', label: '学期' }, { value: 'unit', label: '单元' }, { value: 'knowledge', label: '知识点' }]
 export interface CatalogTag { id: string; kind: TagKind; name: string; revision: number; is_visible: boolean; sort_order: number; paper_count: number }
 export interface Edition { kind: 'original' | 'student' | 'answers'; paper_id: string; label: string; byte_size: number; mode: string; url?: string }
-export interface EditionSource { id: string; title: string; version: number; mode: string }
+export interface EditionSource { id: string; title: string; version: number; mode: string; owned_by?: string }
 export interface ResourceRequest { id: string; username: string; nickname: string; title: string; grade: string; subject: string; details: string; status: 'pending' | 'planned' | 'fulfilled' | 'closed'; reply: string; catalog_id: string | null; paper_title: string | null; revision: number; created_at: number; updated_at: number }
 export interface Demand { fingerprint: string; title: string; grade: string; subject: string; requests: number; users: number }
 export const requestStatuses = { pending: '待处理', planned: '已安排', fulfilled: '资料已补齐', closed: '已关闭' }
@@ -29,7 +29,7 @@ export const getTags = () => request<{ items: CatalogTag[] }>(catalog + '/tags')
 export const saveTag = (admin: number, tag: Omit<CatalogTag, 'id' | 'paper_count'>, id = '') => change<CatalogTag>(catalog + '/tags' + (id ? '/' + encodeURIComponent(id) : ''), admin, tag, id ? 'PUT' : 'POST')
 export const removeTag = (admin: number, item: CatalogTag) => change<void>(catalog + '/tags/' + item.id + '?revision=' + item.revision, admin, undefined, 'DELETE')
 export const assignTags = (admin: number, id: string, revision: number, tag_ids: string[]) => change<{ revision: number; tags: CatalogTag[] }>(catalog + '/papers/' + encodeURIComponent(id) + '/labels', admin, { revision, tag_ids }, 'PUT')
-export const editionSources = (id: string, q = '') => request<{ items: EditionSource[] }>(catalog + '/papers/' + encodeURIComponent(id) + '/edition-sources?q=' + encodeURIComponent(q))
+export const editionSources = (id: string, q = '') => request<{ items: EditionSource[]; loose?: boolean }>(catalog + '/papers/' + encodeURIComponent(id) + '/edition-sources?q=' + encodeURIComponent(q))
 export const saveEdition = (admin: number, id: string, body: { revision: number; kind: 'student' | 'answers'; paper_id: string | null; confirm_publication: boolean }) => change<{ revision: number; editions: Edition[] }>(catalog + '/papers/' + encodeURIComponent(id) + '/editions', admin, body, 'PUT')
 export const getRequests = (status = '', fingerprint = '', offset = 0) => request<Page<ResourceRequest> & { demand: Demand[] }>(base + '/requests?' + new URLSearchParams({ status, fingerprint, offset: String(offset) }))
 export const resolveRequest = (admin: number, item: ResourceRequest) => change<ResourceRequest>(base + '/requests/' + item.id, admin, { revision: item.revision, status: item.status, reply: item.reply, catalog_id: item.catalog_id }, 'PUT')

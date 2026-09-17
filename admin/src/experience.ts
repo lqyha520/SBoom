@@ -36,7 +36,7 @@ export const removeTopic = (id: number, topic: Topic) => change<void>(base + '/t
 export const getUsage = () => request<UsageAnalytics>(base + '/analytics')
 export const renewMember = (id: number, target: MiniUser, days: number, note: string) => change<MiniUser>('/api/v1/admin/mini-users/' + target.id + '/renew', id, { revision: target.revision, days, note })
 export const memberEvents = (id: string, offset = 0) => request<Page<MemberEvent>>('/api/v1/admin/mini-users/' + encodeURIComponent(id) + '/events?offset=' + offset)
-export function batchCatalog(id: number, items: CatalogPaper[], body: { action: string; category_id: string; view_access: string; download_access: string; confirm_publication: boolean }) {
+export function batchCatalog(id: number, items: CatalogPaper[], body: { action: string; category_id: string; view_access: string; download_access: string; confirm_publication: boolean; tag_ids?: string[] }) {
   return change<{ updated: number }>('/api/v1/admin/catalog/batch', id, { ...body, items: items.map(item => ({ id: item.id, revision: item.revision })) })
 }
 export const previewCatalog = (id: string, membership: string) => request<CatalogDetail>('/api/v1/admin/catalog/papers/' + encodeURIComponent(id) + '/preview?membership=' + membership)

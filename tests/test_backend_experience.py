@@ -6,7 +6,7 @@ import unittest
 import test_backend_catalog as fixtures
 from app import db as database
 from app.models.mini import MembershipUpdate
-from app.routers import experience, site
+from app.routers import engagement, experience, site
 from app.services import mini_auth
 
 
@@ -19,7 +19,7 @@ class ExperienceContracts(unittest.TestCase):
 
     def setUp(self):
         fixtures.PublicCatalogContracts.setUp(self)
-        for router in (experience.router, site.router, site.admin_router):
+        for router in (experience.router, site.router, site.admin_router, engagement.router):
             self.client.app.include_router(router)
 
     def test_current_documents_are_readable_before_login(self):
@@ -138,6 +138,33 @@ class ExperienceContracts(unittest.TestCase):
         self.assertTrue(self.client.get(path + '?membership=vip').json()['can_download'])
         self.sign_in(self.viewer)
         self.assertEqual(self.client.get('/api/v1/catalog/papers?only_free=true').json()['total'], 0)
+
+    def test_batch_tags_merge_and_validation(self):
+        first, second = self.publish(), self.publish()
+        path = '/api/v1/admin/catalog/tags'
+        def tag(kind, name):
+            result = self.client.post(path, json={'kind': kind, 'name': name})
+            self.assertEqual(result.status_code, 201, result.text)
+            return result.json()
+        old_book, new_book = tag('textbook', '北师大版'), tag('textbook', '人教版')
+        addition, subtraction = tag('knowledge', '加法'), tag('knowledge', '减法')
+        self.client.put('/api/v1/admin/catalog/papers/' + first['id'] + '/labels',
+                        json={'revision': first['revision'], 'tag_ids': [old_book['id'], addition['id']]}).raise_for_status()
+        first = self.client.get('/api/v1/admin/catalog/papers/' + first['id']).json()
+        body = {'action': 'tags', 'tag_ids': [new_book['id'], addition['id'], subtraction['id']],
+                'items': [{'id': first['id'], 'revision': first['revision']}, {'id': second['id'], 'revision': second['revision']}]}
+        self.assertEqual(self.client.post('/api/v1/admin/catalog/batch', json=body).status_code, 200, body)
+        def names(paper):
+            return sorted(item['name'] for item in self.client.get('/api/v1/admin/catalog/papers/' + paper['id']).json()['tags'])
+        # 旧教材被覆盖，知识点去重后追加；另一份从零打上
+        self.assertEqual(names(first), ['人教版', '减法', '加法'])
+        self.assertEqual(names(second), ['人教版', '减法', '加法'])
+        # 教材选了两个 → 422 且不落库
+        body['tag_ids'] = [new_book['id'], tag('textbook', '苏教版')['id']]
+        self.assertEqual(self.client.post('/api/v1/admin/catalog/batch', json=body).status_code, 422)
+        self.assertEqual(names(first), ['人教版', '减法', '加法'])
+        # 空标签 → 422
+        self.assertEqual(self.client.post('/api/v1/admin/catalog/batch', json={'action': 'tags', 'tag_ids': [], 'items': body['items']}).status_code, 422)
 
     def test_free_filter_resolves_inheritance_before_pagination(self):
         rule = next(item for item in self.client.get('/api/v1/admin/catalog/type-rules').json()['items'] if item['question_type'] == 'quiz')

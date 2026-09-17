@@ -53,7 +53,7 @@ export async function request<T>(url: string, init?: RequestInit, responseType: 
   try {
     r = await fetch(url, {
       ...init,
-      signal: AbortSignal.timeout(url.endsWith('/reconciliations') && init?.method === 'POST' ? 180000 : url.includes('test-llm') ? TEST_LLM_TIMEOUT_MS : DEFAULT_TIMEOUT_MS),
+      signal: AbortSignal.timeout(url.endsWith('/reconciliations') && init?.method === 'POST' ? 180000 : url.includes('/admin/catalog/import') || url.includes('/editions/import') ? 120000 : url.includes('test-llm') ? TEST_LLM_TIMEOUT_MS : DEFAULT_TIMEOUT_MS),
     })
   } catch (e: any) {
     if (e?.name === 'TimeoutError' || e?.name === 'AbortError') throw new Error('请求超时，请稍后重试')
@@ -103,13 +103,15 @@ export async function fetchAdminStats(): Promise<AdminStats> {
   return request('/api/v1/admin/stats')
 }
 
-export async function fetchAdminUsers(query = '', role: '' | 'user' | 'admin' = ''): Promise<AdminUser[]> {
+export interface AdminUserPage { users: AdminUser[]; total: number; limit: number; offset: number }
+export async function fetchAdminUsers(query = '', role: '' | 'user' | 'admin' = '', page = 1, pageSize = 20): Promise<AdminUserPage> {
   const params = new URLSearchParams()
   if (query) params.set('query', query)
   if (role) params.set('role', role)
+  params.set('limit', String(pageSize))
+  params.set('offset', String((page - 1) * pageSize))
   const suffix = params.toString()
-  const d = await request<{ users: AdminUser[] }>(`/api/v1/admin/users${suffix ? `?${suffix}` : ''}`)
-  return d.users || []
+  return request<AdminUserPage>(`/api/v1/admin/users${suffix ? `?${suffix}` : ''}`)
 }
 
 export async function adminCreateUser(u: { username: string; password: string; role: string }): Promise<UserInfo> {

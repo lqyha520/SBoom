@@ -82,11 +82,12 @@ class RevisionItem(Input):
 
 class CatalogBatch(Input):
     items: list[RevisionItem] = Field(min_length=1, max_length=50)
-    action: Literal["category", "published", "withdrawn", "access"]
+    action: Literal["category", "published", "withdrawn", "access", "tags"]
     category_id: str = Field("", max_length=64)
     view_access: Literal["inherit", "free", "vip"] = "inherit"
     download_access: Literal["inherit", "free", "vip"] = "inherit"
     confirm_publication: bool = False
+    tag_ids: list[str] = Field(default_factory=list, max_length=25)
 
     @model_validator(mode="after")
     def valid_action(self):
@@ -96,6 +97,11 @@ class CatalogBatch(Input):
             raise ValueError("请选择分类")
         if self.action == "published" and not self.confirm_publication:
             raise ValueError("发布前请确认所选资料内容及访问权限")
+        if self.action == "tags":
+            if not self.tag_ids:
+                raise ValueError("请至少选择一个标签")
+            if len(set(self.tag_ids)) != len(self.tag_ids) or any(not item or len(item) > 64 for item in self.tag_ids):
+                raise ValueError("标签选择无效或重复")
         if self.view_access == "vip" and self.download_access == "free":
             raise ValueError("VIP 内容不能免费提供 PDF")
         return self

@@ -35,6 +35,7 @@ declare module 'vue' {
     NoticeManager: typeof import('./src/components/NoticeManager.vue')['default']
     OrderManager: typeof import('./src/components/OrderManager.vue')['default']
     OverviewPage: typeof import('./src/components/OverviewPage.vue')['default']
+    PaperEditionDialog: typeof import('./src/components/PaperEditionDialog.vue')['default']
     PaperMetadataDialog: typeof import('./src/components/PaperMetadataDialog.vue')['default']
     PublicPapers: typeof import('./src/components/PublicPapers.vue')['default']
     PublishedPaperPicker: typeof import('./src/components/PublishedPaperPicker.vue')['default']

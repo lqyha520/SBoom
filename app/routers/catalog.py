@@ -1,14 +1,15 @@
 """Guest catalog browsing and authenticated personal / administrator actions."""
 
+import asyncio
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.deps import require_admin
 from app.library_deps import no_store, optional_mini_user, require_mini_user
 from app.library_files import asset_response
 from app.models.catalog import CatalogCreate, CatalogFavorite, CatalogUpdate, TypeAccessUpdate
-from app.services import catalog_access
+from app.services import catalog_access, catalog_import
 from app.services.mini_auth import MiniUser
 from app.services import public_catalog as catalog
 from app.services.user_store import CurrentUser
@@ -91,6 +92,59 @@ def admin_papers(q: str = Query("", max_length=120), status: Literal["", "draft"
 @admin_router.post("/papers", status_code=201)
 def create(body: CatalogCreate, user: CurrentUser = Depends(require_admin)):
     return catalog.create_paper(user.id, body)
+
+
+async def _pdf_body(request: Request, limit: int):
+    """读取原始 PDF 上传体（与 library 的 ZIP 上传同款流式限额读取）。"""
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type not in ("application/pdf", "application/octet-stream"):
+        raise HTTPException(415, detail={"error": "请上传 PDF 文件"})
+    try:
+        declared = int(request.headers.get("content-length", "0"))
+    except ValueError as exc:
+        raise HTTPException(400, detail={"error": "无效的请求长度"}) from exc
+    if declared < 0 or declared > limit:
+        raise HTTPException(413, detail={"error": "PDF 不能超过 32 MB"})
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > limit:
+            raise HTTPException(413, detail={"error": "PDF 不能超过 32 MB"})
+        content.extend(chunk)
+    return bytes(content)
+
+
+@admin_router.post("/import", status_code=201)
+async def import_paper(request: Request,
+                       title: str = Query("", max_length=240), grade: str = Query("", max_length=80),
+                       subject: str = Query("", max_length=80), description: str = Query("", max_length=2000),
+                       category_id: str = Query("", max_length=64),
+                       mode: Literal["student", "answersOnly", "withAnswers"] = Query("withAnswers"),
+                       view_access: Literal["inherit", "free", "vip"] = "inherit",
+                       download_access: Literal["inherit", "free", "vip"] = "inherit",
+                       user: CurrentUser = Depends(require_admin)):
+    """手动导入外部 PDF：渲染预览页 → 建归档 → 直接创建公共习题草稿。"""
+    content = await _pdf_body(request, catalog_import.MAX_IMPORT_BYTES)
+    archive = await asyncio.to_thread(catalog_import.import_paper, user.id, title, grade, subject, content, mode)
+    body = CatalogCreate(paper_id=archive["id"], title=archive["title"], description=description.strip(),
+                         category_id=category_id, view_access=view_access, download_access=download_access)
+    return catalog.create_paper(user.id, body)
+
+
+@admin_router.post("/papers/{catalog_id}/editions/import")
+async def import_edition(catalog_id: str, request: Request,
+                         kind: Literal["student", "answers"] = Query("answers"),
+                         user: CurrentUser = Depends(require_admin)):
+    """导入一份外部 PDF 直接挂为该资料的打印版本（默认答案解析版），不单独创建公共条目。"""
+    from app.models.engagement import EditionInput
+    from app.services import catalog_editions
+
+    content = await _pdf_body(request, catalog_import.MAX_IMPORT_BYTES)
+    detail = await asyncio.to_thread(catalog.get_paper, user.id, catalog_id, admin=True)
+    mode, suffix = ("answersOnly", "答案") if kind == "answers" else ("student", "练习版")
+    archive = await asyncio.to_thread(catalog_import.import_paper, user.id,
+                                      f"{detail['title']}·{suffix}", detail["grade"], detail["subject"], content, mode)
+    body = EditionInput(revision=detail["revision"], kind=kind, paper_id=archive["id"])
+    return await asyncio.to_thread(catalog_editions.assign, user.id, catalog_id, body)
 
 
 @admin_router.get("/papers/{catalog_id}")
