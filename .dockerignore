@@ -6,6 +6,8 @@ node_modules/
 .git/
 .workbuddy/
 .review/
+.env*
+**/.env*
 __pycache__/
 **/__pycache__/
 **/node_modules/

@@ -3,8 +3,8 @@
 # 前置：把整个仓库 clone 到服务器，进入本目录：
 #   cd learn-coach/deploy
 #   cp .env.production.example .env.production   # 填好再继续
-#   docker compose up -d --build
-#   docker compose logs -f app                   # 看到 Uvicorn running 即成功
+#   docker compose --env-file .env.production up -d --build
+#   docker compose --env-file .env.production logs -f app
 #
 # 首次启动会自动建表（幂等迁移）。默认用 Caddy 自动签 HTTPS 证书；
 # 数据库只在 compose 内网监听，不对外暴露端口。
@@ -15,7 +15,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-learncoach}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-learncoach}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
       POSTGRES_DB: ${POSTGRES_DB:-learncoach}
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -35,7 +35,11 @@ services:
       # 容器内固定项：监听全部网卡、连 compose 网络里的 db、开多 worker（Linux 支持）
       HOST: 0.0.0.0
       PORT: "8000"
-      DATABASE_URL: postgresql://${POSTGRES_USER:-learncoach}:${POSTGRES_PASSWORD:-learncoach}@db:5432/${POSTGRES_DB:-learncoach}
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env.production}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-learncoach}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}@db:5432/${POSTGRES_DB:-learncoach}
+    ports:
+      # 日常开发入口：小程序/工作台直连 http://127.0.0.1:8000
+      - "127.0.0.1:8000:8000"
     volumes:
       - appdata:/app/data
     depends_on:
@@ -49,13 +53,14 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      DOMAIN: ${DOMAIN:-localhost}
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env.production}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - app
+      app:
+        condition: service_healthy
 
 volumes:
   pgdata:

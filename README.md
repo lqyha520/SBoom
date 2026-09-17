@@ -38,6 +38,7 @@
 
 - Python 3.11+（生成请求截止时间使用 `asyncio.timeout_at`）
 - Node.js 22.12+、pnpm 10
+- PostgreSQL 16（唯一支持的数据库，通过 `DATABASE_URL` 配置；本地可用 Docker 一键起库）
 - 已配置的 OpenAI 兼容 LLM API（如 DeepSeek / 通义千问 / GPT）
 
 ### 安装与启动
@@ -50,6 +51,10 @@ pip install -r requirements.txt
 
 # 2. 首次部署时创建配置，已有 .env 不要覆盖
 cp -n .env.example .env
+# 在 .env 中配置数据库连接（必填）：
+# DATABASE_URL=postgresql://learncoach:learncoach@127.0.0.1:5432/learncoach
+# 本地开发可用 Docker 起 PG：docker run -d --name learncoach-db -p 127.0.0.1:5432:5432 \
+#   -e POSTGRES_USER=learncoach -e POSTGRES_PASSWORD=learncoach -e POSTGRES_DB=learncoach postgres:16-alpine
 # 密钥可在 /admin/ 的「模型配置」中保存，.env 仅作兜底
 
 # 3. 构建前端（需要 Node.js 22.12+ 和 pnpm）
@@ -72,7 +77,7 @@ python run.py
 
 | 数据 | 隔离方式 |
 |------|----------|
-| 账号密码 | SQLite `data/users.db`，密码 PBKDF2-SHA256 哈希存储 |
+| 账号密码 | PostgreSQL（`DATABASE_URL`），密码 PBKDF2-SHA256 哈希存储 |
 | 会话 | JWT（HS256）签名，httpOnly Cookie 下发（30 天有效），防 XSS 窃取 |
 | 我的模板 | 每用户独立（`user_templates` 表按 `user_id` 隔离），跨设备同步 |
 | 浏览器本地数据 | localStorage 按 `lc_u{用户id}_` 前缀命名空间隔离 |
@@ -100,7 +105,7 @@ CORS_ORIGINS=      # 跨域白名单，留空=仅同源
 FORCE_HTTPS=false  # HTTPS 部署时设 true，为会话 Cookie 添加 Secure
 ```
 
-**运维提示**：`data/` 目录（users.db + secret_key.txt）包含全部用户数据与加密密钥，
+**运维提示**：`data/` 目录（secret_key.txt 等）包含加密密钥等敏感数据，
 已被 .gitignore 排除。**请纳入备份，且绝不能提交到 git**；使用固定 `SECRET_KEY` 时也需安全备份该配置。
 更换有效密钥会使会话失效，并可能使已存 API Key 无法解密。旧版本忽略 `.env` 中
 `SECRET_KEY` 的问题已修复：升级后可能需要重新登录，旧文件密钥仅用于兼容解密历史配置。
@@ -773,6 +778,7 @@ pnpm --dir web typecheck
 pnpm --dir web test
 pnpm --dir web build
 pnpm --dir admin typecheck
+pnpm --dir admin test
 pnpm --dir admin build
 pnpm --dir miniprogram typecheck
 pnpm --dir miniprogram test
@@ -784,8 +790,9 @@ python tests/run_ui_contracts.py
 git diff --check
 ```
 
-`run_ui_contracts.py` 自动创建隔离 SQLite 数据库、启动随机本机端口、运行 7 项 API 契约与
+`run_ui_contracts.py` 自动创建一次性 PostgreSQL 测试库、启动随机本机端口、运行 8 项 API 契约与
 12 项管理后台检查，结束后关闭测试服务。不调用付费模型，不读取或修改现有用户数据库。
+单测同样运行在一次性 PG 测试库上（`tests/pg_support.py` 自动建库/清理，需本机有可达的 PostgreSQL）。
 GitHub Actions 工作流见 `.github/workflows/ci.yml`，覆盖以上前后端检查；远程 CI 需推送后执行。
 
 ---

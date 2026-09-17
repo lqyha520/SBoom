@@ -37,11 +37,11 @@ COPY run.py .
 COPY --from=frontend /src/web/dist ./web/dist
 COPY --from=frontend /src/admin/dist ./admin/dist
 
-# 运行期数据（SQLite 回落 / 本地试卷文件 / secret_key）全部落这个卷
+# 运行期数据（本地试卷文件 / secret_key）全部落这个卷
 VOLUME ["/app/data"]
 EXPOSE 8000
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
-  CMD python -c "import urllib.request,os;urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8000\")}/health',timeout=3)"
+  CMD python -c "import urllib.request,os;urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8000\")}/readyz',timeout=3)"
 
 CMD ["python", "run.py"]
