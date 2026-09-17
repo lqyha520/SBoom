@@ -188,28 +188,28 @@ async def _call_llm_and_parse(system_prompt: str, user_message: str) -> dict:
 async def generate_batch(request: BatchGenerateRequest, http_request: Request, user: CurrentUser = Depends(require_user)):
     """一次 LLM 调用生成整卷的多个题型"""
     # 1. 知识范围
-    scope = knowledge_scope_service.get_scope(request.grade, request.subject)
+    scope = await asyncio.to_thread(knowledge_scope_service.get_scope, request.grade, request.subject)
     if not scope.allowed and not scope.forbidden:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"暂不支持 {request.grade.value} 的 {request.subject.value} 科目"},
+            detail={"error": f"暂不支持 {request.grade} 的 {request.subject} 科目"},
         )
 
     # 2. 题型-年级适配校验
     from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
-    g_num = _grade_num(request.grade.value)
+    g_num = _grade_num(request.grade)
     for it in request.items:
         min_g = MIN_GRADE_FOR_TYPE.get(it.game_type, 0)
         if min_g and g_num < min_g:
             raise HTTPException(
                 status_code=400,
-                detail={"error": f"{request.grade.value}还没有学过{it.game_type}哦"},
+                detail={"error": f"{request.grade}还没有学过{it.game_type}哦"},
             )
 
     # 3. 组装批量 Prompt
     system_prompt = prompt_builder.build_batch_prompt(
-        grade=request.grade.value,
-        subject=request.subject.value,
+        grade=request.grade,
+        subject=request.subject,
         keyword=request.keyword,
         difficulty=request.difficulty.value,
         items=request.items,
@@ -247,25 +247,25 @@ async def generate_questions(request: GenerateRequest, http_request: Request, us
     """生成题目（非流式）。每次都真实调用 LLM，保证每次生成的试卷都是新的。"""
     # 1. 题型-年级适配校验（低年级拦截超纲计算题型）
     from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
-    g_num = _grade_num(request.grade.value)
+    g_num = _grade_num(request.grade)
     min_g = MIN_GRADE_FOR_TYPE.get(request.game_type.value, 0)
     if min_g and g_num < min_g:
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"{request.grade.value}还没有学过{request.game_type.value}哦",
+                "error": f"{request.grade}还没有学过{request.game_type.value}哦",
                 "detail": f"该题型建议 {min_g} 年级及以上使用，请换一个题型",
             },
         )
 
     # 1. 获取知识范围
-    scope = knowledge_scope_service.get_scope(request.grade, request.subject)
+    scope = await asyncio.to_thread(knowledge_scope_service.get_scope, request.grade, request.subject)
 
     if not scope.allowed and not scope.forbidden:
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"暂不支持 {request.grade.value} 的 {request.subject.value} 科目",
+                "error": f"暂不支持 {request.grade} 的 {request.subject} 科目",
                 "detail": "知识范围库中未定义该年级和科目的内容",
             },
         )
@@ -295,20 +295,20 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
     """流式生成题目"""
     # 1. 题型-年级适配校验（与非流式对齐）
     from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
-    g_num = _grade_num(request.grade.value)
+    g_num = _grade_num(request.grade)
     min_g = MIN_GRADE_FOR_TYPE.get(request.game_type.value, 0)
     if min_g and g_num < min_g:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"{request.grade.value}还没有学过{request.game_type.value}哦"},
+            detail={"error": f"{request.grade}还没有学过{request.game_type.value}哦"},
         )
 
     # 2. 知识范围
-    scope = knowledge_scope_service.get_scope(request.grade, request.subject)
+    scope = await asyncio.to_thread(knowledge_scope_service.get_scope, request.grade, request.subject)
     if not scope.allowed and not scope.forbidden:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"暂不支持 {request.grade.value} 的 {request.subject.value} 科目"},
+            detail={"error": f"暂不支持 {request.grade} 的 {request.subject} 科目"},
         )
 
     system_prompt = prompt_builder.build_system_prompt(request, scope)
@@ -372,31 +372,36 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
     summary="查询知识范围",
     description="获取指定年级和科目的允许/禁止知识点范围",
 )
-async def get_knowledge_scope(grade: str, subject: str, user: CurrentUser = Depends(require_user)):
+def get_knowledge_scope(grade: str, subject: str, user: CurrentUser = Depends(require_user)):
     """获取知识范围"""
-    from app.models import Grade, Subject
-
-    try:
-        grade_enum = Grade(grade)
-        subject_enum = Subject(subject)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e)})
-
-    scope = knowledge_scope_service.get_scope(grade_enum, subject_enum)
-    return scope
+    return knowledge_scope_service.get_scope(grade, subject)
 
 
 @router.get(
     "/scope/available",
     summary="获取可用年级/科目列表",
-    description="返回系统已定义的年级列表和每个年级下的科目",
+    description="以后台字典的显式关联（site_dict_links）为唯一数据源，返回每个已关联年级下的可见科目",
 )
-async def get_available_scopes(user: CurrentUser = Depends(require_user)):
-    """获取所有可用年级和科目"""
-    grades = knowledge_scope_service.get_available_grades()
+def get_available_scopes(user: CurrentUser = Depends(require_user)):
+    """可用年级/科目：字典决定展示什么，年级-科目关联决定组合（后台可编辑）"""
+    from app.db import db
+
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, kind, value FROM site_dictionary WHERE is_visible = 1 ORDER BY kind, sort_order"
+        ).fetchall()
+        links = conn.execute("SELECT parent_id, child_id FROM site_dict_links").fetchall()
+    grades = [row for row in rows if row["kind"] == "grade"]
+    subject_value_by_id = {row["id"]: row["value"] for row in rows if row["kind"] == "subject"}
+    linked_by_grade: dict[str, set[str]] = {}
+    for row in links:
+        linked_by_grade.setdefault(row["parent_id"], set()).add(row["child_id"])
     result = {}
-    for g in grades:
-        result[g] = knowledge_scope_service.get_available_subjects(g)
+    for grade in grades:
+        subject_ids = linked_by_grade.get(grade["id"], set())
+        pairs = [row["value"] for row in rows if row["kind"] == "subject" and row["id"] in subject_ids]
+        if pairs:
+            result[grade["value"]] = pairs
     return {"available": result}
 
 
@@ -411,10 +416,10 @@ async def get_available_scopes(user: CurrentUser = Depends(require_user)):
 @metered("validate")
 async def validate_oob(request: ValidateRequest, http_request: Request, user: CurrentUser = Depends(require_user)):
     """校验题目是否超纲"""
-    scope = knowledge_scope_service.get_scope(request.grade, request.subject)
+    scope = await asyncio.to_thread(knowledge_scope_service.get_scope, request.grade, request.subject)
 
     system_prompt = (
-        f"你是一位教育内容审查专家。请判断以下题目是否超出了{request.grade.value}学生的知识范围。\n\n"
+        f"你是一位教育内容审查专家。请判断以下题目是否超出了{request.grade}学生的知识范围。\n\n"
         f"【该年级允许的知识范围】\n{'、'.join(scope.allowed)}\n\n"
         f"【该年级严禁的知识点（超纲）】\n{'、'.join(scope.forbidden)}\n\n"
         "请分析题目内容，输出 JSON：\n"
@@ -457,7 +462,7 @@ async def validate_oob(request: ValidateRequest, http_request: Request, user: Cu
     summary="用户反馈",
     description="收集用户对题目超纲等问题的反馈",
 )
-async def submit_feedback(request: FeedbackRequest, user: CurrentUser = Depends(require_user)):
+def submit_feedback(request: FeedbackRequest, user: CurrentUser = Depends(require_user)):
     """接收用户反馈并落库（后台可查看，重启不丢）"""
     from app.db import db
 

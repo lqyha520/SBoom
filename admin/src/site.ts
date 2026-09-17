@@ -28,8 +28,9 @@ export interface Notice {
 
 export interface SiteDocument { key: 'agreement' | 'privacy'; title: string; body: string; revision: number; updated_at: number }
 
+export type DictionaryKind = 'grade' | 'subject' | 'knowledge_point'
 export interface DictionaryItem {
-  id: string; kind: 'grade' | 'subject'; value: string; label: string
+  id: string; kind: DictionaryKind; parent: string; value: string; label: string
   sort_order: number; is_visible: boolean; revision: number; created_at: number; updated_at: number
 }
 
@@ -134,8 +135,21 @@ export function updateDocument(adminId: number, key: string, body: { revision: n
 
 /* ── 年级 / 科目字典 ── */
 
-export function siteDictionary(kind = '') {
-  return request<{ items: DictionaryItem[] }>(base + '/dictionary' + (kind ? '?kind=' + kind : ''))
+export function siteDictionary(kind = '', parent = '') {
+  const params = new URLSearchParams()
+  if (kind) params.set('kind', kind)
+  if (parent) params.set('parent', parent)
+  const query = params.toString()
+  return request<{ items: DictionaryItem[] }>(base + '/dictionary' + (query ? '?' + query : ''))
+}
+
+export function dictionaryLinks() {
+  return request<{ links: { parent_id: string; child_id: string }[] }>(base + '/dictionary/links')
+}
+
+export function setDictionaryLinks(adminId: number, gradeId: string, subjectIds: string[]) {
+  return request<{ grade_id: string; subject_ids: string[]; subject_values: string[] }>(
+    base + '/dictionary/links/' + encodeURIComponent(gradeId), mutation('PUT', adminId, { subject_ids: subjectIds }))
 }
 
 export function unlistedDictionary() {
@@ -146,7 +160,7 @@ export function adoptDictionary(adminId: number, kind: 'grade' | 'subject', valu
   return request<{ added: number; items: DictionaryItem[] }>(base + '/dictionary/adopt', mutation('POST', adminId, { kind, values }))
 }
 
-export function createDictionary(adminId: number, body: { kind: string; value: string; label: string; sort_order: number; is_visible: boolean }) {
+export function createDictionary(adminId: number, body: { kind: string; parent?: string; value: string; label: string; sort_order: number; is_visible: boolean }) {
   return request<DictionaryItem>(base + '/dictionary', mutation('POST', adminId, body))
 }
 

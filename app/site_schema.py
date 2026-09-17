@@ -1,14 +1,15 @@
 """小程序运营内容表：分类、首页 Banner、公告、协议文档、年级/科目字典。
 
-与 mini_schema 一样是「增量、双库兼容」的建表脚本：SQLite 与 PostgreSQL 共用同一份
-DDL（不使用方言专有类型），由 app.db 负责占位符与时间函数翻译。
+「增量、方言中立」的建表脚本：不使用方言专有类型，占位符与时间函数由 app.db 统一翻译。
 """
 
 import hashlib
 import time
 import uuid
 
-from app.site_defaults import DEFAULT_DOCUMENTS, DEFAULT_GRADES, DEFAULT_SUBJECTS, PREVIOUS_DOCUMENT_HASHES
+from app.site_defaults import (
+    DEFAULT_DOCUMENTS, DEFAULT_GRADES, DEFAULT_SUBJECTS, PREVIOUS_DOCUMENT_HASHES, RETIRED_DICTIONARY_VALUES,
+)
 
 SITE_TABLES = """
 CREATE TABLE IF NOT EXISTS site_categories (
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS site_documents (
 CREATE TABLE IF NOT EXISTS site_dictionary (
     id         TEXT PRIMARY KEY,
     kind       TEXT NOT NULL,
+    parent     TEXT NOT NULL DEFAULT '',
     value      TEXT NOT NULL,
     label      TEXT NOT NULL DEFAULT '',
     sort_order INTEGER NOT NULL DEFAULT 0,
@@ -75,7 +77,15 @@ CREATE TABLE IF NOT EXISTS site_dictionary (
     revision   INTEGER NOT NULL DEFAULT 1,
     created_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL,
-    UNIQUE (kind, value)
+    UNIQUE (kind, parent, value)
+);
+
+-- 年级 ↔ 科目的显式关联（多对多）：parent_id=年级行 id，child_id=科目行 id
+CREATE TABLE IF NOT EXISTS site_dict_links (
+    parent_id  TEXT NOT NULL,
+    child_id   TEXT NOT NULL,
+    created_at BIGINT NOT NULL,
+    PRIMARY KEY (parent_id, child_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_site_banner_order ON site_banners(is_visible, sort_order, id);
@@ -85,14 +95,13 @@ CREATE INDEX IF NOT EXISTS idx_site_dictionary ON site_dictionary(kind, is_visib
 
 
 def _columns(conn, table):
-    from app.db import _use_pg
-
-    if _use_pg():
-        rows = conn.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_name = ?", (table,)
-        ).fetchall()
-        return {row[0] for row in rows}
-    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    rows = conn.execute(
+        # 必须限定当前 schema：同库多 schema（测试隔离/多租户）时，
+        # 未过滤会匹配到其他 schema 同名表的列，导致误判"列已存在"而跳过补列
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = ? AND table_schema = current_schema()", (table,)
+    ).fetchall()
+    return {row[0] for row in rows}
 
 
 def _add_category_column(conn) -> None:
@@ -103,13 +112,87 @@ def _add_category_column(conn) -> None:
 
 
 def _seed_dictionary(conn, now: int) -> None:
+    # 回填历史空 label（种子曾只写 value，导致前端下拉显示空白）；空 label 一律以 value 兜底
+    conn.execute("UPDATE site_dictionary SET label = value, updated_at = ? WHERE label = ''", (now,))
     for kind, values in (("grade", DEFAULT_GRADES), ("subject", DEFAULT_SUBJECTS)):
         for index, value in enumerate(values):
             conn.execute(
-                "INSERT INTO site_dictionary(id, kind, value, label, sort_order, is_visible, revision, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?) ON CONFLICT(kind, value) DO NOTHING",
-                (f"{kind}-{uuid.uuid4().hex[:12]}", kind, value, "", (index + 1) * 10, now, now),
+                "INSERT INTO site_dictionary(id, kind, parent, value, label, sort_order, is_visible, revision, created_at, updated_at) "
+                "VALUES (?, ?, '', ?, ?, ?, 1, 1, ?, ?) ON CONFLICT(kind, parent, value) DO NOTHING",
+                (f"{kind}-{uuid.uuid4().hex[:12]}", kind, value, value, (index + 1) * 10, now, now),
             )
+    # 修剪历史默认值（初中/高中年级、语数英外科目）：精确按字面量删除，不动管理员自加的值
+    for kind, values in RETIRED_DICTIONARY_VALUES.items():
+        for value in values:
+            rows = conn.execute("SELECT id FROM site_dictionary WHERE kind = ? AND value = ?", (kind, value)).fetchall()
+            for row in rows:
+                item_id = row["id"] if not isinstance(row, tuple) else row[0]
+                conn.execute("DELETE FROM site_dictionary WHERE id = ?", (item_id,))
+                _prune_dictionary_children(conn, item_id)
+
+
+def _prune_dictionary_children(conn, item_id: str) -> None:
+    """删除字典条目时同步清理关联与从属的知识点（知识点 parent = 年级id|科目id）。"""
+    conn.execute("DELETE FROM site_dict_links WHERE parent_id = ? OR child_id = ?", (item_id, item_id))
+    conn.execute("DELETE FROM site_dictionary WHERE parent LIKE ? OR parent LIKE ?",
+                 (item_id + "|%", "%|" + item_id))
+
+
+def _seed_dictionary_scope(conn, now: int) -> None:
+    """首次启动迁移：按 knowledge_scope.json 建立年级-科目关联，并把允许的知识点导入字典。
+
+    用 app_config 标记只跑一次；之后关联与知识点完全以后台管理为准，重启不回写。
+    """
+    import json
+    from pathlib import Path
+
+    markers = {"links": "dict_links_seeded", "points": "dict_points_seeded"}
+    done = {row["key"] for row in conn.execute(
+        "SELECT key FROM app_config WHERE key IN (?, ?)", list(markers.values())).fetchall()}
+    if markers["links"] in done and markers["points"] in done:
+        return
+
+    data_path = Path(__file__).parent / "data" / "knowledge_scope.json"
+    if not data_path.exists():
+        return
+    with open(data_path, "r", encoding="utf-8") as handle:
+        scope_data = json.load(handle)
+
+    grades = {row["value"]: row["id"] for row in conn.execute("SELECT id, value FROM site_dictionary WHERE kind = 'grade'")}
+    subjects = {row["value"]: row["id"] for row in conn.execute("SELECT id, value FROM site_dictionary WHERE kind = 'subject'")}
+
+    if markers["links"] not in done:
+        for grade_value, subject_map in scope_data.items():
+            grade_id = grades.get(grade_value)
+            if not grade_id:
+                continue
+            for subject_value in subject_map:
+                subject_id = subjects.get(subject_value)
+                if subject_id:
+                    conn.execute(
+                        "INSERT INTO site_dict_links(parent_id, child_id, created_at) VALUES (?, ?, ?) "
+                        "ON CONFLICT(parent_id, child_id) DO NOTHING", (grade_id, subject_id, now))
+        conn.execute("INSERT INTO app_config(key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING", (markers["links"],))
+
+    if markers["points"] not in done:
+        for grade_value, subject_map in scope_data.items():
+            grade_id = grades.get(grade_value)
+            if not grade_id:
+                continue
+            for subject_value, scope in subject_map.items():
+                subject_id = subjects.get(subject_value)
+                if not subject_id:
+                    continue
+                parent = f"{grade_id}|{subject_id}"
+                for index, point in enumerate(scope.get("allowed", [])):
+                    point = str(point).strip()
+                    if not point:
+                        continue
+                    conn.execute(
+                        "INSERT INTO site_dictionary(id, kind, parent, value, label, sort_order, is_visible, revision, created_at, updated_at) "
+                        "VALUES (?, 'knowledge_point', ?, ?, ?, ?, 1, 1, ?, ?) ON CONFLICT(kind, parent, value) DO NOTHING",
+                        (uuid.uuid4().hex, parent, point, point, (index + 1) * 10, now, now))
+        conn.execute("INSERT INTO app_config(key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING", (markers["points"],))
 
 
 def _seed_documents(conn, now: int) -> None:
@@ -148,13 +231,28 @@ def _backfill_categories(conn, now: int) -> int:
     return created
 
 
+def _migrate_dictionary_v2(conn) -> None:
+    """存量库升级：补 parent 列、放宽唯一约束（知识点允许同名挂在不同组合下）。
+
+    parent 相关索引也在这里建：SITE_TABLES 里建会撞上「存量表还没有该列」的窗口。
+    """
+    if "parent" not in _columns(conn, "site_dictionary"):
+        conn.execute("ALTER TABLE site_dictionary ADD COLUMN parent TEXT NOT NULL DEFAULT ''")
+    conn.execute("ALTER TABLE site_dictionary DROP CONSTRAINT IF EXISTS site_dictionary_kind_value_key")
+    conn.execute("ALTER TABLE site_dictionary DROP CONSTRAINT IF EXISTS site_dictionary_kind_parent_value_key")
+    conn.execute("ALTER TABLE site_dictionary ADD CONSTRAINT site_dictionary_kind_parent_value_key UNIQUE (kind, parent, value)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_site_dictionary_parent ON site_dictionary(kind, parent, is_visible, sort_order)")
+
+
 def init_site_schema(conn) -> None:
     now = int(time.time())
     conn.executescript(SITE_TABLES)
     if "image_fit" not in _columns(conn, "site_banners"):
         conn.execute("ALTER TABLE site_banners ADD COLUMN image_fit TEXT NOT NULL DEFAULT 'contain'")
     _add_category_column(conn)
+    _migrate_dictionary_v2(conn)
     _seed_dictionary(conn, now)
+    _seed_dictionary_scope(conn, now)
     _seed_documents(conn, now)
     created = _backfill_categories(conn, now)
     if created:

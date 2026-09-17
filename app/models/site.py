@@ -84,17 +84,29 @@ class DocumentUpdate(BaseModel):
 
 class DictionaryInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["grade", "subject"]
-    value: str = Field(min_length=1, max_length=80)
+    kind: Literal["grade", "subject", "knowledge_point"]
+    value: str = Field(min_length=1, max_length=120)
     label: str = Field("", max_length=80)
     sort_order: int = Field(0, ge=0, le=100000)
     is_visible: bool = True
+    parent: str = Field("", max_length=80)  # 知识点必填，格式「年级id|科目id」
 
     @model_validator(mode="after")
     def no_blank_value(self):
         if not self.value.strip():
             raise ValueError("取值不能为空")
+        if self.kind == "knowledge_point":
+            parts = self.parent.split("|")
+            if len(parts) != 2 or not all(parts):
+                raise ValueError("知识点必须挂在一个年级+科目组合下")
+        elif self.parent:
+            raise ValueError("只有知识点可以指定所属组合")
         return self
+
+
+class DictionaryLinksUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    subject_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
 class DictionaryUpdate(BaseModel):

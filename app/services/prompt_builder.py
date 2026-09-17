@@ -83,18 +83,13 @@ MIN_GRADE_FOR_TYPE = {
 }
 
 def _grade_num(grade: str) -> int:
-    # 初中年级 → 7/8/9（不限制题型）
-    if "初中" in grade or "初一" in grade or "初二" in grade or "初三" in grade:
-        for ch in grade:
-            if ch in "一二三":
-                return 6 + {"一": 1, "二": 2, "三": 3}[ch]
-        return 9
+    # 仅小学（1-6）；未知值默认不限制题型
     for ch in grade:
         if ch in "一二三四五六":
             return {"一":1,"二":2,"三":3,"四":4,"五":5,"六":6}[ch]
     return 9  # 未知默认不限制
 
-# 年级 → 语言约束档次（1-2 低，3-4 中，5-6 高；初中按高年级处理）
+# 年级 → 语言约束档次（1-2 低，3-4 中，5-6 高）
 def _lang_block_for_grade(grade: str) -> str:
     grade_num = 0
     for ch in grade:
@@ -349,11 +344,11 @@ class PromptBuilder:
         if request.game_type.value in CALC_TYPES:
             style_requirements = STYLE_REQUIREMENTS["calc"]
         else:
-            style_requirements = _lang_block_for_grade(request.grade.value).format(grade=request.grade.value)
+            style_requirements = _lang_block_for_grade(request.grade).format(grade=request.grade)
 
         return SYSTEM_PROMPT_TEMPLATE.format(
-            subject=request.subject.value,
-            grade=request.grade.value,
+            subject=request.subject,
+            grade=request.grade,
             scope_text=scope_text,
             game_type_desc=game_type_desc,
             difficulty=DIFFICULTY_CN.get(request.difficulty.value, request.difficulty.value),

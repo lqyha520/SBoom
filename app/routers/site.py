@@ -1,5 +1,6 @@
 """小程序运营内容接口：后台管理端（增删改查 / 排序 / 上下线）与小程序端（只读）。"""
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.deps import require_admin
@@ -12,6 +13,7 @@ from app.models.site import (
     CategoryUpdate,
     DictionaryAdopt,
     DictionaryInput,
+    DictionaryLinksUpdate,
     DictionaryUpdate,
     DocumentUpdate,
     NoticeInput,
@@ -120,7 +122,7 @@ def delete_banner(banner_id: str, revision: int = Query(ge=1), user: CurrentUser
 @admin_router.put("/banners/{banner_id}/image")
 async def upload_banner_image(banner_id: str, request: Request, revision: int | None = Query(default=None, ge=1), user: CurrentUser = Depends(require_admin)):
     content_type, content = await _image_body(request)
-    return site.save_banner_image(banner_id, content_type, content, revision=revision)
+    return await asyncio.to_thread(site.save_banner_image, banner_id, content_type, content, revision=revision)
 
 
 @admin_router.delete("/banners/{banner_id}/image")
@@ -172,10 +174,21 @@ def update_document(key: str, body: DocumentUpdate, user: CurrentUser = Depends(
 # ─── 后台 · 年级科目字典 ───
 
 @admin_router.get("/dictionary")
-def dictionary(kind: str = Query("", max_length=20), user: CurrentUser = Depends(require_admin)):
-    if kind and kind not in ("grade", "subject"):
-        raise HTTPException(422, detail={"error": "kind 只能是 grade 或 subject"})
-    return site.list_dictionary(kind)
+def dictionary(kind: str = Query("", max_length=20), parent: str = Query("", max_length=80),
+               user: CurrentUser = Depends(require_admin)):
+    if kind and kind not in ("grade", "subject", "knowledge_point"):
+        raise HTTPException(422, detail={"error": "kind 只能是 grade、subject 或 knowledge_point"})
+    return site.list_dictionary(kind, parent)
+
+
+@admin_router.get("/dictionary/links")
+def dictionary_links(user: CurrentUser = Depends(require_admin)):
+    return site.list_dictionary_links()
+
+
+@admin_router.put("/dictionary/links/{grade_id}")
+def set_dictionary_links(grade_id: str, body: DictionaryLinksUpdate, user: CurrentUser = Depends(require_admin)):
+    return site.set_dictionary_links(grade_id, body.subject_ids)
 
 
 @admin_router.get("/dictionary/unlisted")

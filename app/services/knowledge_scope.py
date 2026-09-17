@@ -1,10 +1,16 @@
-"""知识范围约束服务 —— 加载并查询各年级/各科的知识范围"""
+"""知识范围约束服务 —— 查询各年级/各科的知识范围
+
+数据来源分两层：
+- 知识点字典（site_dictionary 里 kind='knowledge_point' 的行，parent=「年级id|科目id」）：
+  后台可编辑，是「允许涉及」的权威来源；组合下有可见知识点时优先生效；
+- knowledge_scope.json：兜底与补充（组合尚无知识点时的 allowed，以及 forbidden/semesters）。
+"""
 
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-from app.models import Grade, Subject, KnowledgeScope, SubjectGrades
+from app.models import KnowledgeScope
 
 
 class KnowledgeScopeService:
@@ -24,54 +30,35 @@ class KnowledgeScopeService:
         with open(data_path, "r", encoding="utf-8") as f:
             self._data = json.load(f)
 
-    def get_scope(self, grade: Grade, subject: Subject) -> KnowledgeScope:
-        """获取指定年级和科目的知识范围"""
-        grade_data = self._data.get(grade.value, {})
-        subject_data = grade_data.get(subject.value, {})
+    def _dictionary_points(self, grade: str, subject: str) -> list[str]:
+        """后台知识点字典里该组合的可见知识点（按展示顺序）。"""
+        from app.db import db
 
-        if not subject_data:
-            return KnowledgeScope(
-                grade=grade.value,
-                subject=subject.value,
-                allowed=[],
-                forbidden=[],
-            )
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT p.value FROM site_dictionary p "
+                "JOIN site_dictionary g ON g.kind = 'grade' AND g.value = ? "
+                "JOIN site_dictionary s ON s.kind = 'subject' AND s.value = ? "
+                "WHERE p.kind = 'knowledge_point' AND p.is_visible = 1 AND p.parent = g.id || '|' || s.id "
+                "ORDER BY p.sort_order, p.value", (grade, subject)).fetchall()
+        return [row["value"] for row in rows]
+
+    def get_scope(self, grade: str, subject: str) -> KnowledgeScope:
+        """获取指定年级和科目的知识范围（grade/subject 为后台字典中的字符串值）"""
+        grade_data = self._data.get(grade, {})
+        subject_data = grade_data.get(subject, {})
+        points = self._dictionary_points(grade, subject)
+
+        if not subject_data and not points:
+            return KnowledgeScope(grade=grade, subject=subject, allowed=[], forbidden=[])
 
         return KnowledgeScope(
-            grade=grade.value,
-            subject=subject.value,
-            allowed=subject_data.get("allowed", []),
+            grade=grade,
+            subject=subject,
+            allowed=points or subject_data.get("allowed", []),
             forbidden=subject_data.get("forbidden", []),
             semesters=subject_data.get("semesters") or None,
         )
-
-    def get_all_grades_for_subject(self, subject: Subject) -> SubjectGrades:
-        """获取某科目在所有年级的知识范围"""
-        grades_map = {}
-        for grade_value, subjects in self._data.items():
-            if subject.value in subjects:
-                scope = subjects[subject.value]
-                grades_map[grade_value] = KnowledgeScope(
-                    grade=grade_value,
-                    subject=subject.value,
-                    allowed=scope.get("allowed", []),
-                    forbidden=scope.get("forbidden", []),
-                    semesters=scope.get("semesters") or None,
-                )
-
-        return SubjectGrades(
-            subject=subject.value,
-            grades=grades_map,
-        )
-
-    def get_available_grades(self) -> List[str]:
-        """获取所有已定义的年级"""
-        return list(self._data.keys())
-
-    def get_available_subjects(self, grade: str) -> List[str]:
-        """获取某年级下已定义的科目"""
-        grade_data = self._data.get(grade, {})
-        return list(grade_data.keys())
 
     def format_scope_for_prompt(self, scope: KnowledgeScope) -> str:
         """将知识范围格式化为 Prompt 可用的文本"""

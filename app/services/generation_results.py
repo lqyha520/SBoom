@@ -115,7 +115,7 @@ async def normalize_result(
     return GameResult(
         game_type=item.game_type, section_id=item.section_id,
         topic=request.keyword, difficulty=request.difficulty.value,
-        grade=request.grade.value, subject=request.subject.value,
+        grade=request.grade, subject=request.subject,
         passage=passage, questions=[Question(**{**value, "id": i + 1}) for i, value in enumerate(kept)],
         missing_count=missing, quality_warnings=warnings,
     )

@@ -3,30 +3,8 @@ from typing import Dict, List, Literal, Optional, Union
 from enum import Enum
 
 
-# ─── 枚举定义 ───
-
-class Grade(str, Enum):
-    """年级"""
-    G1 = "小学一年级"
-    G2 = "小学二年级"
-    G3 = "小学三年级"
-    G4 = "小学四年级"
-    G5 = "小学五年级"
-    G6 = "小学六年级"
-    J7 = "初中一年级"
-    J8 = "初中二年级"
-    J9 = "初中三年级"
-
-
-class Subject(str, Enum):
-    """科目"""
-    MATH = "数学"
-    CHINESE = "语文"
-    ENGLISH = "英语"
-    SCIENCE = "科学"
-    PHYSICS = "物理"
-    CHEMISTRY = "化学"
-    BIOLOGY = "生物"
+# 年级/科目不再用枚举：三端共用后台字典（site_dictionary 表）为唯一数据源，
+# 请求侧为自由字符串，由 knowledge_scope（能力校验）拦截不支持的组合。
 
 
 class GameType(str, Enum):
@@ -57,8 +35,8 @@ class Difficulty(str, Enum):
 
 class GenerateRequest(BaseModel):
     """题目/游戏生成请求"""
-    grade: Grade = Field(..., description="年级")
-    subject: Subject = Field(..., description="科目")
+    grade: str = Field(..., min_length=1, max_length=20, description="年级（来自后台字典）")
+    subject: str = Field(..., min_length=1, max_length=20, description="科目（来自后台字典）")
     keyword: str = Field(..., description="知识点关键词", min_length=1, max_length=100)
     game_type: GameType = Field(GameType.QUIZ, description="交互类型")
     difficulty: Difficulty = Field(Difficulty.MEDIUM, description="难度")
@@ -70,8 +48,8 @@ class GenerateRequest(BaseModel):
 
 class ValidateRequest(BaseModel):
     """超纲校验请求"""
-    grade: Grade
-    subject: Subject
+    grade: str = Field(..., min_length=1, max_length=20)
+    subject: str = Field(..., min_length=1, max_length=20)
     question_content: str = Field(..., max_length=5000, description="待校验的题目内容")
 
 
@@ -84,8 +62,8 @@ class BatchItem(BaseModel):
 
 class BatchGenerateRequest(BaseModel):
     """批量生成整张试卷的请求（一次 LLM 调用出多个题型）"""
-    grade: Grade
-    subject: Subject
+    grade: str = Field(..., min_length=1, max_length=20)
+    subject: str = Field(..., min_length=1, max_length=20)
     keyword: str = Field(..., min_length=1, max_length=100)
     difficulty: Difficulty = Field(Difficulty.MEDIUM)
     items: List[BatchItem] = Field(..., min_length=1, max_length=10)
@@ -166,12 +144,6 @@ class KnowledgeScope(BaseModel):
     allowed: List[str]
     forbidden: List[str]
     semesters: Optional[Dict[str, List[str]]] = None  # 按学期划分的知识点（上册/下册）
-
-
-class SubjectGrades(BaseModel):
-    """某科目的所有年级知识范围"""
-    subject: str
-    grades: Dict[str, KnowledgeScope]
 
 
 class ErrorResponse(BaseModel):
