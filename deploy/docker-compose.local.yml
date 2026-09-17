@@ -1,0 +1,8 @@
+# 本机联调用覆盖文件（不要在公网服务器上用）：
+# 把后端 8000 暴露到宿主机回环，供微信开发者工具 / H5 预览直连（走 HTTP，免证书问题）。
+# 用法：docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+# WSL2 会把 127.0.0.1:8000 自动转发到 Windows 侧，开发者工具里直接用 http://127.0.0.1:8000。
+services:
+  app:
+    ports:
+      - "127.0.0.1:8000:8000"
