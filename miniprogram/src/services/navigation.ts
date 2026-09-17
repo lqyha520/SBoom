@@ -1,5 +1,5 @@
 import { reactive } from 'vue'
-import { safeDestination } from './return-route'
+import { routeFromPage, safeDestination } from './return-route'
 
 export interface CatalogFilters { q: string; grade: string; subject: string; category: string; topic: string }
 export function catalogFilters(filters: Partial<CatalogFilters> = {}): CatalogFilters {
@@ -15,6 +15,19 @@ export function openCatalogPaper(id: string) {
   uni.navigateTo({ url: '/pages/paper/index?id=' + encodeURIComponent(id) + '&scope=catalog' })
 }
 
+/**
+ * 登录页是 navigateTo 进来的，上一页通常就是 returnTo 指向的那一页。
+ * 这时必须退栈而不是再压一层，否则页面栈里会留下两份同样的页面，用户点返回会重复看到它。
+ */
+function backToPrevious(destination: string) {
+  if (typeof getCurrentPages !== 'function') return false
+  const pages = getCurrentPages()
+  if (pages.length < 2) return false
+  if (routeFromPage(pages[pages.length - 2] as unknown as Parameters<typeof routeFromPage>[0]) !== destination) return false
+  uni.navigateBack({ delta: 1, fail: () => uni.redirectTo({ url: destination }) })
+  return true
+}
+
 export function visitDestination(target: string, replace = false) {
   const destination = safeDestination(target)
   const [path, query = ''] = destination.split('?')
@@ -27,7 +40,7 @@ export function visitDestination(target: string, replace = false) {
     openCatalog(filters); return
   }
   if (['/pages/home/index', '/pages/library/index', '/pages/favorites/index', '/pages/account/index'].includes(path!)) uni.switchTab({ url: path! })
-  else if (replace) uni.redirectTo({ url: destination })
+  else if (replace) { if (!backToPrevious(destination)) uni.redirectTo({ url: destination }) }
   else uni.navigateTo({ url: destination })
 }
 

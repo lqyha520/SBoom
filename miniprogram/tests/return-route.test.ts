@@ -32,3 +32,17 @@ test('share cards contain static public artwork and a public destination', () =>
   assert.equal(shareCard('paper', '../private').path, HOME)
   assert.ok(!JSON.stringify(card).includes('assets/'))
 })
+
+test('login still returns to the page when the platform keeps the target encoded', () => {
+  // 微信小程序 onLoad 不做 URL 解码：returnTo 到手时仍是 %2F 开头，必须还能认出来
+  const targets = ['/pages/paper/index?id=abc_123-45', '/pages/library/index?grade=' + encodeURIComponent('三年级'),
+    '/pages/requests/index?title=' + encodeURIComponent('分数应用题') + '&grade=' + encodeURIComponent('六年级')]
+  for (const target of targets) assert.equal(safeDestination(encodeURIComponent(target)), target, target)
+  // 页面栈里的中文参数同样未解码，重新编码前要先归一化，避免二次编码
+  assert.equal(routeFromPage({ route: 'pages/requests/index', options: { title: encodeURIComponent('分数应用题') } }),
+    '/pages/requests/index?title=' + encodeURIComponent('分数应用题'))
+  // 编码形式也不是后门：解码后仍走完整校验
+  assert.equal(safeDestination(encodeURIComponent('/pages/paper/index')), HOME)
+  assert.equal(safeDestination(encodeURIComponent('/pages/paper/index?id=..')), HOME)
+  assert.equal(safeDestination(encodeURIComponent('/pages/private/index')), HOME)
+})

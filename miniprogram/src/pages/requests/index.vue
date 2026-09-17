@@ -5,6 +5,7 @@ import ServicePage from '../../components/ServicePage.vue'
 import { useConsumerPage } from '../../services/consumer-page'
 import { fetchRequests, fetchResourceRequest, submitRequest, requestStatus, type ResourceRequest } from '../../services/growth'
 import { openCatalogPaper } from '../../services/navigation'
+import { decodeParam } from '../../services/return-route'
 import { formatDate } from '../../content'
 // Route query fields initialize the form without replacing ServicePage props.
 defineOptions({ inheritAttrs: false })
@@ -12,7 +13,7 @@ const items = ref<ResourceRequest[]>([]), more = ref(false), title = ref(''), gr
 const focused = ref<ResourceRequest | null>(null)
 const displayed = computed(() => focused.value ? [focused.value, ...items.value.filter(item => item.id !== focused.value?.id)] : items.value)
 let seed = { title: '', grade: '', subject: '' }
-onLoad(options => { seed = { title: String(options?.title || '').slice(0, 120), grade: String(options?.grade || '').slice(0, 80), subject: String(options?.subject || '').slice(0, 80) }; resetForm(); highlight.value = String(options?.id || '') })
+onLoad(options => { seed = { title: decodeParam(options?.title).slice(0, 120), grade: decodeParam(options?.grade).slice(0, 80), subject: decodeParam(options?.subject).slice(0, 80) }; resetForm(); highlight.value = decodeParam(options?.id) })
 function resetForm() { title.value = seed.title; grade.value = seed.grade; subject.value = seed.subject; details.value = '' }
 async function load(valid: () => boolean, append = false) {
   const result = await fetchRequests(append ? items.value.length : 0)

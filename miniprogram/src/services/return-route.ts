@@ -5,10 +5,22 @@ const routes: Record<string, readonly string[]> = {
   requests: ['id', 'title', 'grade', 'subject'], support: ['id', 'kind', 'paper'], privacy: ['kind'],
 }
 const ids = new Set(['id', 'paper', 'category', 'topic'])
+const escaped = /%[0-9A-Fa-f]{2}/
 export const HOME = '/pages/home/index'
+/** 小程序 onLoad 的路径参数不做 URL 解码（H5 会自动解码），统一按"可能未解码"处理一次。 */
+export function decodeParam(value: unknown): string {
+  const raw = typeof value === 'string' ? value : ''
+  if (!escaped.test(raw)) return raw
+  try {
+    const decoded = decodeURIComponent(raw)
+    return /[\u0000-\u001f]/.test(decoded) ? raw : decoded
+  } catch { return raw }
+}
 export function safeDestination(input: unknown): string {
   if (typeof input !== 'string' || input.length > 1400 || /[\\\r\n#]/.test(input)) return HOME
-  const match = /^\/pages\/([a-z]+)\/index(?:\?([^#]*))?$/.exec(input)
+  // 平台差异：小程序原样带未解码的参数，H5 已解码。只有不像页面路径时才尝试解一次，解码结果仍走完整校验。
+  const target = input.startsWith('/pages/') ? input : decodeParam(input)
+  const match = /^\/pages\/([a-z]+)\/index(?:\?([^#]*))?$/.exec(target)
   if (!match || !routes[match[1]!]) return HOME
   const values = new Map<string, string>()
   try {
@@ -31,7 +43,8 @@ export function routeFromPage(page: { route?: string; options?: Record<string, u
   if (!page?.route) return HOME
   const options = page.options || page.$page?.options || {}
   const key = page.route.split('/')[1] || ''
-  const query = (routes[key] || []).filter(name => typeof options[name] === 'string').map(name => name + '=' + encodeURIComponent(String(options[name]))).join('&')
+  // page.options 是平台原样给的路径参数（小程序不解码），所以先归一化再重新编码。
+  const query = (routes[key] || []).filter(name => typeof options[name] === 'string').map(name => name + '=' + encodeURIComponent(decodeParam(options[name]))).join('&')
   return safeDestination('/' + page.route + (query ? '?' + query : ''))
 }
 export function loginUrl(target: string) { return '/pages/login/index?returnTo=' + encodeURIComponent(safeDestination(target)) }
