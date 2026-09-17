@@ -1,10 +1,25 @@
-"""Explicit demo imports preserve account separation, file integrity and user edits."""
+"""Explicit demo imports preserve account separation, file integrity and user edits.
 
+源库（demo 包）本质是 SQLite 文件，importer 保留 sqlite3 只读读取；
+测试在一次性 PG 库的独立 schema 里构造源数据，再导出为 SQLite 源文件。
+"""
+
+import os
+import sqlite3
 import tempfile
 import unittest
-from contextlib import ExitStack
+import uuid
+from contextlib import ExitStack, closing
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit
 from unittest.mock import patch
+
+import psycopg
+from psycopg import sql
+
+import pg_support  # 建一次性测试库，必须在 import app 之前
+
+pg_support.install_module_database()
 
 from app import db as database
 from app.config import get_settings
@@ -16,6 +31,34 @@ from app.services.paper_storage import LocalStorage
 from scripts.import_demo_catalog import import_catalog
 from test_backend_library import bundle, snapshot
 
+# 导出为 SQLite 源文件所需的表：users 供 importer 校验身份，其余为导入清单
+_EXPORT_TABLES = ("users", "mini_users", "mini_user_sessions", "paper_archives", "paper_assets",
+                  "catalog_papers", "catalog_access", "catalog_question_types", "catalog_type_rules",
+                  "mini_catalog_favorites", "mini_catalog_downloads", "mini_membership_events")
+
+_PG_INT_TYPES = ("smallint", "integer", "bigint", "boolean")
+
+
+def export_pg_schema_to_sqlite(dsn: str, sqlite_path: Path, tables) -> None:
+    """把当前 search_path 指向的 PG schema 导出到 SQLite 文件（列名与顺序保持一致）。"""
+    with closing(sqlite3.connect(sqlite_path)) as conn, psycopg.connect(dsn) as pg:
+        for table in tables:
+            columns = pg.execute(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = %s ORDER BY ordinal_position",
+                (table,)).fetchall()
+            if not columns:
+                continue
+            ddl = ", ".join(f'"{name}" {"INTEGER" if data_type in _PG_INT_TYPES else "TEXT"}'
+                            for name, data_type in columns)
+            conn.execute(f'CREATE TABLE "{table}" ({ddl})')
+            rows = pg.execute(f'SELECT * FROM "{table}"').fetchall()
+            if rows:
+                names = [name for name, _ in columns]
+                placeholders = ", ".join("?" for _ in names)
+                conn.executemany(f'INSERT INTO "{table}" ({", ".join(names)}) VALUES ({placeholders})', rows)
+        conn.commit()
+
 
 class DemoImportContracts(unittest.TestCase):
     def setUp(self):
@@ -24,10 +67,29 @@ class DemoImportContracts(unittest.TestCase):
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="lc-demo-import-")))
         self.source_db = self.root / "source.db"
         self.source_files = self.root / "source-files"
-        self.stack.enter_context(patch.object(get_settings(), "database_url", ""))
-        self.stack.enter_context(patch.object(get_settings(), "archive_storage", "local"))
+        pg_support.case_database(self.stack)  # 目标库（导入的目的地）
+        self.stack.enter_context(patch.object(get_settings(), "archive_local_dir", str(self.root / "target-files")))
         self.stack.enter_context(patch.object(get_settings(), "mini_registration_enabled", True))
-        with patch.object(database, "DB_PATH", self.source_db), \
+        self._build_sqlite_source()
+        database.init_db()
+        user_store.create_user("existing-user", "unchanged-password")
+        self.admin = user_store.create_user("existing-admin", "unchanged-password", role="admin")
+        with database.db() as conn:
+            conn.execute("INSERT INTO app_config(key, value) VALUES ('llm_model', 'existing-model')")
+
+    def _build_sqlite_source(self):
+        """在独立 schema 里构造 demo 源数据，导出为 SQLite 源文件后丢弃 schema。"""
+        module_dsn = os.environ["DATABASE_URL"]
+        base = urlsplit(module_dsn)
+        schema = "case_" + uuid.uuid4().hex
+        with psycopg.connect(module_dsn, autocommit=True) as conn:
+            conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        self.stack.callback(self._drop_schema, module_dsn, schema)
+        query = dict(parse_qsl(base.query))
+        query["options"] = "-csearch_path=" + schema
+        source_dsn = base._replace(query=urlencode(query)).geturl()
+        database.close_pg_pool()
+        with patch.object(get_settings(), "database_url", source_dsn), \
                 patch.object(get_settings(), "archive_local_dir", str(self.source_files)):
             database.init_db()
             publisher = user_store.create_user("admin_console", "demo-password", role="admin")
@@ -47,13 +109,16 @@ class DemoImportContracts(unittest.TestCase):
             public_catalog.favorite_paper(self.reader["user"]["id"], self.paper["id"], True)
             paper_library.create_paper(teacher.id, ArchiveCreate(
                 request_id="private-only", source_id="private-only", snapshot=snapshot()))
-        self.stack.enter_context(patch.object(database, "DB_PATH", self.root / "target.db"))
-        self.stack.enter_context(patch.object(get_settings(), "archive_local_dir", str(self.root / "target-files")))
-        database.init_db()
-        user_store.create_user("existing-user", "unchanged-password")
-        self.admin = user_store.create_user("existing-admin", "unchanged-password", role="admin")
-        with database.db() as conn:
-            conn.execute("INSERT INTO app_config(key, value) VALUES ('llm_model', 'existing-model')")
+        database.close_pg_pool()
+        export_pg_schema_to_sqlite(source_dsn, self.source_db, _EXPORT_TABLES)
+
+    @staticmethod
+    def _drop_schema(module_dsn, schema):
+        try:
+            with psycopg.connect(module_dsn, autocommit=True) as conn:
+                conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+        except Exception:
+            pass
 
     def run_import(self, apply=True):
         return import_catalog(self.source_db, self.source_files, self.admin.id, apply=apply)

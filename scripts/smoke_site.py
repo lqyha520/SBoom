@@ -1,35 +1,40 @@
 """站点内容模块冒烟测试：建表 → 分类/Banner/公告/字典 CRUD → 公开视图 → 看板。
 
-用独立临时库运行，不触碰 data/users.db。
-    python scripts/smoke_site.py        # SQLite（默认）
-    python scripts/smoke_site.py --pg   # 另建一次性 PostgreSQL 库，验 PG 方言兼容性
+用一次性 PostgreSQL 测试库运行，绝不触碰业务库：
+    python scripts/smoke_site.py
+（依赖 .env 或环境变量 DATABASE_URL 指向一个可达的 PostgreSQL 实例；脚本会在同一实例上
+ 另建 lc_smoke_ 前缀的一次性库，结束后自动删除。）
 """
 
 import os
 import sys
-import tempfile
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-_USE_PG = "--pg" in sys.argv
-
 
 def _env_database_url() -> str:
     """.env 里的 DATABASE_URL（PG 直连串），用于派生一次性测试库。"""
-    from dotenv import dotenv_values
+    url = os.environ.get("DATABASE_URL") or ""
+    if not url:
+        try:
+            from dotenv import dotenv_values
 
-    return str(dotenv_values(ROOT / ".env").get("DATABASE_URL") or "")
+            url = str(dotenv_values(ROOT / ".env").get("DATABASE_URL") or "")
+        except Exception:
+            pass
+    return url
 
 
 def _create_temp_pg(url: str) -> tuple[str, str]:
-    """在同一个 PG 实例上建一个临时库；返回 (测试库连接串, 库名)。"""
+    """在同一个 PG 实例上建一个一次性库；返回 (测试库连接串, 库名)。"""
     import psycopg
     from urllib.parse import urlsplit, urlunsplit
 
     parts = urlsplit(url)
-    temp_name = "lc_site_smoke_" + next(tempfile._get_candidate_names())
+    temp_name = "lc_smoke_" + uuid.uuid4().hex[:10]
     admin_url = urlunsplit((parts.scheme, parts.netloc, "/postgres", "", ""))
     with psycopg.connect(admin_url, autocommit=True) as conn:
         conn.execute(f'CREATE DATABASE "{temp_name}"')
@@ -46,18 +51,16 @@ def _drop_temp_pg(url: str, name: str) -> None:
         conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
 
 
-_tmp = Path(tempfile.mkdtemp(prefix="lc-site-smoke-"))
-os.environ["LC_DB_PATH"] = str(_tmp / "smoke.db")
+_tmp = Path(__import__("tempfile").mkdtemp(prefix="lc-site-smoke-"))
 os.environ["ARCHIVE_LOCAL_DIR"] = str(_tmp / "files")
-# .env 里配置了 DATABASE_URL 时会连到真实库：默认强制回落 SQLite 临时库，
-# --pg 时改连一次性测试库，绝不使用业务库。
+# .env 里配置了 DATABASE_URL 时会连到真实库：强制改连一次性测试库，绝不使用业务库。
 _pg_temp = ("", "")
-if _USE_PG:
-    _pg_temp = _create_temp_pg(_env_database_url())
-    os.environ["DATABASE_URL"] = _pg_temp[0]
-    print(f"使用一次性 PostgreSQL 测试库：{_pg_temp[1]}")
-else:
-    os.environ["DATABASE_URL"] = ""
+_base_url = _env_database_url()
+if not _base_url.startswith(("postgresql://", "postgres://")):
+    raise SystemExit("DATABASE_URL 未配置：本脚本需要一个可达的 PostgreSQL 实例来派生一次性测试库")
+_pg_temp = _create_temp_pg(_base_url)
+os.environ["DATABASE_URL"] = _pg_temp[0]
+print(f"使用一次性 PostgreSQL 测试库：{_pg_temp[1]}")
 
 from app.db import init_db  # noqa: E402
 from app.models.site import (  # noqa: E402

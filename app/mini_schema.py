@@ -4,14 +4,12 @@ import json
 
 
 def _columns(conn, table):
-    from app.db import _use_pg
-
-    if _use_pg():
-        rows = conn.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_name = ?", (table,)
-        ).fetchall()
-        return {row[0] for row in rows}
-    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    rows = conn.execute(
+        # 必须限定当前 schema，避免同库其他 schema 的同名表干扰补列判断
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = ? AND table_schema = current_schema()", (table,)
+    ).fetchall()
+    return {row[0] for row in rows}
 
 
 def _add_avatar_column(conn) -> None:

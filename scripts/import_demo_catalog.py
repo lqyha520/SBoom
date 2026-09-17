@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app.config import get_settings
+from app.config import get_settings  # noqa: F401  导入期触发 .env 加载（db 连接串等）
 from app.db import db
 from app.services.paper_storage import LocalStorage, _key
 
@@ -87,8 +87,6 @@ def insert_rows(conn, table, rows):
 
 
 def import_catalog(source_db, source_files, publisher_id, *, apply=False):
-    if get_settings().archive_storage != "local":
-        raise ValueError("This local migration requires local file storage")
     rows, assets = read_snapshot(source_db, source_files)
     fingerprint = hashlib.sha256(json.dumps(rows, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     report = {"source_fingerprint": fingerprint, "publisher_id": publisher_id,

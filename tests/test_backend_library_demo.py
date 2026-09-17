@@ -9,6 +9,10 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
+import pg_support  # 建一次性测试库，必须在 import app 之前
+
+pg_support.install_module_database()
+
 from test_backend_library import bundle
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -29,8 +33,8 @@ class DemoLibraryContracts(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="learn-coach-ui-demo-test-")))
-        self.stack.enter_context(patch.object(database, "DB_PATH", self.root / "users.db"))
-        for field, value in {"database_url": "", "archive_storage": "local", "archive_local_dir": str(self.root / "private-papers"),
+        pg_support.case_database(self.stack)
+        for field, value in {"archive_local_dir": str(self.root / "private-papers"),
                              "archive_max_papers": 1000, "archive_storage_mb": 512, "archive_max_bundle_mb": 40}.items():
             self.stack.enter_context(patch.object(get_settings(), field, value))
         database.init_db()
@@ -130,10 +134,11 @@ class DemoLibraryContracts(unittest.TestCase):
             self.assertEqual(client.get(url).status_code, 401)
 
     def test_seeder_rejects_non_fixture_targets_before_writing(self):
-        with patch.object(database, "DB_PATH", self.root / "another.db"):
+        # 指向业务库（非一次性测试库）必须被拒绝，防止种子污染真实数据
+        with patch.object(get_settings(), "database_url", "postgresql://learncoach:learncoach@127.0.0.1:5432/learncoach"):
             with self.assertRaisesRegex(ValueError, "disposable UI fixture"):
                 self.seed()
-        for field, value in (("database_url", "postgresql://not-a-test"), ("archive_storage", "cos"),
+        for field, value in (("database_url", "postgresql://not-a-test"),
                              ("archive_local_dir", str(self.root / "elsewhere"))):
             with self.subTest(field=field), patch.object(get_settings(), field, value):
                 with self.assertRaisesRegex(ValueError, "disposable UI fixture"):
@@ -187,10 +192,10 @@ class DemoLibraryContracts(unittest.TestCase):
             seed_public_catalog(self.other, self.user, self.root, self.assets)
         with self.assertRaisesRegex(ValueError, "disposable UI fixture"):
             seed_public_catalog(publisher, self.other, self.root, self.assets)
-        with patch.object(database, "DB_PATH", self.root / "another.db"):
+        with patch.object(get_settings(), "database_url", "postgresql://learncoach:learncoach@127.0.0.1:5432/learncoach"):
             with self.assertRaisesRegex(ValueError, "disposable UI fixture"):
                 seed_public_catalog(publisher, self.reader, self.root, self.assets)
-        for field, value in (("database_url", "postgresql://not-a-test"), ("archive_storage", "cos"),
+        for field, value in (("database_url", "postgresql://not-a-test"),
                              ("archive_local_dir", str(self.root / "elsewhere"))):
             with self.subTest(field=field), patch.object(get_settings(), field, value):
                 with self.assertRaisesRegex(ValueError, "disposable UI fixture"):

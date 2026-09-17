@@ -116,10 +116,8 @@
 
 ## 部署与运维
 
-默认 `ARCHIVE_STORAGE=local`，文件在 data/paper-files，不能作为静态目录公开。
+文件存储固定为本地磁盘（data/paper-files，可用 ARCHIVE_LOCAL_DIR 调整），不能作为静态目录公开。
 持久化数据库、data/secret_key.txt 和文件目录；多实例需要共享存储。数据库迁移追加建表，部署前仍应备份。
-COS 可选：安装 requirements-cos.txt，配置 COS_REGION/BUCKET/SECRET_ID/SECRET_KEY 并设置 ARCHIVE_STORAGE=cos。
-必须私有桶、最小权限；不向客户端提供公网 COS 地址或签名密钥。切换存储只影响新上传，旧配置需保留。
 
 反向代理支持至少 40 MB ZIP 和 180 秒上传超时；上述账号、会员、资料 API 全部禁止公共缓存。
 不要记录 Authorization、Cookie、微信 code、密码或请求正文。HTTPS 部署开启 FORCE_HTTPS。

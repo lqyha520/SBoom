@@ -15,6 +15,24 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # 后端已 PG-only：单测与 UI 契约测试都跑在这个 service 上，
+    # 测试库由 tests/pg_support.py 自动创建/销毁（lc_test_* 前缀）。
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      LC_TEST_PG_ADMIN: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -40,6 +58,7 @@ jobs:
       - run: pnpm --dir web test
       - run: pnpm --dir web build
       - run: pnpm --dir admin typecheck
+      - run: pnpm --dir admin test
       - run: pnpm --dir admin build
       - run: pnpm --dir miniprogram typecheck
       - run: pnpm --dir miniprogram test

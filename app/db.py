@@ -1,41 +1,37 @@
-"""数据库层 —— 双驱动：SQLite（stdlib）或 PostgreSQL（psycopg3）
+"""数据库层 —— PostgreSQL（psycopg3 + 连接池）
 
-通过 .env 的 DATABASE_URL 切换：
-- 空（默认）        → SQLite，文件路径由 LC_DB_PATH 或 data/users.db 决定
-- postgresql://... → PostgreSQL，多 worker 部署推荐
-
-两套后端共用同一套业务 SQL（? 占位符、datetime('now','localtime') 时间函数、
-ON CONFLICT upsert、RETURNING），由本模块统一翻译，业务代码无需感知差异。
+业务代码统一写 SQLite 风格 SQL（? 占位符、datetime('now','localtime') 时间函数、
+ON CONFLICT upsert、RETURNING），由本模块统一翻译为 PostgreSQL 方言，业务代码无需感知差异。
+本项目已移除 SQLite 运行时支持：DATABASE_URL 必须配置为 PostgreSQL 连接串。
 """
 
 import logging
-import os
-import sqlite3
 import threading
 from contextlib import contextmanager
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path(
-    os.environ.get("LC_DB_PATH")
-    or (Path(__file__).resolve().parent.parent / "data" / "users.db")
-)
-
-from app.config import get_settings  # noqa: E402  （放这里避免 env 未就绪的循环导入问题）
+from app.config import get_settings  # noqa: E402
 
 
-def _use_pg() -> bool:
+def _database_url() -> str:
     url = get_settings().database_url
-    return bool(url) and url.startswith(("postgresql://", "postgres://"))
+    if not url.startswith(("postgresql://", "postgres://")):
+        raise RuntimeError(
+            "DATABASE_URL 未配置或不是 PostgreSQL 连接串。"
+            "本项目仅支持 PostgreSQL，请在 .env 配置例如 "
+            "DATABASE_URL=postgresql://learncoach:learncoach@127.0.0.1:5432/learncoach"
+        )
+    return url
 
 
-# ─── SQL 方言翻译（仅 PG 路径使用） ───
+# ─── SQL 方言翻译 ───
 
 def _to_pg_sql(sql: str) -> str:
     """SQLite 风格 SQL → PostgreSQL 风格：
     1. datetime('now', 'localtime') → to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     2. ? 占位符 → %s（跳过字符串字面量内的 ?）
+    3. 字面量 % → %%（psycopg 只认 %s/%b/%t，LIKE 'import-%' 这类会被当成非法占位符）
     """
     sql = sql.replace(
         "datetime('now', 'localtime')",
@@ -45,6 +41,9 @@ def _to_pg_sql(sql: str) -> str:
         "to_char(now(), 'YYYY-MM-DD HH24:MI:SS')",
     )
     out, in_str, i = [], False, 0
+    # 字面量 % 先整体转义成 %%（psycopg 只认 %s/%b/%t，LIKE 'import-%' 会被当成非法占位符）；
+    # 必须先做这一步再插 %s，否则连占位符一起被转义。
+    sql = sql.replace("%", "%%")
     while i < len(sql):
         ch = sql[i]
         if in_str:
@@ -94,13 +93,14 @@ def _pg_row_factory(cursor):
 
 
 class _PgConn:
-    """psycopg3 连接的薄包装：对业务层暴露与 sqlite3.Connection 一致的小接口。"""
+    """psycopg3 连接的薄包装：对业务层暴露统一的 execute/executemany/commit 接口。"""
 
     def __init__(self, conn):
         self._conn = conn
 
     def execute(self, sql, params=None):
-        return self._conn.execute(_to_pg_sql(sql), params)
+        # 始终传 tuple：params=None 时 psycopg 不做占位符解析，%% 转义就不会被还原
+        return self._conn.execute(_to_pg_sql(sql), () if params is None else params)
 
     def executemany(self, sql, seq):
         return self._conn.cursor().executemany(_to_pg_sql(sql), seq)
@@ -121,56 +121,7 @@ class _PgConn:
 
 # ─── 建表语句 ───
 
-_SCHEMA_SQLITE = """
-CREATE TABLE IF NOT EXISTS users (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    username      TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    role          TEXT NOT NULL DEFAULT 'user',
-    is_active     INTEGER NOT NULL DEFAULT 1,
-    token_valid_after INTEGER NOT NULL DEFAULT 0,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
-
-CREATE TABLE IF NOT EXISTS user_llm_configs (
-    user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    base_url    TEXT NOT NULL DEFAULT '',
-    model       TEXT NOT NULL DEFAULT '',
-    api_key_enc TEXT NOT NULL DEFAULT '',
-    timeout     INTEGER NOT NULL DEFAULT 60,
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
-
-CREATE TABLE IF NOT EXISTS user_templates (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name       TEXT NOT NULL,
-    data       TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-    UNIQUE (user_id, name)
-);
-
-CREATE TABLE IF NOT EXISTS app_config (
-    key        TEXT PRIMARY KEY,
-    value      TEXT NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
-
-CREATE TABLE IF NOT EXISTS feedbacks (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    username   TEXT NOT NULL DEFAULT '',
-    game_id    TEXT NOT NULL DEFAULT '',
-    is_oob     INTEGER NOT NULL DEFAULT 0,
-    comment    TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_feedbacks_created ON feedbacks(created_at DESC);
-"""
-
-_SCHEMA_PG = """
+_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id            SERIAL PRIMARY KEY,
     username      TEXT UNIQUE NOT NULL,
@@ -239,7 +190,7 @@ def _get_pg_pool():
                 from psycopg_pool import ConnectionPool
 
                 pool = ConnectionPool(
-                    get_settings().database_url,
+                    _database_url(),
                     min_size=1,
                     max_size=10,
                     timeout=30,  # 池耗尽时最多等 30s
@@ -261,42 +212,48 @@ def close_pg_pool() -> None:
             _pg_pool = None
 
 
+# Keep related transactions in one domain. Mixed operations acquire all required
+# domains in this fixed order; never acquire another domain in a nested db().
+_LOCK_IDS = {"content": 70634191, "accounts": 70634192, "generation": 70634193, "schema": 70634194}
+
+
 @contextmanager
-def db(serialized: bool = False):
-    """从连接池取连接（PG）或每请求新建（SQLite）；正常退出 commit，异常回滚并关闭。
+def db(serialized: bool | str | tuple[str, ...] = False):
+    """从连接池取连接；正常退出 commit，异常回滚（连接归还池时自动清理）。
 
-    SQLite 路径：WAL 模式 + busy_timeout，多用户并发写不再互相锁死。
-    PG 路径：psycopg_pool 连接池接管（min=1, max=10）。
+    True 兼容内容域；字符串指定业务域，元组用于跨域事务。
+    事务锁跨 worker 生效，固定排序避免交叉获取锁导致死锁。
     """
-    if _use_pg():
-        with _get_pg_pool().connection() as conn:
-            if serialized:
-                conn.execute("SELECT pg_advisory_xact_lock(70634191)")
-            yield _PgConn(conn)
-            conn.commit()
-        return
-
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 5000")
-    # 注：journal_mode=WAL 是持久化设置，init_db() 已执行一次，
-    # 不在每连接重复执行（避免短暂持锁放大写竞争）
-    try:
-        if serialized:
-            conn.execute("BEGIN IMMEDIATE")
-        yield conn
+    with _get_pg_pool().connection() as conn:
+        scopes = ("content",) if serialized is True else (serialized,) if isinstance(serialized, str) else serialized or ()
+        for lock_id in sorted({_LOCK_IDS[scope] for scope in scopes}):
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (lock_id,))
+        yield _PgConn(conn)
         conn.commit()
+
+
+def database_ready() -> bool:
+    """Probe the existing pool only: bounded acquisition and SQL execution."""
+    pool = _pg_pool
+    if pool is None:
+        return False
+    try:
+        with pool.connection(timeout=1) as conn:
+            conn.execute("SET LOCAL statement_timeout = '1000ms'")
+            return conn.execute("SELECT 1").fetchone()[0] == 1
     except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+        return False
 
 
-def _migrate_sqlite(conn: sqlite3.Connection) -> None:
+def _migrate_pg(conn) -> None:
     """存量库补列（方案B初期建的 users 表没有 role/is_active/token_valid_after）。"""
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+    cols = {
+        r[0]
+        for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'users' AND table_schema = current_schema()"
+        ).fetchall()
+    }
     if "role" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
         logger.info("迁移：users 表新增 role 列")
@@ -306,25 +263,6 @@ def _migrate_sqlite(conn: sqlite3.Connection) -> None:
     if "token_valid_after" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN token_valid_after INTEGER NOT NULL DEFAULT 0")
         logger.info("迁移：users 表新增 token_valid_after 列（改密吊销旧会话）")
-
-
-def _migrate_pg(conn) -> None:
-    """存量 PG 库补列（与 _migrate_sqlite 对齐）。"""
-    cols = {
-        r[0]
-        for r in conn.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_name = 'users'"
-        ).fetchall()
-    }
-    if "role" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
-        logger.info("迁移：users 表新增 role 列（PG）")
-    if "is_active" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
-        logger.info("迁移：users 表新增 is_active 列（PG）")
-    if "token_valid_after" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN token_valid_after INTEGER NOT NULL DEFAULT 0")
-        logger.info("迁移：users 表新增 token_valid_after 列（PG，改密吊销旧会话）")
 
 
 def _init_reliability_schema(conn) -> None:
@@ -354,12 +292,7 @@ def _init_reliability_schema(conn) -> None:
             revision BIGINT NOT NULL
         );
     """)
-    if _use_pg():
-        conn.execute("ALTER TABLE user_templates ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1")
-    else:
-        cols = {row["name"] for row in conn.execute("PRAGMA table_info(user_templates)")}
-        if "revision" not in cols:
-            conn.execute("ALTER TABLE user_templates ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+    conn.execute("ALTER TABLE user_templates ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1")
 
 
 def init_db() -> None:
@@ -369,29 +302,14 @@ def init_db() -> None:
     from app.engagement_schema import init_engagement_schema
     from app.commerce_schema import init_commerce_schema
 
-    if _use_pg():
-        # Multiple workers can start together; serialize additive DDL across them.
-        with db(serialized=True) as conn:
-            conn.executescript(_SCHEMA_PG)
-            _migrate_pg(conn)
-            _init_reliability_schema(conn)
-            init_library_schema(conn)
-            init_site_schema(conn)
-            init_experience_schema(conn)
-            init_engagement_schema(conn)
-            init_commerce_schema(conn)
-        logger.info("PostgreSQL 数据库就绪")
-        return
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with db() as conn:
-        # WAL 模式是数据库级持久设置，建表时设一次即可（多用户并发写不互相锁死）
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.executescript(_SCHEMA_SQLITE)
-        _migrate_sqlite(conn)
+    # Multiple workers can start together; serialize additive DDL across them.
+    with db(serialized=tuple(_LOCK_IDS)) as conn:
+        conn.executescript(_SCHEMA)
+        _migrate_pg(conn)
         _init_reliability_schema(conn)
         init_library_schema(conn)
         init_site_schema(conn)
         init_experience_schema(conn)
         init_engagement_schema(conn)
         init_commerce_schema(conn)
-    logger.info(f"用户数据库就绪: {DB_PATH}")
+    logger.info("PostgreSQL 数据库就绪")

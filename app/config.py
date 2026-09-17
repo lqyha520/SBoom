@@ -2,7 +2,6 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 from functools import lru_cache
-from typing import Literal
 
 APP_VERSION = "0.5.0"  # 唯一版本号来源（main.py / admin stats 都引用这里）
 
@@ -36,7 +35,7 @@ class Settings(BaseSettings):
     debug: bool = False  # 仅开发时设 true：启用热重载。生产必须为 false
     workers: int = 1  # worker 进程数；>1 时建议配合 PostgreSQL 使用
 
-    # 数据库：空 = SQLite（data/users.db）；填 PostgreSQL 连接串则切到 PG，例如
+    # 数据库：PostgreSQL 连接串（必填；本服务仅支持 PG），例如
     #   postgresql://learncoach:learncoach@127.0.0.1:5432/learncoach
     database_url: str = ""
 
@@ -49,16 +48,11 @@ class Settings(BaseSettings):
     cors_origins: str = ""  # 逗号分隔的跨域白名单；空 = 仅同源（默认，最安全）
     force_https: bool = False  # HTTPS 部署时设 true：会话 Cookie 加 Secure 标志
 
-    # Paper library: private local files for development, private COS for deployment.
-    archive_storage: Literal["local", "cos"] = "local"
+    # Paper library: private files live on the local disk (data/paper-files by default).
     archive_local_dir: str = ""
     archive_max_papers: int = Field(1000, ge=1, le=100000)
     archive_storage_mb: int = Field(512, ge=16, le=102400)
     archive_max_bundle_mb: int = Field(40, ge=1, le=64)
-    cos_region: str = ""
-    cos_bucket: str = ""
-    cos_secret_id: str = ""
-    cos_secret_key: str = ""
 
     wechat_app_id: str = ""
     wechat_app_secret: str = ""

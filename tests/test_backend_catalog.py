@@ -1,7 +1,10 @@
 """Public catalog publication, privacy and self-service login contracts."""
 
+"""Public catalog publication, privacy and self-service login contracts."""
+
 import copy
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -12,6 +15,13 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("DATABASE_URL", "")  # 防御：下面 install_module_database 会覆盖为一次性测试库
+
+import pg_support  # noqa: E402  建一次性测试库，必须在 import app 之前
+
+pg_support.install_module_database({"SECRET_KEY": "catalog-tests-disposable-secret-no-production",
+                                    "LLM_API_KEY": "", "ADMIN_USERNAME": "", "ADMIN_PASSWORD": ""})
 
 from test_backend_library import bundle, snapshot
 from app import db as database, security
@@ -28,8 +38,8 @@ class PublicCatalogContracts(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="lc-catalog-test-")))
-        self.stack.enter_context(patch.object(database, "DB_PATH", self.root / "users.db"))
-        for field, value in {"database_url": "", "archive_storage": "local", "archive_local_dir": str(self.root / "files"),
+        pg_support.case_database(self.stack)
+        for field, value in {"archive_local_dir": str(self.root / "files"),
                              "registration_enabled": True, "mini_registration_enabled": True, "archive_max_papers": 1000, "archive_storage_mb": 512}.items():
             self.stack.enter_context(patch.object(get_settings(), field, value))
         self.stack.enter_context(patch.object(mini, "allow", return_value=True))

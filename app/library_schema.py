@@ -1,4 +1,4 @@
-"""Additive, SQLite/PostgreSQL-compatible paper library tables."""
+"""Additive, PostgreSQL-compatible paper library tables."""
 
 
 def init_library_schema(conn):

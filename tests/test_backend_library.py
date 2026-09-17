@@ -14,8 +14,10 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-os.environ.update({"DATABASE_URL": "", "SECRET_KEY": "library-tests-disposable-secret-no-production",
-                   "LLM_API_KEY": "", "ADMIN_USERNAME": "", "ADMIN_PASSWORD": ""})
+import pg_support  # noqa: E402  建一次性测试库，必须在 import app 之前
+
+pg_support.install_module_database({"SECRET_KEY": "library-tests-disposable-secret-no-production",
+                                    "LLM_API_KEY": "", "ADMIN_USERNAME": "", "ADMIN_PASSWORD": ""})
 
 import httpx
 from fastapi import FastAPI
@@ -63,8 +65,8 @@ class PaperLibraryContracts(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="lc-library-test-")))
-        self.stack.enter_context(patch.object(database, "DB_PATH", self.root / "users.db"))
-        for field, value in {"database_url": "", "archive_storage": "local", "archive_local_dir": str(self.root / "private"),
+        pg_support.case_database(self.stack)
+        for field, value in {"archive_local_dir": str(self.root / "private"),
                              "archive_max_papers": 1000, "archive_storage_mb": 512, "archive_max_bundle_mb": 40,
                              "wechat_app_id": "", "wechat_app_secret": "", "mini_registration_enabled": True}.items():
             self.stack.enter_context(patch.object(get_settings(), field, value))
@@ -282,10 +284,10 @@ class PaperLibraryContracts(unittest.TestCase):
         self.assertEqual(self.client.get(ready["assets"][0]["url"]).status_code, 404)
         self.assertEqual(list((self.root / "private").rglob("*.jpg")), [])
 
-    def test_cos_never_falls_back_to_local_when_unconfigured(self):
-        get_settings().archive_storage = "cos"
-        with self.assertRaises(Exception):
-            storage_for()
+    def test_storage_rejects_unknown_backend_and_path_escape(self):
+        # COS 后端已移除：任何非 local 的存储名都必须被拒绝，而不是回落到本地磁盘
+        with self.assertRaises(ValueError):
+            storage_for("cos")
         with self.assertRaises(ValueError):
             LocalStorage().path("../../users.db")
 

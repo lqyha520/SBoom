@@ -20,13 +20,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 TEMP = tempfile.TemporaryDirectory(prefix="learn-coach-ui-")
-os.environ.update({
-    "LC_DB_PATH": str(Path(TEMP.name) / "users.db"),
-    "DATABASE_URL": "", "SECRET_KEY": "ui-fixture-disposable-secret-never-use-in-production",
+
+import pg_support  # noqa: E402  一次性测试库，必须在 import app 之前
+
+pg_support.install_module_database({
+    "SECRET_KEY": "ui-fixture-disposable-secret-never-use-in-production",
     "LLM_API_KEY": "", "LLM_BASE_URL": "http://127.0.0.1:1", "LLM_MODEL": "ui-fixture",
     "ADMIN_USERNAME": "", "ADMIN_PASSWORD": "", "FORCE_HTTPS": "false",
     "REGISTRATION_ENABLED": "true", "MINI_REGISTRATION_ENABLED": "true", "CORS_ORIGINS": "",
-    "ARCHIVE_STORAGE": "local", "ARCHIVE_LOCAL_DIR": str(Path(TEMP.name) / "private-papers"),
+    "ARCHIVE_LOCAL_DIR": str(Path(TEMP.name) / "private-papers"),
     "WECHAT_APP_ID": "", "WECHAT_APP_SECRET": "",
     "WECHAT_PAY_ENABLED": "false", "WECHAT_SUBSCRIBE_TEMPLATE_ID": "", "WECHAT_PAY_AUTO_RECONCILE": "false",
 })

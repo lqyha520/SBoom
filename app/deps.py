@@ -23,7 +23,7 @@ async def require_user(token: Optional[str] = Cookie(None, alias=SESSION_COOKIE)
     if payload is None:
         raise HTTPException(status_code=401, detail={"error": "登录已过期，请重新登录"})
     user_id = payload["sub"]
-    # DB 查询是同步 SQLite/PG I/O，放线程池执行，避免阻塞事件循环
+    # DB 查询是同步 PG I/O，放线程池执行，避免阻塞事件循环
     user = await asyncio.to_thread(get_user_by_id, user_id)
     if user is None:
         raise HTTPException(status_code=401, detail={"error": "账号不存在"})

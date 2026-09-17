@@ -6,6 +6,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import pg_support
+
 DATASET = "paper-library-demo-v1"
 FOLDERS = ("三年级数学", "阅读与积累", "英语专项", "期末复习")
 GRADES = ("一年级", "二年级", "三年级", "四年级", "五年级", "六年级")
@@ -225,8 +227,7 @@ def seed_library(user, disposable_root, assets_directory):
     # This helper is deliberately unavailable to the real app and production DB.
     if (not root.is_relative_to(Path(tempfile.gettempdir()).resolve())
             or not root.name.startswith("learn-coach-ui-") or user.username != "ui_teacher"
-            or settings.database_url or database.DB_PATH.resolve() != root / "users.db"
-            or settings.archive_storage != "local"
+            or not pg_support.is_disposable_db(settings.database_url)
             or Path(settings.archive_local_dir).resolve() != root / "private-papers"):
         raise ValueError("Demo seeding is allowed only for the disposable UI fixture")
 
@@ -274,8 +275,7 @@ def seed_public_catalog(publisher, reader, disposable_root, assets_directory):
             or not root.name.startswith("learn-coach-ui-")
             or publisher.username != "admin_console" or publisher.role != "admin"
             or not isinstance(reader, mini_auth.MiniUser) or reader.username != "ui_vip"
-            or settings.database_url or database.DB_PATH.resolve() != root / "users.db"
-            or settings.archive_storage != "local"
+            or not pg_support.is_disposable_db(settings.database_url)
             or Path(settings.archive_local_dir).resolve() != root / "private-papers"):
         raise ValueError("Public demo seeding is allowed only for the disposable UI fixture")
 
