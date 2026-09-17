@@ -49,7 +49,7 @@ test('native avatar selection compresses before reading and previews the uploade
 test('unavailable native compression falls back to the explicitly selected image', async () => {
   const app = fixture({ compressFails: true })
   assert.equal((await app.prepare('wxfile://selected-avatar')).path, 'wxfile://selected-avatar')
-  assert.equal(app.events.at(-1), 'read:wxfile://selected-avatar')
+  assert.equal(app.events[app.events.length - 1], 'read:wxfile://selected-avatar')
 })
 
 test('unreadable, empty and oversized native images fail without submitting invalid data', async () => {
