@@ -36,7 +36,7 @@ def batch(body):
                 fail("所选资料不存在，请刷新列表", 404)
             if row["revision"] != item.revision:
                 fail("部分资料已被其他操作更新，本次未作修改，请刷新后重试")
-            if body.action == "published" and row["file_status"] != "ready":
+            if body.action == "published" and not (row["download_mode"] == "external" and row["external_url"]) and row["file_status"] != "ready":
                 fail("所选资料中仍有文件未就绪，本次未作修改")
             rows.append(row)
         now = int(time.time())
@@ -74,12 +74,17 @@ def preview(admin_id, catalog_id, membership):
     with db() as conn:
         access = catalog_access.access_map(conn, [catalog_id], SimpleNamespace(is_vip=membership == "vip"))[catalog_id]
     result.update(access)
+    result.pop("external_url", None)
+    result.pop("external_code", None)
     result["preview_membership"] = membership
     if not access["can_view"]:
         result["snapshot"] = None
         result["thumbnail_id"] = None
         result["thumbnail_url"] = None
-    result["assets"] = [item for item in result["assets"] if access["can_download" if item["kind"] == "pdf" else "can_view"]]
+    result["assets"] = [item for item in result["assets"] if access["can_download" if item["kind"] == "pdf" else "can_view"]
+                        and (item["kind"] != "pdf" or result["download_mode"] == "pdf")]
+    if result["download_mode"] == "external":
+        result["editions"] = []
     for edition in result.get("editions", []):
         edition.pop("paper_id", None)
         if not access["can_download"]:

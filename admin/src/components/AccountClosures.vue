@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAdminListRoute } from '../navigation'
 import { ref, watch } from 'vue'
 import type { UserInfo } from '../api'
 import { useAdminPage } from '../admin-page'
@@ -7,7 +8,8 @@ const props = defineProps<{ user: UserInfo }>()
 const items = ref<Closure[]>([]), total = ref(0), pageNumber = ref(1), status = ref('pending'), selected = ref<Closure | null>(null), dialog = ref(false), action = ref<'approve' | 'reject'>('reject'), reply = ref(''), confirmName = ref('')
 const page = useAdminPage(async valid => { const result = await getClosures(status.value === 'all' ? '' : status.value, (pageNumber.value - 1) * 20); if (valid()) { items.value = result.items; total.value = result.total } }, () => { dialog.value = false })
 const { error, notice, loading, busy } = page
-watch(pageNumber, page.load); watch(status, () => { if (pageNumber.value === 1) void page.load(); else pageNumber.value = 1 })
+const routeState = useAdminListRoute('accountClosures', { status, page: pageNumber }, () => { void page.load() })
+watch(pageNumber, page.load); watch(status, () => { if (routeState.restoring) return; if (pageNumber.value === 1) void page.load(); else pageNumber.value = 1 })
 function edit(item: Closure) { selected.value = item; action.value = 'reject'; reply.value = ''; confirmName.value = ''; error.value = ''; dialog.value = true }
 function save() { if (!selected.value) return; void page.act(async valid => { await reviewClosure(props.user.id, selected.value!, action.value, reply.value.trim(), action.value === 'approve' && confirmName.value === selected.value!.account_name); if (valid()) { dialog.value = false; notice.value = action.value === 'approve' ? '账号已注销，个人数据已清理' : '审核结果已发送到用户消息中心'; await page.load() } }) }
 </script>

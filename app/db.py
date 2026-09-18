@@ -169,6 +169,10 @@ CREATE TABLE IF NOT EXISTS feedbacks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_feedbacks_created ON feedbacks(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feedbacks_user_id ON feedbacks(user_id);
+CREATE INDEX IF NOT EXISTS idx_feedbacks_game_id ON feedbacks(game_id);
+CREATE INDEX IF NOT EXISTS idx_user_templates_user_id ON user_templates(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_templates_created_at ON user_templates(created_at DESC);
 """
 
 
@@ -309,6 +313,7 @@ def init_db() -> None:
     from app.experience_schema import init_experience_schema
     from app.engagement_schema import init_engagement_schema
     from app.commerce_schema import init_commerce_schema
+    from app.db_indexes import add_optimization_indexes
 
     # Multiple workers can start together; serialize additive DDL across them.
     with db(serialized=tuple(_LOCK_IDS)) as conn:
@@ -320,4 +325,5 @@ def init_db() -> None:
         init_experience_schema(conn)
         init_engagement_schema(conn)
         init_commerce_schema(conn)
+        add_optimization_indexes(conn)
     logger.info("PostgreSQL 数据库就绪")

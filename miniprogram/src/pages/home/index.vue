@@ -7,7 +7,7 @@ import HomeBanner from '../../components/HomeBanner.vue'
 import NoticeBar from '../../components/NoticeBar.vue'
 import NoticePopup from '../../components/NoticePopup.vue'
 import PaperCard from '../../components/PaperCard.vue'
-import PaperSkeleton from '../../components/PaperSkeleton.vue'
+import EnhancedSkeleton from '../../components/EnhancedSkeleton.vue'
 import SearchField from '../../components/SearchField.vue'
 import { errorMessage, favoriteCatalogPaper, fetchCatalog, fetchCatalogSummary, fetchSiteHome } from '../../services/api'
 import { ensureSession, requireLogin, session } from '../../services/session'
@@ -163,8 +163,16 @@ onShareAppMessage(() => shareCard('home'))
         </view>
         <text class="feed-caption">{{ feedCaption }}</text>
         <view v-if="error" class="error-strip" role="status"><text class="grow">{{ error }}</text><button class="section-link retry-papers" role="button" :disabled="loading" aria-label="重试加载习题" @click="loadPapers()">{{ loading ? '加载中' : '重试' }}</button></view>
-        <PaperSkeleton v-if="loading && !items.length" cards :count="2" />
-        <view v-else-if="cards.length" :key="feed + ':' + offset" class="home-cards" :aria-busy="loading"><PaperCard v-for="paper in cards" :key="paper.id" :paper="paper" :busy="loading || !!changing" @favorite="favorite(paper)" /></view>
+        <EnhancedSkeleton v-if="loading && !items.length" :count="2" type="card" class="loading-pulse" />
+        <transition-group name="list" tag="view" class="home-cards">
+          <PaperCard 
+            v-for="paper in cards" 
+            :key="paper.id" 
+            :paper="paper" 
+            :busy="loading || !!changing" 
+            @favorite="favorite(paper)" 
+          />
+        </transition-group>
         <view v-else-if="!loading && !error" class="home-empty"><view class="empty-symbol"><wd-icon name="book" size="28px" /></view><text class="empty-title">{{ grade ? '这个年级的练习还在准备中' : '新的练习正在准备中' }}</text><text class="empty-caption">{{ grade ? '换个年级，看看其他练习吧' : '稍后再来，或去习题库逛逛' }}</text><button class="empty-link" role="button" @click="grade ? clearGrade() : openCatalog()">{{ grade ? '查看全部年级' : '进入习题库' }}<wd-icon name="arrow-right" size="14px" /></button></view>
       </view>
       <view v-if="categories.length" class="content-width home-categories">
@@ -194,11 +202,12 @@ onShareAppMessage(() => shareCard('home'))
 .grade-entry { display: flex; align-items: center; justify-content: center; gap: 5px; flex: none; width: 88px; min-height: 46px; padding: 0 7px; margin: 0; border: 1px solid #dfe8df; border-radius: 13px; background: #edf3ec; font-size: 11px; line-height: 1.5; color: #49664f; }
 .grade-entry text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .grade-entry[disabled] { opacity: .6; }
-.home-subjects { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding-top: 18px; padding-bottom: 23px; }
+.home-subjects { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding-top: 18px; padding-bottom: 23px; animation: fade-in 0.4s ease-out; }
 .subject-entry { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; width: 100%; margin: 0; padding: 0; background: transparent; font-size: 12px; line-height: 1.5; color: #374c3d; }
 .subject-entry > text { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.subject-symbol { display: flex; align-items: center; justify-content: center; width: 50px; height: 50px; border-radius: 17px; color: var(--subject-color); background: var(--subject-tint); transition: transform .18s; }
-.subject-entry:active .subject-symbol { transform: scale(.94); }
+.subject-symbol { display: flex; align-items: center; justify-content: center; width: 50px; height: 50px; border-radius: 17px; color: var(--subject-color); background: var(--subject-tint); transition: transform .18s ease, box-shadow .18s ease; }
+.subject-entry:active .subject-symbol { transform: scale(.94); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.subject-entry:hover .subject-symbol { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
 .all-subjects { --subject-color: #777951; --subject-tint: #eeefdf; }
 .home-status { display: flex; align-items: center; gap: 10px; padding: 0 12px; margin-bottom: 18px; border-radius: 10px; background: #fff4dc; color: #80612b; font-size: 11px; }
 .home-status .section-link { color: #80612b; }
@@ -220,8 +229,10 @@ onShareAppMessage(() => shareCard('home'))
 .empty-link { display: flex; align-items: center; gap: 7px; min-height: 44px; margin: 10px 0 0; padding: 0; background: transparent; font-size: 12px; color: var(--lc-primary); }
 .home-categories { padding-top: 23px; }
 .home-categories .section-heading { margin-bottom: 10px; }
-.category-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.category-entry { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 85px; margin: 0; padding: 12px 10px; background: #fff; border: 1px solid #e7ede4; border-radius: 14px; font-size: 12px; text-align: left; line-height: 1.5; }
+.category-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; animation: slide-up 0.5s ease-out; }
+.category-entry { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 85px; margin: 0; padding: 12px 10px; background: #fff; border: 1px solid #e7ede4; border-radius: 14px; font-size: 12px; text-align: left; line-height: 1.5; transition: all 0.2s ease; }
+.category-entry:active { transform: scale(0.98); border-color: #c5d8c4; }
+.category-entry:hover { border-color: #b8d5b7; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
 .category-symbol { display: flex; align-items: center; justify-content: center; flex: none; width: 30px; height: 34px; color: #8a784b; }
 .category-tone-1 { color: #7883a3; }.category-tone-2 { color: #7b977f; }.category-tone-3 { color: #b48673; }
 .category-title { display: block; color: #3b4f3f; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -233,7 +244,9 @@ onShareAppMessage(() => shareCard('home'))
 .swipe-hint { font-size: 10px; color: #899488; }
 .collection-scroll { width: 100%; }
 .collection-track { display: flex; gap: 12px; padding: 0 20px 4px; }
-.collection-card { display: flex; flex-direction: column; flex: none; width: 244px; min-height: 183px; padding: 18px; margin: 0; border: 1px solid #dce8d9; border-radius: 17px; text-align: left; background: #eaf1e5; color: #4b6d4d; line-height: 1.5; white-space: normal; }
+.collection-card { display: flex; flex-direction: column; flex: none; width: 244px; min-height: 183px; padding: 18px; margin: 0; border: 1px solid #dce8d9; border-radius: 17px; text-align: left; background: #eaf1e5; color: #4b6d4d; line-height: 1.5; white-space: normal; transition: all 0.25s ease; }
+.collection-card:active { transform: scale(0.97); }
+.collection-card:hover { transform: translateY(-4px); box-shadow: 0 8px 16px rgba(0,0,0,0.1); }
 .collection-tone-1 { background: #edf0f6; border-color: #e0e5ee; color: #5d6f92; }.collection-tone-2 { background: #f6efe3; border-color: #eee3d3; color: #90724b; }
 .collection-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; opacity: .85; }
 .collection-label { font-size: 10px; letter-spacing: 1px; }
@@ -255,5 +268,24 @@ onShareAppMessage(() => shareCard('home'))
 .grade-choice.selected { border-color: #78a384; background: #eaf3e8; color: #2d7452; font-weight: 600; }
 .grade-choice.all-grades { grid-column: 1 / -1; }
 @keyframes show-papers { from { transform: translateY(4px); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slide-up { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes pulse-subtle { 0%, 100% { opacity: 1; } 50% { opacity: .7; } }
+.list-enter-active,
+.list-leave-to {
+  transition: all 0.3s ease;
+}
+.list-enter-from,
+.list-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
+}
+.list-enter-to {
+  opacity: 1;
+  transform: translateY(0);
+}
+.home-subjects { animation: fade-in 0.4s ease-out; }
+.collection-track { animation: slide-up 0.6s ease-out; }
+.loading-pulse { animation: pulse-subtle 1.5s ease-in-out infinite; }
 @media (max-width: 359px) { .home-page .content-width { padding-left: 16px; padding-right: 16px; } .home-search-row { gap: 6px; } .grade-entry { width: 81px; font-size: 10px; } .home-cards { gap: 10px; } .feed-tabs { gap: 14px; } .feed-tabs button { font-size: 14px; } .feed-tabs button.active { font-size: 17px; } .category-entry { gap: 5px; padding: 12px 8px; } .category-symbol { width: 25px; } .collection-track { padding-left: 16px; padding-right: 16px; } .collection-card { width: 235px; } }
 </style>

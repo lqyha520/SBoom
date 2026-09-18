@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAdminListRoute } from '../navigation'
 import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import * as api from '../api'
 
@@ -85,6 +86,7 @@ async function submit() {
 }
 watch(dialogOpen, open => { if (!open) form.value.password = '' })
 onMounted(() => load())
+const routeState = useAdminListRoute('users', { q: query, page }, () => { void load() })
 </script>
 
 <template>

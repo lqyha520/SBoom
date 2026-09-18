@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAdminListRoute } from '../navigation'
 import { ref, watch } from 'vue'
 import type { UserInfo } from '../api'
 import { useAdminPage } from '../admin-page'
@@ -8,8 +9,9 @@ const props = defineProps<{ user: UserInfo }>()
 const items = ref<ResourceRequest[]>([]), demand = ref<Demand[]>([]), total = ref(0), pageNumber = ref(1), status = ref('pending'), fingerprint = ref(''), target = ref<ResourceRequest | null>(null), dialog = ref(false)
 const page = useAdminPage(async valid => { const result = await getRequests(status.value === 'all' ? '' : status.value, fingerprint.value, (pageNumber.value - 1) * 20); if (valid()) { items.value = result.items; total.value = result.total; demand.value = result.demand } }, () => { dialog.value = false })
 const { error, notice, loading, busy } = page
+const routeState = useAdminListRoute('resourceRequests', { status, fingerprint, page: pageNumber }, () => { void page.load() })
 watch(pageNumber, page.load)
-watch([status, fingerprint], () => { if (pageNumber.value === 1) void page.load(); else pageNumber.value = 1 })
+watch([status, fingerprint], () => { if (routeState.restoring) return; if (pageNumber.value === 1) void page.load(); else pageNumber.value = 1 })
 function edit(item: ResourceRequest) { target.value = { ...item }; error.value = ''; dialog.value = true }
 function filter(item: Demand) { status.value = 'all'; fingerprint.value = item.fingerprint }
 function save() { if (!target.value) return; void page.act(async valid => { await resolveRequest(props.user.id, { ...target.value!, catalog_id: target.value!.status === 'fulfilled' ? target.value!.catalog_id : null }); if (valid()) { dialog.value = false; notice.value = '需求处理结果已保存，并同步到用户消息中心'; await page.load() } }) }

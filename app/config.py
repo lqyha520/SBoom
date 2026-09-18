@@ -84,6 +84,43 @@ class Settings(BaseSettings):
         env_prefix="",  # 环境变量无需前缀
     )
 
+    def validate(self) -> None:
+        """启动时验证必填配置项，避免运行时才发现错误"""
+        errors = []
+
+        # 必填项
+        if not self.database_url:
+            errors.append("DATABASE_URL 必须配置（PostgreSQL 连接串，如 postgresql://user:pass@host:5432/db）")
+
+        # 相关性检查
+        if self.log_to_file and self.workers > 1:
+            errors.append("LOG_TO_FILE=true 与 WORKERS>1 不兼容，多进程部署应使用容器日志")
+
+        # 支付配置相关性检查
+        if self.wechat_pay_enabled:
+            required_pay_fields = [
+                ("wechat_pay_mchid", "商户号"),
+                ("wechat_pay_serial_no", "商户证书序列号"),
+                ("wechat_pay_private_key_path", "商户私钥路径"),
+                ("wechat_pay_api_v3_key", "API v3 密钥"),
+                ("wechat_pay_notify_origin", "支付回调域名"),
+            ]
+            for field, name in required_pay_fields:
+                if not getattr(self, field):
+                    errors.append(f"启用微信支付时必须配置 {name}（{field}）")
+
+        # 种子管理员相关性检查
+        has_username = bool(self.admin_username)
+        has_password = bool(self.admin_password)
+        if has_username != has_password:
+            errors.append("ADMIN_USERNAME 和 ADMIN_PASSWORD 必须同时设置或同时留空")
+
+        if errors:
+            raise ValueError(
+                "配置验证失败：\n" + "\n".join(f"  - {e}" for e in errors) +
+                "\n请在 .env 文件中修正配置"
+            )
+
 
 @lru_cache()
 def get_settings() -> Settings:

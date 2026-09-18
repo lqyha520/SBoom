@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAdminListRoute } from '../navigation'
 import { onActivated, onDeactivated, ref, watch } from 'vue'
 import type { UserInfo } from '../api'
 import { getSupport, saveSupport, getFeedback, saveFeedback, statusOptions, kindLabels, type Feedback, type SupportSettings } from '../experience'
@@ -30,8 +31,9 @@ async function load() {
 }
 onActivated(async () => { void load(); try { settings.value = await getSupport() } catch (cause) { error.value = message(cause) } })
 onDeactivated(() => { sequence++; dialog.value = false; previewOpen.value = false })
+const routeState = useAdminListRoute('supportCenter', { status, page }, () => { void load() })
 watch(page, load)
-watch(status, () => { if (page.value === 1) void load(); else page.value = 1 })
+watch(status, () => { if (routeState.restoring) return; if (page.value === 1) void load(); else page.value = 1 })
 function edit(item: Feedback) { selected.value = { ...item }; formError.value = ''; dialog.value = true }
 async function save() {
   if (busy.value || !selected.value) return

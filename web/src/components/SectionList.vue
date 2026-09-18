@@ -4,11 +4,13 @@ import Sortable from 'sortablejs'
 import { useExamStore } from '../stores/exam'
 import { MAX_QUESTIONS_PER_TYPE, TYPE_NAME } from '../constants'
 import type { Section } from '../types'
+import QuestionManager from './QuestionManager.vue'
 
 const store = useExamStore()
 const list = ref<HTMLElement | null>(null)
 const layoutSection = ref<Section | null>(null)
 const retryTarget = ref<Section | null>(null)
+const questionTarget = ref('')
 let sortable: Sortable | undefined
 onMounted(() => {
   if (!list.value) return
@@ -24,6 +26,7 @@ watch(() => store.generating, value => sortable?.option('disabled', value))
 onBeforeUnmount(() => sortable?.destroy())
 function actions(section: Section, index: number) {
   return [[
+    { label: '管理题目 / 单题替换', icon: 'i-lucide-list-checks', onSelect: () => { questionTarget.value = section.id } },
     { label: '调整版式', icon: 'i-lucide-columns-2', onSelect: () => { layoutSection.value = section } },
     { label: '上移', icon: 'i-lucide-arrow-up', disabled: index === 0, onSelect: () => store.moveSection(index, index - 1) },
     { label: '下移', icon: 'i-lucide-arrow-down', disabled: index === store.sections.length - 1, onSelect: () => store.moveSection(index, index + 1) },
@@ -39,6 +42,7 @@ async function retry() {
 
 <template>
   <div class="section-list">
+    <QuestionManager v-if="questionTarget" :section-id="questionTarget" @close="questionTarget = ''" />
     <div v-if="!store.sections.length" class="empty-state">
       <UIcon name="i-lucide-list-plus" class="size-8" />
       <h3>尚未添加题型</h3>

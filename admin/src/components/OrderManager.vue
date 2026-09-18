@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAdminListRoute } from '../navigation'
 import { ref, watch } from 'vue'
 import type { UserInfo } from '../api'
 import { useAdminPage } from '../admin-page'
@@ -9,8 +10,9 @@ const selected = ref<Order | null>(null), dialog = ref(false), action = ref<'app
 const filter = (): OrderFilter => ({ status: status.value === 'all' ? '' : status.value, q: q.value.trim(), start_date: start.value, end_date: end.value })
 const page = useAdminPage(async valid => { const [result, plans] = await Promise.all([getOrders(filter(), (pageNumber.value - 1) * 20), getPlans()]); if (valid()) { items.value = result.items; total.value = result.total; summary.value = result.summary; online.value = plans.checkout_enabled } }, () => { dialog.value = false; cancelConfirm.value = false })
 const { error, notice, loading, busy } = page
-watch(pageNumber, page.load); watch(status, () => { if (pageNumber.value === 1) void page.load(); else pageNumber.value = 1 })
-function search() { if (pageNumber.value === 1) void page.load(); else pageNumber.value = 1 }
+const routeState = useAdminListRoute('orders', { q, status, start, end, page: pageNumber }, () => { void page.load() })
+watch(pageNumber, page.load); watch(status, () => { if (routeState.restoring) return; if (pageNumber.value === 1) void page.load(); else pageNumber.value = 1 })
+function search() { if (routeState.restoring) return; if (pageNumber.value === 1) void page.load(); else pageNumber.value = 1 }
 function open(item: Order) {
   selected.value = item; action.value = 'reject'; reply.value = ''; confirmRefund.value = false; cancelConfirm.value = false; dialog.value = true
   void page.act(async valid => { const result = await getOrder(item.id); if (valid() && dialog.value && selected.value?.id === item.id) selected.value = result })

@@ -25,6 +25,9 @@ export interface Question {
   right_expr?: string
   /** 前端运行时标记（稳定 uid，供排版模式回写） */
   _qid?: string
+  /** Locked questions are retained when regenerating their section or paper. */
+  _locked?: boolean
+  _replacement?: import('./generation').GenerationRun
   /** 富文本编辑缓存（排版模式 B/字号/颜色 的结果，v-html 原样渲染） */
   _stemHtml?: string
   _optsHtml?: string[]

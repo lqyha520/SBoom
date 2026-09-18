@@ -33,7 +33,7 @@ def listing(user_id=None, status="", fingerprint="", limit=20, offset=0, identif
     where = " AND ".join(clauses) or "1=1"
     with db() as conn:
         total = conn.execute(f"SELECT COUNT(*) FROM mini_content_requests r WHERE {where}", args).fetchone()[0]
-        rows = conn.execute("SELECT r.*, u.nickname, u.username, c.title AS paper_title, c.status AS paper_status, a.file_status AS paper_file_status FROM mini_content_requests r "
+        rows = conn.execute(f"SELECT r.*, u.nickname, u.username, c.title AS paper_title, c.status AS paper_status, a.file_status AS paper_file_status, ({catalog.VISIBLE}) AS paper_visible FROM mini_content_requests r "
                             "JOIN mini_users u ON u.id = r.user_id LEFT JOIN catalog_papers c ON c.id = r.catalog_id LEFT JOIN paper_archives a ON a.id = c.paper_id "
                             f"WHERE {where} ORDER BY r.updated_at DESC, r.id DESC LIMIT ? OFFSET ?", [*args, limit, offset]).fetchall()
         items = [dict(row) for row in rows]
@@ -41,7 +41,7 @@ def listing(user_id=None, status="", fingerprint="", limit=20, offset=0, identif
             for item in items:
                 for key in ("user_id", "username", "nickname", "fingerprint"):
                     item.pop(key, None)
-                if item["paper_status"] != "published" or item["paper_file_status"] != "ready":
+                if not item.pop("paper_visible"):
                     item["catalog_id"] = None
                     item["paper_title"] = None
         totals = [] if user_id else [dict(row) for row in conn.execute(

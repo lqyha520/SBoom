@@ -22,10 +22,11 @@ import type {
   ScopeData,
   SecLayout,
   Section,
+  PaperSection,
 } from '../types'
 import { deepClone, ensureQids, gradeNumOf, mockQuestions, uid } from '../utils'
 import { useAuthStore, userPrefix } from './auth'
-import { createGenerationRun, runGenerationJob, type GenerationContext, type GenerationMode, type GenerationRun } from '../generation'
+import { createGenerationRun, runGenerationJob, GenerationStopped, type GenerationContext, type GenerationMode, type GenerationRun } from '../generation'
 import * as persistence from '../persistence'
 import type { HistoryEntry, HistoryReason, WorkspaceSnapshot } from '../persistence'
 export { deepClone } from '../utils'
@@ -178,6 +179,16 @@ interface DraftRuntime {
 }
 const draftRuntimes = new WeakMap<object, DraftRuntime>()
 const styleSaveTimers = new WeakMap<object, ReturnType<typeof setTimeout>>()
+const editBursts = new WeakMap<object, { key: string; at: number }>()
+type EditSnapshot = Pick<WorkspaceSnapshot, 'sections' | 'papers' | 'title' | 'titleHtml' | 'style' | 'hiddenElements' | 'templateId' | 'customTemplate'>
+
+function generationSections(sections: Section[]): GenerationContext['sections'] {
+  return sections.map(section => ({ id: section.id, type: section.type, name: section.name,
+    count: section.count, layout: deepClone(section.layout),
+    lockedQuestions: section.data?.questions.flatMap((question, index) => question._locked && index < section.count
+      ? [{ index, question: deepClone(question) }] : []) || [],
+  }))
+}
 
 function sameTemplate(a: MyTemplate, b: MyTemplate) {
   const content = ({ _revision, _syncState, _syncError, ...rest }: MyTemplate) => rest
@@ -210,6 +221,10 @@ export const useExamStore = defineStore('exam', {
       history: [] as HistoryEntry[],
       historyBusy: false,
       pendingRun: null as GenerationRun | null,
+      generationJobs: [] as import('../generation').GenerationJob[],
+      stopRequested: false,
+      undoStack: [] as EditSnapshot[],
+      redoStack: [] as EditSnapshot[],
       usage: null as api.GenerationUsage | null,
       templatesSyncing: false,
       templateBusy: [] as string[],
@@ -276,6 +291,12 @@ export const useExamStore = defineStore('exam', {
   },
 
   getters: {
+    hasPendingEdits(state): boolean {
+      return state.sections.some(section => section.pendingGeneration || section.data?.questions.some(question => question._replacement))
+        || state.papers.some(paper => paper.sections.some(section => section.data.questions.some(question => question._replacement)))
+    },
+    canUndo(state): boolean { return !!state.undoStack.length && !state.generating && !state.accountChanged && !state.layoutMode && !this.hasPendingEdits },
+    canRedo(state): boolean { return !!state.redoStack.length && !state.generating && !state.accountChanged && !state.layoutMode && !this.hasPendingEdits },
     template(state): PaperTemplate {
       if (state.templateId === 'custom') return state.customTemplate
       return TEMPLATES.find(t => t.id === state.templateId) || TEMPLATES[0]
@@ -321,6 +342,80 @@ export const useExamStore = defineStore('exam', {
   },
 
   actions: {
+    editSnapshot(): EditSnapshot {
+      return deepClone({ sections: this.sections, papers: this.papers, title: this.title, titleHtml: this.titleHtml,
+        style: this.style, hiddenElements: this.hiddenElements, templateId: this.templateId, customTemplate: this.customTemplate })
+    },
+    recordEdit(key = '') {
+      if (this.generating || this.accountChanged || this.hasPendingEdits) return
+      const previous = editBursts.get(this), at = Date.now()
+      editBursts.set(this, { key, at })
+      if (key && previous?.key === key && at - previous.at < 500) return
+      const snapshot = this.editSnapshot()
+      const encoded = JSON.stringify(snapshot)
+      if (JSON.stringify(this.undoStack[this.undoStack.length - 1]) === encoded) return
+      this.undoStack.push(snapshot); this.redoStack = []
+      while (this.undoStack.length > 20 || JSON.stringify(this.undoStack).length > 4_000_000) this.undoStack.shift()
+    },
+    undo() {
+      if (!this.canUndo) return
+      editBursts.delete(this)
+      this.redoStack.push(this.editSnapshot())
+      Object.assign(this, deepClone(this.undoStack.pop()!))
+    },
+    redo() {
+      if (!this.canRedo) return
+      editBursts.delete(this)
+      this.undoStack.push(this.editSnapshot())
+      Object.assign(this, deepClone(this.redoStack.pop()!))
+    },
+    questionSection(id: string, paperIndex?: number): Section | PaperSection | undefined {
+      const section = paperIndex === undefined ? this.sections.find(item => item.id === id)
+        : this.papers[paperIndex]?.sections.find((item, index) => (item._sid || String(index)) === id)
+      if (section?.data) ensureQids(section.data)
+      return section
+    },
+    toggleQuestionLock(id: string, qid: string, paperIndex?: number) {
+      if (this.generating || this.accountChanged) return
+      const section = this.questionSection(id, paperIndex)
+      const question = section?.data?.questions.find(item => item._qid === qid)
+      if (!question || section?.type === 'reading' || question._replacement) return
+      this.recordEdit(); question._locked = !question._locked
+    },
+    async replaceQuestion(id: string, qid: string, paperIndex?: number) {
+      if (this.generating || this.accountChanged) return
+      const section = this.questionSection(id, paperIndex)
+      const question = section?.data?.questions.find(item => item._qid === qid)
+      if (!section || !question || question._locked || section.type === 'reading') return
+      const source = paperIndex === undefined ? this : this.papers[paperIndex]
+      if (!source.grade || !source.subject || !source.keyword.trim()) throw new Error('请先填写年级、科目和知识点')
+      const context: GenerationContext = { grade: source.grade, subject: source.subject, keyword: source.keyword,
+        title: source.title, difficulty: source.difficulty as Difficulty, hiddenElements: [], count: 1,
+        sections: [{ id, type: section.type, name: section.name, count: 1, layout: deepClone(section.layout) }] }
+      const existing = question._replacement
+      const run = existing || createGenerationRun(context)
+      question._replacement = run; this.generating = true
+      try {
+        const result = await runGenerationJob(run.context, run.jobs[0], existing ? 'retry' : 'send', async () => {
+          if (this.accountChanged) throw new Error('账号已变化，未发送请求')
+          if (this.persistenceReady && this.ownerId && !await this.flushDraft()) throw new Error('请求记录保存失败，请先恢复本地存储')
+        })
+        if (this.accountChanged) return
+        const replacement = result.sections[0]?.data.questions[0]
+        if (!replacement) throw new Error('没有生成可替换的题目，原题已保留')
+        const content = (value: typeof question) => JSON.stringify([value.stem?.replace(/\s+/g, ''), value.options,
+          value.top, value.left, value.right, value.left_expr, value.right_expr, value.left_items, value.right_items])
+        delete question._replacement
+        if (section.data?.questions.some(item => content(item) === content(replacement))) throw new Error('新题与现有题目重复，原题已保留')
+        this.generating = false; this.recordEdit()
+        const index = section.data!.questions.findIndex(item => item._qid === qid)
+        section.data!.questions[index] = { ...deepClone(replacement), _qid: qid }
+      } finally {
+        this.generating = false
+        if (this.persistenceReady) await this.flushDraft()
+        void this.refreshUsage()
+      }
+    },
     /* ── 初始化与本地版本 ── */
     async init() {
       await this.initPersistence()
@@ -347,6 +442,7 @@ export const useExamStore = defineStore('exam', {
     },
 
     applySnapshot(snapshot: WorkspaceSnapshot) {
+      this.undoStack = []; this.redoStack = []; this.generationJobs = []; this.stopRequested = false
       const value = deepClone(snapshot)
       this.grade = value.grade
       this.subject = value.subject
@@ -372,7 +468,7 @@ export const useExamStore = defineStore('exam', {
       this.generateError = value.generateError
       this.pendingRun = value.pendingRun
       this.pendingRun?.jobs.forEach(job => job.chunks.forEach(chunk => {
-        if (chunk.state === 'running' || chunk.state === 'new') chunk.state = 'unknown'
+        if (chunk.state === 'running') chunk.state = 'unknown'
       }))
       this.failedCount = this.pendingRun?.jobs.length || 0
       this.generating = false
@@ -617,6 +713,7 @@ export const useExamStore = defineStore('exam', {
     /* ── 搭建区 ── */
     addSection(type: string, count?: number, customName?: string) {
       if (this.generating || this.accountChanged) return
+      this.recordEdit()
       const cnt = Math.min(MAX_QUESTIONS_PER_TYPE, Math.max(1, Math.round(count || TYPE_DEFAULT[type] || 4)))
       const sec: Section = {
         id: uid('s'),
@@ -632,6 +729,7 @@ export const useExamStore = defineStore('exam', {
 
     removeSection(id: string) {
       if (this.generating || this.accountChanged) return
+      this.recordEdit()
       const i = this.sections.findIndex(s => s.id === id)
       if (i >= 0) this.sections.splice(i, 1)
     },
@@ -639,6 +737,7 @@ export const useExamStore = defineStore('exam', {
     moveSection(from: number, to: number) {
       if (this.generating || this.accountChanged) return
       if (from === to || from < 0 || to < 0 || from >= this.sections.length || to >= this.sections.length) return
+      this.recordEdit()
       const [item] = this.sections.splice(from, 1)
       this.sections.splice(to, 0, item)
     },
@@ -647,7 +746,12 @@ export const useExamStore = defineStore('exam', {
       if (this.generating || this.accountChanged) return
       const sec = this.sections.find(s => s.id === id)
       if (!sec || !sec.data) return
+      this.recordEdit()
       n = Math.min(MAX_QUESTIONS_PER_TYPE, Math.max(1, Math.round(n) || 1))
+      if (sec.data.questions.slice(n).some(question => question._locked)) {
+        this.generateError = '减少题数会移除已锁定题目，请先在管理题目中解锁'
+        return
+      }
       let qs = sec.data.questions
       if (n < qs.length) {
         qs = qs.slice(0, n)
@@ -665,7 +769,7 @@ export const useExamStore = defineStore('exam', {
       const context: GenerationContext = {
         grade: this.grade, subject: this.subject, keyword: this.keyword, title: this.title,
         titleHtml: this.titleHtml, difficulty: this.difficulty, hiddenElements: [...this.hiddenElements],
-        count: 1, sections: [{ id: section.id, type: section.type, name: section.name, count: section.count, layout: deepClone(section.layout) }],
+        count: 1, sections: generationSections([section]),
       }
       const existing = section.pendingGeneration
       if (mode === 'recover' && !existing) {
@@ -705,6 +809,7 @@ export const useExamStore = defineStore('exam', {
     /* ── 生成整卷 ── */
     async generate() {
       if (!this.canGenerate) return
+      this.undoStack = []; this.redoStack = []
       this.generating = true
       try {
         if ((this.papers.length || this.pendingRun || this.sections.some(section => section.pendingGeneration))
@@ -714,11 +819,22 @@ export const useExamStore = defineStore('exam', {
         grade: this.grade, subject: this.subject, keyword: this.keyword.trim(),
         title: this.title, titleHtml: this.titleHtml || undefined, difficulty: this.difficulty,
         hiddenElements: [...this.hiddenElements], count: Math.max(1, Math.min(20, Math.round(this.paperCount) || 1)),
-        sections: this.sections.map(section => ({
-          id: section.id, type: section.type, name: section.name, count: section.count, layout: deepClone(section.layout),
-        })),
+        sections: generationSections(this.sections),
       }
       this.pendingRun = createGenerationRun(context)
+      // Each result paper has its own locks; preserve them for the corresponding next paper.
+      this.pendingRun.jobs.forEach(job => {
+        const previous = this.papers.find((paper, index) => (paper.day || index + 1) === job.index + 1)
+        if (!previous || previous.grade !== context.grade || previous.subject !== context.subject || previous.keyword !== context.keyword) return
+        const perPaper = deepClone(context)
+        perPaper.sections.forEach(section => {
+          const old = previous.sections.find(item => item._sid === section.id)
+          if (old) section.lockedQuestions = old.data.questions.flatMap((question, index) => question._locked && index < section.count
+            ? [{ index, question: deepClone(question) }] : [])
+        })
+        job.context = perPaper
+        job.chunks = createGenerationRun({ ...perPaper, count: 1 }).jobs[0].chunks
+      })
       this.papers = []
       this.failedCount = 0
       } finally { this.generating = false }
@@ -729,9 +845,11 @@ export const useExamStore = defineStore('exam', {
       const run = this.pendingRun
       if (!run || this.generating || this.accountChanged) return
       this.generating = true
+      this.stopRequested = false
       this.generateError = ''
       this.generateWarn = ''
       const pending = [...run.jobs]
+      this.generationJobs = [...run.jobs]
       const completed = new Set<number>()
       const errors: string[] = []
       const total = pending.length
@@ -741,12 +859,16 @@ export const useExamStore = defineStore('exam', {
       this.generateProgress = prefix + ' 0/' + total + ' 份'
       try {
         await Promise.all(Array.from({ length: Math.min(3, total) }, async () => {
-          while (pending.length && !this.accountChanged) {
+          while (pending.length && !this.accountChanged && !this.stopRequested) {
             const job = pending.shift()!
+            job.startedAt = Date.now(); job.finishedAt = undefined; job.error = ''
             try {
-              const paper = await runGenerationJob(run.context, job, mode, async () => {
+              const paper = await runGenerationJob(job.context || run.context, job, mode, async () => {
                 if (this.accountChanged) throw new Error('账号已变化，未发送新请求')
+                if (this.stopRequested) throw new GenerationStopped()
                 if (this.persistenceReady) await this.flushDraft()
+                if (this.accountChanged) throw new Error('账号已变化，未发送新请求')
+                if (this.stopRequested) throw new GenerationStopped()
               })
               if (this.accountChanged) return
               completed.add(job.index)
@@ -765,8 +887,10 @@ export const useExamStore = defineStore('exam', {
                 })
               }
             } catch (error) {
+              job.error = error instanceof Error ? error.message : '生成失败'
               errors.push(error instanceof Error ? error.message : '生成失败')
             }
+            job.finishedAt = Date.now()
             finished++
             this.generateProgress = prefix + ' ' + finished + '/' + total + ' 份'
           }
@@ -805,6 +929,7 @@ export const useExamStore = defineStore('exam', {
 
     /** 卷头/卷尾元素删除切换（搭建态） */
     toggleHiddenElement(key: string) {
+      this.recordEdit()
       const i = this.hiddenElements.indexOf(key)
       if (i >= 0) this.hiddenElements.splice(i, 1)
       else this.hiddenElements.push(key)
@@ -812,6 +937,7 @@ export const useExamStore = defineStore('exam', {
 
     /** 左栏直接改标题文字：清掉富文本缓存 */
     setTitle(t: string) {
+      this.recordEdit('title')
       this.title = t
       this.titleHtml = ''
     },
@@ -860,11 +986,13 @@ export const useExamStore = defineStore('exam', {
 
     /* ── 卷面配置 ── */
     setTemplate(id: string) {
+      this.recordEdit()
       this.templateId = id
       safeSet(K(this.ownerId, LS.template), JSON.stringify({ id }))
     },
 
     saveCustomTemplate(cfg: Partial<PaperTemplate>) {
+      this.recordEdit('custom-template')
       // 写响应式 state（而非模块常量）：编辑中的卷面立即生效
       Object.assign(this.customTemplate, cfg)
       safeSet(K(this.ownerId, LS.customTemplate), JSON.stringify(cfg))
@@ -872,6 +1000,7 @@ export const useExamStore = defineStore('exam', {
     },
 
     setStyle(patch: Partial<PaperStyle>) {
+      this.recordEdit('style')
       Object.assign(this.style, patch)
       // 持久化防抖：标题拖拽/字号滑条每个 mousemove 都会调 setStyle，
       // 立即写盘会以 60+/s 的频率序列化整份样式（且触发重分页测量键变化）

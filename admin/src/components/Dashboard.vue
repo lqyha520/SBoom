@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import * as api from '../api'
+import { adminRoute, navigateAdmin, listenAdminRoute } from '../navigation'
 
 const props = defineProps<{ user: api.UserInfo }>()
 const emit = defineEmits<{ logout: [] }>()
@@ -86,7 +87,10 @@ const groups: NavGroup[] = [
   },
 ]
 const flat = computed(() => groups.flatMap(group => group.items))
-const tab = ref<Tab>('overview')
+const tab = computed<Tab>({ get: () => adminRoute.tab, set: value => navigateAdmin(value) })
+let stopNavigation: (() => void) | undefined
+onMounted(() => { stopNavigation = listenAdminRoute() })
+onBeforeUnmount(() => stopNavigation?.())
 
 // ─── 一级菜单折叠 ───
 // 折叠状态只影响当前浏览器，存 localStorage；移动端导航会拍平成横向图标条，

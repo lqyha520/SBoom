@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAdminListRoute } from '../navigation'
 import { onMounted, ref, watch } from 'vue'
 import { fetchAdminLogs } from '../api'
 
@@ -21,6 +22,7 @@ async function load() {
 }
 watch(lines, load)
 onMounted(load)
+const routeState = useAdminListRoute('logs', { lines }, () => { void load() })
 </script>
 
 <template>

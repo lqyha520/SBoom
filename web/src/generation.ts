@@ -1,5 +1,5 @@
 import * as api from './api'
-import type { Difficulty, GameData, PaperData, Section } from './types'
+import type { Difficulty, GameData, PaperData, Question, Section } from './types'
 import { deepClone, ensureQids } from './utils'
 
 export interface GenerationContext {
@@ -10,7 +10,9 @@ export interface GenerationContext {
   titleHtml?: string
   difficulty: Difficulty
   hiddenElements: string[]
-  sections: Pick<Section, 'id' | 'type' | 'name' | 'count' | 'layout'>[]
+  sections: (Pick<Section, 'id' | 'type' | 'name' | 'count' | 'layout'> & {
+    lockedQuestions?: { index: number; question: Question }[]
+  })[]
   count: number
 }
 
@@ -25,6 +27,10 @@ export interface GenerationChunk {
 export interface GenerationJob {
   index: number
   chunks: GenerationChunk[]
+  startedAt?: number
+  finishedAt?: number
+  error?: string
+  context?: GenerationContext
 }
 
 export interface GenerationRun {
@@ -33,18 +39,20 @@ export interface GenerationRun {
 }
 
 export type GenerationMode = 'send' | 'recover' | 'retry'
+export class GenerationStopped extends Error { constructor() { super('已停止后续请求，可稍后继续') } }
 
 export function createGenerationRun(context: GenerationContext): GenerationRun {
   const snapshot = deepClone(context)
+  const items = snapshot.sections.map(section => ({ section_id: section.id, game_type: section.type,
+    question_count: section.count - (section.lockedQuestions?.length || 0),
+  })).filter(item => item.question_count > 0)
   return {
     context: snapshot,
     jobs: Array.from({ length: snapshot.count }, (_, index) => ({
       index,
-      chunks: Array.from({ length: Math.ceil(snapshot.sections.length / 10) }, (_, chunk) => ({
+      chunks: Array.from({ length: Math.ceil(items.length / 10) }, (_, chunk) => ({
         requestId: crypto.randomUUID(), state: 'new' as const,
-        items: snapshot.sections.slice(chunk * 10, chunk * 10 + 10).map(section => ({
-          section_id: section.id, game_type: section.type, question_count: section.count,
-        })),
+        items: items.slice(chunk * 10, chunk * 10 + 10),
       })),
     })),
   }
@@ -91,7 +99,7 @@ async function runChunk(chunk: GenerationChunk, context: GenerationContext, mode
     }, chunk.requestId))
     chunk.state = 'succeeded'
   } catch (error) {
-    chunk.state = error instanceof api.ApiError && error.status >= 400 && error.status < 500
+    chunk.state = error instanceof GenerationStopped ? 'new' : error instanceof api.ApiError && error.status >= 400 && error.status < 500
       && error.code !== 'generation_pending' ? 'failed' : 'unknown'
     chunk.error = error instanceof Error ? error.message : '生成失败'
     throw error
@@ -114,7 +122,13 @@ export function assemblePaper(context: GenerationContext, job: GenerationJob): P
   const matched = matchSectionResults(context, responses)
   const sections = context.sections.map((section, index) => {
     const result = matched[index]
-    const questions = Array.isArray(result?.questions) ? deepClone(result.questions.slice(0, section.count)) : []
+    const generated = Array.isArray(result?.questions) ? deepClone(result.questions) : []
+    const locked = new Map(section.lockedQuestions?.map(item => [item.index, deepClone(item.question)]) || [])
+    const questions: Question[] = []
+    for (let index = 0; index < section.count; index++) {
+      const question = locked.get(index) || generated.shift()
+      if (question) questions.push(question)
+    }
     const missing = Math.max(0, section.count - questions.length, result?.missing_count || 0)
     const warnings = [...(result?.quality_warnings || [])]
     if (missing) warnings.push(`缺少 ${missing} 道题（请求 ${section.count} 道，实际 ${questions.length} 道）`)

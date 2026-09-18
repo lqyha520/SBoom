@@ -16,6 +16,7 @@ import uuid
 import zipfile
 
 from fastapi import HTTPException
+from PIL import Image
 
 from app.config import get_settings
 from app.db import db
@@ -44,11 +45,26 @@ def _render_pages(data: bytes) -> list[bytes]:
             raise HTTPException(413, detail={"error": f"PDF 最多 {MAX_PAGES} 页，请先拆分文件"})
         pages = []
         for index in range(count):
-            bitmap = document[index].render(scale=RENDER_SCALE)
-            image = bitmap.to_pil().convert("RGB")
-            buffer = io.BytesIO()
-            image.save(buffer, "JPEG", quality=JPEG_QUALITY)
-            pages.append(buffer.getvalue())
+            page = document[index]
+            try:
+                width, height = page.get_size()
+                if width <= 0 or height <= 0:
+                    raise HTTPException(422, detail={"error": "PDF 页面尺寸无效"})
+                # Landscape and large pages must fit the same private preview bounds.
+                bitmap = page.render(scale=min(RENDER_SCALE, 1200 / width, 1800 / height))
+                try:
+                    image = bitmap.to_pil().convert("RGB")
+                    try:
+                        image.thumbnail((1200, 1800), Image.Resampling.LANCZOS)
+                        buffer = io.BytesIO()
+                        image.save(buffer, "JPEG", quality=JPEG_QUALITY)
+                        pages.append(buffer.getvalue())
+                    finally:
+                        image.close()
+                finally:
+                    bitmap.close()
+            finally:
+                page.close()
         return pages
     finally:
         document.close()

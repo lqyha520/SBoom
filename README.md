@@ -178,6 +178,8 @@ pnpm dev
 同时启动两个前端开发服务后，可通过 `http://127.0.0.1:5173/admin/` 进入后台，保持同源会话。
 选型依据、迁移边界和验收记录见 [UI 重构说明](docs/ui-refactor.md)，
 生成可靠性、存储边界和部署检查见 [可靠性优化说明](docs/reliability.md)。
+题目管理、生成任务、后台导航及下载体验的更新与验收见 [功能与交互优化](docs/interaction-optimization.md)。
+公共习题的逐份导入、失败恢复和发布衔接见 [后台添加习题流程](docs/publication-workflow.md)。
 
 ---
 

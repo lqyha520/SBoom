@@ -4,6 +4,7 @@ import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import ValidationError
 
 from app.deps import require_admin
 from app.library_deps import no_store, optional_mini_user, require_mini_user
@@ -121,12 +122,19 @@ async def import_paper(request: Request,
                        mode: Literal["student", "answersOnly", "withAnswers"] = Query("withAnswers"),
                        view_access: Literal["inherit", "free", "vip"] = "inherit",
                        download_access: Literal["inherit", "free", "vip"] = "inherit",
+                       download_mode: Literal["pdf", "external"] = "pdf",
+                       external_url: str = Query("", max_length=2000), external_code: str = Query("", max_length=100),
                        user: CurrentUser = Depends(require_admin)):
     """手动导入外部 PDF：渲染预览页 → 建归档 → 直接创建公共习题草稿。"""
+    try:
+        body = CatalogCreate(paper_id="pending-import", title=title, description=description.strip(),
+                             category_id=category_id, view_access=view_access, download_access=download_access,
+                             download_mode=download_mode, external_url=external_url, external_code=external_code)
+    except ValidationError as exc:
+        raise HTTPException(422, detail={"error": "下载配置无效，请检查网盘链接、提取码与访问权限"}) from exc
     content = await _pdf_body(request, catalog_import.MAX_IMPORT_BYTES)
     archive = await asyncio.to_thread(catalog_import.import_paper, user.id, title, grade, subject, content, mode)
-    body = CatalogCreate(paper_id=archive["id"], title=archive["title"], description=description.strip(),
-                         category_id=category_id, view_access=view_access, download_access=download_access)
+    body = body.model_copy(update={"paper_id": archive["id"], "title": archive["title"]})
     return catalog.create_paper(user.id, body)
 
 

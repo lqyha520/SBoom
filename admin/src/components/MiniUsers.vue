@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAdminListRoute } from '../navigation'
 import { computed, onActivated, onDeactivated, ref, watch } from 'vue'
 import MemberTools from './MemberTools.vue'
 import type { UserInfo } from '../api'
@@ -80,7 +81,7 @@ async function load() {
   } catch (cause) { if (current === sequence) error.value = message(cause) }
   finally { if (current === sequence) loading.value = false }
 }
-function search() { if (page.value !== 1) page.value = 1; else void load() }
+function search() { if (routeState.restoring) return; if (page.value !== 1) page.value = 1; else void load() }
 watch(page, load)
 watch(membership, search)
 onActivated(load)
@@ -148,6 +149,7 @@ async function save() {
   finally { busy.value = false }
 }
 watch(dialog, open => { if (!open) deleteConfirmed.value = false })
+const routeState = useAdminListRoute('miniUsers', { q, membership, page }, () => { void load() })
 </script>
 
 <template>

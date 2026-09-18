@@ -39,9 +39,26 @@ if settings.log_to_file:
         raise RuntimeError("LOG_TO_FILE requires WORKERS=1; use container logs for multiple workers")
     _log_handlers.append(logging.handlers.RotatingFileHandler(
         _LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"))
+
+# 配置日志格式：生产环境（FORCE_HTTPS=true）使用 JSON 格式，开发环境使用文本格式
+use_json_logging = settings.force_https
+if use_json_logging:
+    try:
+        from pythonjsonlogger import jsonlogger
+        formatter = jsonlogger.JsonFormatter(
+            '%(asctime)s %(name)s %(levelname)s %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+    except ImportError:
+        formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+else:
+    formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+
+for handler in _log_handlers:
+    handler.setFormatter(formatter)
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=_log_handlers,
 )
 logger = logging.getLogger(__name__)
@@ -51,6 +68,20 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用启动/关闭时的管理"""
+    # 启动时验证配置
+    try:
+        settings.validate()
+    except ValueError as e:
+        logger.error("配置验证失败: %s", e)
+        raise
+
+    # 初始化监控指标
+    from app.metrics import init_metrics, start_metrics_server
+    init_metrics(APP_VERSION)
+    # 仅在生产环境启动 metrics 服务器
+    if settings.force_https:
+        start_metrics_server(9090)
+
     init_db()  # 用户库建表 + 迁移（幂等）
     for warning in security_warnings():
         logger.warning("Security configuration: %s", warning)
@@ -101,6 +132,31 @@ if settings.cors_origins.strip():
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+
+# ─── 监控中间件 ───
+@app.middleware("http")
+async def track_requests(request, call_next):
+    """跟踪 API 请求的指标"""
+    from app.metrics import api_requests_total, api_request_duration
+    import time
+
+    start_time = time.time()
+    response = await call_next(request)
+    duration = time.time() - start_time
+
+    # 记录请求指标
+    api_requests_total.labels(
+        method=request.method,
+        endpoint=request.url.path,
+        status=response.status_code
+    ).inc()
+    api_request_duration.labels(
+        method=request.method,
+        endpoint=request.url.path
+    ).observe(duration)
+
+    return response
 
 
 # ─── 前端目录 ───

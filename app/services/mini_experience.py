@@ -184,30 +184,38 @@ def usage_analytics():
     zone = timezone(timedelta(hours=8))
     today = datetime.fromtimestamp(now, zone).replace(hour=0, minute=0, second=0)
     start = int((today - timedelta(days=29)).timestamp())
+    week_start = int((today - timedelta(days=6)).timestamp())
+    end = int((today + timedelta(days=1)).timestamp())
     with db() as conn:
-        rows = conn.execute("SELECT user_id, kind, created_at FROM mini_usage_events WHERE created_at >= ?", (start,)).fetchall()
+        # Aggregate in PostgreSQL: at most 30 daily rows reach the API process.
+        rows = conn.execute(
+            "SELECT to_char(to_timestamp(created_at) AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') AS date, "
+            "COUNT(DISTINCT user_id) AS active_users, "
+            "COUNT(*) FILTER (WHERE kind = 'download_ok') AS download_ok, "
+            "COUNT(*) FILTER (WHERE kind = 'download_failed') AS download_failed, "
+            "COUNT(*) FILTER (WHERE kind = 'search_miss') AS search_miss "
+            "FROM mini_usage_events WHERE created_at >= ? AND created_at < ? GROUP BY 1",
+            (start, end),
+        ).fetchall()
+        users = conn.execute(
+            "SELECT COUNT(DISTINCT user_id) AS monthly_active, "
+            "COUNT(DISTINCT user_id) FILTER (WHERE created_at >= ?) AS weekly_active "
+            "FROM mini_usage_events WHERE created_at >= ? AND created_at < ?",
+            (week_start, start, end),
+        ).fetchone()
         misses = [dict(row) for row in conn.execute("SELECT detail AS query, COUNT(*) AS total FROM mini_usage_events "
-                    "WHERE kind = 'search_miss' AND created_at >= ? GROUP BY detail ORDER BY total DESC, detail LIMIT 20", (start,))]
+                    "WHERE kind = 'search_miss' AND created_at >= ? AND created_at < ? "
+                    "GROUP BY detail ORDER BY total DESC, detail LIMIT 20", (start, end))]
         failures = [dict(row) for row in conn.execute("SELECT e.catalog_id, c.title, COUNT(*) AS total FROM mini_usage_events e "
-                    "LEFT JOIN catalog_papers c ON c.id = e.catalog_id WHERE e.kind = 'download_failed' AND e.created_at >= ? "
-                    "GROUP BY e.catalog_id, c.title ORDER BY total DESC LIMIT 20", (start,))]
-    days = {}
-    week_users, month_users = set(), set()
-    for row in rows:
-        day = datetime.fromtimestamp(row["created_at"], zone).strftime("%Y-%m-%d")
-        point = days.setdefault(day, {"users": set(), "download_ok": 0, "download_failed": 0, "search_miss": 0})
-        point["users"].add(row["user_id"])
-        month_users.add(row["user_id"])
-        if row["created_at"] >= int((today - timedelta(days=6)).timestamp()):
-            week_users.add(row["user_id"])
-        if row["kind"] in ("download_ok", "download_failed", "search_miss"):
-            point[row["kind"]] += 1
+                    "LEFT JOIN catalog_papers c ON c.id = e.catalog_id WHERE e.kind = 'download_failed' "
+                    "AND e.created_at >= ? AND e.created_at < ? "
+                    "GROUP BY e.catalog_id, c.title ORDER BY total DESC, e.catalog_id LIMIT 20", (start, end))]
+    days = {row["date"]: dict(row) for row in rows}
     timeline = []
     for offset in range(29, -1, -1):
         key = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
-        point = days.get(key, {"users": set(), "download_ok": 0, "download_failed": 0, "search_miss": 0})
-        timeline.append({"date": key, "active_users": len(point["users"]), **{k: point[k] for k in ("download_ok", "download_failed", "search_miss")}})
-    return {"daily_active": timeline[-1]["active_users"], "weekly_active": len(week_users), "monthly_active": len(month_users),
+        timeline.append(days.get(key, {"date": key, "active_users": 0, "download_ok": 0, "download_failed": 0, "search_miss": 0}))
+    return {"daily_active": timeline[-1]["active_users"], **dict(users),
             "timeline": timeline, "search_misses": misses, "download_failures": failures,
             "timezone": "Asia/Shanghai", "retention_days": 60}
 

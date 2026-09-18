@@ -8,7 +8,10 @@ def init_experience_schema(conn):
         conn.execute("ALTER TABLE mini_users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''")
         conn.execute("UPDATE mini_users SET nickname = username")
     for name, definition in (("release_number", "INTEGER NOT NULL DEFAULT 1"),
-                             ("update_note", "TEXT NOT NULL DEFAULT ''")):
+                             ("update_note", "TEXT NOT NULL DEFAULT ''"),
+                             ("download_mode", "TEXT NOT NULL DEFAULT 'pdf'"),
+                             ("external_url", "TEXT NOT NULL DEFAULT ''"),
+                             ("external_code", "TEXT NOT NULL DEFAULT ''")):
         if name not in _columns(conn, "catalog_papers"):
             conn.execute(f"ALTER TABLE catalog_papers ADD COLUMN {name} {definition}")
     conn.executescript("""

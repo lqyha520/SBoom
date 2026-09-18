@@ -1,0 +1,122 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { useExamStore } from '../stores/exam'
+import * as api from '../api'
+import { createGenerationRun, assemblePaper } from '../generation'
+
+vi.mock('../api', async original => ({ ...await original<typeof import('../api')>(),
+  generateBatch: vi.fn(), fetchGenerationStatus: vi.fn(), fetchGenerationUsage: vi.fn().mockResolvedValue(null) }))
+beforeEach(() => { localStorage.clear(); setActivePinia(createPinia()); vi.clearAllMocks() })
+function ready(count = 3) {
+  const store = useExamStore()
+  store.grade = '小学三年级'; store.subject = '数学'; store.keyword = '加减法'
+  store.addSection('fill_blank', count)
+  store.questionSection(store.sections[0].id)
+  return store
+}
+function response(items: api.BatchItemReq[]) {
+  return items.map(item => ({ game_type: item.game_type, section_id: item.section_id,
+    questions: Array.from({ length: item.question_count }, (_, index) => ({ stem: `新题 ${index}：8+9=__`, answer: '17' })) }))
+}
+
+describe('编辑恢复与单题替换', () => {
+  it('连续标题输入合并为一步撤销，排版期间暂停撤销', () => {
+    const store = ready()
+    store.undoStack = []
+    store.setTitle('三'); store.setTitle('三年'); store.setTitle('三年级')
+    expect(store.undoStack).toHaveLength(1)
+    store.layoutMode = true; store.undo(); expect(store.title).toBe('三年级')
+    store.layoutMode = false; store.undo(); expect(store.title).toBe('')
+    store.redo(); expect(store.title).toBe('三年级')
+  })
+  it('删除和减少题数都可撤销重做，新的编辑清除重做分支', () => {
+    const store = ready(), id = store.sections[0].id
+    store.sections[0].data!.questions[2]._stemHtml = '<b>人工编辑</b>'
+    store.setSectionCount(id, 1)
+    store.undo()
+    expect(store.sections[0].data!.questions[2]._stemHtml).toBe('<b>人工编辑</b>')
+    store.redo(); expect(store.sections[0].count).toBe(1)
+    store.removeSection(id); store.undo(); expect(store.sections).toHaveLength(1)
+    store.setSectionCount(id, 2); expect(store.canRedo).toBe(false)
+  })
+  it('换题只替换指定题目，稳定标识和其他题目保持，支持撤销', async () => {
+    const store = ready(), section = store.sections[0], before = JSON.parse(JSON.stringify(section.data!.questions))
+    vi.mocked(api.generateBatch).mockImplementation(async params => response(params.items))
+    await store.replaceQuestion(section.id, before[1]._qid)
+    expect(section.data!.questions[0]).toEqual(before[0])
+    expect(section.data!.questions[2]).toEqual(before[2])
+    expect(section.data!.questions[1]._qid).toBe(before[1]._qid)
+    expect(section.data!.questions[1].stem).toContain('新题')
+    store.undo(); expect(store.sections[0].data!.questions).toEqual(before)
+  })
+  it('锁定题不可替换或因减少题数移除', async () => {
+    const store = ready(), section = store.sections[0], qid = section.data!.questions[2]._qid!
+    store.toggleQuestionLock(section.id, qid)
+    store.setSectionCount(section.id, 1)
+    expect(section.count).toBe(3)
+    await store.replaceQuestion(section.id, qid)
+    expect(api.generateBatch).not.toHaveBeenCalled()
+  })
+  it('换题失败保留原题和请求记录，仍在处理时不重复发送', async () => {
+    const store = ready(), section = store.sections[0], question = section.data!.questions[0], stem = question.stem
+    vi.mocked(api.generateBatch).mockRejectedValueOnce(new Error('网络超时'))
+    await expect(store.replaceQuestion(section.id, question._qid!)).rejects.toThrow('网络超时')
+    expect(question.stem).toBe(stem)
+    expect(question._replacement).toBeTruthy()
+    expect(store.canUndo).toBe(false)
+    vi.mocked(api.fetchGenerationStatus).mockResolvedValueOnce({ status: 'running' } as api.GenerationStatus)
+    await expect(store.replaceQuestion(section.id, question._qid!)).rejects.toThrow('仍在处理中')
+    expect(api.generateBatch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('锁定和停止生成', () => {
+  it('不同结果卷各自保留锁题，未锁题的结果卷不继承搭建区锁题', async () => {
+    const store = ready(2); store.paperCount = 3
+    vi.mocked(api.generateBatch).mockImplementation(async params => response(params.items))
+    await store.generate()
+    const first = store.papers[0].sections[0].data.questions[0]
+    const second = store.papers[1].sections[0].data.questions[1]
+    first._locked = true; first.stem = '第一份保留'
+    second._locked = true; second.stem = '第二份保留'
+    store.sections[0].data!.questions[0]._locked = true
+    vi.mocked(api.generateBatch).mockClear()
+    await store.generate()
+    expect(vi.mocked(api.generateBatch).mock.calls.map(([params]) => params.items[0].question_count)).toEqual([1, 1, 2])
+    expect(store.papers[0].sections[0].data.questions[0].stem).toBe('第一份保留')
+    expect(store.papers[1].sections[0].data.questions[1].stem).toBe('第二份保留')
+    expect(store.papers[2].sections[0].data.questions.some(question => question._locked)).toBe(false)
+  })
+  it('重新生成仅请求未锁定题，原位置保留锁定题及富文本', async () => {
+    const store = ready(), section = store.sections[0], locked = section.data!.questions[1]
+    locked._locked = true; locked._stemHtml = '<b>保留题目</b>'
+    vi.mocked(api.generateBatch).mockImplementation(async params => response(params.items))
+    await store.generate()
+    expect(vi.mocked(api.generateBatch).mock.calls[0][0].items[0].question_count).toBe(2)
+    expect(store.papers[0].sections[0].data.questions[1]).toEqual(locked)
+  })
+  it('整道大题锁定时不发送模型请求', () => {
+    const store = ready(1), section = store.sections[0], question = section.data!.questions[0]
+    question._locked = true
+    const context = { grade: store.grade, subject: store.subject, keyword: store.keyword, title: '', difficulty: store.difficulty,
+      hiddenElements: [], count: 1, sections: [{ ...section, lockedQuestions: [{ index: 0, question }] }] }
+    const run = createGenerationRun(context)
+    expect(run.jobs[0].chunks).toEqual([])
+    expect(assemblePaper(context, run.jobs[0]).sections[0].data.questions).toEqual([question])
+  })
+  it('停止后不派发排队任务，已经发出的三份继续完成', async () => {
+    const store = ready(1); store.paperCount = 5
+    const releases: (() => void)[] = []
+    vi.mocked(api.generateBatch).mockImplementation(params => new Promise(resolve => { releases.push(() => resolve(response(params.items))) }))
+    const running = store.generate()
+    await vi.waitFor(() => expect(releases).toHaveLength(3))
+    store.stopRequested = true
+    releases.forEach(release => release())
+    await running
+    expect(api.generateBatch).toHaveBeenCalledTimes(3)
+    expect(store.papers).toHaveLength(3)
+    expect(store.pendingRun?.jobs).toHaveLength(2)
+    expect(store.pendingRun?.jobs.every(job => job.chunks.every(chunk => chunk.state === 'new'))).toBe(true)
+    expect(store.generationJobs.filter(job => job.finishedAt)).toHaveLength(3)
+  })
+})

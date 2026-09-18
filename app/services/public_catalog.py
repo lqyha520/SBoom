@@ -10,14 +10,15 @@ from app.db import db
 from app.models.catalog import CatalogCreate, CatalogUpdate
 from app.mini_schema import index_question_types
 from app.services import catalog_access, mini_auth
-from app.services import catalog_discovery, catalog_editions
+from app.services import catalog_discovery, catalog_editions, catalog_delivery
 
 COLUMNS = """c.id, c.title, c.description, c.category, c.category_id, c.status, c.featured, c.revision, c.release_number, c.update_note,
+    c.download_mode, c.external_url, c.external_code,
     c.created_at, c.updated_at, c.published_at, a.grade, a.subject, a.keyword,
     a.question_count, a.version, a.page_count, a.file_status, a.file_error,
     (SELECT id FROM paper_assets WHERE paper_id = a.id AND kind = 'page' AND page_number = 1) AS thumbnail_id"""
 JOIN = "catalog_papers c JOIN paper_archives a ON a.id = c.paper_id"
-VISIBLE = "c.status = 'published' AND a.file_status = 'ready'"
+VISIBLE = "c.status = 'published' AND " + catalog_delivery.availability_sql()
 QUESTION_FIELDS = {"id", "type", "stem", "_stemHtml", "_optsHtml", "options", "answer", "analysis",
                    "acceptable_answers", "left_items", "right_items", "left_expr", "right_expr", "top", "left", "right"}
 
@@ -69,6 +70,9 @@ def _item(row, admin=False, access=None):
                              if item["thumbnail_id"] else None)
     if not admin:
         item["created_at"] = item["published_at"]
+        # Even authorized readers retrieve the destination through the download action.
+        item.pop("external_url", None)
+        item.pop("external_code", None)
     if access:
         item.update(access)
         if not item["can_view"]:
@@ -191,21 +195,24 @@ def get_paper(user_id, catalog_id, admin=False):
         rows = conn.execute("SELECT id, kind, page_number, mime_type, byte_size FROM paper_assets WHERE paper_id = ? "
                             "ORDER BY page_number", (result.pop("archive_id"),)).fetchall()
         result["assets"] = [{**dict(asset), "url": f"{prefix}/papers/{catalog_id}/assets/{asset['id']}"} for asset in rows
-                            if access["can_download" if asset["kind"] == "pdf" else "can_view"]]
+                            if access["can_download" if asset["kind"] == "pdf" else "can_view"]
+                            and (admin or asset["kind"] != "pdf" or result["download_mode"] == "pdf")]
         result["versions"] = [dict(row) for row in conn.execute(
             "SELECT release_number, note, created_at FROM catalog_versions WHERE catalog_id = ? ORDER BY release_number DESC", (catalog_id,))]
         result["tags"] = catalog_discovery.label_map(conn, [catalog_id], admin)[catalog_id]
-        result["editions"] = catalog_editions.listing(conn, catalog_id, admin, access["can_download"])
+        result["editions"] = catalog_editions.listing(conn, catalog_id, admin, access["can_download"]) if admin or result["download_mode"] == "pdf" else []
     return result
 
 
 def get_asset(catalog_id, asset_id, admin=False, user_id=None):
     with db() as conn:
-        row = conn.execute(f"SELECT s.*, c.title FROM {JOIN} JOIN paper_assets s ON (s.paper_id = a.id OR "
+        row = conn.execute(f"SELECT s.*, c.title, c.download_mode FROM {JOIN} JOIN paper_assets s ON (s.paper_id = a.id OR "
                            "(s.kind = 'pdf' AND EXISTS (SELECT 1 FROM catalog_print_editions e JOIN paper_archives p ON p.id = e.paper_id WHERE e.catalog_id = c.id AND e.paper_id = s.paper_id AND p.file_status = 'ready'))) "
                            "WHERE c.id = ? AND s.id = ? AND a.file_status = 'ready'" +
                            ("" if admin else " AND c.status = 'published'"), (catalog_id, asset_id)).fetchone()
         if not row:
+            _missing()
+        if not admin and row["kind"] == "pdf" and row["download_mode"] != "pdf":
             _missing()
         if not admin and user_id is None and row["kind"] == "pdf":
             raise HTTPException(401, detail={"error": "请先登录后下载", "code": "login_required"})
@@ -231,15 +238,19 @@ def request_download(user_id, catalog_id, edition="original"):
         row = _visible(conn, catalog_id)
         user = mini_auth._user(conn, user_id)
         catalog_access.require_access(catalog_access.access_map(conn, [catalog_id], user)[catalog_id], "download")
-        paper_id = catalog_editions.source_id(conn, catalog_id, row["paper_id"], edition)
-        asset = conn.execute("SELECT id, kind, page_number, mime_type, byte_size FROM paper_assets WHERE paper_id = ? AND kind = 'pdf'",
-                             (paper_id,)).fetchone()
-        if not asset:
-            _missing()
+        if row["download_mode"] == "external":
+            result = {"kind": "external", "url": row["external_url"], "extraction_code": row["external_code"]}
+        else:
+            paper_id = catalog_editions.source_id(conn, catalog_id, row["paper_id"], edition)
+            asset = conn.execute("SELECT id, kind, page_number, mime_type, byte_size FROM paper_assets WHERE paper_id = ? AND kind = 'pdf'",
+                                 (paper_id,)).fetchone()
+            if not asset:
+                _missing()
+            result = {**dict(asset), "url": f"/api/v1/catalog/papers/{catalog_id}/assets/{asset['id']}"}
         conn.execute("INSERT INTO mini_catalog_downloads(user_id, catalog_id, requested_at) VALUES (?, ?, ?) "
                      "ON CONFLICT(user_id, catalog_id) DO UPDATE SET requested_at = excluded.requested_at",
                      (user_id, catalog_id, int(time.time())))
-        return {**dict(asset), "url": f"/api/v1/catalog/papers/{catalog_id}/assets/{asset['id']}"}
+        return result
 
 
 def summary(user_id):
@@ -253,7 +264,7 @@ def summary(user_id):
                        "paper_count": row["total"]} for row in conn.execute(
             "SELECT c.id, c.name, c.description, c.icon, COUNT(p.id) AS total FROM site_categories c "
             "JOIN catalog_papers p ON p.category_id = c.id JOIN paper_archives a ON a.id = p.paper_id "
-            "WHERE c.is_visible = 1 AND p.status = 'published' AND a.file_status = 'ready' "
+            f"WHERE c.is_visible = 1 AND p.status = 'published' AND {catalog_delivery.availability_sql('p')} "
             "GROUP BY c.id, c.name, c.description, c.icon ORDER BY c.sort_order, c.name")]
         result = {
             "papers": count,
@@ -293,20 +304,22 @@ def list_sources(user_id, q="", limit=20, offset=0):
 def create_paper(user_id, body: CatalogCreate):
     now, catalog_id = int(time.time()), uuid.uuid4().hex
     with db(serialized=True) as conn:
-        paper = conn.execute("SELECT title, snapshot_json FROM paper_archives WHERE id = ? AND user_id = ?", (body.paper_id, user_id)).fetchone()
+        delivery = catalog_delivery.settings(body)
+        paper_id = body.paper_id or catalog_delivery.metadata_archive(conn, user_id, body)
+        paper = conn.execute("SELECT title, snapshot_json FROM paper_archives WHERE id = ? AND user_id = ?", (paper_id, user_id)).fetchone()
         if not paper:
             raise HTTPException(404, detail={"error": "只能选择当前管理员自己保存的试卷"})
-        if conn.execute("SELECT id FROM catalog_papers WHERE paper_id = ?", (body.paper_id,)).fetchone():
+        if conn.execute("SELECT id FROM catalog_papers WHERE paper_id = ?", (paper_id,)).fetchone():
             raise HTTPException(409, detail={"error": "该版本已加入公共库，请编辑已有条目"})
-        if conn.execute("SELECT 1 FROM catalog_versions WHERE paper_id = ?", (body.paper_id,)).fetchone():
+        if conn.execute("SELECT 1 FROM catalog_versions WHERE paper_id = ?", (paper_id,)).fetchone():
             raise HTTPException(409, detail={"error": "该原稿属于修订历史，请另存新的归档版本"})
-        if catalog_editions.referenced(conn, body.paper_id):
+        if catalog_editions.referenced(conn, paper_id):
             raise HTTPException(409, detail={"error": "该原稿属于公共资料的打印版本，请另存新的归档"})
         category_id, category_name = _resolve_category(conn, body)
-        conn.execute("INSERT INTO catalog_papers(id, paper_id, publisher_id, title, description, category, category_id, created_at, updated_at) "
-                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                     (catalog_id, body.paper_id, user_id, body.title.strip() or paper["title"], body.description.strip(),
-                      category_name, category_id, now, now))
+        conn.execute("INSERT INTO catalog_papers(id, paper_id, publisher_id, title, description, category, category_id, created_at, updated_at, download_mode, external_url, external_code) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (catalog_id, paper_id, user_id, body.title.strip() or paper["title"], body.description.strip(),
+                      category_name, category_id, now, now, delivery["download_mode"], delivery["external_url"], delivery["external_code"]))
         index_question_types(conn, catalog_id, paper["snapshot_json"])
         catalog_access.save_policy(conn, catalog_id, body)
     return get_paper(user_id, catalog_id, admin=True)
@@ -319,17 +332,20 @@ def update_paper(user_id, catalog_id, body: CatalogUpdate):
             _missing()
         if row["revision"] != body.revision:
             raise HTTPException(409, detail={"error": "条目已被其他操作更新，请刷新后重试"})
+        delivery = catalog_delivery.settings(body, row)
+        if delivery["download_mode"] == "pdf" and row["download_mode"] == "external" and row["file_status"] != "ready":
+            raise HTTPException(409, detail={"error": "尚无 PDF 文件，请先通过修订原稿关联已就绪的 PDF，再切换下载方式"})
         if body.status == "published":
-            if row["file_status"] != "ready":
+            if delivery["download_mode"] == "pdf" and row["file_status"] != "ready":
                 raise HTTPException(409, detail={"error": "PDF 与预览图尚未完成，请先在工作台补齐文件"})
             if row["status"] != "published" and not body.confirm_publication:
                 raise HTTPException(422, detail={"error": "请确认习题、答案和文件可按所设权限提供给小程序用户"})
         published_at = int(time.time()) if body.status == "published" and row["status"] != "published" else row["published_at"]
         category_id, category_name = _resolve_category(conn, body, previous=row)
         conn.execute("UPDATE catalog_papers SET title = ?, description = ?, category = ?, category_id = ?, status = ?, featured = ?, "
-                     "revision = revision + 1, published_at = ?, updated_at = ? WHERE id = ?",
+                     "revision = revision + 1, published_at = ?, updated_at = ?, download_mode = ?, external_url = ?, external_code = ? WHERE id = ?",
                      (body.title, body.description.strip(), category_name, category_id, body.status, int(body.featured),
-                      published_at, int(time.time()), catalog_id))
+                      published_at, int(time.time()), delivery["download_mode"], delivery["external_url"], delivery["external_code"], catalog_id))
         catalog_access.save_policy(conn, catalog_id, body, preserve_missing=True)
     return get_paper(user_id, catalog_id, admin=True)
 

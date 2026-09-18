@@ -70,7 +70,7 @@ def _extract_json(text: str) -> dict:
             obj, _ = json.JSONDecoder().raw_decode(text)
             if isinstance(obj, dict):
                 return obj
-        except Exception:
+        except (json.JSONDecodeError, ValueError, TypeError):
             pass
         # 括号配平修复：从第一个 { 起逐字符配平，截取完整对象
         depth = 0
@@ -222,8 +222,8 @@ async def generate_batch(request: BatchGenerateRequest, http_request: Request, u
         raw = await _call_llm_and_parse(system_prompt, user_message)
     except HTTPException:
         raise
-    except Exception:
-        logger.exception("批量生成失败")
+    except (RuntimeError, ValueError, TypeError) as e:
+        logger.exception("批量生成失败: %s", type(e).__name__)
         raise HTTPException(status_code=502, detail={"error": "批量生成失败", "detail": "生成链路异常，请重试；若持续失败请联系管理员"})
 
     matched = match_sections(raw, request.items)
@@ -345,12 +345,12 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
                     yield f"data: {json.dumps({'qc_warning': '模型结果结构不完整，请人工核对'}, ensure_ascii=False)}\n\n"
                 if request.game_type.value == "reading" and not data.get("passage"):
                     yield f"data: {json.dumps({'qc_warning': '阅读正文缺失'}, ensure_ascii=False)}\n\n"
-            except Exception:
+            except (json.JSONDecodeError, ValueError, TypeError):
                 yield f"data: {json.dumps({'qc_warning': '模型结果无法解析，请人工核对'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
-        except Exception:
+        except (httpx.HTTPError, json.JSONDecodeError, RuntimeError, ValueError) as e:
             # 不向客户端泄漏内部异常细节（可能含内网 URL/密钥提示），详情留日志
-            logger.exception("流式生成失败")
+            logger.exception("流式生成失败: %s", type(e).__name__)
             yield f"data: {json.dumps({'error': '生成失败，请重试；若持续失败请联系管理员'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
@@ -450,8 +450,8 @@ async def validate_oob(request: ValidateRequest, http_request: Request, user: Cu
         return ValidateResult(**data)
     except HTTPException:
         raise
-    except Exception:
-        logger.exception("超纲校验失败")
+    except (RuntimeError, ValueError, TypeError, json.JSONDecodeError) as e:
+        logger.exception("超纲校验失败: %s", type(e).__name__)
         raise HTTPException(status_code=502, detail={"error": "校验请求失败", "detail": "校验链路异常，请重试；若持续失败请联系管理员"})
 
 

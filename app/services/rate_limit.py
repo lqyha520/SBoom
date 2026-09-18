@@ -7,31 +7,56 @@
 
 import threading
 import time
-from collections import defaultdict, deque
+from collections import deque
+from heapq import heappop, heappush
+from math import isfinite
 
 
 _lock = threading.Lock()
-_hits: dict = defaultdict(deque)
+_MAX_KEYS = 10_000
+_CLEANUP_BATCH = 64
+# Include the policy so a short window cannot discard a longer window's history.
+_Policy = tuple[str, int, float]
+_hits: dict[_Policy, deque[float]] = {}
+# One scheduled check per policy, even when that policy receives many requests.
+_expirations: list[tuple[float, _Policy]] = []
+
+
+def _cleanup(now: float) -> None:
+    for _ in range(_CLEANUP_BATCH):
+        if not _expirations or _expirations[0][0] > now:
+            break
+        _, policy = heappop(_expirations)
+        expires = _hits[policy][-1] + policy[2]
+        if expires <= now:
+            del _hits[policy]
+        else:
+            heappush(_expirations, (expires, policy))
 
 
 def allow(key: str, max_events: int, per_seconds: float) -> bool:
     """在 per_seconds 窗口内该 key 已发生 max_events 次则拒绝。
 
-    内存自清理：key 闲置超过窗口时长即被移除，防止无限增长。
+    窗口左边界不计入；拒绝请求不会延长窗口。
+    每次最多清理 64 个到期条目，最多保留 10,000 个 key/策略组合。
+    容量耗尽时拒绝新组合，保留已有计数；后续请求逐批回收过期容量。
     """
-    now = time.monotonic()
+    if max_events < 1 or not isfinite(per_seconds) or per_seconds <= 0:
+        raise ValueError("Rate limit count and window must be positive and finite")
+    policy = (key, max_events, per_seconds)
     with _lock:
-        q = _hits.get(key)
+        now = time.monotonic()
+        _cleanup(now)
+        q = _hits.get(policy)
         if q is None:
+            if len(_hits) >= _MAX_KEYS:
+                return False
             q = deque()
-            _hits[key] = q
-        while q and now - q[0] > per_seconds:
+            _hits[policy] = q
+            heappush(_expirations, (now + per_seconds, policy))
+        while q and now - q[0] >= per_seconds:
             q.popleft()
         if len(q) >= max_events:
             return False
         q.append(now)
-        # 简易清理：条目过多时剔除已过期 key，避免长期运行内存膨胀
-        if len(_hits) > 10_000:
-            for k in [k for k, v in _hits.items() if not v or now - v[-1] > per_seconds]:
-                _hits.pop(k, None)
         return True

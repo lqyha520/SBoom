@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAdminListRoute } from '../navigation'
 import { computed, onActivated, onDeactivated, ref, watch } from 'vue'
 import type { UserInfo } from '../api'
 import { typeRules, updateTypeRule, type TypeRule } from '../mini'
@@ -35,6 +36,7 @@ async function save() {
 }
 onActivated(load)
 onDeactivated(() => { sequence++; loading.value = false; dialog.value = false })
+const routeState = useAdminListRoute('typeAccess', { q }, () => { void load() })
 </script>
 
 <template>

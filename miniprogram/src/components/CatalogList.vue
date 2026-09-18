@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import AuthGate from './AuthGate.vue'
 import AppTabBar from './AppTabBar.vue'
 import PageChrome from './PageChrome.vue'
 import PaperRow from './PaperRow.vue'
-import PaperSkeleton from './PaperSkeleton.vue'
+import EnhancedSkeleton from './EnhancedSkeleton.vue'
 import SearchField from './SearchField.vue'
 import CatalogFilterSheet from './CatalogFilterSheet.vue'
 import FavoriteGroups from './FavoriteGroups.vue'
@@ -17,6 +17,7 @@ import { catalogSelection, openCatalog, confirmAction } from '../services/naviga
 import { exerciseText, subjectOptions } from '../presentation'
 import type { CatalogSummary, PaperSummary } from '../types'
 import { emptyTags, fetchTags, tagKinds, openRequests, type CatalogTag, type TagFilters } from '../services/growth'
+import { debounce } from '../utils/performance'
 
 const props = withDefaults(defineProps<{ view?: 'all' | 'favorites' | 'downloads' | 'recent'; topicId?: string }>(), { view: 'all', topicId: '' })
 const canBrowse = computed(() => props.view === 'all' || !!session.user)
@@ -54,12 +55,14 @@ const requests = createLatestRequest()
 let active = false
 let selectionRevision = -1
 let timer: ReturnType<typeof setTimeout> | undefined
+let loaded = false
+let scrollTop = 0
 const filtered = computed(() => !!(q.value || grade.value || subject.value || category.value || (!props.topicId && topic.value) || onlyFree.value || favoriteGroup.value || chosenTags.value.length))
 function preferences() {
   const saved = readPreferences(session.user?.id || '')
   grade.value = saved.grade; subject.value = saved.subject; searches.value = saved.history
 }
-function search(value = q.value) {
+const debouncedSearch = debounce((value: string) => {
   q.value = value
   if (session.user && value.trim()) {
     const saved = rememberSearch(readPreferences(session.user.id), value)
@@ -67,6 +70,9 @@ function search(value = q.value) {
   }
   clearTimeout(timer)
   void refresh()
+}, 300)
+function search(value = q.value) {
+  debouncedSearch(value)
 }
 function clearSearches() {
   searches.value = []
@@ -78,21 +84,30 @@ async function clearRecent() {
   try { await clearHistory(); await refresh() } catch (cause) { error.value = errorMessage(cause) }
 }
 
-async function refresh(reset = true) {
+async function refresh(reset = true, preserveWindow = false) {
   if (!canBrowse.value || !active) { uni.stopPullDownRefresh(); return }
   if (reset) clearTimeout(timer)
   if (!reset && (loading.value || !more.value)) return
   const current = requests.begin()
   loading.value = true; error.value = ''
   try {
-    const result = await fetchCatalog({ q: q.value, grade: grade.value, subject: subject.value, category: category.value,
+    const filters = { q: q.value, grade: grade.value, subject: subject.value, category: category.value,
       favorite: props.view === 'favorites', downloaded: props.view === 'downloads', recent: props.view === 'recent',
       favorite_group: favoriteGroup.value, topic: topic.value, only_free: onlyFree.value, sort: sort.value,
-      ...tagFilters,
-      offset: reset ? 0 : items.value.length, limit: 20 })
+      ...tagFilters }
+    const wanted = preserveWindow ? Math.max(20, items.value.length) : 20
+    const result = await fetchCatalog({ ...filters, offset: reset ? 0 : items.value.length, limit: 20 })
+    while (current() && reset && result.has_more && result.items.length < wanted) {
+      const next = await fetchCatalog({ ...filters, offset: result.items.length, limit: 20 })
+      if (!next.items.length) { result.has_more = false; break }
+      result.items.push(...next.items)
+      result.total = next.total; result.has_more = next.has_more
+    }
     if (!current()) return
     items.value = reset ? result.items : [...items.value, ...result.items.filter(item => !items.value.some(old => old.id === item.id))]
     total.value = result.total; more.value = result.has_more
+    loaded = true
+    if (preserveWindow) { await nextTick(); if (current()) uni.pageScrollTo({ scrollTop, duration: 0 }) }
     if (reset) {
       const [counts, collections, labels] = await Promise.all([fetchCatalogSummary(), fetchTopics(), fetchTags()])
       if (current()) { summary.value = counts; topics.value = collections.items; tags.value = labels.items }
@@ -104,6 +119,7 @@ async function activate() {
   active = true
   await ensureSession()
   if (canBrowse.value && active) {
+    const previousSelection = selectionRevision
     if (selectionRevision < 0 && !props.topicId) preferences()
     if (!props.topicId && props.view === 'all' && catalogSelection.revision > 0 && selectionRevision !== catalogSelection.revision) {
       q.value = catalogSelection.q; grade.value = catalogSelection.grade
@@ -113,13 +129,14 @@ async function activate() {
     selectionRevision = catalogSelection.revision
     searches.value = readPreferences(session.user?.id || '').history
     void groupControl.value?.refresh()
-    clearTimeout(timer); void refresh()
+    clearTimeout(timer); void refresh(true, loaded && previousSelection === catalogSelection.revision)
   }
 }
 function deactivate() { active = false; clearTimeout(timer); requests.invalidate(); loading.value = false; filterOpen.value = false; uni.stopPullDownRefresh() }
 watch([q, grade, subject, category, topic, sort, onlyFree, favoriteGroup, () => Object.values(tagFilters).join(':')], () => {
-  clearTimeout(timer); requests.invalidate(); more.value = false
-  if (active && canBrowse.value) { loading.value = true; timer = setTimeout(() => { void refresh() }, 300) }
+  requests.invalidate(); more.value = false
+  loaded = false; scrollTop = 0
+  if (active && canBrowse.value) { loading.value = true; void refresh() }
 }, { flush: 'sync' })
 watch([grade, subject], () => {
   if (session.user) writePreferences(session.user.id, { ...readPreferences(session.user.id), grade: grade.value, subject: subject.value })
@@ -128,6 +145,7 @@ watch(() => session.user?.id, (owner, previous) => {
   requests.invalidate(); clearTimeout(timer); items.value = []; summary.value = null; total.value = 0; more.value = false
   error.value = ''; loading.value = false; q.value = ''; grade.value = ''; subject.value = ''; category.value = ''
   selectionRevision = catalogSelection.revision
+  loaded = false; scrollTop = 0
   topic.value = props.topicId; topics.value = []; tags.value = []; Object.assign(tagFilters, emptyTags()); favoriteGroup.value = ''; onlyFree.value = false; sort.value = 'featured'; if (!props.topicId) preferences()
   filterOpen.value = false
   if (active && previous && !owner) void refresh()
@@ -141,12 +159,31 @@ async function favorite(paper: PaperSummary) {
   const current = requests.begin()
   changing.value = paper.id
   try {
-    await favoriteCatalogPaper(paper.id, !paper.favorite)
-    if (current()) await refresh()
+    const result = await favoriteCatalogPaper(paper.id, !paper.favorite)
+    if (current()) {
+      paper.favorite = result.favorite
+      if (props.view === 'favorites' && !result.favorite) {
+        items.value = items.value.filter(item => item.id !== paper.id)
+        total.value = Math.max(0, total.value - 1)
+      }
+    }
   } catch (cause) { if (current()) error.value = errorMessage(cause) }
   finally { changing.value = '' }
 }
-defineExpose({ activate, deactivate, refresh, loadMore: () => refresh(false), shareTitle: computed(() => topicHeader.value?.title || '习题专题') })
+async function handleDownload(paper: PaperSummary) {
+  if (!requireLogin('/pages/paper/index?id=' + encodeURIComponent(paper.id))) return
+  // Navigate to paper detail and trigger download
+  openCatalogPaper(paper.id)
+}
+async function handleShare(paper: PaperSummary) {
+  // #ifdef MP-WEIXIN
+  uni.share({
+    title: exerciseText(paper.title),
+    path: '/pages/paper/index?id=' + encodeURIComponent(paper.id)
+  })
+  // #endif
+}
+defineExpose({ activate, deactivate, refresh, rememberScroll: (top: number) => { scrollTop = top }, loadMore: () => refresh(false), shareTitle: computed(() => topicHeader.value?.title || '习题专题') })
 onMounted(activate)
 onBeforeUnmount(deactivate)
 </script>
@@ -167,8 +204,8 @@ onBeforeUnmount(deactivate)
       <view v-if="grade || category || chosenTags.length" class="active-filters"><wd-tag v-if="grade" closable variant="light" type="primary" @close="grade = ''">{{ grade }}</wd-tag><wd-tag v-if="category" closable variant="light" type="primary" @close="category = ''">{{ exerciseText(categoryName) || '已选分类' }}</wd-tag><wd-tag v-for="tag in chosenTags" :key="tag.kind" closable variant="light" @close="tagFilters[tag.kind] = ''">{{ tag.name }}</wd-tag></view>
       <view v-if="error" class="error-strip"><text class="grow">{{ error }}</text><wd-button icon="refresh" type="danger" variant="text" role="button" aria-label="重试加载" @click="refresh()" /></view>
       <view class="list-caption"><text class="result-count">{{ loading ? '正在检索习题' : '共 ' + total + ' 份习题' }}</text><button v-if="filtered" class="section-link" role="button" @click="resetFilters"><wd-icon name="close-circle" size="14px" /><text>清除筛选</text></button><text v-else>{{ view === 'all' ? (sort === 'latest' ? '最新发布' : sort === 'popular' ? '热门习题' : '精选优先') : view === 'downloads' ? '最近下载' : view === 'recent' ? '最近浏览' : '最近收藏' }}</text></view>
-      <PaperSkeleton v-if="loading && !items.length" />
-      <view v-else-if="items.length" class="paper-list catalog-paper-list"><PaperRow v-for="paper in items" :key="paper.id" :paper="paper" :busy="!!changing || loading" @favorite="favorite(paper)" /></view>
+      <EnhancedSkeleton v-if="loading && !items.length" :count="4" type="list" />
+      <view v-else-if="items.length" class="paper-list catalog-paper-list"><PaperRow v-for="paper in items" :key="paper.id" :paper="paper" :busy="!!changing || loading" @favorite="favorite(paper)" @download="handleDownload(paper)" @share="handleShare(paper)" /></view>
       <view v-else-if="!loading && !error" class="catalog-empty"><wd-empty :icon="filtered ? 'no-result' : view === 'favorites' ? 'no-collection' : 'no-content'" :tip="filtered ? '没有匹配的习题' : view === 'favorites' ? '还没有收藏的习题' : view === 'downloads' ? '暂无下载记录' : view === 'recent' ? '暂无浏览记录' : '暂无已发布习题'"><template #bottom><view v-if="filtered || view !== 'all'" class="empty-actions"><wd-button v-if="filtered" variant="plain" role="button" @click="resetFilters">清除筛选</wd-button><wd-button v-else variant="plain" icon="book" role="button" @click="openCatalog()">去习题库看看</wd-button></view></template></wd-empty></view>
       <view v-if="loading && items.length" class="loading-line"><wd-loading size="18px" /><text>正在加载</text></view>
       <view v-if="view === 'all' && !loading && !error && !items.length" class="request-entry"><text>没有找到需要的资料？</text><wd-button variant="plain" size="small" @click="openRequests({ q, grade, subject })">提交资料需求</wd-button></view>

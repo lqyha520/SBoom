@@ -3,6 +3,7 @@
 import uuid
 from app.db import db
 from app.services.mini_errors import fail
+from app.services.catalog_delivery import availability_sql
 
 KINDS = ("textbook", "term", "unit", "knowledge")
 
@@ -10,7 +11,7 @@ KINDS = ("textbook", "term", "unit", "knowledge")
 def tags(admin=False):
     with db() as conn:
         rows = conn.execute("SELECT t.*, (SELECT COUNT(*) FROM catalog_paper_tags p JOIN catalog_papers c ON c.id = p.catalog_id "
-                            "JOIN paper_archives a ON a.id = c.paper_id WHERE p.tag_id = t.id AND c.status = 'published' AND a.file_status = 'ready') AS paper_count "
+                            f"JOIN paper_archives a ON a.id = c.paper_id WHERE p.tag_id = t.id AND c.status = 'published' AND {availability_sql()}) AS paper_count "
                             "FROM catalog_tags t " + ("" if admin else "WHERE t.is_visible = 1 ") + "ORDER BY t.kind, t.sort_order, t.name, t.id").fetchall()
     return {"items": [{**dict(row), "is_visible": bool(row["is_visible"])} for row in rows]}
 

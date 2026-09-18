@@ -19,12 +19,12 @@ export function clearAssetCache() {
   pdfHandle = null
 }
 
-function downloadAsset(path: string): Promise<string> {
+function downloadAsset(path: string, progress: (percent: number) => void): Promise<string> {
   const epoch = authGeneration()
   return new Promise<string>((resolve, reject) => {
     let url: string
     try { url = apiUrl(path) } catch (error) { reject(error); return }
-    uni.downloadFile({
+    const task = uni.downloadFile({
       url, header: authHeaders(), timeout: 60000,
       success(result) {
         if (epoch !== authGeneration()) { release(result.tempFilePath); reject(new ApiError('登录状态已变化')); return }
@@ -38,14 +38,15 @@ function downloadAsset(path: string): Promise<string> {
       },
       fail() { reject(new ApiError('文件下载失败，请检查网络')) },
     })
+    task.onProgressUpdate?.(event => progress(event.progress))
   })
 }
 
 const files = createFilePool(downloadAsset, release)
 export function acquireAsset(path: string) { return files.acquire(path) }
 
-export async function openPdf(asset: Asset, title: string) {
-  const handle = acquireAsset(asset.url)
+export async function openPdf(asset: Asset, title: string, progress?: (percent: number) => void) {
+  const handle = files.acquire(asset.url, progress)
   pdfHandle?.release()
   pdfHandle = handle
   try {

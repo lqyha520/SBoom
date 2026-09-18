@@ -7,6 +7,7 @@ import SectionList from './SectionList.vue'
 import PaperTemplateDialog from './PaperTemplateDialog.vue'
 import CustomTypesDialog from './CustomTypesDialog.vue'
 import RecoveryActions from './RecoveryActions.vue'
+import GenerationTasks from './GenerationTasks.vue'
 
 const store = useExamStore()
 const emit = defineEmits<{ 'open-templates': []; preview: [] }>()
@@ -63,6 +64,7 @@ function pickTemplate(id: string) {
       <p v-else-if="store.generationIssue" role="alert" class="mb-3 text-xs text-warning">{{ store.generationIssue }}</p>
       <p v-else-if="missingConditions" class="mb-3 text-xs text-muted">待补充：{{ missingConditions }}</p>
       <RecoveryActions />
+      <GenerationTasks />
       <p v-if="store.usage" class="mb-2 text-xs text-muted numeric">24 小时请求 {{ store.usage.requests }} / {{ store.usage.daily_limit }}</p>
       <div class="flex gap-2">
         <UButton icon="i-lucide-sparkles" :label="store.generating ? store.generateProgress || '正在生成试卷' : '生成试卷'" :loading="store.generating" :disabled="!store.canGenerate" block class="min-h-10 whitespace-normal" @click="store.generate()" />
@@ -77,9 +79,10 @@ function pickTemplate(id: string) {
 <style scoped>
 .builder-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .paper-fields { padding: 20px; border-bottom: 1px solid var(--ui-border-muted); }
-.builder-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 48px; padding: 10px 20px; font-size: 12px; font-weight: 600; color: var(--ui-text-toned); background: transparent; border: 0; text-align: left; }
+.builder-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 48px; padding: 10px 20px; font-size: 12px; font-weight: 600; color: var(--ui-text-toned); background: transparent; border: 0; text-align: left; transition: color 0.2s ease; }
+.builder-section-heading:hover { color: var(--ui-text-highlighted); }
 .section-total { font-weight: 500; font-size: 11px; color: var(--ui-text-muted); margin-left: 4px; }
-.generation-footer { flex: none; padding: 16px 20px; border-top: 1px solid var(--ui-border); background: #fcfdfd; }
+.generation-footer { flex: none; padding: 16px 20px; border-top: 1px solid var(--ui-border); background: linear-gradient(to bottom, #fcfdfd, #f8f9fa); }
 .mobile-preview { display: none; }
 @media (max-width: 1023px) { .mobile-preview { display: inline-flex; } }
 </style>

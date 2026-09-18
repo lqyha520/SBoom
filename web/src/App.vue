@@ -21,6 +21,8 @@ const showTpl = ref(false)
 const showHistory = ref(false)
 const showCloud = ref(false)
 const accountError = ref('')
+const suggestedKeyword = ref((new URLSearchParams(location.search).get('keyword') || '').slice(0, 100))
+function applySuggestedKeyword() { store.keyword = suggestedKeyword.value; store.view = 'build'; suggestedKeyword.value = ''; history.replaceState(null, '', location.pathname) }
 const accountReloading = ref(false)
 const draftLabel = computed(() => ({ loading: '读取草稿', saving: '正在保存', saved: store.draftSavedAt ? '草稿已保存' : '本机草稿', error: '保存失败' })[store.draftState])
 const mobilePanel = ref('conditions')
@@ -56,6 +58,16 @@ function storageChanged(event: StorageEvent) {
 }
 function saveOnHide() { if (document.visibilityState === 'hidden') void store.flushDraft() }
 function saveOnExit() { void store.flushDraft() }
+function captureEdit(event: FocusEvent) {
+  const target = event.target as HTMLElement
+  if (target.isContentEditable || target.closest('[contenteditable="true"]')) store.recordEdit()
+}
+function editShortcut(event: KeyboardEvent) {
+  const target = event.target as HTMLElement
+  if (target.closest('input, textarea, [contenteditable="true"]') || !(event.ctrlKey || event.metaKey)) return
+  if (event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? store.redo() : store.undo() }
+  if (event.key.toLowerCase() === 'y') { event.preventDefault(); store.redo() }
+}
 function warnUnsaved(event: BeforeUnloadEvent) {
   if (store.draftState === 'saving' || store.draftState === 'error') {
     event.preventDefault()
@@ -70,6 +82,7 @@ onMounted(() => {
   window.addEventListener('online', syncOnReconnect)
   window.addEventListener('pagehide', saveOnExit)
   window.addEventListener('beforeunload', warnUnsaved)
+  window.addEventListener('keydown', editShortcut)
   document.addEventListener('visibilitychange', saveOnHide)
 })
 onBeforeUnmount(() => {
@@ -79,6 +92,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('online', syncOnReconnect)
   window.removeEventListener('pagehide', saveOnExit)
   window.removeEventListener('beforeunload', warnUnsaved)
+  window.removeEventListener('keydown', editShortcut)
   document.removeEventListener('visibilitychange', saveOnHide)
 })
 </script>
@@ -105,6 +119,8 @@ onBeforeUnmount(() => {
           </button>
         </nav>
         <div class="topbar-actions">
+          <UTooltip text="撤销（Ctrl+Z）"><UButton icon="i-lucide-undo-2" aria-label="撤销编辑" variant="ghost" :disabled="!store.canUndo" @click="store.undo()" /></UTooltip>
+          <UTooltip text="重做（Ctrl+Shift+Z）"><UButton icon="i-lucide-redo-2" aria-label="重做编辑" variant="ghost" :disabled="!store.canRedo" @click="store.redo()" /></UTooltip>
           <UTooltip text="云端试卷"><UButton icon="i-lucide-cloud" color="neutral" variant="ghost" aria-label="云端试卷" class="icon-tool" @click="showCloud = true" /></UTooltip>
           <UTooltip text="本机历史"><UButton icon="i-lucide-history" color="neutral" variant="ghost" aria-label="本机历史" class="icon-tool" @click="showHistory = true" /></UTooltip>
           <UButton icon="i-lucide-folder-open" label="我的模板" aria-label="我的模板" color="neutral" variant="ghost" class="templates-button" @click="showTpl = true" />
@@ -137,9 +153,10 @@ onBeforeUnmount(() => {
           <UButton icon="i-lucide-refresh-cw" label="保存并刷新" color="warning" variant="soft" :loading="accountReloading" @click="accountChanged" />
         </template>
       </UAlert>
+      <UAlert v-if="suggestedKeyword && store.persistenceReady" title="从运营统计带入的出题需求" :description="suggestedKeyword" class="workspace-alert no-print"><template #actions><UButton label="应用知识点" :disabled="store.generating" @click="applySuggestedKeyword" /><UButton label="忽略" variant="ghost" @click="suggestedKeyword = ''" /></template></UAlert>
       <UTabs v-if="store.view === 'build'" v-model="mobilePanel" :items="workspaceTabs" :content="false" class="workspace-tabs no-print" :ui="{ list: 'w-full', trigger: 'flex-1' }" />
       <div v-if="!store.persistenceReady" class="loading-screen" role="status">正在恢复草稿</div>
-      <main v-else class="workbench" :class="{ 'result-only': store.view === 'result' }" :data-panel="mobilePanel">
+      <main v-else class="workbench" :class="{ 'result-only': store.view === 'result' }" :data-panel="mobilePanel" @focusin="captureEdit">
         <template v-if="store.view === 'build'">
           <LeftPanel />
           <MiddleColumn @open-templates="showTpl = true" @preview="mobilePanel = 'preview'" />

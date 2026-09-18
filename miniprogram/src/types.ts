@@ -40,6 +40,7 @@ export interface Snapshot {
   export_options: { mode: 'student' | 'withAnswers' | 'answersOnly'; addDay: boolean; renderer_version: 'web-v1' }
 }
 export interface PaperSummary {
+  download_mode?: 'pdf' | 'external'
   tags?: import('./services/growth').CatalogTag[]
   can_view: boolean; can_download: boolean; required_view: 'free' | 'vip'; required_download: 'free' | 'vip'
   view_access: 'inherit' | 'free' | 'vip'; download_access: 'inherit' | 'free' | 'vip'; question_types: string[]
@@ -50,6 +51,8 @@ export interface PaperSummary {
   created_at: number; updated_at: number; thumbnail_id: string | null; thumbnail_url: string | null
 }
 export interface Asset { id: string; kind: 'pdf' | 'page'; page_number: number; mime_type: string; byte_size: number; url: string }
+export interface ExternalDownload { kind: 'external'; url: string; extraction_code: string }
+export type DownloadTarget = Asset | ExternalDownload
 export interface PrintEdition { kind: 'original' | 'student' | 'answers'; label: string; byte_size: number; mode: string; url?: string }
 export interface PaperDetail extends PaperSummary { snapshot: Snapshot | null; assets: Asset[]; editions?: PrintEdition[]; release_number?: number; update_note?: string; versions?: { release_number: number; note: string; created_at: number }[] }
 export interface CatalogSummary {

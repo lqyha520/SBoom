@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAdminListRoute } from '../navigation'
 import { ref, watch } from 'vue'
 import type { UserInfo } from '../api'
 import { useAdminPage } from '../admin-page'
@@ -10,6 +11,7 @@ const maxDate = day.value, minDate = new Date(Date.now() + 8 * 3600000 - 90 * 86
 const labels = { running: '核对中', complete: '已完成', error: '未完成' }
 const page = useAdminPage(async valid => { const [result, plans] = await Promise.all([getReconciliations((pageNumber.value - 1) * 20), getPlans()]); if (valid()) { items.value = result.items; total.value = result.total; online.value = plans.checkout_enabled } }, () => { dialog.value = false })
 const { error, notice, loading, busy } = page
+const routeState = useAdminListRoute('reconciliations', { page: pageNumber }, () => { void page.load() })
 watch(pageNumber, page.load)
 function run() { void page.act(async valid => { try { const result = await reconcile(props.user.id, day.value); if (valid()) { selected.value = result; dialog.value = true; notice.value = '账单核对完成' } } finally { if (valid()) await page.load() } }) }
 function inspect(item: Reconciliation) { void page.act(async valid => { const result = await getReconciliation(item.id); if (valid()) { selected.value = result; dialog.value = true } }) }

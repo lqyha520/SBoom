@@ -22,7 +22,7 @@ RUN cd web && pnpm build \
  && cd ../admin && pnpm build
 
 # ─── 阶段二：Python 运行时 ───
-FROM python:3.13-slim
+FROM python:3.12-slim
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -42,6 +42,6 @@ VOLUME ["/app/data"]
 EXPOSE 8000
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
-  CMD python -c "import urllib.request,os;urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8000\")}/readyz',timeout=3)"
+  CMD python -c "import urllib.request,os;urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8000\")}/health/detail',timeout=3)"
 
 CMD ["python", "run.py"]

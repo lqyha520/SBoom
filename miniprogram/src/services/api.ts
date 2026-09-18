@@ -1,4 +1,4 @@
-import type { Asset, CatalogSummary, PaperDetail, PaperList, SiteDocument, SiteHome, User } from '../types'
+import type { Asset, DownloadTarget, CatalogSummary, PaperDetail, PaperList, SiteDocument, SiteHome, User } from '../types'
 import { exerciseText } from '../presentation'
 
 let base = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
@@ -90,7 +90,7 @@ export function favoriteCatalogPaper(id: string, favorite: boolean) {
   return request<{ favorite: boolean }>('/api/v1/catalog/papers/' + encodeURIComponent(id) + '/favorite', 'PUT', { favorite })
 }
 export function requestCatalogDownload(id: string, edition: 'original' | 'student' | 'answers' = 'original') {
-  return request<Asset>('/api/v1/catalog/papers/' + encodeURIComponent(id) + '/download?edition=' + edition, 'POST')
+  return request<DownloadTarget>('/api/v1/catalog/papers/' + encodeURIComponent(id) + '/download?edition=' + edition, 'POST')
 }
 
 /** 后台配置的运营内容：Banner、公告、分类、年级科目字典，一次请求拿全 */

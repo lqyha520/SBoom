@@ -46,10 +46,11 @@ onActivated(load)
 </template>
 
 <style scoped>
-.usage-section { padding: 24px 0; border-bottom: 1px solid var(--ui-border); }
+.usage-section { padding: 24px 0; border-bottom: 1px solid var(--ui-border); animation: fade-in 0.4s ease; }
 .usage-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; margin-top: 20px; }
 .usage-grid dt { font-size: 12px; color: var(--ui-text-muted); }
-.usage-grid dd { margin: 10px 0 0; font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.usage-grid dd { margin: 10px 0 0; font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; transition: color 0.2s ease; }
+.usage-grid dd:hover { color: var(--ui-primary); }
 .usage-grid .token-count { font-size: 20px; }
 .usage-caption { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 18px; color: var(--ui-text-muted); font-size: 11px; }
 @media (max-width: 760px) { .usage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

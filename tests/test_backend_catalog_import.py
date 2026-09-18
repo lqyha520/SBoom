@@ -1,6 +1,7 @@
 """手动导入外部 PDF 成为公共习题的契约。"""
 
 import hashlib
+import io
 import json
 import os
 import unittest
@@ -67,6 +68,38 @@ class CatalogImportContracts(fixtures.PublicCatalogContracts):
         self.sign_in(self.viewer)
         listing = self.client.get("/api/v1/catalog/papers", params={"q": "外部导入"}).json()
         self.assertEqual(listing["total"], 1)
+
+    def test_pdf_import_can_deliver_a_link_while_retaining_page_previews(self):
+        params = {'title': '网盘交付卷', 'grade': '三年级', 'subject': '数学', 'download_mode': 'external',
+                  'external_url': 'https://pan.example.com/s/abc?pwd=1234&from=school', 'external_code': '1234'}
+        response = self.client.post('/api/v1/admin/catalog/import', params=params,
+                                    content=tiny_pdf('external-delivery'), headers={'Content-Type': 'application/pdf'})
+        self.assertEqual(response.status_code, 201, response.text)
+        item = self.publish(response.json())
+        self.sign_in(self.viewer)
+        detail = self.client.get(f"/api/v1/catalog/papers/{item['id']}").json()
+        self.assertEqual([asset['kind'] for asset in detail['assets']], ['page'])
+        delivery = self.client.post(f"/api/v1/catalog/papers/{item['id']}/download").json()
+        self.assertEqual(delivery['url'], params['external_url'])
+        self.assertEqual(delivery['extraction_code'], '1234')
+
+    def test_landscape_and_large_pages_fit_preview_bounds_without_changing_pdf(self):
+        from PIL import Image
+        for width, height in ((842, 595), (2000, 3000)):
+            with self.subTest(width=width, height=height):
+                content = tiny_pdf(f"page-{width}").replace(b"595 842", f"{width} {height}".encode())
+                response = self.client.post("/api/v1/admin/catalog/import", params={
+                    "title": f"尺寸验收 {width}", "grade": "三年级", "subject": "数学",
+                }, content=content, headers={"Content-Type": "application/pdf"})
+                self.assertEqual(response.status_code, 201, response.text)
+                assets = response.json()["assets"]
+                preview = self.client.get(next(asset["url"] for asset in assets if asset["kind"] == "page"))
+                with Image.open(io.BytesIO(preview.content)) as image:
+                    self.assertLessEqual(image.width, 1200)
+                    self.assertLessEqual(image.height, 1800)
+                    self.assertAlmostEqual(image.width / image.height, width / height, delta=0.01)
+                original = self.client.get(next(asset["url"] for asset in assets if asset["kind"] == "pdf"))
+                self.assertEqual(original.content, content)
 
     def test_reimporting_the_same_pdf_reuses_the_archive(self):
         first = self.import_paper().json()

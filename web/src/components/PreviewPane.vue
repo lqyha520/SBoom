@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useExamStore } from '../stores/exam'
 import type { PaperData } from '../types'
 import PaperView from './PaperView.vue'
@@ -18,8 +18,10 @@ const previewPaper = computed<PaperData>(() => ({
 const previewBox = ref<HTMLElement | null>(null)
 const paperViewEl = ref<InstanceType<typeof PaperView> | null>(null)
 const { zoom, manual, setManual } = useFitZoom(previewBox)
-const layoutMode = ref(false)
+const layoutMode = computed({ get: () => store.layoutMode, set: value => { store.layoutMode = value } })
+onBeforeUnmount(() => { store.layoutMode = false })
 function toggleLayout() {
+  if (!layoutMode.value) store.recordEdit()
   if (layoutMode.value) {
     const sections = paperViewEl.value?.applyLayout()
     if (sections) store.syncSections(sections)

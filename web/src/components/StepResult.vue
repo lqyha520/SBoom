@@ -5,6 +5,8 @@ import PaperView from './PaperView.vue'
 import FormatBar from './FormatBar.vue'
 import ZoomControl from './ZoomControl.vue'
 import RecoveryActions from './RecoveryActions.vue'
+import GenerationTasks from './GenerationTasks.vue'
+import QuestionManager from './QuestionManager.vue'
 import * as exporter from '../exporter'
 import { useFitZoom } from '../useFitZoom'
 
@@ -12,6 +14,7 @@ const store = useExamStore()
 const emit = defineEmits<{ library: [] }>()
 const CloudSaveDialog = defineAsyncComponent(() => import('./CloudSaveDialog.vue'))
 const showCloudSave = ref(false)
+const manageQuestions = ref(false)
 const archiving = ref(false)
 const stackEl = ref<HTMLElement | null>(null)
 const paperViewEl = ref<InstanceType<typeof PaperView> | null>(null)
@@ -62,6 +65,7 @@ const moreExports = computed(() => [
   ]] : []),
 ])
 function toggleLayout() {
+  if (!store.layoutMode) store.recordEdit()
   if (store.layoutMode) paperViewEl.value?.applyLayout()
   else store.showAnswers = false
   store.layoutMode = !store.layoutMode
@@ -71,6 +75,8 @@ function cancelLayout() { store.layoutMode = false; paperViewEl.value?.repaginat
 
 <template>
   <section v-if="paper" class="result-view" aria-label="生成的试卷">
+    <GenerationTasks />
+    <QuestionManager v-if="manageQuestions" :paper-index="selected" @close="manageQuestions = false" />
     <div v-if="store.generateWarn || store.generateError || exportError" class="result-notice no-print">
       <UAlert v-if="store.generateWarn" color="warning" variant="soft" :title="store.generateWarn" />
       <RecoveryActions />
@@ -82,6 +88,7 @@ function cancelLayout() { store.layoutMode = false; paperViewEl.value?.repaginat
       <USelect v-model="selected" :items="paperOptions" aria-label="选择试卷" class="paper-picker" :disabled="store.layoutMode || busy || store.generating" />
       <span class="text-xs text-muted">共 {{ store.papers.length }} 份</span>
       <div class="flex-1"></div>
+      <UButton label="管理题目" icon="i-lucide-list-checks" variant="outline" :disabled="busy || store.layoutMode || store.generating" @click="manageQuestions = true" />
       <UButton icon="i-lucide-refresh-cw" label="重新生成" color="neutral" variant="outline" :loading="store.generating" :disabled="busy || store.layoutMode" @click="store.regenerate()" />
       <UButton icon="i-lucide-cloud-upload" label="保存到云端" color="neutral" variant="outline" :loading="archiving" :disabled="busy || store.layoutMode || store.generating || store.accountChanged" @click="showCloudSave = true" />
       <UButtonGroup>

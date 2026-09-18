@@ -2,12 +2,15 @@
 
 import time
 import unittest
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import test_backend_catalog as fixtures
 from app import db as database
 from app.models.mini import MembershipUpdate
 from app.routers import engagement, experience, site
-from app.services import mini_auth
+from app.services import mini_auth, mini_experience
 
 
 class ExperienceContracts(unittest.TestCase):
@@ -279,3 +282,70 @@ class ExperienceContracts(unittest.TestCase):
         self.assertEqual(data['daily_active'], 1)
         self.assertEqual(data['download_failures'][0]['total'], 1)
         self.assertEqual(data['search_misses'][0]['query'], '完全不存在的内容')
+
+    def test_usage_analytics_empty_window_has_thirty_zero_days(self):
+        data = self.client.get('/api/v1/admin/experience/analytics').json()
+        self.assertEqual((data['daily_active'], data['weekly_active'], data['monthly_active']), (0, 0, 0))
+        self.assertEqual(len(data['timeline']), 30)
+        self.assertTrue(all(point['active_users'] == point['download_ok'] == point['download_failed'] == point['search_miss'] == 0
+                            for point in data['timeline']))
+        self.assertEqual(data['search_misses'], [])
+        self.assertEqual(data['download_failures'], [])
+
+    def test_usage_analytics_respects_shanghai_boundaries_and_unique_users(self):
+        today = datetime(2026, 9, 18, tzinfo=timezone(timedelta(hours=8)))
+        midnight = int(today.timestamp())
+        start, week = midnight - 29 * 86400, midnight - 6 * 86400
+        with database.db() as conn:
+            conn.executemany("INSERT INTO mini_users(id, username, created_at, updated_at) VALUES (?, ?, 0, 0)",
+                             [(key, key) for key in ('old-only', 'month-only', 'week-only', 'future-only')])
+            events = [
+                ('old-only', 'search_miss', start - 1, 'outside-window'),
+                ('month-only', 'active', start, ''),
+                ('month-only', 'download_ok', week - 1, ''),
+                ('week-only', 'search_miss', week, 'week-boundary'),
+                (self.viewer.id, 'active', midnight - 1, ''),
+                (self.viewer.id, 'download_ok', midnight, ''),
+                (self.viewer.id, 'download_ok', midnight + 1, ''),
+                (self.other.id, 'download_failed', midnight + 2, ''),
+                (self.other.id, 'search_miss', midnight + 3, 'today-query'),
+                ('future-only', 'search_miss', midnight + 86400, 'future-query'),
+                ('future-only', 'download_failed', midnight + 86400, ''),
+            ]
+            conn.executemany("INSERT INTO mini_usage_events(id, user_id, kind, created_at, detail) VALUES (?, ?, ?, ?, ?)",
+                             [(f'boundary-{index}', *event) for index, event in enumerate(events)])
+
+        @contextmanager
+        def utc_database():
+            with database.db() as conn:
+                conn.execute("SET LOCAL TIME ZONE 'UTC'")
+                yield conn
+
+        with patch.object(mini_experience.time, 'time', return_value=midnight + 12 * 3600), \
+                patch.object(mini_experience, 'db', utc_database):
+            response = self.client.get('/api/v1/admin/experience/analytics')
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual((data['daily_active'], data['weekly_active'], data['monthly_active']), (2, 3, 4))
+        self.assertEqual(len(data['timeline']), 30)
+        self.assertEqual(data['timeline'][0]['date'], '2026-08-20')
+        self.assertEqual(data['timeline'][0]['active_users'], 1)
+        self.assertEqual(data['timeline'][-2]['active_users'], 1)
+        self.assertEqual(data['timeline'][-1], {'date': '2026-09-18', 'active_users': 2,
+                                               'download_ok': 2, 'download_failed': 1, 'search_miss': 1})
+        self.assertEqual(data['search_misses'], [{'query': 'today-query', 'total': 1}, {'query': 'week-boundary', 'total': 1}])
+        self.assertEqual(data['download_failures'], [{'catalog_id': None, 'title': None, 'total': 1}])
+        self.assertEqual(data['timezone'], 'Asia/Shanghai')
+
+    def test_usage_analytics_limits_rankings_and_keeps_event_counts(self):
+        now = int(time.time())
+        with database.db() as conn:
+            conn.executemany("INSERT INTO mini_usage_events(id, user_id, kind, detail, created_at) VALUES (?, ?, 'search_miss', ?, ?)",
+                             [(f'miss-{query}-{event}', self.viewer.id, f'query-{query:02}', now)
+                              for query in range(25) for event in range(query + 1)])
+        data = self.client.get('/api/v1/admin/experience/analytics').json()
+        self.assertEqual((data['daily_active'], data['weekly_active'], data['monthly_active']), (1, 1, 1))
+        self.assertEqual(data['timeline'][-1]['search_miss'], 325)
+        self.assertEqual(len(data['search_misses']), 20)
+        self.assertEqual(data['search_misses'][0], {'query': 'query-24', 'total': 25})
+        self.assertEqual(data['search_misses'][-1], {'query': 'query-05', 'total': 6})

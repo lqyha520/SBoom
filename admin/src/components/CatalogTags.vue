@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAdminListRoute } from '../navigation'
 import { computed, ref, watch } from 'vue'
 import type { UserInfo } from '../api'
 import { useAdminPage } from '../admin-page'
@@ -10,10 +11,11 @@ const filtered = computed(() => items.value.filter(item => (kind.value === 'all'
 const visible = computed(() => filtered.value.slice((pageNumber.value - 1) * 20, pageNumber.value * 20))
 const page = useAdminPage(async valid => { const result = await getTags(); if (valid()) items.value = result.items }, () => { dialog.value = false; deleting.value = false })
 const { error, notice, loading, busy } = page
-watch([kind, q], () => { pageNumber.value = 1 })
+watch([kind, q], () => { if (!routeState.restoring) pageNumber.value = 1 })
 function edit(item: CatalogTag | null = null) { error.value = ''; target.value = item; form.value = { kind: item?.kind || (kind.value === 'all' ? 'textbook' : kind.value as TagKind), name: item?.name || '', is_visible: item?.is_visible ?? true, sort_order: item?.sort_order || 0, revision: item?.revision || 0 }; dialog.value = true }
 function save() { void page.act(async valid => { await saveTag(props.user.id, { ...form.value, name: form.value.name.trim(), sort_order: Number(form.value.sort_order) }, target.value?.id); if (valid()) { dialog.value = false; notice.value = '标签已保存'; await page.load() } }) }
 function remove() { if (!target.value) return; void page.act(async valid => { await removeTag(props.user.id, target.value!); if (valid()) { deleting.value = false; notice.value = '标签已删除'; await page.load() } }) }
+const routeState = useAdminListRoute('catalogTags', { q, kind, page: pageNumber }, () => { void page.load() })
 </script>
 <template>
   <section class="admin-section"><div class="section-toolbar"><p class="text-sm text-muted">管理教材、学期、单元与知识点。在公共习题的「标签与打印」中关联资料。</p><UButton label="新增标签" icon="i-lucide-plus" @click="edit()" /></div>
