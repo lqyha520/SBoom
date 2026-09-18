@@ -163,8 +163,8 @@ onShareAppMessage(() => shareCard('home'))
         </view>
         <text class="feed-caption">{{ feedCaption }}</text>
         <view v-if="error" class="error-strip" role="status"><text class="grow">{{ error }}</text><button class="section-link retry-papers" role="button" :disabled="loading" aria-label="重试加载习题" @click="loadPapers()">{{ loading ? '加载中' : '重试' }}</button></view>
-        <EnhancedSkeleton v-if="loading && !items.length" :count="2" type="card" class="loading-pulse" />
-        <transition-group name="list" tag="view" class="home-cards">
+        <EnhancedSkeleton v-if="loading && !items.length" :count="2" type="card" />
+        <transition-group v-else-if="cards.length" name="list" tag="view" class="home-cards">
           <PaperCard 
             v-for="paper in cards" 
             :key="paper.id" 
@@ -270,7 +270,6 @@ onShareAppMessage(() => shareCard('home'))
 @keyframes show-papers { from { transform: translateY(4px); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slide-up { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-@keyframes pulse-subtle { 0%, 100% { opacity: 1; } 50% { opacity: .7; } }
 .list-enter-active,
 .list-leave-to {
   transition: all 0.3s ease;
@@ -286,6 +285,5 @@ onShareAppMessage(() => shareCard('home'))
 }
 .home-subjects { animation: fade-in 0.4s ease-out; }
 .collection-track { animation: slide-up 0.6s ease-out; }
-.loading-pulse { animation: pulse-subtle 1.5s ease-in-out infinite; }
 @media (max-width: 359px) { .home-page .content-width { padding-left: 16px; padding-right: 16px; } .home-search-row { gap: 6px; } .grade-entry { width: 81px; font-size: 10px; } .home-cards { gap: 10px; } .feed-tabs { gap: 14px; } .feed-tabs button { font-size: 14px; } .feed-tabs button.active { font-size: 17px; } .category-entry { gap: 5px; padding: 12px 8px; } .category-symbol { width: 25px; } .collection-track { padding-left: 16px; padding-right: 16px; } .collection-card { width: 235px; } }
 </style>

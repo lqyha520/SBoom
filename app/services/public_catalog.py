@@ -70,9 +70,10 @@ def _item(row, admin=False, access=None):
                              if item["thumbnail_id"] else None)
     if not admin:
         item["created_at"] = item["published_at"]
-        # Even authorized readers retrieve the destination through the download action.
-        item.pop("external_url", None)
-        item.pop("external_code", None)
+        # 网盘模式：有下载权限的用户需要链接信息，PDF模式才移除
+        if item["download_mode"] != "external":
+            item.pop("external_url", None)
+            item.pop("external_code", None)
     if access:
         item.update(access)
         if not item["can_view"]:

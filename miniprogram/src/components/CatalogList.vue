@@ -13,7 +13,7 @@ import { readPreferences, rememberSearch, writePreferences } from '../services/p
 import { errorMessage, favoriteCatalogPaper, fetchCatalog, fetchCatalogSummary } from '../services/api'
 import { ensureSession, requireLogin, session } from '../services/session'
 import { createLatestRequest } from '../services/latest-request'
-import { catalogSelection, openCatalog, confirmAction } from '../services/navigation'
+import { catalogSelection, openCatalog, openCatalogPaper, confirmAction } from '../services/navigation'
 import { exerciseText, subjectOptions } from '../presentation'
 import type { CatalogSummary, PaperSummary } from '../types'
 import { emptyTags, fetchTags, tagKinds, openRequests, type CatalogTag, type TagFilters } from '../services/growth'
@@ -204,7 +204,7 @@ onBeforeUnmount(deactivate)
       <view v-if="grade || category || chosenTags.length" class="active-filters"><wd-tag v-if="grade" closable variant="light" type="primary" @close="grade = ''">{{ grade }}</wd-tag><wd-tag v-if="category" closable variant="light" type="primary" @close="category = ''">{{ exerciseText(categoryName) || '已选分类' }}</wd-tag><wd-tag v-for="tag in chosenTags" :key="tag.kind" closable variant="light" @close="tagFilters[tag.kind] = ''">{{ tag.name }}</wd-tag></view>
       <view v-if="error" class="error-strip"><text class="grow">{{ error }}</text><wd-button icon="refresh" type="danger" variant="text" role="button" aria-label="重试加载" @click="refresh()" /></view>
       <view class="list-caption"><text class="result-count">{{ loading ? '正在检索习题' : '共 ' + total + ' 份习题' }}</text><button v-if="filtered" class="section-link" role="button" @click="resetFilters"><wd-icon name="close-circle" size="14px" /><text>清除筛选</text></button><text v-else>{{ view === 'all' ? (sort === 'latest' ? '最新发布' : sort === 'popular' ? '热门习题' : '精选优先') : view === 'downloads' ? '最近下载' : view === 'recent' ? '最近浏览' : '最近收藏' }}</text></view>
-      <EnhancedSkeleton v-if="loading && !items.length" :count="4" type="list" />
+      <EnhancedSkeleton v-if="loading && !items.length" :count="4" type="row" />
       <view v-else-if="items.length" class="paper-list catalog-paper-list"><PaperRow v-for="paper in items" :key="paper.id" :paper="paper" :busy="!!changing || loading" @favorite="favorite(paper)" @download="handleDownload(paper)" @share="handleShare(paper)" /></view>
       <view v-else-if="!loading && !error" class="catalog-empty"><wd-empty :icon="filtered ? 'no-result' : view === 'favorites' ? 'no-collection' : 'no-content'" :tip="filtered ? '没有匹配的习题' : view === 'favorites' ? '还没有收藏的习题' : view === 'downloads' ? '暂无下载记录' : view === 'recent' ? '暂无浏览记录' : '暂无已发布习题'"><template #bottom><view v-if="filtered || view !== 'all'" class="empty-actions"><wd-button v-if="filtered" variant="plain" role="button" @click="resetFilters">清除筛选</wd-button><wd-button v-else variant="plain" icon="book" role="button" @click="openCatalog()">去习题库看看</wd-button></view></template></wd-empty></view>
       <view v-if="loading && items.length" class="loading-line"><wd-loading size="18px" /><text>正在加载</text></view>
