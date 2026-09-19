@@ -231,6 +231,20 @@ test('the shared chrome bar clears the WeChat capsule and never collapses', () =
   }
 })
 
+test('page chrome reserves the status bar and capsule even without a back button', () => {
+  // 首页/我的/资料库(tab 态) 传 back=false；曾经把占位高度写成 `back ? bar.height : 0`，
+  // 于是这些页面 height=0、内容顶到状态栏下面被胶囊挡住。
+  const bar = { inset: 24, height: 68 }
+  for (const back of [false, true]) {
+    const app = fixture('components/PageChrome.vue', { '../services/chrome': { chromeBar: () => bar } }, 'inset, height', { back })
+    try {
+      assert.equal(app.page.inset.value, bar.inset)
+      assert.equal(app.page.height.value, bar.height, 'page height must not depend on the back button')
+      assert.ok(app.page.height.value >= bar.inset + 44, 'content must start below the status bar and capsule')
+    } finally { app.dispose() }
+  }
+})
+
 test('preview back closes the reader and page picker without leaving the detail route', () => {
   // 顶部栏几何由 services/chrome.ts 统一计算（见上一条用例），这里只验证预览页确实采用了它。
   for (const bar of [{ inset: 24, height: 68 }, { inset: 47, height: 94 }]) {

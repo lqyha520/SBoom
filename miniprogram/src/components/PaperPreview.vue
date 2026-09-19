@@ -18,6 +18,9 @@ const resetKeys = ref<Record<number, number>>({})
 const zoomed = new Set<number>()
 const jumpOpen = ref(false)
 // 顶部栏几何与 PageChrome 共用同一处计算，保证各页返回按钮位置一致。
+// 注意 chromeBar().height 是**含状态栏的总高**（PageChrome 直接拿它当占位高度）；
+// 这里 header 用 paddingTop 顶出状态栏 + border-box，所以 height 直接取总高，
+// 不能再加 navigationTop，否则状态栏会被算两遍、标题栏偏高。
 const bar = chromeBar()
 const navigationTop = ref(bar.inset)
 const navigationHeight = ref(bar.height)
@@ -47,7 +50,7 @@ watch(() => props.pages.length, count => { if (current.value >= count) select(Ma
 
 <template>
   <view class="paper-reader" role="dialog" aria-modal="true" aria-label="习题原稿预览">
-    <view class="reader-header" :style="{ paddingTop: navigationTop + 'px', height: navigationTop + navigationHeight + 'px' }"><ChromeBack :top="navigationTop + 5" label="返回习题详情" @tap="close" /><text class="reader-title">原稿预览</text></view>
+    <view class="reader-header" :style="{ paddingTop: navigationTop + 'px', height: navigationHeight + 'px' }"><ChromeBack :top="navigationTop + 5" label="返回习题详情" @tap="close" /><text class="reader-title">原稿预览</text></view>
     <swiper class="reader-pages" :current="current" :disable-touch="zoomedCurrent" @change="change">
       <swiper-item v-for="(page, index) in pages" :key="page.id">
         <movable-area class="reader-area" scale-area>

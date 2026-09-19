@@ -85,6 +85,20 @@ test('the reader and page chrome share one back button and keep zoom direction s
   assert.ok(!/:direction=/.test(preview), 'movable-view direction must not be bound dynamically')
 })
 
+test('the reader header uses the total bar height and tab pages always keep the top inset', () => {
+  const read = (file: string) => readFileSync(new URL('../src/' + file, import.meta.url), 'utf8')
+  const preview = read('components/PaperPreview.vue')
+  // chromeBar().height 已经包含状态栏；header 用 padding-top 顶出状态栏 + border-box，
+  // 再写 navigationTop + navigationHeight 就会把状态栏算两遍、标题栏偏高。
+  assert.ok(preview.includes("height: navigationHeight + 'px'"), 'the reader header must use the total bar height')
+  assert.ok(!preview.includes('navigationTop + navigationHeight'), 'the status bar must not be counted twice')
+  // 首页/我的/资料库(tab 态) 没有返回按钮，但仍必须让出状态栏+胶囊的高度，
+  // 否则内容会顶到最上面被系统区域挡住。
+  const chrome = read('components/PageChrome.vue')
+  assert.ok(chrome.includes('height.value = bar.height'), 'page chrome must reserve the bar height')
+  assert.ok(!chrome.includes('props.back ? bar.height'), 'reserving the bar height must not depend on the back button')
+})
+
 test('static Wot button and icon names exist in the installed icon font', () => {
   const font = readFileSync(new URL('../node_modules/@wot-ui/ui/components/wd-icon/iconfont.scss', import.meta.url), 'utf8')
   const icons = new Set(Array.from(font.matchAll(/\.wd-icon-([\w-]+):before/g), match => match[1]))
