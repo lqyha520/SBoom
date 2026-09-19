@@ -6,6 +6,7 @@ ON CONFLICT upsert、RETURNING），由本模块统一翻译为 PostgreSQL 方�
 """
 
 from hashlib import sha256
+import itertools
 import logging
 import threading
 from contextlib import contextmanager
@@ -118,6 +119,32 @@ class _PgConn:
 
     def close(self):
         self._conn.close()
+
+
+_sp_seq = itertools.count(1)
+
+
+@contextmanager
+def savepoint(conn):
+    """在既有事务内开子事务（SAVEPOINT），块内失败只回滚该子事务。
+
+    PostgreSQL 里任何一条语句失败都会把**整个事务**打成 aborted，后续语句全部报
+    InFailedSqlTransaction，最终 commit 退化成 ROLLBACK。所以那种"用 try/except 吞掉
+    可选 DDL（建索引/补列），失败就算了"的写法在 PG 下并不安全：吞掉异常不等于救回事务，
+    整个 init_db 的建表会一起被回滚。要真正隔离失败，必须把语句放进 SAVEPOINT。
+
+    conn 可以是 _PgConn，也可以是裸 psycopg 连接。
+    """
+    raw = getattr(conn, "_conn", conn)
+    name = f"lc_sp_{next(_sp_seq)}"
+    raw.execute(f"SAVEPOINT {name}")
+    try:
+        yield conn
+    except Exception:
+        # 事务处于 aborted 时，ROLLBACK TO SAVEPOINT 是少数仍被允许执行的命令
+        raw.execute(f"ROLLBACK TO SAVEPOINT {name}")
+        raise
+    raw.execute(f"RELEASE SAVEPOINT {name}")
 
 
 # ─── 建表语句 ───
@@ -307,6 +334,32 @@ def _init_reliability_schema(conn) -> None:
     conn.execute("ALTER TABLE user_templates ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1")
 
 
+# 建表流程出问题时（例如上面 savepoint 那类坑）必须能在日志里看出来，
+# 抽查几张跨模块的核心表，缺任何一张都说明整个 DDL 事务其实被回滚了。
+_CORE_TABLES = (
+    "users",
+    "generation_requests",
+    "paper_archives",
+    "catalog_papers",
+    "mini_users",
+    "mini_catalog_favorites",
+    "mini_usage_events",
+    "site_dictionary",
+    "site_dict_links",
+    "mini_orders",
+    "mini_membership_grants",
+)
+
+
+def _verify_schema(conn) -> tuple[list, int]:
+    """返回 (缺失的核心表, 当前 schema 表总数)。"""
+    rows = conn.execute(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()"
+    ).fetchall()
+    present = {row[0] for row in rows}
+    return [t for t in _CORE_TABLES if t not in present], len(present)
+
+
 def init_db() -> None:
     from app.library_schema import init_library_schema
     from app.site_schema import init_site_schema
@@ -326,4 +379,14 @@ def init_db() -> None:
         init_engagement_schema(conn)
         init_commerce_schema(conn)
         add_optimization_indexes(conn)
-    logger.info("PostgreSQL 数据库就绪")
+    # 事务已提交，另起一个连接读真实落库结果（不是"没抛异常"就算成功）
+    with db() as conn:
+        missing, total = _verify_schema(conn)
+    if missing:
+        logger.error(
+            "数据库建表不完整：缺失 %s（当前共 %d 张表）。"
+            "通常意味着 init_db() 的 DDL 事务中途失败并整体回滚，请查上面的告警日志。",
+            ", ".join(missing),
+            total,
+        )
+    logger.info("PostgreSQL 数据库就绪（%d 张表）", total)
