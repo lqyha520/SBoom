@@ -30,6 +30,7 @@ export function clearSession() {
   configureSession('')
   session.user = null
   session.ready = true
+  session.error = ''
   clearAssetCache()
   try { uni.removeStorageSync(TOKEN_KEY) } catch { /* A revoked server session remains invalid without local storage. */ }
 }
@@ -49,9 +50,9 @@ export function acceptSession(user: User, token = '') {
 }
 
 export function ensureSession(): Promise<boolean> {
-  if (session.ready) { markActive(); return Promise.resolve(!!session.user) }
+  if (session.ready && !session.error) { markActive(); return Promise.resolve(!!session.user) }
   if (initializing) return initializing
-  initializing = (async () => {
+  initializing = Promise.resolve().then(async () => {
     let epoch = authGeneration()
     try {
       let token = ''
@@ -60,13 +61,16 @@ export function ensureSession(): Promise<boolean> {
       configureSession(token)
       epoch = authGeneration()
       const user = await request<User>('/api/v1/mini/me')
+      if (epoch !== authGeneration()) return !!session.user
       acceptSession(user, token)
       return true
     } catch (error) {
-      if (epoch === authGeneration()) { session.error = errorMessage(error); clearSession() }
+      // Explicit authorization failures are handled by the API's unauthorized handler.
+      // A timeout or temporary server failure must leave the saved token available for retry.
+      if (epoch === authGeneration()) { session.error = errorMessage(error); session.ready = true }
       return !!session.user
-    } finally { initializing = null }
-  })()
+    }
+  }).finally(() => { initializing = null })
   return initializing
 }
 

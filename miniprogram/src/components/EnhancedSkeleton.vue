@@ -47,20 +47,20 @@ withDefaults(defineProps<SkeletonProps>(), {
 <style scoped>
 .skeleton-container { display: flex; flex-direction: column; gap: 12px; }
 .skeleton-container.is-card { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
-.skeleton-container.is-row { gap: 0; }
+.skeleton-container.is-row { gap:0;padding:0 12px;border:1px solid var(--lc-card-line);border-radius:var(--lc-radius-card);background:var(--lc-card); }
 
 .skeleton { position: relative; overflow: hidden; background: var(--lc-card-line, #e7eee8); border-radius: 8px; }
 .skeleton-list { height: 80px; border-radius: 10px; }
 .skeleton-text { height: 20px; width: 80%; border-radius: 4px; }
 
-.skeleton-card { padding: 9px 9px 11px; border: 1px solid var(--lc-card-line); border-radius: 14px; background: var(--lc-card, #ffffff); box-shadow: var(--lc-card-shadow-soft); }
-.skeleton-cover { height: 152px; border-radius: 10px; }
+.skeleton-card { padding: 9px 9px 6px; border: 1px solid var(--lc-card-line); border-radius: var(--lc-radius-card); background: var(--lc-card, #ffffff); box-shadow: var(--lc-card-shadow-soft); }
+.skeleton-cover { height: 144px; border-radius: 10px; }
 .skeleton-title { height: 18px; margin-top: 11px; border-radius: 6px; }
 .skeleton-title-short { width: 62%; margin-top: 6px; }
-.skeleton-card-meta { height: 12px; width: 46%; margin-top: 12px; border-radius: 6px; }
+.skeleton-card-meta { height: 35px; width: 46%; margin-top: 12px; border-radius: 6px; }
 
-.skeleton-row { display: flex; align-items: center; gap: 13px; min-height: 115px; padding: 14px 0; }
-.skeleton-thumb { flex: none; width: 66px; height: 86px; }
+.skeleton-row { display: flex; align-items: center; gap: 12px; min-height: 120px; padding: 16px 0; }
+.skeleton-thumb { flex: none; width: 56px; height: 78px; }
 .skeleton-row-lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 9px; }
 .skeleton-labels { height: 12px; width: 38%; border-radius: 6px; }
 .skeleton-name { height: 18px; width: 88%; border-radius: 6px; }
@@ -72,4 +72,5 @@ withDefaults(defineProps<SkeletonProps>(), {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(100%); }
 }
+@media (max-width:359px) { .skeleton-cover { height:132px; }.skeleton-container.is-row { padding:0 10px; }.skeleton-row { gap:10px; }.skeleton-thumb { width:52px;height:74px; } }
 </style>

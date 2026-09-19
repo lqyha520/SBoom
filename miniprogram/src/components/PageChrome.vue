@@ -20,7 +20,7 @@ function goBack() {
 
 <template>
   <view class="page-chrome" :style="{ height: height + 'px' }">
-    <button v-if="back" class="bare-icon chrome-back" :style="{ top: inset + 5 + 'px' }" role="button" aria-label="返回上一页" title="返回上一页" @click="goBack"><wd-icon name="arrow-left" size="20px" /></button>
+    <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="back" class="bare-icon chrome-back" :style="{ top: inset + 5 + 'px' }" role="button" aria-label="返回上一页" title="返回上一页" @click="goBack"><wd-icon name="arrow-left" size="20px" /></button>
   </view>
 </template>
 

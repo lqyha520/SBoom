@@ -60,10 +60,10 @@ async function save() {
 </script>
 
 <template>
-  <wd-popup :model-value="open" position="bottom" :z-index="1250" :close-on-click-modal="!busy" root-portal safe-area-inset-bottom custom-style="border-radius:8px 8px 0 0" @update:model-value="!$event && emit('close')">
+  <wd-popup :model-value="open" position="bottom" :z-index="1250" :close-on-click-modal="!busy" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0" @update:model-value="!$event && emit('close')">
     <view class="sheet password-sheet" role="dialog" aria-modal="true" :aria-label="hasPassword ? '修改密码' : '设置密码'">
       <view class="sheet-handle" />
-      <view class="sheet-head"><text class="sheet-title">{{ hasPassword ? '修改密码' : '设置密码' }}</text><button class="bare-icon" role="button" aria-label="关闭密码设置" :disabled="busy" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
+      <view class="sheet-head"><text class="sheet-title">{{ hasPassword ? '修改密码' : '设置密码' }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭密码设置" :disabled="busy" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
       <text class="password-intro">{{ hasPassword ? '修改后，其它设备上的登录会失效，这台设备保持登录状态。' : '设置密码后，可使用账号 ' + session.user?.username + ' 登录习题库。' }}</text>
       <text v-if="hasPassword" class="field-label">当前密码</text>
       <wd-input v-if="hasPassword" v-model="current" prefix-icon="lock" show-password custom-class="field-input" placeholder="请输入当前密码" aria-label="当前密码" :maxlength="128" :disabled="busy" @input="input" />
@@ -83,6 +83,6 @@ async function save() {
 .password-sheet { max-height: 88vh; overflow-y: auto; }
 .password-intro { display: block; margin-top: 2px; color: var(--lc-secondary); font-size: 12px; line-height: 1.8; }
 .field-input :deep(.wd-input) { background: var(--lc-background); border-radius: 8px; --wot-input-padding: 14px; --wot-input-inner-height: 24px; --wot-input-bg: transparent; }
-.field-hint { display: block; margin-top: 10px; color: var(--lc-muted); font-size: 11px; line-height: 1.7; }
+.field-hint { display: block; margin-top: 10px; color: var(--lc-muted); font-size: 12px; line-height: 1.7; }
 .field-hint.error-text { color: #a34040; }
 </style>

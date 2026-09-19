@@ -2,10 +2,13 @@ import assert from 'node:assert/strict'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
 import { loadEnv } from 'vite'
 
 const project = fileURLToPath(new URL('../', import.meta.url))
 const output = path.join(project, 'dist/build/mp-weixin')
+const wxssCompiler = process.env.WECHAT_WCSC_PATH
+let wxssCount = 0
 const json = async file => JSON.parse(await readFile(file, 'utf8'))
 const app = await json(path.join(output, 'app.json'))
 const config = await json(path.join(output, 'project.config.json'))
@@ -45,6 +48,10 @@ for (const item of app.tabBar.list) {
     assert.equal(bytes.subarray(1, 4).toString(), 'PNG', `Missing PNG tab icon: ${icon}`)
     assert.ok(bytes.length < 40 * 1024, `Tab icon too large: ${icon}`)
   }
+  const selectedIcon = item.iconPath.replace(/\.png$/, '-selected.png')
+  const selectedBytes = await readFile(path.join(output, selectedIcon))
+  assert.equal(selectedBytes.subarray(1, 4).toString(), 'PNG', `Missing custom tab icon: ${selectedIcon}`)
+  assert.ok(selectedBytes.length < 40 * 1024, `Custom tab icon too large: ${selectedIcon}`)
 }
 
 let size = 0
@@ -55,6 +62,19 @@ async function inspect(directory) {
     if (item.isDirectory()) { await inspect(file); continue }
     size += (await stat(file)).size
     count++
+    if (item.name.endsWith('.wxss')) {
+      const styles = (await readFile(file, 'utf8')).replace(/\/\*[\s\S]*?\*\//g, '')
+      // WXSS rejects bare pseudo-classes after a combinator (for example
+      // `.row > :last-child`), even when the uni-app build accepts the CSS.
+      assert.ok(!/[>+~]\s*:(?!:)/.test(styles), `Unsupported bare pseudo-class in ${path.relative(output, file)}; use an explicit class selector`)
+      if (wxssCompiler) {
+        const compiled = spawnSync(wxssCompiler, ['-lc', '-o', process.platform === 'win32' ? 'NUL' : '/dev/null', path.relative(output, file)], {
+          cwd: output, encoding: 'utf8', windowsHide: true, timeout: 15000,
+        })
+        assert.ok(!compiled.error && compiled.status === 0, `WXSS compiler rejected ${path.relative(output, file)}: ${compiled.error?.message || compiled.stderr || compiled.stdout}`)
+      }
+      wxssCount++
+    }
     if (item.name.endsWith('.json')) {
       const value = await json(file)
       for (const component of Object.values(value.usingComponents || {})) {
@@ -96,4 +116,5 @@ if (release) {
   assert.ok(api.includes(origin.origin), 'Rebuild after changing the API origin')
 }
 console.log(`WeChat package OK: ${count} files, ${(size / 1024).toFixed(1)} KiB / 2048 KiB.`)
+if (wxssCompiler) console.log(`WeChat stylesheet compiler OK: ${wxssCount} WXSS files.`)
 if (!release) console.log('Structural checks only. Run check:release after configuring the AppID and HTTPS origin; device testing is still required.')

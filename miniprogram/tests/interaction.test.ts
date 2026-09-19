@@ -63,7 +63,7 @@ test('PDF retry retains the selected edition and exposes transfer progress', asy
       requestCatalogDownload: async (_id: string, edition: string) => { calls.push(edition); return { url: '/pdf' } } },
     '../../services/session': { session: vue.reactive({ user: { id: 'reader' } }), ensureSession: async () => true, requireLogin: () => true },
     '../../services/latest-request': { createLatestRequest },
-    '../../services/assets': { clearAssetCache() {}, openPdf: async (_asset: unknown, _title: string, progress: (percent: number) => void) => {
+    '../../services/assets': { cancelPdfDownload() {}, clearAssetCache() {}, openPdf: async (_asset: unknown, _title: string, progress: (percent: number) => void) => {
       progress(48); assert.equal(page.downloadProgress.value, 48)
       if (++attempt === 1) throw new Error('网络断开')
     } },
@@ -103,7 +103,7 @@ test('网盘资料不依赖 PDF，获取后展示链接，复制失败可重试�
       requestCatalogDownload: async () => ({ kind: 'external', url: 'https://pan.example.com/a', extraction_code: 'Ab12' }) },
     '../../services/session': { session: vue.reactive({ user: { id: 'reader' } }), ensureSession: async () => true, requireLogin: () => true },
     '../../services/latest-request': { createLatestRequest },
-    '../../services/assets': { clearAssetCache() {}, openPdf: async () => { pdfOpened = true } },
+    '../../services/assets': { cancelPdfDownload() {}, clearAssetCache() {}, openPdf: async () => { pdfOpened = true } },
     '../../presentation': { exerciseText: (title: string) => title },
     '../../services/experience': { recordView: async () => {}, recordEvent: async () => {} },
   }, 'exports.page = { load, download, copyLink, linkTarget, linkOpen, linkError, downloading }', {
@@ -131,7 +131,7 @@ test('网盘下载权限不足时显示会员入口，离开页面后迟到的�
     '../../services/api': { errorMessage: String, fetchCatalogPaper: async () => ({ id: 'link', title: '资料', can_view: true, can_download: entitled, download_mode: 'external', assets: [] }),
       requestCatalogDownload: async () => { requests++; return new Promise(resolve => { finish = resolve }) } },
     '../../services/session': { session: vue.reactive({ user: { id: 'reader' } }), ensureSession: async () => true, requireLogin: () => true },
-    '../../services/latest-request': { createLatestRequest }, '../../services/assets': { clearAssetCache() {} },
+    '../../services/latest-request': { createLatestRequest }, '../../services/assets': { cancelPdfDownload() {}, clearAssetCache() {} },
     '../../presentation': { exerciseText: (title: string) => title },
     '../../services/experience': { recordView: async () => {} },
   }, 'exports.page = { load, download, membershipOpen, linkTarget, linkOpen }', { uni: { stopPullDownRefresh() {} } }))!.page

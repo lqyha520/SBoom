@@ -33,10 +33,10 @@ function dismiss() {
       <view class="notice-head">
         <view class="notice-level" :class="current.level"><wd-icon :name="current.level === 'warning' ? 'exclamation-polygon-fill' : 'info-circle-fill'" size="16px" /></view>
         <text class="notice-title">{{ current.title }}</text>
-        <button class="bare-icon" role="button" aria-label="关闭公告" title="关闭" @click="dismiss"><wd-icon name="close" size="17px" /></button>
+        <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭公告" title="关闭" @click="dismiss"><wd-icon name="close" size="17px" /></button>
       </view>
       <scroll-view v-if="current.body" scroll-y class="notice-body"><text class="notice-text">{{ current.body }}</text></scroll-view>
-      <button class="notice-confirm" role="button" @click="dismiss"><text>我知道了</text></button>
+      <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="notice-confirm" role="button" @click="dismiss"><text>我知道了</text></button>
     </view>
   </wd-popup>
 </template>

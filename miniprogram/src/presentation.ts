@@ -20,6 +20,25 @@ export function exerciseText(value: string | null | undefined) {
   return (value || '').replace(/试卷/g, '习题').replace(/原卷/g, '原稿')
 }
 
+/** Imported originals may have pages but no counted questions. */
+export function paperExtent(paper: Pick<PaperSummary, 'question_count' | 'page_count' | 'download_mode'>, compact = false) {
+  if (paper.download_mode === 'external') return '网盘资料'
+  if (compact && paper.question_count > 0) return `${paper.question_count} 题`
+  return [paper.question_count > 0 ? `${paper.question_count} 题` : '', paper.page_count > 0 ? `${paper.page_count} 页` : ''].filter(Boolean).join(' · ') || 'PDF 资料'
+}
+
+export function paperAccess(paper: Pick<PaperSummary, 'required_view' | 'required_download' | 'download_mode'>) {
+  if (paper.required_view === 'vip') return 'VIP 专享'
+  if (paper.required_download === 'vip') return 'VIP 下载'
+  return paper.download_mode === 'external' ? '免费获取' : '免费 PDF'
+}
+
+export function downloadAccessHint(paper: Pick<PaperSummary, 'required_view' | 'required_download' | 'download_mode'>) {
+  if (paper.required_view === 'vip') return '预览与下载均需 VIP 会员'
+  if (paper.required_download === 'vip') return '可免费预览，下载需 VIP 会员'
+  return paper.download_mode === 'external' ? '登录后免费获取网盘链接' : '可免费预览，登录后免费下载'
+}
+
 export function exerciseTitle(paper: Pick<PaperSummary, 'title' | 'grade' | 'subject'>) {
   const title = exerciseText(paper.title)
   const grades = [paper.grade, paper.grade.replace(/^(小学|初中|高中)/, '')]

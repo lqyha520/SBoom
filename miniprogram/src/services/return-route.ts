@@ -51,3 +51,10 @@ export function loginUrl(target: string) { return '/pages/login/index?returnTo='
 export function shareCard(kind: 'home' | 'paper' | 'topic', id = '', title = '') {
   return { title: title.trim().slice(0, 100) || '习题库 · 每天一点进步', path: safeDestination('/pages/' + kind + '/index' + (id ? '?id=' + encodeURIComponent(id) : '')), imageUrl: '/static/banners/study.jpg' }
 }
+
+/** Share the public paper chosen by a native button, never the private list. */
+export function catalogShare(event: { target?: { dataset?: Record<string, unknown> } }, fallback = shareCard('home')) {
+  const data = event.target?.dataset
+  if (typeof data?.paperId !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.paperId)) return fallback
+  return shareCard('paper', data.paperId, typeof data.paperTitle === 'string' ? data.paperTitle : '')
+}

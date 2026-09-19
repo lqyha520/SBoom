@@ -1,8 +1,9 @@
 import { ApiError, apiUrl, authGeneration, authHeaders, handleAuthFailure } from './api'
-import { createFilePool, type FileHandle } from './file-pool'
+import { createFilePool, type FileHandle, type RegisterDownloadCancel } from './file-pool'
 import type { Asset } from '../types'
 
 let pdfHandle: FileHandle | null = null
+let pendingPdf: FileHandle | null = null
 
 function release(path: string) {
   if (!path) return
@@ -17,9 +18,18 @@ function release(path: string) {
 export function clearAssetCache() {
   files.clear()
   pdfHandle = null
+  pendingPdf = null
 }
 
-function downloadAsset(path: string, progress: (percent: number) => void): Promise<string> {
+export function cancelPdfDownload() {
+  const handle = pendingPdf
+  if (!handle) return
+  pendingPdf = null
+  if (pdfHandle === handle) pdfHandle = null
+  handle.release()
+}
+
+function downloadAsset(path: string, progress: (percent: number) => void, registerCancel: RegisterDownloadCancel): Promise<string> {
   const epoch = authGeneration()
   return new Promise<string>((resolve, reject) => {
     let url: string
@@ -38,6 +48,7 @@ function downloadAsset(path: string, progress: (percent: number) => void): Promi
       },
       fail() { reject(new ApiError('文件下载失败，请检查网络')) },
     })
+    registerCancel(() => task.abort())
     task.onProgressUpdate?.(event => progress(event.progress))
   })
 }
@@ -49,8 +60,11 @@ export async function openPdf(asset: Asset, title: string, progress?: (percent: 
   const handle = files.acquire(asset.url, progress)
   pdfHandle?.release()
   pdfHandle = handle
+  pendingPdf = handle
   try {
     const path = await handle.ready
+    if (pendingPdf !== handle) throw new ApiError('下载已取消')
+    pendingPdf = null
     // #ifdef MP-WEIXIN
     await new Promise<void>((resolve, reject) => uni.openDocument({
       filePath: path, fileType: 'pdf', showMenu: true,
@@ -67,9 +81,11 @@ export async function openPdf(asset: Asset, title: string, progress?: (percent: 
     link.remove()
     // #endif
   } catch (error) {
-    handle.invalidate()
+    if (pdfHandle === handle) handle.invalidate()
     handle.release()
     if (pdfHandle === handle) pdfHandle = null
     throw error
+  } finally {
+    if (pendingPdf === handle) pendingPdf = null
   }
 }

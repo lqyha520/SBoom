@@ -6,7 +6,7 @@ import { errorMessage, request } from '../../services/api'
 import { ensureSession, loginMini } from '../../services/session'
 import type { Authenticated } from '../../types'
 import { HOME, safeDestination } from '../../services/return-route'
-import { visitDestination } from '../../services/navigation'
+import { openCatalog, visitDestination } from '../../services/navigation'
 import { registrationAccountError } from '../../../../shared/mini-profile'
 
 const agreed = ref(false)
@@ -94,7 +94,7 @@ onUnload(leave)
 <template>
   <view class="login-page">
     <view class="login-intro">
-      <PageChrome />
+      <PageChrome back />
       <view class="login-art"><image src="/static/illustrations/notebook.png" mode="aspectFit" aria-hidden="true" /></view>
       <text class="login-title">习题库</text><text class="login-subtitle">每天一点进步</text>
     </view>
@@ -111,15 +111,16 @@ onUnload(leave)
       <view class="login-feedback" role="status" aria-live="polite">{{ error }}</view>
       <view class="consent">
         <wd-checkbox v-model="agreed" type="circle" :disabled="busy" role="checkbox" :aria-checked="agreed" aria-label="已阅读并同意用户协议和隐私政策" custom-class="consent-checkbox" @change="error = ''" />
-        <view class="consent-copy"><text>我已阅读并同意</text><view class="consent-links"><button class="legal-link" role="button" :disabled="busy" @click="legal('agreement')">《用户协议》</button><text>与</text><button class="legal-link" role="button" :disabled="busy" @click="legal('privacy')">《隐私政策》</button></view></view>
+        <view class="consent-copy"><text>我已阅读并同意</text><view class="consent-links"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="legal-link" role="button" :disabled="busy" @click="legal('agreement')">《用户协议》</button><text>与</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="legal-link" role="button" :disabled="busy" @click="legal('privacy')">《隐私政策》</button></view></view>
       </view>
+      <button class="browse-entry" hover-class="control-pressed" role="button" :disabled="busy" @click="openCatalog()">暂不登录，先逛习题库<wd-icon name="arrow-right" size="14px" /></button>
     </view>
     <text class="login-brand">Learning Coach</text>
     <!-- #ifdef H5 -->
-    <wd-popup :model-value="accountOpen" position="bottom" :z-index="1200" :close-on-click-modal="!busy" root-portal safe-area-inset-bottom custom-style="border-radius:8px 8px 0 0" @update:model-value="!$event && closeAccount()">
+    <wd-popup :model-value="accountOpen" position="bottom" :z-index="1200" :close-on-click-modal="!busy" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0" @update:model-value="!$event && closeAccount()">
       <view class="sheet account-login-sheet" role="dialog" aria-modal="true" aria-label="账号登录">
         <view class="sheet-handle" />
-        <view class="sheet-head"><text class="sheet-title">习题库账号</text><button class="bare-icon" role="button" aria-label="关闭账号登录" :disabled="busy" @click="closeAccount"><wd-icon name="close" size="20px" /></button></view>
+        <view class="sheet-head"><text class="sheet-title">习题库账号</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭账号登录" :disabled="busy" @click="closeAccount"><wd-icon name="close" size="20px" /></button></view>
         <wd-tabs v-model="webMode" line-theme="text" @change="error = ''"><wd-tab name="login" title="登录" :disabled="busy" /><wd-tab name="register" title="注册" :disabled="busy" /></wd-tabs>
         <view class="login-form"><text class="field-label">账号</text><wd-input v-model="username" prefix-icon="user" custom-class="login-input" :placeholder="webMode === 'register' ? '设置英文或数字账号' : '请输入登录账号'" aria-label="用户名" :maxlength="32" :disabled="busy" /><text v-if="webMode === 'register'" class="account-hint">2-32 位英文、数字、下划线或短横线；中文昵称可在个人资料中设置。</text><text class="field-label">密码</text><wd-input v-model="password" prefix-icon="lock" custom-class="login-input" show-password placeholder="密码" aria-label="密码" :maxlength="128" :disabled="busy" confirm-type="done" @confirm="submitWeb" /></view>
         <view v-if="error" class="error-strip" role="alert">{{ error }}</view>
@@ -142,12 +143,13 @@ onUnload(leave)
 .login-body :deep(.login-primary) { position: relative; --wot-button-height-medium: 54px; font-size: 15px; font-weight: 600; }
 .login-trail { position: absolute; right: 20px; top: 0; height: 100%; display: flex; align-items: center; }
 .login-feedback { min-height: 31px; padding: 8px 0 3px; color: #a33e37; text-align: center; font-size: 12px; overflow-wrap: anywhere; }
+.browse-entry { display:flex;align-items:center;justify-content:center;gap:6px;min-height:44px;margin:12px auto 0;padding:8px;background:transparent;color:var(--lc-primary);font-size:13px;line-height:1.6; }
 .consent { display: flex; align-items: flex-start; justify-content: center; margin-top: 8px; color: var(--lc-muted); font-size: 12px; }
 .consent :deep(.consent-checkbox) { display: flex; align-items: center; justify-content: center; min-height: 44px; width: 44px; flex: none; margin: 0; }
 .consent-copy { padding-top: 9px; }
 .consent-links { display: flex; align-items: center; flex-wrap: wrap; gap: 0; margin-top: -3px; }
 .legal-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0; margin: 0; background: transparent; border-radius: 0; color: var(--lc-primary); font-size: 12px; line-height: 1.5; }
-.login-brand { margin-top: auto; padding: 70px 24px 28px; text-align: center; color: var(--lc-muted); font-size: 11px; }
+.login-brand { margin-top: auto; padding: 70px 24px 28px; text-align: center; color: var(--lc-muted); font-size: 12px; }
 .account-login-sheet { max-height: 84vh; overflow-y: auto; }
 .login-form :deep(.login-input) { background: var(--lc-background); border-radius: 8px; --wot-input-padding: 14px; --wot-input-inner-height: 24px; --wot-input-bg: transparent; }
 .login-submit { padding-top: 24px; }

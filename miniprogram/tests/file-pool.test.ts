@@ -88,3 +88,82 @@ test('network failures can be retried without retaining a rejected promise', asy
   assert.equal(await retry.ready, 'downloaded')
   retry.release()
 })
+
+test('only the last consumer aborts an in-flight download, once', async () => {
+  const pending = deferred()
+  let aborted = 0
+  const files = createFilePool((_key, _progress, registerCancel) => {
+    registerCancel(() => { aborted++; pending.reject(new Error('aborted')) })
+    return pending.promise
+  }, () => {})
+  const first = files.acquire('image'), second = files.acquire('image')
+  const rejected = assert.rejects(first.ready, /aborted/)
+  await Promise.resolve()
+  first.release()
+  assert.equal(aborted, 0)
+  second.release(); second.release(); files.clear()
+  await rejected
+  assert.equal(aborted, 1)
+})
+
+test('clearing a pending download aborts it without evicting a replacement', async () => {
+  const pending = deferred()
+  let downloads = 0, aborted = 0
+  const files = createFilePool((_key, _progress, registerCancel) => {
+    if (++downloads > 1) return Promise.resolve('replacement')
+    registerCancel(() => { aborted++; pending.reject(new Error('aborted')) })
+    return pending.promise
+  }, () => {})
+  const previous = files.acquire('image')
+  const rejected = assert.rejects(previous.ready, /aborted/)
+  await Promise.resolve()
+  files.clear()
+  const current = files.acquire('image')
+  await rejected
+  previous.release()
+  assert.equal(await current.ready, 'replacement')
+  const shared = files.acquire('image')
+  assert.equal(await shared.ready, 'replacement')
+  assert.equal(downloads, 2); assert.equal(aborted, 1)
+  current.release(); shared.release()
+})
+
+test('settled downloads are disposed without aborting their completed task', async () => {
+  let aborted = 0
+  const disposed: string[] = []
+  const files = createFilePool(async (_key, _progress, registerCancel) => {
+    registerCancel(() => { aborted++ })
+    return 'completed'
+  }, file => disposed.push(file))
+  const handle = files.acquire('image')
+  await handle.ready
+  handle.release()
+  assert.equal(aborted, 0); assert.deepEqual(disposed, ['completed'])
+})
+
+test('leaving before the download starts avoids all network work', async () => {
+  let downloads = 0
+  const files = createFilePool(async () => { downloads++; return 'unused' }, () => {})
+  const handle = files.acquire('image')
+  handle.release()
+  await assert.rejects(handle.ready, /expired/)
+  assert.equal(downloads, 0)
+})
+
+test('invalidating a pending file aborts it and permits retry', async () => {
+  const pending = deferred()
+  let downloads = 0, aborted = 0
+  const files = createFilePool((_key, _progress, registerCancel) => {
+    if (++downloads > 1) return Promise.resolve('retry')
+    registerCancel(() => { aborted++; pending.reject(new Error('aborted')) })
+    return pending.promise
+  }, () => {})
+  const failed = files.acquire('image')
+  const rejected = assert.rejects(failed.ready, /aborted/)
+  await Promise.resolve()
+  failed.invalidate(); failed.release()
+  await rejected
+  const retry = files.acquire('image')
+  assert.equal(await retry.ready, 'retry'); assert.equal(aborted, 1)
+  retry.release()
+})

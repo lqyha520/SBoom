@@ -14,9 +14,14 @@ page, .wd-root-portal {
   --lc-border: #edf1ed;
   --lc-background: #f7f9f8;
   --lc-surface: #ffffff;
+  --lc-page-gutter: 20px;
+  --lc-radius-card: 16px;
+  --lc-radius-control: 12px;
+  --lc-success-bg: #e9f4eb;
+  --lc-success-text: #256a50;
   /* 页面底色与卡片：纯白会让整屏发闷，用一层很浅的绿灰渐变托住内容 */
-  --lc-canvas: #f4f9f6;
-  --lc-canvas-mid: #fbfdfc;
+  --lc-canvas: #f6f8f7;
+  --lc-canvas-mid: #fafcfb;
   --lc-card: #ffffff;
   --lc-card-line: #e7eee8;
   --lc-card-shadow: 0 8px 20px #23392d0f;
@@ -39,7 +44,7 @@ page, .wd-root-portal {
   --wot-radius-large: 8px;
   --wot-search-padding: 0;
   --wot-search-input-height: 44px;
-  --wot-search-input-radius: 999px;
+  --wot-search-input-radius: 12px;
   --wot-search-input-font-size: 16px;
   --wot-search-field-padding: 0 0 0 14px;
   --wot-search-bg: transparent;
@@ -59,7 +64,7 @@ page, .wd-root-portal {
   --wot-cell-padding: 18px 0;
   --wot-cell-title-font-size: 14px;
   --wot-cell-value-font-size: 12px;
-  --wot-cell-label-font-size: 11px;
+  --wot-cell-label-font-size: 12px;
   --wot-cell-icon-spacing-right: 12px;
   --wot-cell-border-margin-horizontal: 0;
   --wot-cell-border-color: #e8ecef;
@@ -68,6 +73,6 @@ page, .wd-root-portal {
   --wot-button-height-medium: 46px;
   --wot-button-height-large: 50px;
   --wot-button-font-size-medium: 14px;
-  --wot-tabbar-item-title-font-size: 11px;
+  --wot-tabbar-item-title-font-size: 12px;
   --wot-tabbar-item-icon-size: 20px;
 }

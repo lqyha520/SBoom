@@ -18,8 +18,9 @@ export async function refreshUnread() {
   if (epoch === authGeneration()) inboxState.unread = result.unread
 }
 export async function readMessages(id = '') {
+  const epoch = authGeneration()
   const result = await request<{ unread: number }>('/api/v1/mini/messages/' + (id ? encodeURIComponent(id) + '/read' : 'read-all'), 'POST')
-  inboxState.unread = result.unread
+  if (epoch === authGeneration()) inboxState.unread = result.unread
 }
 export function messageDestination(message: Pick<Message, 'target_type' | 'target_id'>) {
   const pages: Record<string, string> = { paper: 'paper', feedback: 'support', membership: 'membership', request: 'requests', closure: 'closure', order: 'orders' }

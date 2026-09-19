@@ -12,14 +12,14 @@ page {
 view, text, button, input, rich-text, uni-view, uni-text, uni-button, uni-input { box-sizing: border-box; }
 button, uni-button { font-family: inherit; letter-spacing: 0; }
 button::after, uni-button::after { border: 0 !important; }
-.home-page, .catalog-page, .account-page, .detail-page, .login-page, .privacy-page {
+.home-page, .catalog-page, .account-page, .detail-page, .login-page, .privacy-page, .service-page, .support-page-shell {
   width: 100%; max-width: 520px; min-height: calc(100vh - var(--window-top, 0px)); margin: 0 auto;
   background-color: var(--lc-canvas);
   background-image: linear-gradient(180deg, var(--lc-canvas) 0%, var(--lc-canvas-mid) 340px, #f6faf7 100%);
 }
-/* 50px navigation content + 20px clearance; the gesture inset replaces the minimum bottom padding. */
-.has-tabbar { --lc-tabbar-safe-bottom: env(safe-area-inset-bottom, 0px); padding-bottom: calc(70px + max(4px, var(--lc-tabbar-safe-bottom))); }
-.content-width { width: 100%; padding-left: 22px; padding-right: 22px; margin: 0 auto; }
+/* 69px bottom navigation + 16px clearance keep the last item above the bar. */
+.has-tabbar { --lc-tabbar-safe-bottom: env(safe-area-inset-bottom, 0px); padding-bottom: calc(85px + var(--lc-tabbar-safe-bottom)); }
+.content-width { width: 100%; padding-left: var(--lc-page-gutter); padding-right: var(--lc-page-gutter); margin: 0 auto; }
 .page-shell { width: 100%; max-width: 720px; margin: 0 auto; padding: 24px 22px 36px; }
 /* 浮在底色上的白色卡片：列表、菜单、概览都靠它把层次拉出来 */
 .surface-card { width: 100%; padding: 18px; border: 1px solid var(--lc-card-line); border-radius: 14px; background: var(--lc-card); box-shadow: var(--lc-card-shadow); }
@@ -40,24 +40,25 @@ button::after, uni-button::after { border: 0 !important; }
 .empty-actions { display: flex; align-items: center; justify-content: center; margin-top: 20px; }
 .loading-line { display: flex; gap: 10px; align-items: center; justify-content: center; padding: 24px 0; color: var(--lc-muted); font-size: 12px; }
 .paper-list { display: flex; flex-direction: column; gap: 0; }
-.list-caption { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; padding: 7px 0; font-size: 11px; color: var(--lc-muted); }
-.paper-row { display: flex; align-items: center; gap: 8px; min-height: 115px; padding: 14px 0; background: transparent; }
-.paper-main { display: flex; align-items: center; gap: 13px; flex: 1; min-width: 0; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; text-align: left; white-space: normal; line-height: 1.5; }
-.paper-thumb { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 66px; height: 86px; padding: 9px; border-radius: 8px; background: var(--subject-tint, #e9effb); }
+.list-caption { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; padding: 7px 0; font-size: 12px; color: var(--lc-muted); }
+.paper-row { display: flex; align-items: center; gap: 4px; min-height: 120px; padding: 16px 0; background: transparent; }
+.paper-main { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; text-align: left; white-space: normal; line-height: 1.5; }
+.paper-thumb { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 56px; height: 78px; padding: 6px; border-radius: 8px; background: var(--subject-tint, #e9effb); }
 .paper-thumb-sheet { width: 100%; transform: rotate(-4deg); box-shadow: 2px 3px 0 #ffffff80; }
 .favorite-control { width: 44px !important; min-width: 44px !important; height: 44px !important; flex: none; color: var(--lc-muted) !important; --wot-button-size-icon-medium: 20px; }
 .favorite-control.is-favorite { color: var(--lc-coral) !important; }
-.paper-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 14px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; margin-top: 5px; color: var(--lc-text); }
-.paper-labels { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; color: var(--lc-muted); font-size: 11px; line-height: 1.6; }
-.paper-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 5px; color: var(--lc-muted); font-size: 11px; margin-top: 6px; }
+.paper-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 15px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; margin-top: 5px; color: var(--lc-text); }
+.paper-labels { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; color: var(--lc-muted); font-size: 12px; line-height: 1.6; }
+.paper-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 8px; color: var(--lc-muted); font-size: 12px; margin-top: 7px; }
 .file-pending, .paper-editorial { color: var(--lc-warning); }
 .language { --subject-color: #b56857; --subject-tint: #f8e9e2; }
 .math { --subject-color: #526eac; --subject-tint: #e9effb; }
 .english { --subject-color: #307e61; --subject-tint: #e9f4eb; }
 .general { --subject-color: #806b31; --subject-tint: #fcf1d3; }
-.access-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px; background: #fffaf0; color: var(--lc-warning); font-size: 11px; line-height: 1.5; white-space: nowrap; }
-.paper-topic { display: block; color: var(--lc-muted); font-size: 11px; margin-top: 5px; overflow-wrap: anywhere; }
-.list-end { padding: 26px 0 8px; text-align: center; color: var(--lc-muted); font-size: 11px; }
+.access-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 6px; background: var(--lc-warning-bg); color: var(--lc-warning); font-size: 12px; line-height: 1.5; white-space: nowrap; }
+.access-badge.is-free { background: var(--lc-success-bg); color: var(--lc-success-text); }
+.paper-topic { display: block; color: var(--lc-muted); font-size: 12px; margin-top: 5px; overflow-wrap: anywhere; }
+.list-end { padding: 26px 0 8px; text-align: center; color: var(--lc-muted); font-size: 12px; }
 .section-link { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; margin: 0; padding: 0; background: transparent; color: var(--lc-muted); font-size: 12px; line-height: 1.5; border-radius: 0; }
 .section-link:active { color: var(--lc-primary); }
 .sheet { padding: 12px 22px max(24px, env(safe-area-inset-bottom)); max-width: 520px; margin: 0 auto; }
@@ -65,9 +66,43 @@ button::after, uni-button::after { border: 0 !important; }
 .sheet-title { display: block; font-size: 18px; font-weight: 600; }
 .sheet-handle { width: 34px; height: 4px; margin: 2px auto 8px; border-radius: 999px; background: var(--lc-border); }
 .field-label { display: block; margin: 18px 0 8px; color: var(--lc-secondary); font-size: 13px; }
+/* Slot content belongs to the consumer page in uni-app. Keep its shared styles
+   in app.wxss rather than in the isolated ServicePage component. */
+.service-heading { padding-top:12px;padding-bottom:20px; }
+.service-title { display:block;font-size:24px;font-weight:650;line-height:1.4; }
+.service-description { display:block;font-size:13px;color:var(--lc-secondary);line-height:1.8;margin-top:8px; }
+.service-body { padding-bottom:calc(28px + env(safe-area-inset-bottom)); }
+.service-card { display:block;margin:0 0 14px;padding:18px;border:1px solid var(--lc-card-line);border-radius:var(--lc-radius-card);background:var(--lc-card);box-shadow:var(--lc-card-shadow-soft);overflow-wrap:anywhere;color:var(--lc-text); }
+.service-card-title { display:block;min-width:0;font-size:16px;font-weight:600;line-height:1.6; }
+.service-copy { display:block;margin-top:8px;font-size:14px;color:var(--lc-secondary);white-space:pre-wrap;line-height:1.8; }
+.service-meta { display:block;margin-top:8px;font-size:12px;color:var(--lc-muted);line-height:1.7; }
+.service-actions { display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:16px; }
+.service-reply { margin-top:14px;padding:12px;border-radius:var(--lc-radius-control);background:var(--lc-primary-soft);font-size:14px;line-height:1.8;white-space:pre-wrap; }
+.service-fields { display:flex;flex-direction:column;gap:14px; }
+.service-fields .field-label { margin:0 0 8px; }
+.service-row { display:flex;justify-content:space-between;align-items:flex-start;gap:12px; }
+.service-row > .service-card-title { flex:1; }
+.service-row > .service-meta,
+.service-row > .order-price,
+.service-row > .unread-dot,
+.service-row > .wd-tag,
+.service-row > .wd-button { flex:none; }
+.service-empty { padding:28px 0; }
+.service-tabs { display:flex;gap:4px;margin-bottom:18px;padding:4px;border:1px solid var(--lc-card-line);border-radius:var(--lc-radius-control);background:#edf1ee; }
+.service-tabs button { flex:1;min-width:0;min-height:44px;margin:0;padding:9px 8px;border-radius:9px;background:transparent;color:var(--lc-secondary);font-size:14px;line-height:1.7; }
+.service-tabs button.selected { background:var(--lc-surface);color:var(--lc-primary);font-weight:600;box-shadow:var(--lc-card-shadow-soft); }
+.service-tabs button[disabled] { opacity:.6; }
 .sheet-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
 .text-link { color: var(--lc-primary); font-size: 13px; min-height: 44px; padding: 10px; text-align: center; }
 button:focus-visible, uni-button:focus-visible, [role='button']:focus-visible { outline: 2px solid var(--lc-primary); outline-offset: 3px; }
 @media (hover: hover) { .bare-icon:hover { background: var(--lc-primary-soft); } .paper-main:hover .paper-name { color: var(--lc-primary); } }
 @media (prefers-reduced-motion: reduce) { view, button, uni-view, uni-button { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
-@media (max-width: 359px) { .content-width, .page-shell { padding-left: 17px; padding-right: 17px; } .paper-main { gap: 10px; } .paper-row { gap: 4px; } .paper-thumb { width: 58px; height: 76px; padding: 8px; } }
+@media (max-width: 359px) { page, .wd-root-portal { --lc-page-gutter: 16px; } .page-shell { padding-left: 16px; padding-right: 16px; } .paper-main { gap: 10px; } .paper-thumb { width: 52px; height: 74px; padding: 5px; } }
+/* Shared press feedback for native mini-program buttons and H5. */
+.control-pressed { opacity:.72; }
+/* #ifdef H5 */
+button:focus-visible, .private-image:focus-visible { outline:2px solid var(--lc-primary);outline-offset:3px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration:.01ms !important;transition-duration:.01ms !important; }
+}
+/* #endif */

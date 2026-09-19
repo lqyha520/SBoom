@@ -1,0 +1,47 @@
+[
+  {
+    "key": "daily",
+    "kicker": "每日练习",
+    "title": "口算练习，随时开始",
+    "subtitle": "先选年级，再挑一份合适的练习",
+    "action_label": "去练习",
+    "target_type": "category",
+    "category": "每日口算",
+    "image": "daily-banner.jpg",
+    "image_fit": "contain",
+    "topic": "每日口算",
+    "description": "按年级挑选一份，练熟基础计算",
+    "cover": "daily-topic.jpg",
+    "publish_initially": true
+  },
+  {
+    "key": "reading",
+    "kicker": "阅读与积累",
+    "title": "读懂文字，也学会表达",
+    "subtitle": "阅读理解与词句积累，慢慢练扎实",
+    "action_label": "去阅读",
+    "target_type": "category",
+    "category": "阅读与积累",
+    "image": "reading-banner.jpg",
+    "image_fit": "contain",
+    "topic": "阅读与积累",
+    "description": "读一段文字，积累词句与表达",
+    "cover": "reading-topic.jpg",
+    "publish_initially": false
+  },
+  {
+    "key": "unit",
+    "kicker": "单元巩固",
+    "title": "学过的知识，再巩固一次",
+    "subtitle": "按年级查找单元练习，跟上学习进度",
+    "action_label": "去巩固",
+    "target_type": "category",
+    "category": "单元练习",
+    "image": "unit-banner.jpg",
+    "image_fit": "contain",
+    "topic": "单元巩固",
+    "description": "按年级回顾单元知识，查漏补缺",
+    "cover": "unit-topic.jpg",
+    "publish_initially": false
+  }
+]

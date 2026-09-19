@@ -56,7 +56,6 @@ const error = ref('')
 let sequence = 0
 
 const currentDoc = computed(() => loaded.value[kind.value] || null)
-const usingOffline = computed(() => !!error.value || !currentDoc.value)
 const title = computed(() => currentDoc.value?.title || offline[kind.value].title)
 const blocks = computed(() => (currentDoc.value?.body || offline[kind.value].body)
   .split('\n').map(line => line.trim()).filter(Boolean)
@@ -83,7 +82,7 @@ onShow(load)
     <wd-tabs v-model="kind" line-theme="text" @change="load"><wd-tab name="agreement" title="用户协议" /><wd-tab name="privacy" title="隐私政策" /></wd-tabs>
     <view v-if="error" class="error-strip"><text class="grow">{{ error }}</text><wd-button icon="refresh" variant="text" type="danger" role="button" aria-label="重新加载协议内容" @click="load" /></view>
     <text class="page-title legal-title">{{ title }}</text>
-    <text class="page-subtitle">{{ usingOffline ? '离线版本 · 内容以后台配置为准' : updated }}</text>
+    <text class="page-subtitle" role="status">{{ loading && !currentDoc ? '正在加载最新内容…' : currentDoc ? updated : '当前显示离线说明，联网后可重试加载最新版本' }}</text>
     <template v-for="(block, index) in blocks" :key="index">
       <text v-if="block.heading" class="privacy-heading">{{ block.heading }}</text>
       <text v-else class="privacy-text">{{ block.text }}</text>
@@ -96,6 +95,6 @@ onShow(load)
 .privacy { padding-top: 0; }
 .legal-title { margin-top: 24px; font-size: 23px; }
 .privacy-heading { display: block; margin: 28px 0 12px; font-size: 17px; font-weight: 600; color: var(--lc-text); }
-.privacy-text { display: block; line-height: 1.95; font-size: 14px; color: var(--lc-secondary); overflow-wrap: anywhere; }
+.privacy-text { display: block; margin-bottom:12px;line-height: 1.95; font-size: 15px; color: var(--lc-text); overflow-wrap: anywhere; }
 .legal-loading { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 26px 0; color: var(--lc-muted); font-size: 12px; }
 </style>

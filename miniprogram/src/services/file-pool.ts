@@ -4,23 +4,29 @@ export interface FileHandle {
   invalidate(): void
 }
 
+export type RegisterDownloadCancel = (cancel: () => void) => void
+
 interface Entry {
   ready: Promise<string>
   users: number
   active: boolean
+  cancel?: () => void
   file?: string
   progress?: number
   listeners: Set<(percent: number) => void>
 }
 
 // Share active downloads, but keep no files after their last consumer leaves.
-export function createFilePool(download: (key: string, progress: (percent: number) => void) => Promise<string>, dispose: (file: string) => void) {
+export function createFilePool(download: (key: string, progress: (percent: number) => void, registerCancel: RegisterDownloadCancel) => Promise<string>, dispose: (file: string) => void) {
   const entries = new Map<string, Entry>()
 
   function discard(key: string, entry: Entry) {
     if (entries.get(key) === entry) entries.delete(key)
     entry.active = false
     entry.listeners.clear()
+    const cancel = entry.cancel
+    entry.cancel = undefined
+    cancel?.()
     if (entry.file) { dispose(entry.file); entry.file = undefined }
   }
 
@@ -36,12 +42,13 @@ export function createFilePool(download: (key: string, progress: (percent: numbe
             if (!created.active) return
             created.progress = Math.max(0, Math.min(100, percent))
             created.listeners.forEach(listener => listener(created.progress!))
-          })
+          }, cancel => { if (created.active) created.cancel = cancel; else cancel() })
         }).then(file => {
+          created.cancel = undefined
           if (!created.active) { dispose(file); throw new Error('File request expired') }
           created.file = file
           return file
-        }).catch(error => { discard(key, created); throw error })
+        }).catch(error => { created.cancel = undefined; discard(key, created); throw error })
         entry = created
       }
       const held = entry

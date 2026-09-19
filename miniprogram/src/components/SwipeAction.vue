@@ -1,135 +1,70 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 
-interface SwipeAction {
-  key: string
-  label: string
-  icon: string
-  color?: string
-}
-
-const props = defineProps<{
-  actions: SwipeAction[]
-}>()
-
-const emit = defineEmits<{
-  action: [key: string]
-}>()
-
-const startX = ref(0)
+interface Action { key: string; label: string; icon: string; color?: string; openType?: 'share' }
+interface SwipeTouchEvent { touches: ArrayLike<{ clientX: number; clientY: number }>; preventDefault?: () => void }
+const props = withDefaults(defineProps<{ actions: Action[]; open?: boolean; disabled?: boolean; shareId?: string; shareTitle?: string }>(), { open: false, disabled: false })
+const emit = defineEmits<{ action: [key: string]; 'update:open': [value: boolean] }>()
 const currentX = ref(0)
-const isSwiping = ref(false)
-const actionWidth = 80
-const swipeThreshold = 40
-
-const containerStyle = computed(() => ({
-  transform: `translateX(${currentX.value}px)`,
-  transition: isSwiping.value ? 'none' : 'transform 0.3s ease'
-}))
-
-const activeAction = computed(() => {
-  if (Math.abs(currentX.value) < swipeThreshold) return null
-  const index = Math.floor(Math.abs(currentX.value) / actionWidth)
-  const direction = currentX.value > 0 ? 'right' : 'left'
-  if (direction === 'left' && index < props.actions.length) {
-    return props.actions[index]
-  }
-  return null
-})
-
-function handleTouchStart(e: any) {
-  startX.value = e.touches[0].clientX
-  isSwiping.value = true
+const direction = ref<'pending' | 'horizontal' | 'vertical'>('pending')
+const dragging = ref(false)
+const actionWidth = 70
+const width = computed(() => props.actions.length * actionWidth)
+let startX = 0, startY = 0, origin = 0, ignoreClickUntil = 0
+const containerStyle = computed(() => ({ transform: `translateX(${currentX.value}px)`, transition: dragging.value ? 'none' : 'transform .2s ease' }))
+watch(() => props.open, open => { currentX.value = open ? -width.value : 0 })
+watch(() => props.disabled, disabled => { if (disabled) close() })
+function close() { dragging.value = false; currentX.value = 0; emit('update:open', false) }
+function handleTouchStart(event: SwipeTouchEvent) {
+  if (props.disabled || !event.touches[0]) return
+  startX = event.touches[0].clientX; startY = event.touches[0].clientY
+  origin = props.open ? -width.value : 0; direction.value = 'pending'; dragging.value = true
 }
-
-function handleTouchMove(e: any) {
-  if (!isSwiping.value) return
-  const diff = e.touches[0].clientX - startX.value
-  const maxSwipe = -props.actions.length * actionWidth
-  
-  if (diff < 0) {
-    currentX.value = Math.max(maxSwipe, diff)
-  } else {
-    currentX.value = Math.min(0, diff)
+function handleTouchMove(event: SwipeTouchEvent) {
+  if (!dragging.value || !event.touches[0]) return
+  const dx = event.touches[0].clientX - startX, dy = event.touches[0].clientY - startY
+  if (direction.value === 'pending') {
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 10) return
+    direction.value = Math.abs(dx) > Math.abs(dy) * 1.2 ? 'horizontal' : 'vertical'
   }
+  if (direction.value !== 'horizontal') return
+  event.preventDefault?.()
+  currentX.value = Math.max(-width.value, Math.min(0, origin + dx))
 }
-
 function handleTouchEnd() {
-  isSwiping.value = false
-  
-  if (activeAction.value) {
-    emit('action', activeAction.value.key)
-    currentX.value = 0
-  } else {
-    currentX.value = 0
-  }
+  if (!dragging.value) return
+  dragging.value = false
+  if (direction.value !== 'horizontal') return
+  ignoreClickUntil = Date.now() + 350
+  const open = origin === 0 ? currentX.value < -36 : currentX.value < origin + 36
+  currentX.value = open ? -width.value : 0
+  emit('update:open', open)
 }
-
-function reset() {
-  currentX.value = 0
-  isSwiping.value = false
+function cancel() { dragging.value = false; currentX.value = props.open ? -width.value : 0; ignoreClickUntil = Date.now() + 350 }
+function blocksClick(allowWhileBusy = false) {
+  if (Date.now() < ignoreClickUntil) return true
+  if (props.open) { close(); return true }
+  return props.disabled && !allowWhileBusy
 }
+function perform(key: string) { if (!props.disabled && props.open) { emit('action', key); close() } }
+defineExpose({ blocksClick })
 </script>
 
 <template>
-  <view 
-    class="swipe-container"
-    @touchstart="handleTouchStart"
-    @touchmove="handleTouchMove"
-    @touchend="handleTouchEnd"
-    @touchcancel="reset"
-  >
-    <view class="swipe-actions">
-      <view 
-        v-for="(action, index) in actions" 
-        :key="action.key"
-        class="swipe-action"
-        :class="`action-${action.key}`"
-        :style="{ 
-          width: actionWidth + 'px',
-          backgroundColor: action.color || '#f0f0f0'
-        }"
-        @click.stop="emit('action', action.key)"
-      >
-        <wd-icon :name="action.icon" size="20px" />
-        <text>{{ action.label }}</text>
-      </view>
+  <view class="swipe-container">
+    <view v-show="open || dragging" class="swipe-actions" :aria-hidden="!open">
+      <button role="button" v-for="action in actions" :key="action.key" class="swipe-action" hover-class="control-pressed"
+        :style="{ width: actionWidth + 'px', backgroundColor: action.color }" :disabled="disabled || !open" :tabindex="open ? 0 : -1"
+        :open-type="action.openType" :data-paper-id="shareId" :data-paper-title="shareTitle" :aria-label="action.label"
+        @click.stop="perform(action.key)"><wd-icon :name="action.icon" size="20px" /><text>{{ action.label }}</text></button>
     </view>
-    <view class="swipe-content" :style="containerStyle">
-      <slot />
-    </view>
+    <view class="swipe-content" :style="containerStyle" @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd" @touchcancel="cancel"><slot /></view>
   </view>
 </template>
 
 <style scoped>
-.swipe-container {
-  position: relative;
-  overflow: hidden;
-}
-
-.swipe-actions {
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  display: flex;
-  height: 100%;
-}
-
-.swipe-action {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  color: white;
-  font-size: 12px;
-}
-
-.swipe-content {
-  position: relative;
-  z-index: 1;
-  background: white;
-  min-height: 100%;
-}
+.swipe-container { position:relative;overflow:hidden;border-radius:10px; }
+.swipe-actions { position:absolute;right:0;top:0;bottom:0;display:flex; }
+.swipe-action { display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:44px;margin:0;padding:0;border-radius:0;color:#fff;font-size:12px;line-height:1.5; }
+.swipe-content { position:relative;z-index:1;background:var(--lc-card);min-height:100%; }
 </style>

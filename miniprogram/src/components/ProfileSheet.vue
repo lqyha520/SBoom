@@ -102,25 +102,25 @@ async function save() {
 </script>
 
 <template>
-  <wd-popup :model-value="open" position="bottom" :z-index="1250" :close-on-click-modal="!busy" root-portal safe-area-inset-bottom custom-style="border-radius:24px 24px 0 0" @update:model-value="!$event && emit('close')">
+  <wd-popup :model-value="open" position="bottom" :z-index="1250" :close-on-click-modal="!busy" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0" @update:model-value="!$event && emit('close')">
     <view class="sheet profile-sheet" role="dialog" aria-modal="true" aria-label="编辑资料">
       <view class="sheet-handle" />
-      <view class="sheet-head"><view><text class="sheet-title">编辑资料</text><text class="profile-intro">换个喜欢的头像，认识一下新的自己</text></view><button class="bare-icon" role="button" aria-label="关闭编辑资料" :disabled="busy" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
+      <view class="sheet-head"><view><text class="sheet-title">编辑资料</text><text class="profile-intro">换个喜欢的头像，认识一下新的自己</text></view><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭编辑资料" :disabled="busy" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
       <view class="profile-preview">
         <view class="preview-avatar"><ProfileAvatar :user="previewUser" :preview-src="photo?.path" /></view>
         <text class="preview-name">{{ processing ? '正在处理图片…' : nickname.trim() || '我的昵称' }}</text>
       </view>
       <view class="avatar-actions">
         <!-- #ifdef MP-WEIXIN -->
-        <button class="choose-avatar" role="button" aria-label="使用微信头像" open-type="chooseAvatar" :disabled="busy" @chooseavatar="chooseWechatAvatar"><wd-icon name="camera" size="18px" /><text>使用微信头像</text></button>
+        <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="choose-avatar" role="button" aria-label="使用微信头像" open-type="chooseAvatar" :disabled="busy" @chooseavatar="chooseWechatAvatar"><wd-icon name="camera" size="18px" /><text>使用微信头像</text></button>
         <!-- #endif -->
         <!-- #ifdef H5 -->
-        <button class="choose-avatar" role="button" aria-label="选择头像图片" :disabled="busy" @click="choosePhoto"><wd-icon name="camera" size="18px" /><text>选择头像图片</text></button>
+        <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="choose-avatar" role="button" aria-label="选择头像图片" :disabled="busy" @click="choosePhoto"><wd-icon name="camera" size="18px" /><text>选择头像图片</text></button>
         <!-- #endif -->
       </view>
       <view class="avatar-label"><text class="field-label">默认头像</text><text>选一个你喜欢的</text></view>
       <view class="preset-grid" role="radiogroup" aria-label="选择默认头像">
-        <button v-for="choice in DEFAULT_AVATAR_CHOICES" :key="choice.key" class="preset-option" :class="{ selected: !photo && avatar === choice.key }" role="radio" :aria-label="choice.label" :aria-checked="!photo && avatar === choice.key" :disabled="busy" @click="choosePreset(choice.key)">
+        <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="choice in DEFAULT_AVATAR_CHOICES" :key="choice.key" class="preset-option" :class="{ selected: !photo && avatar === choice.key }" role="radio" :aria-label="choice.label" :aria-checked="!photo && avatar === choice.key" :disabled="busy" @click="choosePreset(choice.key)">
           <view class="preset-picture" :style="{ background: choice.background }"><image :src="choice.image" mode="aspectFill" /><view v-if="!photo && avatar === choice.key" class="preset-check"><wd-icon name="check" size="11px" /></view></view>
           <text>{{ choice.label }}</text>
         </button>
@@ -152,9 +152,9 @@ async function save() {
 .choose-avatar::after { border:0; }
 .avatar-label,.nickname-label { display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px; }
 .avatar-label .field-label,.nickname-label .field-label { margin:0; }
-.avatar-label > text:last-child,.nickname-label > text:last-child { color:var(--lc-muted);font-size:11px; }
+.avatar-label > text:last-child,.nickname-label > text:last-child { color:var(--lc-muted);font-size: 12px; }
 .preset-grid { display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:24px; }
-.preset-option { display:flex;flex-direction:column;align-items:center;gap:7px;margin:0;padding:5px 0;background:transparent;color:var(--lc-secondary);font-size:11px;line-height:1.4; }
+.preset-option { display:flex;flex-direction:column;align-items:center;gap:7px;margin:0;padding:5px 0;background:transparent;color:var(--lc-secondary);font-size: 12px;line-height:1.4; }
 .preset-picture { position:relative;width:48px;height:48px;border:2px solid transparent;border-radius:50%; }
 .preset-picture image { width:100%;height:100%;border-radius:50%; }
 .preset-option.selected { color:var(--lc-primary);font-weight:600; }.preset-option.selected .preset-picture { border-color:var(--lc-primary);box-shadow:0 0 0 3px var(--lc-primary-soft); }
@@ -162,6 +162,6 @@ async function save() {
 .nickname-field { display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--lc-card-line);border-radius:12px;color:var(--lc-muted);background:var(--lc-background); }
 .nickname-field:focus-within { border-color:var(--lc-primary); }
 .nickname-field input { flex:1;min-width:0;height:26px;font-size:15px;color:var(--lc-text); }
-.field-hint { display:block;margin-top:8px;color:var(--lc-muted);font-size:11px;line-height:1.7; }
+.field-hint { display:block;margin-top:8px;color:var(--lc-muted);font-size: 12px;line-height:1.7; }
 .field-hint.error-text { color:#a34040; }
 </style>

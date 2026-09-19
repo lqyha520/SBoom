@@ -5,8 +5,11 @@ import lucide from '@iconify-json/lucide/icons.json' with { type: 'json' }
 
 const destination = fileURLToPath(new URL('../src/static/tabs/', import.meta.url))
 await mkdir(destination, { recursive: true })
+const tabIcons = new Set(['house', 'book-open', 'heart', 'user-round'])
 for (const name of ['house', 'files', 'folders', 'star', 'user-round', 'book-open', 'heart']) {
-  for (const [suffix, color] of [['', '#637168'], ['-active', '#307e61']]) {
+  const variants = [['', '#637168'], ['-active', '#307e61']]
+  if (tabIcons.has(name)) variants.push(['-selected', '#ffffff'])
+  for (const [suffix, color] of variants) {
     const body = lucide.icons[name].body.replaceAll('currentColor', color)
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">${body}</svg>`
     await sharp(Buffer.from(svg)).resize(64, 64).png().toFile(`${destination}${name}${suffix}.png`)

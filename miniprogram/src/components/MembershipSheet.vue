@@ -34,10 +34,10 @@ async function refresh() {
 </script>
 
 <template>
-  <wd-popup :model-value="open" position="bottom" :z-index="1200" root-portal safe-area-inset-bottom custom-style="border-radius:8px 8px 0 0" @update:model-value="!$event && emit('close')">
+  <wd-popup :model-value="open" position="bottom" :z-index="1200" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0" @update:model-value="!$event && emit('close')">
     <view class="sheet membership-sheet" role="dialog" aria-modal="true" aria-label="会员状态">
       <view class="sheet-handle" />
-      <view class="sheet-head"><text class="sheet-title">会员状态</text><button class="bare-icon" role="button" aria-label="关闭会员状态" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
+      <view class="sheet-head"><text class="sheet-title">会员状态</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭会员状态" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
       <view class="membership-identity"><view class="membership-symbol"><wd-icon name="star-fill" size="25px" /></view><view class="grow"><text class="membership-name">{{ session.user?.is_vip ? 'VIP 会员' : '普通用户' }}</text><text class="membership-expiry">{{ membershipExpiry(session.user) }}</text></view></view>
       <view class="membership-perks"><view><wd-icon name="book" size="17px" /><text>VIP 专享习题</text></view><view><wd-icon name="file-pdf" size="17px" /><text>完整原稿与 PDF</text></view></view>
       <text v-if="expiresSoon" class="membership-contact">会员将在 7 天内到期，可提前查看续期套餐。</text><text v-if="contact" class="membership-contact">{{ contact.benefits }}</text><view class="membership-refresh"><wd-button role="button" block variant="plain" @click="service">会员套餐与卡密</wd-button><wd-button role="button" block variant="text" @click="contactService">查看联系方式</wd-button></view>
