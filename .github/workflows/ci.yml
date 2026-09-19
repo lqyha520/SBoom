@@ -74,7 +74,9 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements.txt
       - name: Security audit
-        run: pip-audit --no-deps
+        # pip-audit 的 --no-deps 只能与 -r/--requirement 同用，单独使用会直接报用法错误
+        # （exit 2）。这里改为审计上一步 pip install -r 装出来的环境。
+        run: pip-audit --skip-editable
       - name: Type check
         run: mypy app/
       - run: python -m unittest discover -s tests -p 'test_backend*.py' -v
