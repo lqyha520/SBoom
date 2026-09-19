@@ -11,6 +11,8 @@ import {
   TYPE_GROUPS_DEFAULT,
 } from '../constants'
 import * as api from '../api'
+// randomId：crypto.randomUUID 是 [SecureContext] 限定 API，http://内网IP 下不存在
+import { randomId } from '../../../shared/webcrypto'
 import type {
   CustomType,
   Difficulty,
@@ -418,7 +420,14 @@ export const useExamStore = defineStore('exam', {
     },
     /* ── 初始化与本地版本 ── */
     async init() {
-      await this.initPersistence()
+      // 草稿持久化失败（IndexedDB 被禁用、存储配额耗尽等）不能连坐：年级科目必须照常加载，
+      // 否则工作台会整片空白，用户完全看不出问题出在本地存储上。
+      try { await this.initPersistence() }
+      catch (error) {
+        this.persistenceReady = true
+        this.draftState = 'error'
+        this.storageError = error instanceof Error ? error.message : '本地草稿初始化失败'
+      }
       this.availableLoading = true
       this.availableError = ''
       try { this.available = await api.fetchAvailable() }
@@ -479,7 +488,13 @@ export const useExamStore = defineStore('exam', {
     async initPersistence() {
       if (this.persistenceReady) return
       if (!this.ownerId) { this.persistenceReady = true; this.draftState = 'saved'; return }
-      const session = persistence.draftSession(this.ownerId)
+      // draftSession 抛错也必须留下 runtime：否则 flushDraft() 恒返回 false，
+      // 「退出登录」会被「草稿未保存」永久拦下，而真正的原因（存储不可用）没人看得到。
+      let session: { previous: string | null; current: string } = { previous: null, current: randomId() }
+      try { session = persistence.draftSession(this.ownerId) }
+      catch (error) {
+        this.storageError = error instanceof Error ? error.message : '本地草稿会话初始化失败'
+      }
       const runtime: DraftRuntime = { owner: this.ownerId, id: session.current, sequence: 0, pending: Promise.resolve() }
       draftRuntimes.set(this, runtime)
       try {

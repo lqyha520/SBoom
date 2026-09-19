@@ -4,6 +4,8 @@ import { useExamStore } from '../stores/exam'
 import { captureWorkspaceGuard } from '../api'
 import { captureSnapshot, completeArchive, createArchive, createArchiveFolder, fetchArchiveFolders } from '../library'
 import type { ArchiveDetail, ArchiveFolder, ArchiveRequest, ArchiveSnapshot } from '../library'
+// crypto.randomUUID 是 [SecureContext] 限定 API，http://内网IP 下不存在
+import { randomId } from '../../../shared/webcrypto'
 
 const props = defineProps<{ open: boolean; selected: number }>()
 const emit = defineEmits<{ close: []; busy: [value: boolean]; library: [] }>()
@@ -41,10 +43,10 @@ async function addFolder() {
 }
 function prepare() {
   const papers = scope.value === 'all' ? store.papers : [store.papers[props.selected] || store.papers[0]]
-  const groupId = papers.length > 1 ? crypto.randomUUID() : ''
+  const groupId = papers.length > 1 ? randomId() : ''
   jobs.value = papers.filter(Boolean).map(paper => {
-    paper.archiveSourceId ||= crypto.randomUUID()
-    return { request: { request_id: crypto.randomUUID(), source_id: paper.archiveSourceId,
+    paper.archiveSourceId ||= randomId()
+    return { request: { request_id: randomId(), source_id: paper.archiveSourceId,
       snapshot: captureSnapshot(paper, store.template, store.style, mode.value, store.addDayLabel),
       folder_id: folder.value === 'unfiled' ? null : folder.value,
       group_id: groupId, group_name: papers.length > 1 ? groupName.value.trim() : '' }, state: 'pending', error: '' }

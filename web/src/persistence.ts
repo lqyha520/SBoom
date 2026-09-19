@@ -2,6 +2,8 @@ import { openDB, type DBSchema } from 'idb'
 import type { GenerationRun } from './generation'
 import type { Difficulty, PaperData, PaperStyle, PaperTemplate, Section } from './types'
 import { deepClone } from './utils'
+// crypto.randomUUID 是 [SecureContext] 限定 API，http://内网IP 下不存在
+import { randomId } from '../../shared/webcrypto'
 
 export interface WorkspaceSnapshot {
   version: 1
@@ -78,7 +80,7 @@ function validateSnapshot(value: WorkspaceSnapshot): WorkspaceSnapshot {
 }
 
 export function draftSession(owner: string): { previous: string | null; current: string } {
-  const current = crypto.randomUUID()
+  const current = randomId()
   const key = 'lc_draft_session:' + owner
   let previous: string | null = null
   try {
@@ -115,7 +117,7 @@ export async function addHistory(owner: string, snapshot: WorkspaceSnapshot, rea
     ? snapshot.papers.reduce((n, paper) => n + paper.sections.reduce((m, section) => m + section.data.questions.length, 0), 0)
     : snapshot.sections.reduce((n, section) => n + (section.data?.questions.length || 0), 0)
   const entry: HistoryEntry = {
-    id: crypto.randomUUID(), owner, updatedAt: Date.now(), title: snapshot.title || snapshot.keyword || '未命名试卷',
+    id: randomId(), owner, updatedAt: Date.now(), title: snapshot.title || snapshot.keyword || '未命名试卷',
     grade: snapshot.grade, subject: snapshot.subject, keyword: snapshot.keyword,
     paperCount: snapshot.papers.length, questionCount: questions, reason,
   }

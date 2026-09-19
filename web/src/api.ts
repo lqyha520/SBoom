@@ -1,4 +1,6 @@
 import type { Difficulty, MyTemplate, Question, ScopeData } from './types'
+// crypto.randomUUID 是 [SecureContext] 限定 API，http://内网IP 下不存在
+import { randomId } from '../../shared/webcrypto'
 
 const API = ''
 export const AUTH_CHANGED_EVENT = 'lc:auth-changed'
@@ -138,7 +140,7 @@ export interface BatchParams {
   items: BatchItemReq[]
 }
 
-export async function generateBatch(params: BatchParams, requestId: string = crypto.randomUUID()): Promise<BatchRespSection[]> {
+export async function generateBatch(params: BatchParams, requestId: string = randomId()): Promise<BatchRespSection[]> {
   const body: Record<string, unknown> = {
     grade: params.grade,
     subject: params.subject,
@@ -162,7 +164,7 @@ export async function generateOne(params: {
   game_type: string
   difficulty: Difficulty
   question_count: number
-}, requestId: string = crypto.randomUUID()) {
+}, requestId: string = randomId()) {
   const body: Record<string, unknown> = {
     grade: params.grade,
     subject: params.subject,

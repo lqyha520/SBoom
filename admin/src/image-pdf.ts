@@ -1,4 +1,6 @@
 import { computed, reactive, ref } from 'vue'
+// crypto.randomUUID 是 [SecureContext] 限定 API，http://内网IP 下不存在
+import { randomId } from '../../shared/webcrypto'
 
 export const MAX_IMAGE_PAGES = 40
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -91,7 +93,7 @@ export function useImagePdfComposer() {
         if (disposed || current !== revision) break
         if (pages.value.length >= MAX_IMAGE_PAGES) { error.value = '最多合并 40 张图片，其余图片未添加'; break }
         if (bytes + file.size > MAX_TOTAL_BYTES) { error.value = '图片总大小不能超过 200 MB，其余图片未添加'; break }
-        const page = reactive<ImagePage>({ id: crypto.randomUUID(), file, preview: '', width: 0, height: 0, rotation: 0, error: '' })
+        const page = reactive<ImagePage>({ id: randomId(), file, preview: '', width: 0, height: 0, rotation: 0, error: '' })
         try {
           const bitmap = await readImage(file)
           try {

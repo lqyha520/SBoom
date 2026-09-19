@@ -1,6 +1,8 @@
 import * as api from './api'
 import type { Difficulty, GameData, PaperData, Question, Section } from './types'
 import { deepClone, ensureQids } from './utils'
+// crypto.randomUUID 是 [SecureContext] 限定 API，http://内网IP 下不存在
+import { randomId } from '../../shared/webcrypto'
 
 export interface GenerationContext {
   grade: string
@@ -51,7 +53,7 @@ export function createGenerationRun(context: GenerationContext): GenerationRun {
     jobs: Array.from({ length: snapshot.count }, (_, index) => ({
       index,
       chunks: Array.from({ length: Math.ceil(items.length / 10) }, (_, chunk) => ({
-        requestId: crypto.randomUUID(), state: 'new' as const,
+        requestId: randomId(), state: 'new' as const,
         items: items.slice(chunk * 10, chunk * 10 + 10),
       })),
     })),
@@ -88,7 +90,7 @@ async function runChunk(chunk: GenerationChunk, context: GenerationContext, mode
   } else if (mode === 'recover') {
     throw new Error('该部分尚未发送，可手动重试')
   }
-  if (mode === 'retry') chunk.requestId = crypto.randomUUID()
+  if (mode === 'retry') chunk.requestId = randomId()
   chunk.state = 'running'
   chunk.error = ''
   try {

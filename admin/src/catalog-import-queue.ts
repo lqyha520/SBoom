@@ -2,6 +2,8 @@ import { computed, reactive, ref } from 'vue'
 import { AuthError } from './api'
 import { defaultDownloadSettings, downloadPayload, downloadSettingsIssue, type DownloadSettings } from './download-settings'
 import { attachImportedEdition, importPublication, type CatalogDetail, type CatalogImportMeta } from './catalog'
+// crypto.randomUUID / crypto.subtle 都是 [SecureContext] 限定 API，http://内网IP 下不存在
+import { randomId, sha256Hex } from '../../shared/webcrypto'
 
 export type ImportFields = Pick<CatalogImportMeta, 'title' | 'grade' | 'subject' | 'category_id' | 'mode'> & DownloadSettings
 export type ImportShared = Pick<CatalogImportMeta, 'description' | 'view_access' | 'download_access'>
@@ -19,8 +21,7 @@ export async function inspectPdf(file: File) {
   if (file.size > 32 * 1024 * 1024) throw new Error('文件超过 32 MB，请先压缩或拆分')
   const bytes = await file.arrayBuffer()
   if (new TextDecoder().decode(bytes.slice(0, 5)) !== '%PDF-') throw new Error('文件内容不是 PDF，请检查后重新选择')
-  const digest = await crypto.subtle.digest('SHA-256', bytes)
-  return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('')
+  return sha256Hex(bytes)
 }
 export function importRowIssue(row: ImportRow) {
   return row.fileError || row.answerFileError || (!row.meta.title.trim() ? '请填写公开标题' : '')
@@ -40,7 +41,7 @@ export function useCatalogImportQueue(userId: number, created: (paper: CatalogDe
     checking.value = true
     try {
       for (const file of files) {
-        const row = reactive<ImportRow>({ id: crypto.randomUUID(), file, digest: '', fileError: '',
+        const row = reactive<ImportRow>({ id: randomId(), file, digest: '', fileError: '',
           meta: { ...defaultDownloadSettings(), ...defaults, title: file.name.replace(/\.pdf$/i, '').slice(0, 240) },
           state: 'checking', progress: 0, error: '', answerError: '', answerState: 'none', answerProgress: 0, answerFileError: '' })
         rows.value.push(row)
