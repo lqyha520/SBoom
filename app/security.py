@@ -128,7 +128,8 @@ def parse_token(token: str) -> Optional[dict]:
         if not hmac.compare_digest(expected, _b64url_decode(sig)):
             return None
         data = json.loads(_b64url_decode(payload))
-        if data.get("exp", 0) < time.time():
+        # payload 是我们自己签发的，但仍按不可信输入处理：合法 JSON 也可能是数组/标量
+        if not isinstance(data, dict) or data.get("exp", 0) < time.time():
             return None
         data["sub"] = int(data["sub"])
         return data

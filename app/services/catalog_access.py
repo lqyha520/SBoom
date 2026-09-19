@@ -21,7 +21,7 @@ def access_map(conn, ids, user=None, admin=False):
     placeholders = ",".join("?" for _ in ids)
     policies = {row["catalog_id"]: dict(row) for row in conn.execute(
         f"SELECT * FROM catalog_access WHERE catalog_id IN ({placeholders})", ids)}
-    kinds = {catalog_id: [] for catalog_id in ids}
+    kinds: dict[str, list[dict]] = {catalog_id: [] for catalog_id in ids}
     for row in conn.execute("SELECT t.catalog_id, t.question_type, r.view_access, r.download_access "
                             "FROM catalog_question_types t LEFT JOIN catalog_type_rules r ON r.question_type = t.question_type "
                             f"WHERE t.catalog_id IN ({placeholders}) ORDER BY t.question_type", ids):

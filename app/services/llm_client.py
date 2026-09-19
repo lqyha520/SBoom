@@ -92,7 +92,7 @@ class LLMClient:
             pass
 
     @staticmethod
-    def _req_timeout(timeout: float) -> httpx.Timeout:
+    def _req_timeout(timeout: Optional[float]) -> httpx.Timeout:
         """单次请求的超时覆盖（连接池 client 的默认超时较长，按调用方配置收紧）。"""
         return httpx.Timeout(float(timeout)) if timeout else httpx.Timeout(LLMClient.DEFAULT_TIMEOUT)
 
@@ -102,10 +102,10 @@ class LLMClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         top_p: Optional[float] = None,
-        base_url: str = None,
-        model: str = None,
-        api_key: str = None,
-        timeout: float = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> str:
         """非流式调用，返回完整响应文本。可选传入 base_url/model/api_key/timeout 覆盖默认配置。"""
         url = base_url or settings.llm_base_url
@@ -123,7 +123,7 @@ class LLMClient:
         }
 
         async with self._borrow_client(url, key) as client:
-            response = None
+            response: Optional[httpx.Response] = None
             for attempt in range(1, self.MAX_ATTEMPTS + 1):
                 try:
                     record_attempt()
@@ -140,10 +140,13 @@ class LLMClient:
                     # httpx retires broken connections; closing this shared client
                     # would interrupt other users' in-flight requests.
 
+            if response is None:
+                # 上面的循环要么 break（response 已赋值）要么抛出；这里只是让类型收窄
+                raise RuntimeError("LLM 请求未返回响应")
             try:
                 data = response.json()
                 record_usage(data.get("usage"))
-                return data["choices"][0]["message"]["content"]
+                return str(data["choices"][0]["message"]["content"])
             except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
                 # LLM 返回了非 JSON 错误页或结构异常——翻译成统一异常，由调用方按 502 处理
                 logger.error("模型响应结构异常: %s", type(e).__name__)
@@ -155,10 +158,10 @@ class LLMClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         top_p: Optional[float] = None,
-        base_url: str = None,
-        model: str = None,
-        api_key: str = None,
-        timeout: float = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> AsyncGenerator[str, None]:
         """流式调用，逐 token 产出文本。可选传入 base_url/model/api_key/timeout 覆盖默认配置。"""
         url = base_url or settings.llm_base_url

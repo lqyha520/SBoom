@@ -16,6 +16,7 @@ from cryptography import x509
 from cryptography.exceptions import InvalidSignature, InvalidTag, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric.types import PublicKeyTypes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from app.config import get_settings
 
@@ -37,6 +38,8 @@ def _key_material(private_path, private_stat, public_path, public_stat, serial):
         raise ValueError("Oversized key")
     private = serialization.load_pem_private_key(private_bytes, password=None)
     certificate = None
+    # 证书公钥与裸公钥是两种不同的联合类型，显式标注为完整的公钥联合，避免分支间类型冲突
+    public: PublicKeyTypes
     if b"BEGIN CERTIFICATE" in public_bytes:
         certificate = x509.load_pem_x509_certificate(public_bytes)
         if format(certificate.serial_number, "X").upper() != serial.upper():

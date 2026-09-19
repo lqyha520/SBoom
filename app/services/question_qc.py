@@ -51,7 +51,9 @@ def reject_reason(stem: Optional[str]) -> Optional[str]:
 
 def arithmetic_value(expression: str) -> Optional[Fraction]:
     """Evaluate a bounded arithmetic AST only; never execute model-provided code."""
-    text = expression.translate(str.maketrans({"×": "*", "÷": "/", "−": "-", "（": "(", "）": ")", "[": "(", "]": ")"})).strip()
+    # dict 值类型显式写宽：str.maketrans 的重载要 dict[str, str | int | None]，而 dict 是不变的
+    translation: dict[str, str | int | None] = {"×": "*", "÷": "/", "−": "-", "（": "(", "）": ")", "[": "(", "]": ")"}
+    text = expression.translate(str.maketrans(translation)).strip()
     text = re.sub(r"(\d+(?:\.\d+)?)%", r"(\1/100)", text)
     if not text or len(text) > 120 or not re.fullmatch(r"[0-9.\s+*/()\-]+", text):
         return None
@@ -61,7 +63,7 @@ def arithmetic_value(expression: str) -> Optional[Fraction]:
         if len(list(ast.walk(tree))) > 80:
             return None
 
-        def visit(node):
+        def visit(node) -> Fraction:
             if isinstance(node, ast.Constant) and type(node.value) in (int, float):
                 value = Fraction(str(node.value))
             elif isinstance(node, ast.BinOp) and type(node.op) in ops:
@@ -141,13 +143,15 @@ def question_issue(question) -> Optional[str]:
         if any(key not in question for key in ("top", "left", "right")):
             return "数的分成字段缺失"
         values = [_number(question.get(key)) for key in ("top", "left", "right")]
-        if values.count(None) != 1 or _number(answer) is None:
+        target = _number(answer)
+        if values.count(None) != 1 or target is None:
             return "数的分成需包含两个已知数和一个待填数"
         blank = question[("top", "left", "right")[values.index(None)]]
         if blank is not None and not re.fullmatch(r"[_?？\s]+", str(blank)):
             return "数的分成填空位置无效"
-        values[values.index(None)] = _number(answer)
-        if values[0] != values[1] + values[2]:
+        # 用局部列表替代直接回写 values，让"待填位已填"这件事对类型检查可见
+        filled = [target if value is None else value for value in values]
+        if filled[0] != filled[1] + filled[2]:
             return "数的分成答案不正确"
     if kind == "match_pair":
         left, right = question.get("left_items"), question.get("right_items")

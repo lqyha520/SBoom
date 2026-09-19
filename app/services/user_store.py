@@ -62,7 +62,8 @@ def authenticate(username: str, password: str) -> Optional[Any]:
 
 def count_admins() -> int:
     with db() as conn:
-        return conn.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'").fetchone()[0]
+        row = conn.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'").fetchone()
+        return int(row[0])
 
 
 def ensure_admin(username: str, password: str) -> None:
@@ -150,7 +151,7 @@ def delete_user(user_id: int) -> bool:
         if conn.execute("SELECT 1 FROM catalog_edition_history e JOIN paper_archives a ON a.id = e.paper_id WHERE a.user_id = ? LIMIT 1", (user_id,)).fetchone():
             raise UserHasCatalogPapers("该用户的原稿仍被公共资料的打印版本引用，请先处理公共条目")
         cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
-        return cur.rowcount > 0
+        return int(cur.rowcount) > 0
 
 
 def admin_stats() -> dict:
@@ -180,12 +181,13 @@ def _template_payload(data: dict, name: str) -> str:
 
 def _next_template_revision(conn, user_id: int) -> int:
     # Keep revisions monotonic even when a name is deleted and recreated.
-    return conn.execute(
+    row = conn.execute(
         "INSERT INTO template_revision_counters (user_id, revision) "
         "SELECT ?, COALESCE(MAX(revision), 0) + 1 FROM user_templates WHERE user_id = ? "
         "ON CONFLICT(user_id) DO UPDATE SET revision = template_revision_counters.revision + 1 "
         "RETURNING revision", (user_id, user_id),
-    ).fetchone()[0]
+    ).fetchone()
+    return int(row[0])
 
 
 def list_templates(user_id: int) -> list:
@@ -229,7 +231,7 @@ def upsert_template(user_id: int, name: str, data: dict, expected_revision: Opti
             ).fetchone()
         if row is None:
             raise TemplateConflict("模板已在其他设备修改或删除，本地版本已保留，请另存为新模板")
-        return row[0]
+        return int(row[0])
 
 
 def bulk_upsert_templates(user_id: int, templates: list) -> int:
@@ -264,7 +266,7 @@ def delete_template(user_id: int, name: str, expected_revision: Optional[int] = 
         )
         if not cur.rowcount and expected_revision is not None:
             raise TemplateConflict("模板版本已变化，未删除任何数据，请刷新模板列表后确认")
-        return cur.rowcount > 0
+        return int(cur.rowcount) > 0
 
 
 # ─── 管理端模板查看 ───
@@ -295,6 +297,9 @@ def get_template_for_admin(tpl_id: int, user_id: int) -> Optional[dict]:
     if not row:
         return None
     try:
-        return json.loads(row["data"])
+        data = json.loads(row["data"])
     except json.JSONDecodeError:
         return {"name": "?", "error": "模板数据损坏（JSON 解析失败）"}
+    if not isinstance(data, dict):
+        return {"name": "?", "error": "模板数据损坏（不是对象）"}
+    return data

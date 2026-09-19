@@ -28,7 +28,7 @@ def money(value):
 def parse_bill(content, record_kind=None):
     rows = csv.reader(io.StringIO(content), strict=True)
     header = None
-    result = []
+    result: list[dict] = []
     footer = False
     for values in rows:
         if not values:

@@ -66,7 +66,7 @@ def _error(message="登录已过期，请重新登录", status=401, code=""):
     raise HTTPException(status, detail={"error": message, **({"code": code} if code else {})})
 
 
-def _user(conn, user_id):
+def _user(conn, user_id) -> MiniUser:
     row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
     if not row:
         _error()
@@ -340,7 +340,8 @@ def update_admin_profile(admin_id, user_id, body: AdminProfileUpdate):
             args.append(body.avatar)
             conn.execute("DELETE FROM mini_user_avatars WHERE user_id = ?", (user_id,))
         reset_password = body.new_password is not None
-        if reset_password:
+        # 用条件本身而不是布尔量收窄类型：mypy 不会从 reset_password 反推 new_password 非空
+        if body.new_password is not None:
             fields.append("password_hash = ?")
             args.append(hash_password(body.new_password))
         if not fields:

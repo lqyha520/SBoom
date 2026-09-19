@@ -9,6 +9,7 @@ import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import wraps
+from typing import cast
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
@@ -87,7 +88,8 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
                 raise HTTPException(409, detail={"error": "请求 ID 已用于其他出题条件"})
             if row["status"] == "succeeded":
                 if row["result_json"]:
-                    return json.loads(row["result_json"])
+                    # 缓存由 _finish 用 json.dumps 写入，必然是对象；cast 只补类型、不改行为
+                    return cast(dict, json.loads(row["result_json"]))
                 raise HTTPException(410, detail={"error": "该请求已完成，结果缓存已过期或不支持重放，不会再次调用模型"})
             if row["error_status"]:
                 raise HTTPException(row["error_status"], detail=json.loads(row["error_json"]))
@@ -179,16 +181,17 @@ def metered(kind: str):
                 return data
             except BaseException as exc:
                 status_code = exc.status_code if isinstance(exc, HTTPException) else 503
-                detail = exc.detail if isinstance(exc, HTTPException) else {"error": "生成中断，结果尚不确定，请先查询请求状态"}
-                if isinstance(detail, dict):
-                    detail = {**detail, "request_id": request_id}
+                # 不复用上面 except 分支的 detail：那里的 detail 已被收窄为 dict，而这里可能是 str
+                failure_detail = exc.detail if isinstance(exc, HTTPException) else {"error": "生成中断，结果尚不确定，请先查询请求状态"}
+                if isinstance(failure_detail, dict):
+                    failure_detail = {**failure_detail, "request_id": request_id}
                 await asyncio.shield(asyncio.to_thread(
                     _finish, user.id, request_id, usage,
-                    "unknown" if status_code >= 500 else "failed", None, (status_code, detail),
+                    "unknown" if status_code >= 500 else "failed", None, (status_code, failure_detail),
                 ))
                 if isinstance(exc, asyncio.CancelledError):
                     raise
-                raise HTTPException(status_code, detail=detail,
+                raise HTTPException(status_code, detail=failure_detail,
                                     headers=exc.headers if isinstance(exc, HTTPException) else None) from exc
             finally:
                 current_usage.reset(token)

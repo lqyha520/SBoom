@@ -122,8 +122,8 @@ def _seed_dictionary(conn, now: int) -> None:
                 (f"{kind}-{uuid.uuid4().hex[:12]}", kind, value, value, (index + 1) * 10, now, now),
             )
     # 修剪历史默认值（初中/高中年级、语数英外科目）：精确按字面量删除，不动管理员自加的值
-    for kind, values in RETIRED_DICTIONARY_VALUES.items():
-        for value in values:
+    for kind, retired in RETIRED_DICTIONARY_VALUES.items():
+        for value in retired:
             rows = conn.execute("SELECT id FROM site_dictionary WHERE kind = ? AND value = ?", (kind, value)).fetchall()
             for row in rows:
                 item_id = row["id"] if not isinstance(row, tuple) else row[0]

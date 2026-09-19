@@ -56,7 +56,8 @@ def _take_questions(raw, game_type: str, count: int, seen: set, namespace: str) 
     questions = raw.get("questions", []) if isinstance(raw, dict) else []
     if not isinstance(questions, list):
         return [], 1
-    kept, rejected = [], 0
+    kept: list[dict] = []
+    rejected = 0
     for value in questions[:300]:
         if len(kept) >= count:
             break
@@ -81,7 +82,8 @@ async def normalize_result(
     passage = passage.strip() if isinstance(passage, str) else None
     namespace = passage or ""
     if item.game_type == "reading" and not passage:
-        kept, rejected = [], 0
+        kept: list[dict] = []
+        rejected = 0
         warnings.append("阅读正文缺失，未采用无法核对的问题")
     else:
         kept, rejected = _take_questions(raw, item.game_type, item.question_count, seen, namespace)

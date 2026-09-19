@@ -279,7 +279,8 @@ def database_ready() -> bool:
     try:
         with pool.connection(timeout=1) as conn:
             conn.execute("SET LOCAL statement_timeout = '1000ms'")
-            return conn.execute("SELECT 1").fetchone()[0] == 1
+            row = conn.execute("SELECT 1").fetchone()
+            return row is not None and row[0] == 1
     except Exception:
         return False
 

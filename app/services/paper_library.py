@@ -40,7 +40,7 @@ def _folder(conn, user_id: int, folder_id: str | None):
         _missing()
 
 
-def _summary(row):
+def _summary(row) -> dict:
     value = dict(row)
     value["favorite"] = bool(value["favorite"])
     if value["file_status"] == "uploading" and value["upload_started_at"] < time.time() - UPLOAD_LEASE:
@@ -58,7 +58,7 @@ def _assets(conn, paper_id: str):
     return [{**dict(row), "url": f"/api/v1/library/assets/{row['id']}"} for row in rows]
 
 
-def get_paper(user_id: int, paper_id: str):
+def get_paper(user_id: int, paper_id: str) -> dict:
     with db() as conn:
         row = conn.execute(
             f"SELECT {SUMMARY_COLUMNS}, a.snapshot_json FROM paper_archives a LEFT JOIN paper_folders f ON f.id = a.folder_id "
@@ -150,7 +150,9 @@ def list_papers(user_id: int, q="", grade="", subject="", folder_id=None, favori
 
 
 def update_paper(user_id: int, paper_id: str, request: ArchiveUpdate):
-    updates, args = [], []
+    # args 同时承载 str（folder_id/title）与 int（favorite），不能由首条 append 推定元素类型
+    updates: list[str] = []
+    args: list = []
     with db(serialized=True) as conn:
         _owned(conn, user_id, paper_id)
         if "folder_id" in request.model_fields_set:

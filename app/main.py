@@ -33,7 +33,7 @@ settings = get_settings()
 
 
 _LOG_FILE = Path(__file__).resolve().parent.parent / "server.log"
-_log_handlers = [logging.StreamHandler(sys.stdout)]
+_log_handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
 if settings.log_to_file:
     if settings.workers > 1:
         raise RuntimeError("LOG_TO_FILE requires WORKERS=1; use container logs for multiple workers")
@@ -42,6 +42,7 @@ if settings.log_to_file:
 
 # 配置日志格式：生产环境（FORCE_HTTPS=true）使用 JSON 格式，开发环境使用文本格式
 use_json_logging = settings.force_https
+formatter: logging.Formatter
 if use_json_logging:
     try:
         from pythonjsonlogger import jsonlogger
@@ -70,7 +71,7 @@ async def lifespan(app: FastAPI):
     """应用启动/关闭时的管理"""
     # 启动时验证配置
     try:
-        settings.validate()
+        settings.validate_startup()
     except ValueError as e:
         logger.error("配置验证失败: %s", e)
         raise

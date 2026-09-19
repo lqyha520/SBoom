@@ -52,7 +52,7 @@ def remove(identifier, revision):
 
 
 def label_map(conn, identifiers, admin=False):
-    result = {identifier: [] for identifier in identifiers}
+    result: dict[str, list[dict]] = {identifier: [] for identifier in identifiers}
     if not identifiers:
         return result
     marks = ",".join("?" for _ in identifiers)
@@ -70,7 +70,7 @@ def assign(catalog_id, body):
             fail("资料不存在", 404)
         if row[0] != body.revision:
             fail("资料已更新，请刷新后重试")
-        counts = {}
+        counts: dict[str, int] = {}
         for identifier in body.tag_ids:
             tag = conn.execute("SELECT kind FROM catalog_tags WHERE id = ?", (identifier,)).fetchone()
             if not tag:

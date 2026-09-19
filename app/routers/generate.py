@@ -36,6 +36,13 @@ router = APIRouter(prefix="/api/v1", tags=["生成"])
 settings = get_settings()
 
 
+def _object(value) -> dict:
+    """模型返回的 JSON 必须是对象；合法 JSON 也可能是数组/标量，那种情况按生成失败处理。"""
+    if not isinstance(value, dict):
+        raise ValueError("模型返回的 JSON 不是对象")
+    return value
+
+
 def _extract_json(text: str) -> dict:
     """从 LLM 返回的文本中提取 JSON，处理思考标签/markdown 包裹等干扰"""
     text = text.strip()
@@ -63,7 +70,7 @@ def _extract_json(text: str) -> dict:
         text = text[start:end]
 
     try:
-        return json.loads(text)
+        return _object(json.loads(text))
     except json.JSONDecodeError:
         # JSON 内部有杂质（如 "Extra data"）：用 JSONDecoder 逐段解析取第一个完整对象
         try:
@@ -93,7 +100,7 @@ def _extract_json(text: str) -> dict:
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    return json.loads(text[: i + 1])
+                    return _object(json.loads(text[: i + 1]))
         raise
 
 
@@ -227,7 +234,7 @@ async def generate_batch(request: BatchGenerateRequest, http_request: Request, u
         raise HTTPException(status_code=502, detail={"error": "批量生成失败", "detail": "生成链路异常，请重试；若持续失败请联系管理员"})
 
     matched = match_sections(raw, request.items)
-    seen = set()
+    seen: set[str] = set()
     sections = []
     for index, (item, section) in enumerate(zip(request.items, matched)):
         resolved = item.model_copy(update={"section_id": item.section_id or f"section-{index + 1}"})

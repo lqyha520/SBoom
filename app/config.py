@@ -84,8 +84,12 @@ class Settings(BaseSettings):
         env_prefix="",  # 环境变量无需前缀
     )
 
-    def validate(self) -> None:
-        """启动时验证必填配置项，避免运行时才发现错误"""
+    def validate_startup(self) -> None:
+        """启动时验证必填配置项，避免运行时才发现错误。
+
+        刻意不叫 ``validate``：那是 ``pydantic.BaseModel`` 的类方法，同名定义会把
+        父类的 ``Settings.validate(value)`` 覆盖成实例方法。
+        """
         errors = []
 
         # 必填项
