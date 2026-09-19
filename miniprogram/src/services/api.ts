@@ -36,6 +36,12 @@ export function authHeaders() {
   if (owner) headers['X-Mini-User'] = owner
   return headers
 }
+// #ifdef MP-WEIXIN
+/** 只有开发者工具能连本机后端：真机上 127.0.0.1 指向手机自己，请求必然失败。 */
+function loopbackUsableHere() {
+  try { return (uni.getSystemInfoSync() as { platform?: string }).platform === 'devtools' } catch { return false }
+}
+// #endif
 export function apiUrl(path: string) {
   if (!path.startsWith('/api/v1/')) throw new ApiError('无效的接口地址')
   // #ifdef MP-WEIXIN
@@ -43,6 +49,10 @@ export function apiUrl(path: string) {
   const loopback = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/
   if (!/^https:\/\/[^/]+/.test(base) && !(import.meta.env.DEV && loopback.test(base))) {
     throw new ApiError('请先配置小程序的 HTTPS API 地址')
+  }
+  // 把「拿开发构建去上传」这种误操作变成一句能自解释的提示，而不是含义不明的"网络错误"。
+  if (loopback.test(base) && !loopbackUsableHere()) {
+    throw new ApiError('当前安装包内置的是本机调试地址，请改用正式构建（发行）重新上传')
   }
   // #endif
   return base + path
