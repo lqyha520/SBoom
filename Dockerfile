@@ -30,7 +30,12 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8000
 
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+# 构建期可换 pip 源，默认仍是官方 PyPI（CI、本地构建行为完全不变）。
+# 国内服务器重建时用 --build-arg PIP_INDEX_URL=<镜像源> 提速：实测该机到
+# files.pythonhosted.org 只有 ~14 kB/s，整层依赖要爬 30-40 分钟；换成国内镜像
+# 可到 ~1 MB/s，一两分钟装完。
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN pip install --index-url="${PIP_INDEX_URL}" -r requirements.txt
 
 COPY app ./app
 COPY run.py .

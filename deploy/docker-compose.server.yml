@@ -18,6 +18,14 @@
 # 用法（在服务器 /opt/learn-coach/deploy 下）：
 #   docker compose -p learncoach --env-file .env.production -f docker-compose.server.yml up -d --build
 #   docker compose -p learncoach --env-file .env.production -f docker-compose.server.yml logs -f app
+#
+# 重建镜像（改了代码/依赖后必须重建，只 up -d 不会生效）：
+#   ⚠️ 该机到官方 PyPI 只有 ~14 kB/s，整层 pip install 要爬 30-40 分钟（实测 cryptography
+#      4.7MB 花了 357s）。用国内镜像可到 ~1 MB/s，实测 51s 装完：
+#   docker compose -p learncoach --env-file .env.production -f docker-compose.server.yml \
+#     build --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ app
+#   docker compose -p learncoach --env-file .env.production -f docker-compose.server.yml up -d
+#   （PIP_INDEX_URL 由 Dockerfile 的 ARG 声明，默认仍是官方源，别处构建行为不变）
 
 services:
   db:
