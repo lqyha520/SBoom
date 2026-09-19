@@ -195,6 +195,7 @@ test('reading positions survive reopening, are isolated by account and release, 
 test('the reader restores a page, clamps navigation, resets zoom on turn and persists the chosen page', () => {
   const saved: number[] = []
   const app = fixture('components/PaperPreview.vue', { '../services/session': { session: { user: { id: 'reader' } } },
+    '../services/chrome': { chromeBar: () => ({ inset: 24, height: 68 }) },
     '../services/reading-position': { readPosition: () => 4, rememberPosition: (_owner: string, _paper: string, _release: number, page: number) => saved.push(page) },
   }, 'current, scale, select, change, resize, resetKeys', { pages: Array.from({ length: 8 }, (_, index) => ({ id: String(index), page_number: index + 1 })), paperId: 'paper', release: 1 }, { uni: { getWindowInfo: () => ({ statusBarHeight: 24 }), getMenuButtonBoundingClientRect: () => ({ top: 28, height: 32 }) } })
   try {
@@ -213,23 +214,42 @@ test('the reader restores a page, clamps navigation, resets zoom on turn and per
   } finally { app.dispose() }
 })
 
+test('the shared chrome bar clears the WeChat capsule and never collapses', () => {
+  const devices = [
+    { statusBarHeight: 24, top: 28, bottom: 60, height: 32 },
+    { statusBarHeight: 47, top: 54, bottom: 86, height: 32 },
+    { statusBarHeight: 20, top: 26, height: 32 },
+  ]
+  for (const device of devices) {
+    const app = fixture('services/chrome.ts', {}, '', {}, { uni: { getWindowInfo: () => device, getMenuButtonBoundingClientRect: () => device } })
+    try {
+      const bar = app.exports.chromeBar()
+      assert.equal(bar.inset, device.statusBarHeight)
+      assert.ok(bar.height >= device.statusBarHeight + 44, 'the bar must fit a 44px control')
+      assert.ok(bar.height >= (device.bottom || device.top + device.height) + 8, 'the bar must clear the capsule')
+    } finally { app.dispose() }
+  }
+})
+
 test('preview back closes the reader and page picker without leaving the detail route', () => {
-  for (const device of [{ statusBarHeight: 24, top: 28, height: 32 }, { statusBarHeight: 47, top: 54, height: 32 }]) {
+  // 顶部栏几何由 services/chrome.ts 统一计算（见上一条用例），这里只验证预览页确实采用了它。
+  for (const bar of [{ inset: 24, height: 68 }, { inset: 47, height: 94 }]) {
     const app = fixture('components/PaperPreview.vue', {
       '../services/session': { session: { user: { id: 'reader' } } },
+      '../services/chrome': { chromeBar: () => bar },
       '../services/reading-position': { readPosition: () => 2 },
     }, 'current, close, jumpOpen, navigationTop, navigationHeight', {
       pages: Array.from({ length: 4 }, (_, index) => ({ id: String(index), page_number: index + 1 })), paperId: 'paper', release: 1,
-    }, { uni: { getWindowInfo: () => device, getMenuButtonBoundingClientRect: () => device } })
+    }, { uni: { getWindowInfo: () => bar, getMenuButtonBoundingClientRect: () => bar } })
     try {
       app.page.jumpOpen.value = true
       app.page.close()
       assert.deepEqual(app.events, [['close']])
       assert.equal(app.page.jumpOpen.value, false)
       assert.equal(app.page.current.value, 2)
-      assert.equal(app.page.navigationTop.value, device.statusBarHeight)
-      assert.ok(app.page.navigationHeight.value >= 44)
-      assert.ok(app.page.navigationTop.value + app.page.navigationHeight.value >= device.top + device.height)
+      assert.equal(app.page.navigationTop.value, bar.inset)
+      assert.equal(app.page.navigationHeight.value, bar.height)
+      assert.ok(app.page.navigationTop.value + app.page.navigationHeight.value >= bar.inset + 44)
     } finally { app.dispose() }
   }
 })

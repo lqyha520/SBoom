@@ -70,6 +70,21 @@ test('custom page chrome is enabled on WeChat as well as H5', () => {
   assert.ok(login.includes("request<Authenticated>('/api/v1/mini/login'"))
 })
 
+test('the reader and page chrome share one back button and keep zoom direction static', () => {
+  const read = (file: string) => readFileSync(new URL('../src/' + file, import.meta.url), 'utf8')
+  assert.ok(read('components/ChromeBack.vue').includes('name="arrow-left"'), 'ChromeBack must render the standard arrow icon')
+  for (const host of ['components/PageChrome.vue', 'components/PaperPreview.vue']) {
+    const source = read(host)
+    assert.ok(source.includes("import ChromeBack from './ChromeBack.vue'"), host + ' must reuse the shared back button')
+    assert.ok(source.includes('<ChromeBack'), host + ' must render the shared back button')
+    assert.ok(!/class="[^"]*chrome-back/.test(source), host + ' must not inline its own back button')
+  }
+  const preview = read('components/PaperPreview.vue')
+  // 动态改 direction 会在双指缩放中途打断 movable-view 的手势，表现为放大后拖不动
+  assert.ok(preview.includes('direction="all"'), 'movable-view must keep a static direction')
+  assert.ok(!/:direction=/.test(preview), 'movable-view direction must not be bound dynamically')
+})
+
 test('static Wot button and icon names exist in the installed icon font', () => {
   const font = readFileSync(new URL('../node_modules/@wot-ui/ui/components/wd-icon/iconfont.scss', import.meta.url), 'utf8')
   const icons = new Set(Array.from(font.matchAll(/\.wd-icon-([\w-]+):before/g), match => match[1]))
