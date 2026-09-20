@@ -23,7 +23,7 @@ function goBack() {
 
 <template>
   <view class="page-chrome" :style="{ height: height + 'px' }">
-    <ChromeBack v-if="back" :top="inset + 5" label="返回上一页" @tap="goBack" />
+    <ChromeBack v-if="back" :top="inset + 5" label="返回上一页" @press="goBack" />
   </view>
 </template>
 

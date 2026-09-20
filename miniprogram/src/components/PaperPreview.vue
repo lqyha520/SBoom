@@ -50,7 +50,7 @@ watch(() => props.pages.length, count => { if (current.value >= count) select(Ma
 
 <template>
   <view class="paper-reader" role="dialog" aria-modal="true" aria-label="习题原稿预览">
-    <view class="reader-header" :style="{ paddingTop: navigationTop + 'px', height: navigationHeight + 'px' }"><ChromeBack :top="navigationTop + 5" label="返回习题详情" @tap="close" /><text class="reader-title">原稿预览</text></view>
+    <view class="reader-header" :style="{ paddingTop: navigationTop + 'px', height: navigationHeight + 'px' }"><ChromeBack :top="navigationTop + 5" label="返回习题详情" @press="close" /><text class="reader-title">原稿预览</text></view>
     <swiper class="reader-pages" :current="current" :disable-touch="zoomedCurrent" @change="change">
       <swiper-item v-for="(page, index) in pages" :key="page.id">
         <movable-area class="reader-area" scale-area>

@@ -78,7 +78,18 @@ test('the reader and page chrome share one back button and keep zoom direction s
     assert.ok(source.includes("import ChromeBack from './ChromeBack.vue'"), host + ' must reuse the shared back button')
     assert.ok(source.includes('<ChromeBack'), host + ' must render the shared back button')
     assert.ok(!/class="[^"]*chrome-back/.test(source), host + ' must not inline its own back button')
+    // 自定义组件的事件名不能和原生事件同名：叫 tap 时，`$emit('tap')` 和内部 <button>
+    // 冒泡到组件节点上的原生 tap 会命中同一个 bindtap，一次点击跑两遍处理函数，
+    // 返回一次退了两级（反馈页返回直接落到列表页，详情页被一起弹掉）。
+    assert.ok(/<ChromeBack[^>]*@press=/.test(source), host + ' must bind the custom press event')
+    assert.ok(!/<ChromeBack[^>]*@(tap|click)=/.test(source), host + ' must not bind a native event name on the back button')
   }
+  const back = read('components/ChromeBack.vue')
+  assert.ok(back.includes('defineEmits<{ press: [] }>()'), 'ChromeBack must declare a non-native event name')
+  // 只看模板，注释里提到历史写法是允许的。
+  const backTemplate = back.slice(back.indexOf('</script>'))
+  assert.ok(backTemplate.includes("$emit('press')"), 'ChromeBack must emit press')
+  assert.ok(!backTemplate.includes("$emit('tap')"), 'ChromeBack must not emit tap: it double-fires with the native event')
   const preview = read('components/PaperPreview.vue')
   // 动态改 direction 会在双指缩放中途打断 movable-view 的手势，表现为放大后拖不动
   assert.ok(preview.includes('direction="all"'), 'movable-view must keep a static direction')
