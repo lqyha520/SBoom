@@ -32,7 +32,7 @@ RUN cd web && pnpm build \
  && cd ../admin && pnpm build
 
 # ─── 阶段二：Python 运行时 ───
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     HOST=0.0.0.0 \
