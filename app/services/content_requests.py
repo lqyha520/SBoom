@@ -3,10 +3,11 @@
 import hashlib
 import time
 import uuid
+
 from app.db import db
+from app.services import public_catalog as catalog
 from app.services.mini_errors import fail
 from app.services.mini_messages import notify
-from app.services import public_catalog as catalog
 
 
 def create(user_id, body):

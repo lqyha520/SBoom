@@ -6,9 +6,20 @@ from fastapi import APIRouter, Depends, Query, Response
 
 from app.deps import require_admin
 from app.library_deps import no_store, optional_mini_user, require_mini_user
-from app.models.experience import (CatalogBatch, CatalogRevision, FeedbackCreate, FeedbackUpdate, GroupAssignment,
-                                   GroupInput, Renewal, SupportSettings, TopicInput, UsageEvent)
-from app.services import catalog_ops as publishing, mini_experience as experience
+from app.models.experience import (
+    CatalogBatch,
+    CatalogRevision,
+    FeedbackCreate,
+    FeedbackUpdate,
+    GroupAssignment,
+    GroupInput,
+    Renewal,
+    SupportSettings,
+    TopicInput,
+    UsageEvent,
+)
+from app.services import catalog_ops as publishing
+from app.services import mini_experience as experience
 from app.services.mini_auth import MiniUser
 from app.services.rate_limit import allow
 from app.services.user_store import CurrentUser
@@ -147,7 +158,7 @@ def member_events(identifier: str, limit: int = Query(20, ge=1, le=50), offset: 
 
 @router.post("/admin/catalog/batch")
 def batch(body: CatalogBatch, user: CurrentUser = Depends(require_admin)):
-    return publishing.batch(body)
+    return publishing.batch(body, user.id)
 
 
 @router.get("/admin/catalog/papers/{identifier}/preview")

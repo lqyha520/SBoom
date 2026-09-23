@@ -1,3 +1,5 @@
+> 2026-09-21：服务器入口、监控与备份恢复的最新要求见 [优化交付记录](optimization-2026-09-21.md)。server compose 现默认仅回环绑定并启用 Secure Cookie，应用前须先完成加密回源。
+
 # 部署到 Linux 云服务器（Docker 方案）
 
 整套编排 = **app（FastAPI，含 web/admin 静态托管）+ db（PostgreSQL 16）+ caddy（自动 HTTPS 反代）**。
@@ -53,6 +55,25 @@ curl --fail https://你的域名/readyz  # {"status":"ready"}，数据库不可�
 ```bash
 git pull && docker compose --env-file .env.production up -d --build   # 只重建应用层，前端 dist 在镜像内构建
 ```
+
+### 3.1 非 root 运行与 appdata 卷属主（从旧版升级必读）
+
+镜像以 `USER app`（uid/gid **10001**）运行，代码目录 root 只读，运行期写入全部落 `/app/data`。
+卷是**先在旧 root 镜像下创建**时，`/app/data` 及其内容属主是 `root`，切到新镜像后：
+
+- 容器照样启动、`/readyz` 照样返回 ready（探针不写盘），症状是**静默写失败** —— 试卷文件、缩略图、`operations/` 全部落不下来。
+- 属主迁移只需做一次（改动的是属主，不动内容），用任意镜像挂着卷执行：
+
+```bash
+# 把 <卷名> 换成实际名字：docker volume ls 里通常是 <compose项目名>_appdata
+docker run --rm -u 0 -v <卷名>:/app/data --entrypoint chown <镜像> -R 10001:10001 /app/data
+# 校验：应当没有任何非 10001 的条目
+docker run --rm -v <卷名>:/app/data --entrypoint sh <镜像> -c 'find /app/data ! -user 10001 | head'
+```
+
+- 升级前务必先备份该卷（「4. 数据与备份」），迁移后再验一次容器内写权限：
+  `docker exec <app容器> sh -c 'touch /app/data/.w && rm /app/data/.w'`
+- 若回滚到旧 root 镜像，属主不必改回（root 能读写任何属主）；但要回到新镜像就得保持 10001。
 
 ## 4. 数据与备份
 

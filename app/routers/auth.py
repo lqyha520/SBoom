@@ -9,14 +9,15 @@
 import asyncio
 import logging
 import re
-from psycopg.errors import UniqueViolation
+import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
+from psycopg.errors import UniqueViolation
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.deps import SESSION_COOKIE, require_user
-from app.security import create_token, hash_password, verify_password
+from app.security import create_token, parse_token
 from app.services import user_store
 from app.services.rate_limit import allow
 from app.services.user_store import CurrentUser
@@ -70,7 +71,7 @@ def register(req: Credentials, request: Request, response: Response):
         user = user_store.create_user(req.username, req.password, role=role)
     except UniqueViolation:
         # 并发注册同名用户：UNIQUE 约束冲突 → 友好 409（而非 500）
-        raise HTTPException(status_code=409, detail={"error": "用户名已被占用"})
+        raise HTTPException(status_code=409, detail={"error": "用户名已被占用"}) from None
     _set_session_cookie(response, user.id)
     logger.info(f"新用户注册: {user.username} (id={user.id}, role={role})")
     return {"id": user.id, "username": user.username, "role": role}
@@ -95,7 +96,20 @@ async def login(req: Credentials, request: Request, response: Response):
 
 
 @router.post("/logout", summary="登出")
-async def logout(response: Response):
+async def logout(response: Response, token: str | None = Cookie(None, alias=SESSION_COOKIE),
+                 workspace_user: str | None = Header(None, alias="X-Workspace-User")):
+    """删 Cookie 的同时在服务端吊销该会话：旧 Cookie 即使被复制走也不能再用。
+
+    不走 require_user：令牌已失效/账号已禁用时也应正常清 Cookie 返回 ok。
+    吊销点取 max(现在, 本令牌 iat + 1)——同一秒内签发的旧令牌也会被拒，
+    而下一秒起的新登录不受影响。
+    """
+    payload = parse_token(token) if token else None
+    if payload is not None and workspace_user is not None and workspace_user != str(payload["sub"]):
+        raise HTTPException(409, detail={"error": "登录账号已变化，请刷新后继续", "code": "account_changed"})
+    if payload is not None:
+        not_before = max(int(time.time()), int(payload.get("iat", 0)) + 1)
+        await asyncio.to_thread(user_store.revoke_sessions, payload["sub"], not_before)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"status": "ok"}
 

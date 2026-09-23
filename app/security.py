@@ -14,7 +14,7 @@ import logging
 import secrets
 import time
 from pathlib import Path
-from typing import Optional
+
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ _SECRET_FILE = _DATA_DIR / "secret_key.txt"
 
 # ─── 密钥加载 ───
 
-_cached_secret: Optional[bytes] = None
+_cached_secret: bytes | None = None
 
 
 def get_secret() -> bytes:
@@ -57,7 +57,7 @@ def get_secret() -> bytes:
                 break
             time.sleep(0.05)
         if not generated:
-            raise RuntimeError("服务密钥文件为空，请检查 data/secret_key.txt；不会覆盖已有文件")
+            raise RuntimeError("服务密钥文件为空，请检查 data/secret_key.txt；不会覆盖已有文件") from None
     try:
         import os
         os.chmod(_SECRET_FILE, 0o600)
@@ -119,7 +119,7 @@ def create_token(user_id: int, ttl_seconds: int = _TOKEN_TTL_SECONDS) -> str:
     return f"{header}.{payload}.{_b64url(sig)}"
 
 
-def parse_token(token: str) -> Optional[dict]:
+def parse_token(token: str) -> dict | None:
     """校验签名与过期时间，返回 payload（含 sub/iat/exp）；无效返回 None。"""
     try:
         header, payload, sig = token.split(".")
@@ -142,7 +142,7 @@ def parse_token(token: str) -> Optional[dict]:
 try:
     from cryptography.fernet import Fernet, InvalidToken
 
-    def _fernet(secret: Optional[bytes] = None) -> Fernet:
+    def _fernet(secret: bytes | None = None) -> Fernet:
         key = hashlib.sha256(b"llm-key:" + (secret if secret is not None else get_secret())).digest()
         return Fernet(base64.urlsafe_b64encode(key))
 

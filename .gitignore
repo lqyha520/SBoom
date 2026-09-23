@@ -40,6 +40,8 @@ desktop.ini
 *.tmp
 *.temp
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # ============================
 # 多用户数据（用户库 / 服务密钥，绝不入库）
@@ -47,9 +49,11 @@ desktop.ini
 data/
 
 # ============================
-# 构建产物
+# 构建产物（只忽略三个前端子项目的产物，避免误吞其它目录里的 dist）
 # ============================
-dist/
+/web/dist/
+/admin/dist/
+/miniprogram/dist/
 build/
 *.egg-info/
 
@@ -80,14 +84,21 @@ math-question-bank/
 # 本地工作文件（不入库）
 # ============================
 .workbuddy/
+.ccgui/
 # 工程审查工作区（临时分析产物 + 运行日志）
 .review/
 _*.py
 _*.js
 _*.txt
+# 仓库根的一次性排查/改库脚本：正式脚本放 scripts/，临时脚本放 artifacts/（不入库）
+/check_*.py
+/update_*.py
+/verify_*.py
+/*.sql
 # 本机运行的日志与 PID 文件
 server.log*
 server.pid
+*.pid
 # 截图/压测/回归产物（子目录白名单见上）
 artifacts/
 # 生产环境密钥

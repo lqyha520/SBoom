@@ -1,11 +1,29 @@
 """HTTP boundaries for curriculum discovery, inbox and account requests."""
 
 from typing import Literal
+
 from fastapi import APIRouter, Depends, Query, Response
+
 from app.deps import require_admin
 from app.library_deps import no_store, optional_mini_user, require_mini_user
-from app.models.engagement import TagInput, PaperLabels, EditionInput, ContentRequest, RequestResolution, ClosureInput, ClosureReview, SubscriptionGrant
-from app.services import catalog_discovery, catalog_editions, content_requests, mini_messages, account_closures, wechat_notices
+from app.models.engagement import (
+    ClosureInput,
+    ClosureReview,
+    ContentRequest,
+    EditionInput,
+    PaperLabels,
+    RequestResolution,
+    SubscriptionGrant,
+    TagInput,
+)
+from app.services import (
+    account_closures,
+    catalog_discovery,
+    catalog_editions,
+    content_requests,
+    mini_messages,
+    wechat_notices,
+)
 from app.services.mini_auth import MiniUser
 from app.services.user_store import CurrentUser
 

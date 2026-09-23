@@ -3,6 +3,7 @@
 import hashlib
 import json
 import time
+
 from app.db import db
 from app.services.mini_errors import fail
 
@@ -121,4 +122,9 @@ def assign(admin_id, catalog_id, body):
         else:
             conn.execute("DELETE FROM catalog_print_editions WHERE catalog_id = ? AND kind = ?", (catalog_id, body.kind))
         conn.execute("UPDATE catalog_papers SET revision = revision + 1, updated_at = ? WHERE id = ?", (int(time.time()), catalog_id))
+        if body.confirm_publication:
+            from app.services.catalog_review import confirm
+            confirm(conn, catalog_id, admin_id)
+        else:
+            conn.execute("UPDATE catalog_papers SET reviewed_at = 0, reviewed_by = NULL, answer_readiness = 'unknown' WHERE id = ?", (catalog_id,))
         return {"revision": body.revision + 1, "editions": listing(conn, catalog_id, True)}

@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 import type { Authenticated, User } from '../types'
-import { authGeneration, configureSession, errorMessage, patchPassword, patchProfile, request, TOKEN_KEY, unauthorizedHandler } from './api'
+import { authGeneration, configureSession, errorMessage, patchPassword, patchProfile, request, TOKEN_KEY, unauthorizedHandler, type ReadOptions } from './api'
 import { clearAssetCache } from './assets'
 import { recordEvent } from './experience'
 import { inboxState } from './growth'
@@ -26,7 +26,7 @@ function markActive() {
 }
 
 export function clearSession() {
-  inboxState.unread = 0
+  inboxState.unread = 0; inboxState.pending = 0
   configureSession('')
   session.user = null
   session.ready = true
@@ -37,7 +37,7 @@ export function clearSession() {
 unauthorizedHandler(clearSession)
 
 export function acceptSession(user: User, token = '') {
-  inboxState.unread = 0
+  inboxState.unread = 0; inboxState.pending = 0
   clearAssetCache()
   configureSession(token, String(user.id))
   session.user = user
@@ -86,9 +86,9 @@ export async function registerWeb(username: string, password: string) {
 
 export function loginMini(result: Authenticated) { acceptSession(result.user, result.token) }
 
-export async function refreshMembership() {
+export async function refreshMembership(options: ReadOptions = {}) {
   const previous = session.user
-  const user = await request<User>('/api/v1/mini/me')
+  const user = await request<User>('/api/v1/mini/me', 'GET', undefined, options)
   // A refresh started before saving a photo must not overwrite the new profile.
   if (session.user !== previous) return
   if (session.user?.is_vip && !user.is_vip) clearAssetCache()

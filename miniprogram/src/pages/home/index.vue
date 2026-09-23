@@ -56,6 +56,7 @@ const paperRequests = createLatestRequest()
 const contentRequests = createLatestRequest()
 const favoriteRequests = createLatestRequest()
 let active = true
+const imagesActive = ref(false)
 
 async function loadPapers(reset = false) {
   if (!active || changing.value) return
@@ -63,31 +64,31 @@ async function loadPapers(reset = false) {
   loading.value = true; error.value = ''
   if (reset) { items.value = []; total.value = 0; offset.value = 0 }
   try {
-    const result = await fetchCatalog({ limit: 12, grade: grade.value, sort: feed.value })
+    const result = await fetchCatalog({ limit: 12, grade: grade.value, sort: feed.value }, { scope: current })
     if (current()) { items.value = result.items; total.value = result.total; offset.value = 0 }
   } catch (cause) { if (current()) error.value = errorMessage(cause) }
   finally { if (current()) loading.value = false }
 }
-async function loadContent() {
+async function loadContent(force = false) {
   if (!active) return
   const current = contentRequests.begin()
   contentLoading.value = true; contentError.value = ''
   // Each result can appear immediately; an unavailable optional section must
   // not prevent the catalog, search or other home sections from being used.
   const results = await Promise.allSettled([
-    fetchSiteHome().then(home => { if (current()) site.value = home }),
-    fetchCatalogSummary().then(counts => { if (current()) summary.value = counts }),
-    fetchTopics().then(curated => { if (current()) collections.value = curated.items }),
-    session.user ? fetchCatalog({ recent: true, limit: 1 }).then(result => { if (current()) recentPaper.value = result.items[0] || null }).catch(() => {}) : Promise.resolve(),
+    fetchSiteHome({ scope: current, force }).then(home => { if (current()) site.value = home }),
+    fetchCatalogSummary({ scope: current }).then(counts => { if (current()) summary.value = counts }),
+    fetchTopics({ scope: current, force }).then(curated => { if (current()) collections.value = curated.items }),
+    session.user ? fetchCatalog({ recent: true, limit: 1 }, { scope: current }).then(result => { if (current()) recentPaper.value = result.items[0] || null }).catch(() => {}) : Promise.resolve(),
   ])
   if (!current()) return
   const labels = ['首页推荐', '分类', '专题']
   contentError.value = results.flatMap((result, index) => result.status === 'rejected' ? [labels[index]] : []).join('、')
   contentLoading.value = false
 }
-async function load() {
+async function load(force = false) {
   if (!active || changing.value) { uni.stopPullDownRefresh(); return }
-  await Promise.allSettled([loadPapers(), loadContent()])
+  await Promise.allSettled([loadPapers(), loadContent(force)])
   if (active) uni.stopPullDownRefresh()
   if (active && session.user) void refreshUnread().catch(() => {})
 }
@@ -133,14 +134,22 @@ onShow(async () => {
   active = true
   await ensureSession()
   if (active) {
+    imagesActive.value = true
     if (session.user) grade.value = readPreferences(session.user.id).grade
     void load()
   }
 })
-function leave() { active = false; invalidate(); loading.value = false; contentLoading.value = false; changing.value = ''; gradePicker.value = false; uni.stopPullDownRefresh() }
+function leave() { active = false; imagesActive.value = false; invalidate(); loading.value = false; contentLoading.value = false; changing.value = ''; gradePicker.value = false; uni.stopPullDownRefresh() }
 onHide(leave)
-onUnload(leave)
-onPullDownRefresh(load)
+function reconnect() { if (active && !changing.value) void load(true) }
+uni.$on?.('lc-network-restored', reconnect)
+function memoryWarning() {
+  if (active) return
+  items.value = []; recentPaper.value = null; site.value = null; summary.value = null; collections.value = []
+}
+uni.$on?.('lc-memory-warning', memoryWarning)
+onUnload(() => { leave(); uni.$off?.('lc-network-restored', reconnect); uni.$off?.('lc-memory-warning', memoryWarning) })
+onPullDownRefresh(() => load(true))
 onShareAppMessage(() => shareCard('home'))
 </script>
 
@@ -151,12 +160,12 @@ onShareAppMessage(() => shareCard('home'))
       <view class="grow home-search"><SearchField v-model="q" placeholder="搜知识点、习题" @search="search" /></view>
       <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="grade-entry" role="button" aria-label="选择年级" :disabled="loading || !!changing" @click="gradePicker = true"><text>{{ grade.replace(/^小学/, '') || '全部年级' }}</text><wd-icon name="down" size="11px" /></button>
     </view>
-    <HomeBanner :banners="banners" :grade="grade" :recent="recentPaper" :loading="contentLoading" />
+    <HomeBanner :banners="banners" :grade="grade" :recent="recentPaper" :loading="contentLoading" :active="imagesActive" />
     <view class="content-width home-subjects">
       <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="item in subjects" :key="item.label" class="subject-entry" role="button" :aria-label="item.subject ? item.label + '习题' : '全部习题'" @click="openCatalog({ subject: item.subject, grade })"><view class="subject-symbol" :class="item.tone"><wd-icon :name="item.icon" size="24px" /></view><text>{{ item.label }}</text></button>
     </view>
     <NoticeBar :notices="notices" />
-    <view v-if="contentError" class="content-width"><view class="home-status" role="status"><text class="grow">{{ contentError }}暂时加载失败</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="section-link" :disabled="contentLoading" @click="loadContent">{{ contentLoading ? '加载中' : '重试' }}</button></view></view>
+    <view v-if="contentError" class="content-width"><view class="home-status" role="status"><text class="grow">{{ contentError }}暂时加载失败</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="section-link" :disabled="contentLoading" @click="loadContent(true)">{{ contentLoading ? '加载中' : '重试' }}</button></view></view>
     <template v-if="session.ready">
       <view class="content-width home-feed">
         <view class="section-heading feed-heading">
@@ -167,7 +176,7 @@ onShareAppMessage(() => shareCard('home'))
         <view v-if="error" class="error-strip" role="status"><text class="grow">{{ error }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="section-link retry-papers" role="button" :disabled="loading" aria-label="重试加载习题" @click="loadPapers()">{{ loading ? '加载中' : '重试' }}</button></view>
         <EnhancedSkeleton v-if="loading && !items.length" :count="2" type="card" />
         <transition-group v-else-if="cards.length" name="list" tag="view" class="home-cards">
-          <PaperCard 
+          <PaperCard :active="imagesActive"
             v-for="paper in cards" 
             :key="paper.id" 
             :paper="paper" 

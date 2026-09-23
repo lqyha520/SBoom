@@ -14,7 +14,7 @@ class AppConfigCacheContracts(unittest.TestCase):
     def test_empty_configuration_is_cached_until_expiry(self):
         with patch.object(app_config, "_load_llm_raw", return_value={}) as load, \
                 patch.object(app_config.time, "monotonic", return_value=100) as clock:
-            for attempt in range(5):
+            for _attempt in range(5):
                 self.assertEqual(app_config.get_llm(), app_config._EMPTY)
             self.assertEqual(load.call_count, 1)
             clock.return_value = 160

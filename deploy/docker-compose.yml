@@ -8,11 +8,31 @@
 #
 # 首次启动会自动建表（幂等迁移）。默认用 Caddy 自动签 HTTPS 证书；
 # 数据库只在 compose 内网监听，不对外暴露端口。
+#
+# 镜像内应用以非 root（uid 10001）运行；从旧版镜像升级时 appdata 卷需一次性
+# chown，网络改为固定网段后首次 up 前需先 `docker compose down`（不带 -v），见 docs/deploy.md。
+
+# 三个服务共用的日志轮转：单文件 10m × 3 份，防止 json-file 日志把磁盘吃满
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   db:
+    # 与根目录 docker-compose.yml、docker-compose.server.yml、CI 统一用 16-alpine。
+    # 不要在 postgres:16（glibc）与 16-alpine（musl）之间切换已有的 pgdata 卷：两者文本排序规则不同，
+    # 换镜像后需要 REINDEX，见 docs/deploy.md。
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
+    # PostgreSQL 并行查询/大排序走共享内存；Docker 默认 64m 容易触发 "could not resize shared memory segment"
+    shm_size: 256m
+    deploy:
+      resources:
+        limits:
+          memory: 1g
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-learncoach}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
@@ -31,16 +51,21 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file: .env.production
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "3"
+    logging: *default-logging
+    # 给在途生成任务/连接池收尾留时间；超过后才 SIGKILL
+    stop_grace_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
     environment:
       # 容器内固定项：监听全部网卡、连 compose 网络里的 db、开多 worker（Linux 支持）
       HOST: 0.0.0.0
       PORT: "8000"
       LOG_TO_FILE: "false"
+      # 只信任本 compose 网络内的来源（caddy 容器）转发的 X-Forwarded-*。
+      # 不要填 "*"：那样任何直连客户端都能伪造 IP，按 IP 的限流会失效。
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.30.1.0/24}
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env.production}
       DATABASE_URL: postgresql://${POSTGRES_USER:-learncoach}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}@db:5432/${POSTGRES_DB:-learncoach}
     ports:
@@ -55,6 +80,7 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"
@@ -67,6 +93,14 @@ services:
     depends_on:
       app:
         condition: service_healthy
+
+# 固定网段，使 FORWARDED_ALLOW_IPS 的默认值可预期（与 docker-compose.server.yml 的 172.30.0.0/24 错开，
+# 两套编排可在同一宿主机共存）。改网段后需要 `docker compose down` 让 compose 重建网络。
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.1.0/24
 
 volumes:
   pgdata:

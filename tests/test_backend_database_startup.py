@@ -22,7 +22,7 @@ class DatabaseStartupContracts(unittest.TestCase):
         # 第一次开事务必须是"拿全局 advisory lock 的那个 DDL 事务"；
         # 之后还会另起一个只读连接做落库校验，所以不能断言只调用一次。
         self.assertEqual(
-            connection.call_args_list[0], call(serialized=tuple(database._LOCK_IDS))
+            connection.call_args_list[0], call(serialized=tuple(database._LOCK_IDS), ddl=True)
         )
 
     def test_missing_database_url_fails_closed(self):
@@ -48,7 +48,7 @@ class FreshSchemaContracts(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         # 每次 case 一个全新的空 schema：这才是"首次部署"的真实形态
-        pg_support.case_database(self.stack)
+        pg_support.case_database(self.stack, fresh=True)
 
     def _tables(self) -> set:
         with database.db() as conn:

@@ -29,27 +29,53 @@ export function cancelPdfDownload() {
   handle.release()
 }
 
+// 微信把 wx.request / wx.downloadFile / wx.uploadFile 挤在同一个并发池里（约 10 个）。
+// 列表缩略图必须带鉴权头，只能走 downloadFile 一张张下；弱网时这些下载会占着连接槽直到
+// 60 秒超时，把随后 fetchCatalog 之类的接口请求全部堵在队列里，页面就像“卡住一分钟”。
+// 这里给资源下载单独限流：最多同时占 4 个槽，永远给接口请求留出余量。
+const MAX_CONCURRENT_DOWNLOADS = 4
+let activeDownloads = 0
+const downloadWaiters: (() => void)[] = []
+function freeSlot() {
+  const next = downloadWaiters.shift()
+  // 直接把腾出的槽交给下一个等待者，避免计数抖动。
+  if (next) next(); else activeDownloads = Math.max(0, activeDownloads - 1)
+}
+
 function downloadAsset(path: string, progress: (percent: number) => void, registerCancel: RegisterDownloadCancel): Promise<string> {
+  const pdf = path.startsWith('pdf:')
+  if (pdf) path = path.slice(4)
   const epoch = authGeneration()
+  let cancelled = false
+  let task: UniApp.DownloadTask | undefined
+  // 排队期间也要能取消：此时 task 还没创建，先置标记，轮到自己时立即放弃并让出槽。
+  registerCancel(() => { cancelled = true; task?.abort() })
   return new Promise<string>((resolve, reject) => {
-    let url: string
-    try { url = apiUrl(path) } catch (error) { reject(error); return }
-    const task = uni.downloadFile({
-      url, header: authHeaders(), timeout: 60000,
-      success(result) {
-        if (epoch !== authGeneration()) { release(result.tempFilePath); reject(new ApiError('登录状态已变化')); return }
-        if (result.statusCode !== 200) {
-          release(result.tempFilePath)
-          handleAuthFailure(result.statusCode, result.statusCode === 409 ? 'account_changed' : '')
-          reject(new ApiError('文件暂不可用，请重试', result.statusCode))
-          return
-        }
-        resolve(result.tempFilePath)
-      },
-      fail() { reject(new ApiError('文件下载失败，请检查网络')) },
-    })
-    registerCancel(() => task.abort())
-    task.onProgressUpdate?.(event => progress(event.progress))
+    // 有空槽就同步开下（保持“下一微任务即发起请求”的时序），否则排队等让出。
+    const start = () => {
+      if (cancelled) { reject(new ApiError('下载已取消')); freeSlot(); return }
+      let url: string
+      try { url = apiUrl(path) } catch (error) { reject(error); freeSlot(); return }
+      const settle = (run: () => void) => { run(); freeSlot() }
+      task = uni.downloadFile({
+        // 缩略图/预览图没必要等满 60 秒；PDF 文件大，仍给足时间。
+        url, header: authHeaders(), timeout: pdf ? 60000 : 20000,
+        success(result) {
+          if (epoch !== authGeneration()) { release(result.tempFilePath); settle(() => reject(new ApiError('登录状态已变化'))); return }
+          if (result.statusCode !== 200) {
+            release(result.tempFilePath)
+            handleAuthFailure(result.statusCode, result.statusCode === 409 ? 'account_changed' : '')
+            settle(() => reject(new ApiError('文件暂不可用，请重试', result.statusCode)))
+            return
+          }
+          settle(() => resolve(result.tempFilePath))
+        },
+        fail() { settle(() => reject(new ApiError('文件下载失败，请检查网络'))) },
+      })
+      task.onProgressUpdate?.(event => progress(event.progress))
+    }
+    if (activeDownloads < MAX_CONCURRENT_DOWNLOADS) { activeDownloads++; start() }
+    else downloadWaiters.push(start)
   })
 }
 
@@ -57,7 +83,7 @@ const files = createFilePool(downloadAsset, release)
 export function acquireAsset(path: string) { return files.acquire(path) }
 
 export async function openPdf(asset: Asset, title: string, progress?: (percent: number) => void) {
-  const handle = files.acquire(asset.url, progress)
+  const handle = files.acquire('pdf:' + asset.url, progress)
   pdfHandle?.release()
   pdfHandle = handle
   pendingPdf = handle

@@ -4,16 +4,32 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
+
 from app.config import get_settings
 from app.db import db
 from app.security import decrypt_secret, encrypt_secret
 from app.services.mini_errors import fail
 
 logger = logging.getLogger(__name__)
+
+# 进程内共享一个 httpx.Client（线程安全）：复用到 api.weixin.qq.com 的连接，不必每次重新握 TLS
+_HTTP_LIMITS = httpx.Limits(max_connections=5, max_keepalive_connections=5)
+_http_lock = threading.Lock()
+_http_shared: httpx.Client | None = None
+
+
+def _http_client() -> httpx.Client:
+    global _http_shared
+    if _http_shared is None or _http_shared.is_closed:
+        with _http_lock:
+            if _http_shared is None or _http_shared.is_closed:
+                _http_shared = httpx.Client(timeout=10, follow_redirects=False, limits=_HTTP_LIMITS)
+    return _http_shared
 
 
 def configuration():
@@ -59,10 +75,9 @@ def access_token():
             value = decrypt_secret(data["token"])
             if value:
                 return value
-    with httpx.Client(timeout=10, follow_redirects=False) as client:
-        response = client.post("https://api.weixin.qq.com/cgi-bin/stable_token", json={"grant_type": "client_credential", "appid": settings.wechat_app_id, "secret": settings.wechat_app_secret, "force_refresh": False})
-        response.raise_for_status()
-        value = response.json()
+    response = _http_client().post("https://api.weixin.qq.com/cgi-bin/stable_token", json={"grant_type": "client_credential", "appid": settings.wechat_app_id, "secret": settings.wechat_app_secret, "force_refresh": False}, timeout=10)
+    response.raise_for_status()
+    value = response.json()
     if not isinstance(value, dict) or value.get("errcode") or not isinstance(value.get("access_token"), str):
         raise ValueError("WECHAT_ACCESS_UNAVAILABLE")
     expires = min(7200, max(60, int(value.get("expires_in", 7200))))
@@ -86,10 +101,9 @@ def send(message, openid, template_id):
         settings.wechat_subscribe_body_field: {"value": message["body"].replace("\n", " ")[:20] or "请打开小程序查看"},
         settings.wechat_subscribe_time_field: {"value": stamp.strftime("%Y-%m-%d" if settings.wechat_subscribe_time_field.startswith("date") else "%Y-%m-%d %H:%M")},
     }
-    with httpx.Client(timeout=10, follow_redirects=False) as client:
-        response = client.post("https://api.weixin.qq.com/cgi-bin/message/subscribe/send", params={"access_token": access_token()}, json={"touser": openid, "template_id": template_id, "page": destination(message), "data": data})
-        response.raise_for_status()
-        value = response.json()
+    response = _http_client().post("https://api.weixin.qq.com/cgi-bin/message/subscribe/send", params={"access_token": access_token()}, json={"touser": openid, "template_id": template_id, "page": destination(message), "data": data}, timeout=10)
+    response.raise_for_status()
+    value = response.json()
     if not isinstance(value, dict) or "errcode" not in value:
         raise ValueError("INVALID_WECHAT_RESPONSE")
     return int(value["errcode"])

@@ -27,7 +27,7 @@ class KnowledgeScopeService:
 
     def _load(self) -> None:
         data_path = Path(__file__).parent.parent / "data" / "knowledge_scope.json"
-        with open(data_path, "r", encoding="utf-8") as f:
+        with open(data_path, encoding="utf-8") as f:
             self._data = json.load(f)
 
     def _dictionary_points(self, grade: str, subject: str) -> list[str]:

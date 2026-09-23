@@ -2,9 +2,8 @@
 
 import asyncio
 import logging
-from typing import Optional
 
-from fastapi import Cookie, Depends, HTTPException, Header
+from fastapi import Cookie, Depends, Header, HTTPException
 
 from app.security import parse_token
 from app.services.user_store import CurrentUser, get_user_by_id
@@ -14,8 +13,8 @@ logger = logging.getLogger(__name__)
 SESSION_COOKIE = "lc_session"
 
 
-async def require_user(token: Optional[str] = Cookie(None, alias=SESSION_COOKIE),
-                       workspace_user: Optional[str] = Header(None, alias="X-Workspace-User")) -> CurrentUser:
+async def require_user(token: str | None = Cookie(None, alias=SESSION_COOKIE),
+                       workspace_user: str | None = Header(None, alias="X-Workspace-User")) -> CurrentUser:
     """从 httpOnly Cookie 中解析会话令牌，返回当前用户；未登录/过期抛 401。"""
     if not token:
         raise HTTPException(status_code=401, detail={"error": "请先登录"})

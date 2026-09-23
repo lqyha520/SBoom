@@ -103,3 +103,15 @@ class TypeAccessUpdate(BaseModel):
         if self.view_access == "vip" and self.download_access != "vip":
             raise ValueError("VIP 观看的题型必须同时限制 PDF 下载")
         return self
+
+
+class CatalogWindow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[str] = Field(max_length=1000)
+
+    @field_validator("ids")
+    @classmethod
+    def valid_ids(cls, values):
+        if any(not value or len(value) > 64 for value in values):
+            raise ValueError("无效的资料编号")
+        return list(dict.fromkeys(values))

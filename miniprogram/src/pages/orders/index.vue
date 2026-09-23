@@ -2,7 +2,7 @@
 import { ref } from 'vue'
 import { onLoad, onReachBottom } from '@dcloudio/uni-app'
 import ServicePage from '../../components/ServicePage.vue'
-import { useConsumerPage } from '../../services/consumer-page'
+import { useConsumerPage, type ConsumerTicket } from '../../services/consumer-page'
 import { fetchPlans, fetchOrders, fetchOrder, cancelOrder, syncOrder, requestRefund, syncRefund, orderStatus, refundStatus, yuan, openOrder, type Order } from '../../services/growth'
 import { checkout, checkoutSupport } from '../../services/checkout'
 import { confirmAction } from '../../services/navigation'
@@ -11,16 +11,16 @@ import { openSupport } from '../../services/experience'
 import { formatDate } from '../../content'
 const id = ref(''), items = ref<Order[]>([]), selected = ref<Order | null>(null), more = ref(false), reason = ref(''), refundOpen = ref(false), canPay = ref(false), online = ref(false), notice = ref(''), refundError = ref('')
 onLoad(options => { id.value = String(options?.id || '') })
-async function load(valid: () => boolean, append = false) {
-  if (id.value) { const result = await fetchOrder(id.value); if (valid()) selected.value = result }
-  else { const result = await fetchOrders(append ? items.value.length : 0); if (valid()) { items.value = append ? [...items.value, ...result.items.filter(item => !items.value.some(old => old.id === item.id))] : result.items; more.value = result.has_more } }
-  if (!append) { const plans = await fetchPlans(); if (valid()) { online.value = plans.checkout_enabled; canPay.value = plans.checkout_enabled && checkoutSupport(plans.ios_enabled) && !!session.user?.has_wechat } }
+async function load(valid: ConsumerTicket, append = false) {
+  if (id.value) { const result = await fetchOrder(id.value, { scope: valid }); if (valid()) selected.value = result }
+  else { const result = await fetchOrders(append ? items.value.length : 0, { scope: valid }); if (valid()) { items.value = append ? [...items.value, ...result.items.filter(item => !items.value.some(old => old.id === item.id))] : result.items; more.value = result.has_more } }
+  if (!append && valid()) { const plans = await fetchPlans({ scope: valid }); if (valid()) { online.value = plans.checkout_enabled; canPay.value = plans.checkout_enabled && checkoutSupport(plans.ios_enabled) && !!session.user?.has_wechat } }
 }
 const page = useConsumerPage(load, () => { items.value = []; selected.value = null; more.value = false; refundOpen.value = false; reason.value = ''; notice.value = ''; refundError.value = '';  canPay.value = false; online.value = false })
 const { error, busy, loading } = page
 function payable(order: Order) { return ['created', 'pending'].includes(order.status) && order.expires_at > Date.now() / 1000 }
-function pay() { if (!selected.value || !canPay.value) return; void page.act(async valid => { const result = await checkout(selected.value!.id, valid); if (valid() && result) { selected.value = result; notice.value = result.status === 'paid' ? '付款已确认，会员权益已更新' : '付款结果仍在确认中，请稍后查询订单状态' } }) }
-function sync() { if (!selected.value) return; void page.act(async valid => { const item = selected.value!; const result = item.refund && ['processing', 'abnormal'].includes(item.refund.status) ? await syncRefund(item.refund.id) : await syncOrder(item.id); if (!valid()) return; selected.value = result; await refreshMembership(); if (valid()) notice.value = '已查询最新订单状态' }) }
+function pay() { if (!selected.value || !canPay.value) return; void page.act(async valid => { const result = await checkout(selected.value!.id, valid, { scope: valid }); if (valid() && result) { selected.value = result; notice.value = result.status === 'paid' ? '付款已确认，会员权益已更新' : '付款结果仍在确认中，请稍后查询订单状态' } }) }
+function sync() { if (!selected.value) return; void page.act(async valid => { const item = selected.value!; const result = item.refund && ['processing', 'abnormal'].includes(item.refund.status) ? await syncRefund(item.refund.id) : await syncOrder(item.id); if (!valid()) return; selected.value = result; await refreshMembership({ scope: valid }); if (valid()) notice.value = '已查询最新订单状态' }) }
 function cancel() { if (!selected.value) return; void page.act(async valid => { if (!await confirmAction('取消订单', '确认关闭这笔未付款订单？') || !valid()) return; const result = await cancelOrder(selected.value!.id); if (valid()) selected.value = result }) }
 function refund() {
   if (reason.value.trim().length < 5) { refundError.value = '请填写至少 5 个字的退款原因'; return }

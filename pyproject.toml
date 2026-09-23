@@ -3,6 +3,7 @@ python_version = "3.12"
 # pydantic 的 mypy 插件：让 mypy 理解 BaseModel 由字段生成的 __init__ 与 model_validate，
 # 否则 Settings(...) / CatalogCreate(...) 这类调用会被误报成「缺少命名参数」(call-arg)。
 plugins = ["pydantic.mypy"]
+mypy_path = ["$MYPY_CONFIG_FILE_DIR/tests"]
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false  # 逐步启用，先从宽松开始
@@ -13,6 +14,11 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
 strict_equality = true
+
+[[tool.mypy.overrides]]
+# 维护脚本复用测试数据库护栏和 fixture；CI 的类型检查目标仍是 app/run/scripts。
+module = ["pg_support", "test_backend_library"]
+follow_imports = "silent"
 
 [[tool.mypy.overrides]]
 module = [
@@ -28,3 +34,41 @@ module = [
     "pypdfium2.*",
 ]
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+# 与 `python -m unittest discover -s tests -p 'test_backend*.py'` 收集同一批用例。
+# tests/test_ui_contracts.py 需要一个已启动的 fixture 服务（走 tests/run_ui_contracts.py），
+# 故不纳入默认收集；ui_fixture.py / library_demo.py 等是辅助模块，不匹配 test_ 前缀。
+testpaths = ["tests"]
+python_files = ["test_backend*.py"]
+addopts = "-p no:cacheprovider --durations=15"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+# 前端子项目、数据目录、题库与审计产物不做 lint；node_modules 覆盖各子项目
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "artifacts",
+    "data",
+    "math-question-bank",
+    "node_modules",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]  # 行宽先交给 line-length 提示，不阻塞
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI/Pydantic 的依赖和字段声明是有意在函数定义时创建的不可变描述符。
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Cookie", "fastapi.Body", "pydantic.Field"]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试和 CLI 先设置隔离数据库/启动路径，再导入应用模块。
+"tests/*.py" = ["E402"]
+"scripts/*.py" = ["E402"]

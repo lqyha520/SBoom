@@ -1,5 +1,6 @@
 import { payOrder, syncOrder, type Order } from './growth'
 import { refreshMembership } from './session'
+import type { ReadOptions } from './api'
 
 export function checkoutSupport(iosEnabled: boolean) {
   let supported = false
@@ -8,7 +9,7 @@ export function checkoutSupport(iosEnabled: boolean) {
   // #endif
   return supported
 }
-export async function checkout(id: string, valid: () => boolean): Promise<Order | null> {
+export async function checkout(id: string, valid: () => boolean, options: ReadOptions = {}): Promise<Order | null> {
   // #ifdef MP-WEIXIN
   const result = await payOrder(id)
   if (!valid()) return null
@@ -20,7 +21,7 @@ export async function checkout(id: string, valid: () => boolean): Promise<Order 
   // Only the backend's verified provider status determines whether payment completed.
   const confirmed = await syncOrder(id)
   if (!valid()) return null
-  await refreshMembership()
+  await refreshMembership(options)
   return valid() ? confirmed : null
   // #endif
   // #ifdef H5

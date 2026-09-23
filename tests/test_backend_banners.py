@@ -5,6 +5,7 @@ import unittest
 
 import test_backend_catalog as fixtures
 from PIL import Image
+
 from app import db as database
 from app.routers import site
 from app.site_schema import init_site_schema

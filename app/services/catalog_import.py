@@ -8,12 +8,16 @@ paper_archives + paper_assets，从而复用公共习题发布的全部既有逻
 打包成 ZIP 交给既有入库管线，保证与工作台导出的文件结构逐字节同规。
 """
 
+import asyncio
 import hashlib
 import io
 import json
+import threading
 import time
 import uuid
 import zipfile
+from contextvars import ContextVar
+from functools import wraps
 
 from fastapi import HTTPException
 from PIL import Image
@@ -26,6 +30,44 @@ from app.services.paper_storage import MAX_PAGES
 MAX_IMPORT_BYTES = 32 * 1024 * 1024  # 与 unpack_bundle 对单份 PDF 的上限一致
 RENDER_SCALE = 2  # A4 595pt → 1190px 宽，与工作台导出的预览页观感一致
 JPEG_QUALITY = 80
+
+
+# PDFium is not thread safe. Reject queued imports instead of retaining large
+# request bodies while another import renders. Each worker owns one renderer.
+_import_gate = threading.Lock()
+_admitted = ContextVar("pdf_import_admitted", default=False)
+
+
+def admitted_import(function):
+    """读取上传体前占用处理槽，断开连接也等渲染任务结束后才释放。"""
+    @wraps(function)
+    async def wrapped(*args, **kwargs):
+        if not _import_gate.acquire(blocking=False):
+            raise HTTPException(429, detail={"error": "PDF 正在处理，请稍后重试"}, headers={"Retry-After": "3"})
+        token = _admitted.set(True)
+        task = asyncio.create_task(function(*args, **kwargs))
+        def release(completed):
+            _import_gate.release()
+            if not completed.cancelled():
+                completed.exception()  # 客户端离开后也回收异常。
+        task.add_done_callback(release)
+        try:
+            return await asyncio.shield(task)
+        finally:
+            _admitted.reset(token)
+    return wrapped
+def bounded_import(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if _admitted.get():
+            return function(*args, **kwargs)
+        if not _import_gate.acquire(blocking=False):
+            raise HTTPException(429, detail={"error": "PDF 正在处理，请稍后重试"}, headers={"Retry-After": "3"})
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _import_gate.release()
+    return wrapped
 
 
 def _render_pages(data: bytes) -> list[bytes]:
@@ -83,7 +125,8 @@ IMPORT_MODES = ("student", "answersOnly", "withAnswers")
 MODE_LABELS = {"student": "练习版", "answersOnly": "答案版", "withAnswers": "习题与答案版"}
 
 
-def import_paper(user_id: int, title: str, grade: str, subject: str, data: bytes, mode: str = "withAnswers") -> dict:
+@bounded_import
+def import_paper(user_id: int, title: str, grade: str, subject: str, data: bytes, mode: str = "withAnswers", *, keyword: str = "", question_types: list[str] | None = None, question_count: int = 0) -> dict:
     """把一份 PDF 变成 file_status=ready 的私有试卷归档，返回归档详情。"""
     title = (title or "").strip() or "导入的习题"
     grade, subject = (grade or "").strip(), (subject or "").strip()
@@ -96,10 +139,15 @@ def import_paper(user_id: int, title: str, grade: str, subject: str, data: bytes
     if len(data) > MAX_IMPORT_BYTES:
         raise HTTPException(413, detail={"error": "PDF 不能超过 32 MB"})
     digest = hashlib.sha256(data).hexdigest()
+    with db() as conn:
+        existing = conn.execute("SELECT id, file_status FROM paper_archives WHERE user_id = ? AND source_id = ? AND content_hash = ?",
+                                (user_id, f"import-{digest[:32]}", digest)).fetchone()
+    if existing and existing["file_status"] == "ready":
+        return paper_library.get_paper(user_id, existing["id"])
     pages = _render_pages(data)
     snapshot = json.dumps({
         "schema_version": 1,
-        "paper": {"title": title, "grade": grade, "subject": subject, "keyword": "", "difficulty": "", "sections": []},
+        "paper": {"title": title, "grade": grade, "subject": subject, "keyword": keyword.strip(), "difficulty": "", "sections": [], "declared_question_types": question_types or [], "declared_question_count": question_count},
         "template": {}, "style": {}, "export_options": {"mode": mode},
     }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     now = int(time.time())
@@ -126,7 +174,7 @@ def import_paper(user_id: int, title: str, grade: str, subject: str, data: bytes
                 "keyword, question_count, snapshot_json, folder_id, group_id, group_name, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (paper_id, user_id, f"import-{digest[:32]}", f"import-{digest}", digest, version, title, grade, subject,
-                 "", 0, snapshot, None, "", "", now, now),
+                 keyword.strip(), question_count, snapshot, None, "", "", now, now),
             )
     paper_library.publish_bundle(user_id, paper_id, _bundle(pages, data))
     return paper_library.get_paper(user_id, paper_id)

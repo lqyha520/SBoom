@@ -1,10 +1,8 @@
 """Library and mini-program contracts. Disposable DB/files, no real WeChat or COS."""
 
-import asyncio
 import copy
 import io
 import json
-import os
 import tempfile
 import time
 import unittest
@@ -24,7 +22,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from app import db as database, security
+from app import db as database
+from app import security
 from app.config import get_settings
 from app.deps import SESSION_COOKIE
 from app.models.library import ArchiveCreate

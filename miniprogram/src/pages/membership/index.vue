@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import PageChrome from '../../components/PageChrome.vue'
 import AuthGate from '../../components/AuthGate.vue'
-import { useConsumerPage } from '../../services/consumer-page'
+import { useConsumerPage, type ConsumerTicket } from '../../services/consumer-page'
 import { fetchPlans, createOrder, requestKey, yuan, openOrder, redeemMembershipCard, type Plan } from '../../services/growth'
 import { fetchSupport, openSupport, type SupportSettings } from '../../services/experience'
 import { refreshMembership, session } from '../../services/session'
@@ -26,9 +26,9 @@ const selectedPlan = computed(() => plans.value.find(plan => plan.id === selecte
 const primaryLabel = computed(() => lifetime.value ? '去挑选习题' : canPurchase.value && selectedPlan.value
   ? (session.user?.is_vip ? '确认续费' : '确认开通') : '咨询开通')
 
-async function load(valid: () => boolean) {
+async function load(valid: ConsumerTicket) {
   action.value = ''
-  const [catalog, support, membership] = await Promise.allSettled([fetchPlans(), fetchSupport(), refreshMembership()])
+  const [catalog, support, membership] = await Promise.allSettled([fetchPlans({ scope: valid }), fetchSupport({ scope: valid }), refreshMembership({ scope: valid })])
   if (!valid()) return
   if (support.status === 'fulfilled') { contact.value = support.value; contactError.value = false }
   else { contact.value = null; contactError.value = true }

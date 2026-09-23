@@ -8,7 +8,7 @@ import { createFilePool } from '../src/services/file-pool'
 function fixture() {
   // Exercise the native document lifecycle; H5 download links use a separate branch.
   const source = readFileSync(new URL('../src/services/assets.ts', import.meta.url), 'utf8').replace(/\/\/ #ifdef H5[\s\S]*?\/\/ #endif/g, '')
-  const tasks: { success: (result: { statusCode: number; tempFilePath: string }) => void; fail: () => void; aborted: number }[] = []
+  const tasks: { url: string; timeout: number; success: (result: { statusCode: number; tempFilePath: string }) => void; fail: () => void; aborted: number }[] = []
   const opened: string[] = [], removed: string[] = []
   const exports: Record<string, any> = {}
   let generation = 0
@@ -37,6 +37,23 @@ test('native downloads abort when the last image consumer leaves', async () => {
   first.release(); assert.equal(tasks[0]!.aborted, 0)
   second.release(); await rejected
   assert.equal(tasks[0]!.aborted, 1)
+})
+
+test('PDF asset IDs get a long timeout without changing the API URL; images retain a short timeout', async () => {
+  const { api, tasks } = fixture()
+  const url = '/api/v1/catalog/papers/paper/assets/opaque-id'
+  const pdf = api.openPdf({ url, kind: 'pdf' }, '原稿')
+  await Promise.resolve()
+  assert.equal(tasks[0]!.url, url)
+  assert.equal(tasks[0]!.timeout, 60000)
+  tasks[0]!.success({ statusCode: 200, tempFilePath: '/temporary.pdf' })
+  await pdf
+  const image = api.acquireAsset('/api/v1/catalog/papers/paper/assets/image-id')
+  await Promise.resolve()
+  assert.equal(tasks[1]!.timeout, 20000)
+  tasks[1]!.success({ statusCode: 200, tempFilePath: '/temporary.jpg' })
+  await image.ready
+  image.release(); api.clearAssetCache()
 })
 
 test('leaving a page cancels its pending PDF and never opens a late document', async () => {

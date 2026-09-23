@@ -5,6 +5,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 import * as vue from 'vue'
 import { parse } from 'vue/compiler-sfc'
+import { createUnreadTracker } from '../src/services/unread-tracker'
 import { createLatestRequest } from '../src/services/latest-request'
 
 function fixture(file: string, modules: Record<string, unknown>, expose = '', props: Record<string, unknown> = {}, globals: Record<string, unknown> = {}) {
@@ -15,7 +16,7 @@ function fixture(file: string, modules: Record<string, unknown>, expose = '', pr
   const state = vue.reactive(props)
   scope.run(() => vm.runInNewContext(ts.transpileModule(source + '\nexports.state = {' + expose + '}', { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
     exports, require: (id: string) => id === 'vue' ? { ...vue, onMounted() {}, onBeforeUnmount() {} } : id === '@dcloudio/uni-app'
-      ? Object.fromEntries(['onShow', 'onHide', 'onUnload', 'onLoad', 'onPullDownRefresh', 'onReachBottom', 'onShareAppMessage'].map(name => [name, (cb: (...args: any[]) => unknown) => { hooks[name] = cb }])) : modules[id] || {},
+      ? Object.fromEntries(['onShow', 'onHide', 'onUnload', 'onLoad', 'onPullDownRefresh', 'onReachBottom', 'onShareAppMessage', 'onPageScroll'].map(name => [name, (cb: (...args: any[]) => unknown) => { hooks[name] = cb }])) : modules[id] || {},
     defineProps: () => state, withDefaults: (_: unknown, defaults: object) => Object.assign(state, { ...defaults, ...props }),
     defineEmits: () => (...args: unknown[]) => events.push(args), defineExpose() {}, setTimeout, clearTimeout, ...globals,
   }))
@@ -142,7 +143,8 @@ test('read receipts retry after failure, deduplicate taps and stop updating afte
   let generation = 1, fail = true, calls = 0
   const inboxState = vue.reactive({ unread: 3 })
   let reply: () => Promise<void> = async () => { calls++; if (fail) throw Error('offline'); inboxState.unread = 2 }
-  const app = fixture('services/message-reads.ts', { './api': { authGeneration: () => generation }, './growth': { inboxState, readMessages: () => reply() } })
+  const unreadTracker = createUnreadTracker(() => generation, count => { inboxState.unread = count })
+  const app = fixture('services/message-reads.ts', { './api': { authGeneration: () => generation }, './growth': { inboxState, unreadTracker, readMessages: () => reply() } })
   const service = app.exports
   try {
     const message = { id: 'message', read_at: null }
@@ -170,7 +172,8 @@ test('login recovery notifies the visible parent before the auth gate is removed
 
 test('a server-confirmed read clears a queued receipt after its original response was lost', async () => {
   const inboxState = vue.reactive({ unread: 3 })
-  const app = fixture('services/message-reads.ts', { './api': { authGeneration: () => 1 }, './growth': { inboxState, readMessages: async () => { throw Error('response lost') } } })
+  const unreadTracker = createUnreadTracker(() => 1, count => { inboxState.unread = count })
+  const app = fixture('services/message-reads.ts', { './api': { authGeneration: () => 1 }, './growth': { inboxState, unreadTracker, readMessages: async () => { throw Error('response lost') } } })
   try {
     app.exports.markMessageRead({ id: 'message', read_at: null }); await app.exports.syncMessageReads()
     app.exports.applyPendingReads([{ id: 'message', read_at: 1 }], 2)

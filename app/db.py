@@ -5,11 +5,13 @@ ON CONFLICT upsert、RETURNING），由本模块统一翻译为 PostgreSQL 方�
 本项目已移除 SQLite 运行时支持：DATABASE_URL 必须配置为 PostgreSQL 连接串。
 """
 
-from hashlib import sha256
 import itertools
 import logging
 import threading
+import time
 from contextlib import contextmanager
+from functools import lru_cache
+from hashlib import sha256
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +31,15 @@ def _database_url() -> str:
 
 # ─── SQL 方言翻译 ───
 
+@lru_cache(maxsize=4096)
 def _to_pg_sql(sql: str) -> str:
     """SQLite 风格 SQL → PostgreSQL 风格：
     1. datetime('now', 'localtime') → to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
     2. ? 占位符 → %s（跳过字符串字面量内的 ?）
     3. 字面量 % → %%（psycopg 只认 %s/%b/%t，LIKE 'import-%' 这类会被当成非法占位符）
+
+    纯函数（输出只由输入字符串决定），业务 SQL 基本都是固定模板，
+    用 LRU 缓存省掉每次 execute 的逐字符扫描。
     """
     sql = sql.replace(
         "datetime('now', 'localtime')",
@@ -70,11 +76,12 @@ def _to_pg_sql(sql: str) -> str:
 class _MixedRow(dict):
     """同时支持 row["name"] 和 row[0] 两种访问方式的行对象（对齐 sqlite3.Row 习惯）。"""
 
-    _order: list
+    _order: tuple
 
     def __init__(self, keys, values):
-        super().__init__(zip(keys, values))
-        self._order = list(values)
+        super().__init__(zip(keys, values, strict=False))
+        # psycopg 传进来的就是不可变 tuple，直接持有引用即可，不再逐行复制一份 list
+        self._order = values if isinstance(values, tuple) else tuple(values)
 
     def __getitem__(self, key):
         if isinstance(key, int):
@@ -221,18 +228,74 @@ def _get_pg_pool():
             if _pg_pool is None:
                 from psycopg_pool import ConnectionPool
 
+                settings = get_settings()
+                url = _database_url()
+                min_size = max(1, min(settings.db_pool_min, settings.db_pool_max))
                 pool = ConnectionPool(
-                    _database_url(),
-                    min_size=1,
-                    max_size=10,
-                    timeout=30,  # 池耗尽时最多等 30s
+                    url,
+                    min_size=min_size,
+                    max_size=settings.db_pool_max,
+                    timeout=settings.db_pool_timeout,  # 池耗尽时最多等多久
                     open=False,
-                    kwargs={"row_factory": _pg_row_factory, "connect_timeout": 10},
+                    kwargs={
+                        "row_factory": _pg_row_factory,
+                        "connect_timeout": 10,
+                        "options": _connection_options(url, settings),
+                    },
                 )
                 pool.open(wait=True, timeout=30)
                 _pg_pool = pool
-                logger.info("PostgreSQL 连接池已就绪（min=1, max=10）")
+                logger.info(
+                    "PostgreSQL 连接池已就绪（min=%d, max=%d, statement_timeout=%dms, lock_timeout=%dms, idle_in_transaction=%dms）",
+                    min_size, settings.db_pool_max, settings.db_statement_timeout_ms,
+                    settings.db_lock_timeout_ms, settings.db_idle_in_transaction_timeout_ms,
+                )
     return _pg_pool
+
+
+def _connection_options(url: str, settings) -> str:
+    """拼出 libpq 的 options 参数：服务端会话级超时，连接建立时即生效、无需额外往返。
+
+    DSN 里可能已经带了 options（测试用 -csearch_path=xxx 做 schema 隔离），
+    kwargs 会整体覆盖同名参数，所以必须把两者合并而不是直接替换。
+    """
+    from psycopg.conninfo import conninfo_to_dict
+
+    try:
+        existing = str(conninfo_to_dict(url).get("options") or "")
+    except Exception:
+        existing = ""
+    extra = (
+        f"-c statement_timeout={int(settings.db_statement_timeout_ms)} "
+        f"-c lock_timeout={int(settings.db_lock_timeout_ms)} "
+        f"-c idle_in_transaction_session_timeout={int(settings.db_idle_in_transaction_timeout_ms)}"
+    )
+    return f"{existing} {extra}".strip()
+
+
+_pool_stats_sampled_at = 0.0
+
+
+def _sample_pool_metrics(pool, *, returning: bool = False) -> None:
+    """把池占用情况写进 Prometheus 指标，最多每秒采样一次。
+
+    pool.get_stats() 要拿池锁并拷一份计数字典；每次取/还连接都调两次纯属浪费，
+    指标本身也只是秒级刷新。多线程同时进来最多重复采样一次，无需加锁。
+    """
+    global _pool_stats_sampled_at
+    now = time.monotonic()
+    if now - _pool_stats_sampled_at < 1.0:
+        return
+    _pool_stats_sampled_at = now
+    from app.metrics import update_db_pool_metrics
+
+    stats = pool.get_stats()
+    size, available = stats.get("pool_size", 0), stats.get("pool_available", 0)
+    if returning:
+        # finally 里连接尚未归还，按"即将归还"修正一格
+        update_db_pool_metrics(max(0, size - available - 1), available + 1)
+    else:
+        update_db_pool_metrics(max(0, size - available), available)
 
 
 def close_pg_pool() -> None:
@@ -250,13 +313,24 @@ _LOCK_IDS = {"content": 70634191, "accounts": 70634192, "generation": 70634193, 
 
 
 @contextmanager
-def db(serialized: bool | str | tuple[str, ...] = False, *, content_user: str | None = None):
+def db(serialized: bool | str | tuple[str, ...] = False, *, content_user: str | None = None, ddl: bool = False):
     """从连接池取连接；正常退出 commit，异常回滚（连接归还池时自动清理）。
 
     True 兼容内容域；字符串指定业务域，元组用于跨域事务。
     事务锁跨 worker 生效，固定排序避免交叉获取锁导致死锁。
+    ddl=True 仅供启动建表：解除本事务的 statement/lock 超时——大表补索引可能远超 30s，
+    多 worker 同时启动时排队等 schema 锁也不该被 lock_timeout 打断。
     """
-    with _get_pg_pool().connection() as conn:
+    from app.metrics import db_wait
+    pool = _get_pg_pool()
+    started = time.perf_counter()
+    with pool.connection() as conn:
+        db_wait.labels("pool").observe(time.perf_counter() - started)
+        _sample_pool_metrics(pool)
+        started = time.perf_counter()
+        if ddl:
+            conn.execute("SET LOCAL statement_timeout = 0")
+            conn.execute("SET LOCAL lock_timeout = 0")
         scopes = ("content",) if serialized is True else (serialized,) if isinstance(serialized, str) else serialized or ()
         locks = {_LOCK_IDS[scope]: False for scope in scopes}
         if content_user is not None:
@@ -267,8 +341,12 @@ def db(serialized: bool | str | tuple[str, ...] = False, *, content_user: str | 
         if content_user is not None:
             user_key = int.from_bytes(sha256(str(content_user).encode()).digest()[:4], signed=True)
             conn.execute("SELECT pg_advisory_xact_lock(%s, %s)", (_LOCK_IDS["content"], user_key))
-        yield _PgConn(conn)
-        conn.commit()
+        db_wait.labels("lock").observe(time.perf_counter() - started)
+        try:
+            yield _PgConn(conn)
+            conn.commit()
+        finally:
+            _sample_pool_metrics(pool, returning=True)
 
 
 def database_ready() -> bool:
@@ -362,15 +440,16 @@ def _verify_schema(conn) -> tuple[list, int]:
 
 
 def init_db() -> None:
-    from app.library_schema import init_library_schema
-    from app.site_schema import init_site_schema
-    from app.experience_schema import init_experience_schema
-    from app.engagement_schema import init_engagement_schema
     from app.commerce_schema import init_commerce_schema
-    from app.db_indexes import add_optimization_indexes
+    from app.db_indexes import add_optimization_indexes, add_search_indexes
+    from app.engagement_schema import init_engagement_schema
+    from app.experience_schema import init_experience_schema
+    from app.library_schema import init_library_schema
+    from app.maintenance_schema import init_maintenance_schema
+    from app.site_schema import init_site_schema
 
     # Multiple workers can start together; serialize additive DDL across them.
-    with db(serialized=tuple(_LOCK_IDS)) as conn:
+    with db(serialized=tuple(_LOCK_IDS), ddl=True) as conn:
         conn.executescript(_SCHEMA)
         _migrate_pg(conn)
         _init_reliability_schema(conn)
@@ -380,6 +459,8 @@ def init_db() -> None:
         init_engagement_schema(conn)
         init_commerce_schema(conn)
         add_optimization_indexes(conn)
+        add_search_indexes(conn)
+        init_maintenance_schema(conn)
     # 事务已提交，另起一个连接读真实落库结果（不是"没抛异常"就算成功）
     with db() as conn:
         missing, total = _verify_schema(conn)

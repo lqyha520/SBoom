@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { catalogDetail, type CatalogDetail, type CatalogPaper } from '../catalog'
+import { attachImportedEdition, catalogDetail, type CatalogDetail, type CatalogPaper } from '../catalog'
 import { editionSources, saveEdition, type EditionSource } from '../growth'
 const props = defineProps<{ open: boolean; target: CatalogPaper | null; adminId: number }>()
 const emit = defineEmits<{ close: []; saved: [] }>()
 const detail = ref<CatalogDetail | null>(null), sources = ref<EditionSource[]>([])
 const loose = ref(false)
+const uploadFile = ref<File | null>(null)
+function chooseFile(event: Event) { uploadFile.value = (event.target as HTMLInputElement).files?.[0] || null }
 const error = ref(''), notice = ref(''), busy = ref(false), loading = ref(false), q = ref(''), editionKind = ref<'student' | 'answers'>('answers'), sourceId = ref('none'), confirmed = ref(false)
 let sequence = 0
 const sourceChoices = ref<{ value: string; label: string }[]>([])
@@ -16,7 +18,7 @@ function rebuildChoices() {
     label: `${item.title} · v${item.version} · ${item.mode === 'student' ? '练习版' : item.mode === 'answersOnly' ? '答案版' : '习题与答案版'}${item.owned_by ? `（已单独建条目「${item.owned_by}」，需先删除该条目）` : ''}`,
   }))]
 }
-function setEditionSelection() { sourceId.value = detail.value?.editions?.find(item => item.kind === editionKind.value)?.paper_id || 'none'; confirmed.value = false }
+function setEditionSelection() { sourceId.value = detail.value?.editions?.find(item => item.kind === editionKind.value)?.paper_id || 'none'; confirmed.value = false; uploadFile.value = null }
 async function load() {
   if (!props.open || !props.target) return
   const current = ++sequence; loading.value = true; error.value = ''
@@ -33,9 +35,10 @@ async function save() {
   if (!detail.value || busy.value || loading.value) return
   const current = sequence; busy.value = true; error.value = ''; notice.value = ''
   try {
-    const result = await saveEdition(props.adminId, detail.value.id, { revision: detail.value.revision, kind: editionKind.value, paper_id: sourceId.value === 'none' ? null : sourceId.value, confirm_publication: confirmed.value })
+    const result = uploadFile.value ? await attachImportedEdition(props.adminId, detail.value.id, detail.value.revision, editionKind.value, uploadFile.value, undefined, confirmed.value) : await saveEdition(props.adminId, detail.value.id, { revision: detail.value.revision, kind: editionKind.value, paper_id: sourceId.value === 'none' ? null : sourceId.value, confirm_publication: confirmed.value })
     if (current !== sequence) return
     detail.value.revision = result.revision; detail.value.editions = result.editions; confirmed.value = false
+    uploadFile.value = null
     notice.value = '打印版本已保存'
     emit('saved')
   } catch (cause) { if (current === sequence) error.value = cause instanceof Error ? cause.message : '保存失败' }
@@ -54,6 +57,7 @@ async function save() {
         <UFormField label="要配置的版本"><USelect v-model="editionKind" :items="[{ value: 'student', label: '练习版' }, { value: 'answers', label: '答案解析版' }]" :disabled="busy" class="w-full" /></UFormField>
         <div class="actions-row"><UInput v-model="q" placeholder="搜索匹配的归档" :disabled="busy" @keydown.enter.prevent="load" /><UButton label="查找文件" variant="outline" :disabled="busy" :loading="loading" @click="load" /></div>
         <UFormField hint="工作台习题从同年级、学科与题量的归档中匹配；导入的 PDF 会列出全部导入归档。最多显示 50 份，可搜索缩小范围。更换修订稿后需重新关联。"><USelect v-model="sourceId" :items="sourceChoices" :disabled="busy || loading" class="w-full" aria-label="关联打印文件" /></UFormField>
+        <UFormField label="或直接上传 PDF" hint="上传会替换所选打印版本，请先核对题目与答案是否配套。"><input type="file" accept="application/pdf,.pdf" :disabled="busy || loading" @change="chooseFile" /></UFormField>
         <UCheckbox v-if="detail.status === 'published'" v-model="confirmed" label="已核对文件和现有会员权限，确认更新已发布的打印版本" :disabled="busy" />
         <UButton label="保存打印版本" :disabled="busy || loading || (detail.status === 'published' && !confirmed)" :loading="busy" @click="save" />
       </template>

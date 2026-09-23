@@ -5,7 +5,7 @@ import { openCatalogPaper } from '../services/navigation'
 import PrivateImage from './PrivateImage.vue'
 import PaperAccessBadge from './PaperAccessBadge.vue'
 
-defineProps<{ paper: PaperSummary; busy?: boolean }>()
+withDefaults(defineProps<{ paper: PaperSummary; busy?: boolean; active?: boolean }>(), { active: true })
 const emit = defineEmits<{ favorite: [] }>()
 </script>
 
@@ -14,7 +14,7 @@ const emit = defineEmits<{ favorite: [] }>()
     <button class="paper-card-open" hover-class="control-pressed" role="button" :aria-label="'打开习题：' + exerciseText(paper.title)" @click="openCatalogPaper(paper.id)">
       <view class="paper-cover">
         <view v-if="!paper.can_view" class="cover-sheet cover-locked"><wd-icon name="lock" size="21px" /><text>会员专享</text></view>
-        <view v-else-if="paper.download_mode === 'external' && !paper.thumbnail_url" class="cover-sheet cover-locked"><wd-icon name="folder" size="21px" /><text>网盘资料</text></view><view v-else class="cover-sheet"><PrivateImage :src="paper.thumbnail_url" /></view>
+        <view v-else-if="paper.download_mode === 'external' && !paper.thumbnail_url" class="cover-sheet cover-locked"><wd-icon name="folder" size="21px" /><text>网盘资料</text></view><view v-else class="cover-sheet"><PrivateImage :src="paper.thumbnail_url" :active="active" /></view>
         <view class="cover-access"><PaperAccessBadge :paper="paper" /></view>
       </view>
       <text class="paper-card-title">{{ exerciseTitle(paper) }}</text>

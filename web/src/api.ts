@@ -33,11 +33,11 @@ export class AuthError extends Error {
 const DEFAULT_TIMEOUT_MS = 30_000
 const GENERATE_TIMEOUT_MS = 300_000
 
-export async function request<T>(url: string, init?: RequestInit, timeoutOverrideMs?: number): Promise<T> {
+export async function request<T>(url: string, init?: RequestInit, timeoutOverrideMs?: number, responseType: 'json' | 'blob' = 'json'): Promise<T> {
   const paid = url.startsWith('/api/v1/generate') || url === '/api/v1/validate'
   const timeoutMs = timeoutOverrideMs ?? (paid ? GENERATE_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
   const headers = new Headers(init?.headers)
-  if (workspaceOwner && !url.startsWith('/api/v1/auth/')) headers.set('X-Workspace-User', workspaceOwner)
+  if (workspaceOwner && (!url.startsWith('/api/v1/auth/') || url === '/api/v1/auth/logout')) headers.set('X-Workspace-User', workspaceOwner)
   const requestId = headers.get('X-Request-ID') || ''
   let r: Response
   try {
@@ -73,7 +73,12 @@ export async function request<T>(url: string, init?: RequestInit, timeoutOverrid
     throw new ApiError(base, r.status, d?.code || '', d?.request_id || requestId)
   }
   if (r.status === 204) return undefined as T
-  return r.json()
+  try {
+    return responseType === 'blob' ? await r.blob() as T : await r.json()
+  } catch {
+    // HTTP 头已收到不代表响应体完整；生成可能已计费，必须保留原请求查询。
+    throw new ApiError(paid ? '结果接收中断，未自动重发；请查询原请求结果' : '响应接收失败，请重试', 0, 'network_unknown', requestId)
+  }
 }
 
 /* ── 认证 ── */

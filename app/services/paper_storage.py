@@ -85,3 +85,11 @@ def unpack_bundle(data: bytes) -> list[tuple[str, int, str, bytes]]:
             return files
     except (ValueError, OSError, zipfile.BadZipFile, RuntimeError, NotImplementedError, UnidentifiedImageError) as exc:
         raise HTTPException(422, detail={"error": "文件包无效：需包含 PDF 与连续的 JPEG 页面，最多 40 页"}) from exc
+
+
+def thumbnail(raw: bytes) -> bytes:
+    with Image.open(io.BytesIO(raw)) as image:
+        image.thumbnail((320, 480), Image.Resampling.LANCZOS)
+        out = io.BytesIO()
+        image.convert("RGB").save(out, format="JPEG", quality=82, optimize=True)
+        return out.getvalue()

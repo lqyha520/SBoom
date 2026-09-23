@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from 'vue'
+import BannerArtwork from './BannerArtwork.vue'
 import { acquireAsset } from '../services/assets'
 import { createBannerImages } from '../services/banner-images'
 import { openCatalog, openCatalogPaper } from '../services/navigation'
 import type { SiteBanner, PaperSummary } from '../types'
 
-const props = withDefaults(defineProps<{ banners: SiteBanner[]; grade?: string; loading?: boolean; recent?: PaperSummary | null }>(), { grade: '', loading: false })
+const props = withDefaults(defineProps<{ banners: SiteBanner[]; grade?: string; loading?: boolean; recent?: PaperSummary | null; active?: boolean }>(), { grade: '', loading: false, active: true })
 const current = ref(0)
 const art = ref<Record<string, string>>({})
 const images = createBannerImages(acquireAsset, (id, path) => {
@@ -18,7 +19,10 @@ watch(() => props.banners, (next, previous) => {
   const selected = previous?.[current.value]?.id
   const index = next.findIndex(banner => banner.id === selected)
   current.value = index >= 0 ? index : Math.min(current.value, Math.max(0, next.length - 1))
-  images.sync(next)
+}, { immediate: true })
+watch([() => props.banners, () => props.active], () => {
+  if (props.active === false) images.clear()
+  else images.sync(props.banners)
 }, { immediate: true })
 onUnmounted(() => images.clear())
 
@@ -37,18 +41,19 @@ function change(event: { detail: { current: number } }) { current.value = event.
   <view class="home-banner">
     <view v-if="loading && !banners.length" class="banner-skeleton" role="status" aria-label="正在加载首页推荐"><view /><view /><view /></view>
     <view v-else-if="!banners.length" class="home-welcome">
-      <view class="welcome-copy"><text v-if="recent" class="welcome-kicker">继续上次浏览</text><text class="welcome-title">{{ recent ? recent.title : '今天想练什么？' }}</text><text v-if="!recent" class="welcome-subtitle">按年级和科目，找到合适的练习</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="welcome-link" role="button" @click="recent ? openCatalogPaper(recent.id) : openCatalog({ grade })">{{ recent ? '继续查看' : '开始选习题' }}<wd-icon name="arrow-right" size="15px" /></button></view>
-      <view class="welcome-symbol" aria-hidden="true"><wd-icon name="book" size="40px" /><view class="welcome-spark">+</view></view>
+      <view class="welcome-copy"><view class="welcome-kicker"><view class="kicker-dot" /><text>{{ recent ? '接着上次的发现' : '今天，也有新收获' }}</text></view><text class="welcome-title">{{ recent ? recent.title : '把好奇心，\n变成小进步。' }}</text><text class="welcome-subtitle">{{ recent ? '喜欢的练习，值得再看一遍' : '选一份好练习，让知识慢慢发芽' }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="welcome-link" role="button" @click="recent ? openCatalogPaper(recent.id) : openCatalog({ grade })">{{ recent ? '继续查看' : '去发现习题' }}<wd-icon name="arrow-right" size="14px" /></button></view>
+      <view class="welcome-art"><BannerArtwork /></view>
+      <view class="welcome-footer"><text>{{ grade || '跟着自己的节奏学' }}</text><view class="welcome-subjects"><text>语文</text><view /><text>数学</text><view /><text>英语</text></view></view>
     </view>
     <template v-else>
       <swiper class="banner-swiper" :current="current" :autoplay="false" :circular="banners.length > 1" :duration="240" @change="change">
         <swiper-item v-for="slide in banners" :key="slide.id">
-          <view class="banner-slide" :class="{ 'text-banner': !slide.image_url }">
+          <view class="banner-slide modern-banner" :class="{ 'text-banner': !slide.image_url }">
             <view v-if="slide.image_url" class="banner-media">
               <image v-if="art[slide.id]" :key="slide.image_url" class="banner-photo" :src="art[slide.id]" :mode="slide.image_fit === 'cover' ? 'aspectFill' : 'aspectFit'" aria-hidden="true" @error="images.fail(slide.id, art[slide.id] || '')" />
               <view v-else class="banner-image-placeholder" aria-hidden="true"><wd-icon name="book" size="32px" /><text>每天一点进步</text></view>
             </view>
-            <view v-else class="text-banner-symbol" aria-hidden="true"><wd-icon name="book" size="50px" /></view>
+            <view v-else class="text-banner-art" aria-hidden="true"><BannerArtwork /></view>
             <view class="banner-body">
               <view class="banner-copy"><text v-if="slide.kicker" class="banner-kicker">{{ slide.kicker }}</text><text class="banner-title">{{ slide.title }}</text><text v-if="slide.subtitle" class="banner-subtitle">{{ slide.subtitle }}</text></view>
               <view v-if="actionable(slide)" class="banner-cta"><text>{{ slide.action_label || '去看看' }}</text><view class="banner-arrow"><wd-icon name="arrow-right" size="17px" /></view></view>
@@ -98,16 +103,31 @@ function change(event: { detail: { current: number } }) { current.value = event.
 .banner-dot > view { width: 5px; height: 5px; border-radius: 99px; background: #c3d1c8; transition: width .2s; }
 .banner-dot > view.active { width: 17px; background: var(--lc-primary); }
 .banner-next { display: flex; align-items: center; justify-content: flex-end; gap: 9px; min-width: 65px; height: 44px; margin: 0; padding: 0; background: transparent; font-size: 12px; color: var(--lc-muted); }
-.home-welcome { position: relative; display: flex; align-items: center; min-height: 104px; padding: 12px 16px 6px; border: 1px solid #dcebdd; border-radius: 18px; background: #eaf3ed; overflow: hidden; }
-.welcome-copy { position: relative; z-index: 1; max-width: 82%; }
-.welcome-kicker { display: block; font-size: 12px; color: #527461; letter-spacing: 2px; }
-.welcome-title { display: block; margin-top: 2px; font-size: 18px; font-weight: 650; line-height: 1.5; color: #254b38; display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden; }
-.welcome-subtitle { display: block; font-size: 12px; margin-top: 4px; color: #527461; }
-.welcome-link { display: inline-flex; align-items: center; gap: 9px; min-height: 44px; margin: 0; padding: 0; font-size: 13px; line-height: 1.5; color: var(--lc-primary); background: transparent; }
-.welcome-symbol { position: absolute; right: -12px; bottom: 15px; display: flex; align-items: center; justify-content: center; width: 62px; height: 66px; border-radius: 24px; background: #d9e9dd; color: #80a78d; transform: rotate(-13deg); }
-.welcome-spark { position: absolute; top: -15px; right: 19px; color: #af8d4e; font-size: 25px; font-weight: 300; }
+.home-welcome { position:relative;min-height:242px;padding:21px 18px 49px;border:1px solid #e8e4ce;border-radius:22px;background:linear-gradient(115deg,#fff8e9 0%,#f7f1d9 57%,#e5eedc 100%);overflow:hidden;box-shadow:0 5px 16px #6a79500a; }
+.welcome-copy { position:relative;z-index:2;width:65%; }
+.welcome-kicker { display:inline-flex;align-items:center;gap:6px;color:#66806a;font-size:10px;line-height:18px;letter-spacing:1px; }.kicker-dot { width:5px;height:5px;border-radius:50%;background:#78975d; }
+.welcome-title { display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-line;margin-top:10px;color:#294f3a;font-size:25px;font-weight:700;line-height:1.35;letter-spacing:1px; }
+.welcome-subtitle { display:block;max-width:155px;margin-top:10px;color:#78816a;font-size:11px;line-height:1.7; }
+.welcome-link { display:inline-flex;align-items:center;gap:11px;min-height:38px;margin:15px 0 0;padding:0 13px;border-radius:10px;background:#38664d;color:#fffdf1;font-size:12px;font-weight:550;line-height:1.5;box-shadow:0 3px 0 #254b3814; }
+.welcome-art { position:absolute;right:-6px;top:25px;transform:rotate(3deg) scale(.88);transform-origin:right center;pointer-events:none; }
+.welcome-footer { position:absolute;bottom:0;left:18px;right:18px;height:35px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #70815924;color:#819078;font-size:10px;letter-spacing:.3px; }.welcome-subjects { display:flex;align-items:center;gap:7px; }.welcome-subjects view { width:2px;height:2px;border-radius:50%;background:#abb497; }
+.text-banner { background:linear-gradient(115deg,#fff8e9 0%,#f7f1d9 57%,#e5eedc 100%);border-color:#e8e4ce; }
+.text-banner .banner-body { width:65%;max-width:65%;padding:20px 17px;z-index:1; }.text-banner .banner-title { font-size:24px;color:#294f3a; }.text-banner .banner-subtitle { color:#78816a;font-size:11px; }.text-banner .banner-kicker { color:#66806a;letter-spacing:1px;font-size:10px; }.text-banner .banner-cta { padding:7px 10px;border-radius:9px;background:#38664d;color:#fffdf1; }.text-banner .banner-arrow { width:18px;height:18px;background:transparent; }
+.text-banner-art { position:absolute;right:-8px;top:22px;transform:scale(.88);transform-origin:right center;pointer-events:none; }
 .banner-skeleton { padding: 135px 18px 10px; border-radius: 18px; background: #eaf0eb; }
 .banner-skeleton > view { width: 65%; height: 9px; border-radius: 8px; margin-bottom: 8px; background: #dce7df; }
 .banner-skeleton > view:last-child { width: 40%; }
-@media (max-width: 359px) { .home-banner { padding-left: 16px; padding-right: 16px; } .banner-swiper,.banner-skeleton { height: calc(41.6667vw + 78.666px); } .banner-title { font-size: 16px; } .banner-body { padding-left: 13px; padding-right: 13px; } .welcome-title { font-size: 18px; } }
+.modern-banner { border-color:#e8e4ce; background:linear-gradient(115deg,#fff8e9 0%,#f7f1d9 58%,#e5eedc 100%); }
+.modern-banner .banner-media { position:absolute;right:0;top:0;width:43%;height:100%;background:#e5eedc;clip-path:polygon(18% 0,100% 0,100% 100%,0 100%); }
+.modern-banner .banner-photo { opacity:.92; }
+.modern-banner .banner-body { position:relative;z-index:1;align-items:flex-start;flex-direction:column;justify-content:center;width:62%;max-width:62%;height:100%;box-sizing:border-box;padding:20px 8px 20px 18px; }
+.modern-banner .banner-copy { flex:none;width:100%; }
+.modern-banner .banner-kicker { color:#66806a;letter-spacing:1px;font-size:10px;margin-bottom:7px; }
+.modern-banner .banner-title { color:#294f3a;font-size:21px;line-height:1.35;-webkit-line-clamp:2; }
+.modern-banner .banner-subtitle { color:#78816a;font-size:11px;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;margin-top:7px; }
+.modern-banner .banner-cta { flex-direction:row;align-items:center;max-width:100%;margin-top:12px;padding:7px 10px;border-radius:9px;background:#38664d;color:#fffdf1;font-size:11px;gap:7px; }
+.modern-banner .banner-arrow { width:18px;height:18px;background:transparent; }
+.modern-banner.text-banner .banner-media { display:none; }
+@media (max-width: 359px) { .modern-banner .banner-body { padding-left:15px; }.modern-banner .banner-title { font-size:19px; }.modern-banner .banner-subtitle { max-width:120px; }.modern-banner .banner-cta { margin-top:9px; } }
+@media (max-width: 359px) { .home-banner { padding-left: 16px; padding-right: 16px; } .banner-swiper,.banner-skeleton { height: calc(41.6667vw + 78.666px); } .banner-title { font-size: 16px; } .banner-body { padding-left: 13px; padding-right: 13px; } .welcome-title { font-size:22px; }.welcome-art,.text-banner-art { right:-16px;transform:scale(.73); }.welcome-subtitle { max-width:132px; }.home-welcome { padding-left:15px; }.welcome-copy { width:64%; } }
 </style>

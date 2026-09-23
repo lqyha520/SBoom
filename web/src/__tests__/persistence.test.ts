@@ -39,6 +39,15 @@ afterEach(async () => {
 })
 
 describe('owned drafts and immutable history', () => {
+  it('isolates the draft before asynchronously opening the database', async () => {
+    const store = account()
+    const snapshot = store.captureSnapshot()
+    snapshot.title = '保存时的标题'
+    const saving = persistence.saveDraft('1', 'snapshot-isolation', snapshot)
+    snapshot.title = '保存开始后的编辑'
+    await saving
+    expect((await persistence.loadDraft('1', 'snapshot-isolation'))?.snapshot.title).toBe('保存时的标题')
+  })
   it('binds storage to the authenticated user rather than the import-time localStorage ID', () => {
     localStorage.setItem(UID_KEY, '99')
     localStorage.setItem(userPrefix(1) + LS.paperStyle, JSON.stringify({ bg: 'stars' }))

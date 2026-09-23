@@ -4,6 +4,7 @@
 （模型配置已收归后台管理：/api/v1/admin/llm-config，全体用户共用。）
 """
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,9 +12,8 @@ from pydantic import BaseModel, Field
 
 from app.deps import require_user
 from app.services import user_store
+from app.services.generation_control import request_status, usage_summary
 from app.services.user_store import CurrentUser
-from app.services.generation_control import usage_summary, request_status
-import asyncio
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/me", tags=["个人数据"])

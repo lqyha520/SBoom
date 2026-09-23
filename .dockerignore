@@ -4,22 +4,38 @@ artifacts/
 data/
 node_modules/
 .git/
+.github/
 .workbuddy/
 .review/
+.ccgui/
 .env*
 **/.env*
+deploy/.env*
 __pycache__/
 **/__pycache__/
 **/node_modules/
 **/dist/
 miniprogram/
+tests/
+docs/
+# 工具缓存
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.venv/
+venv/
 # 本地日志与运行时文件
 server.log*
 server.pid
+*.pid
 *.log
-# 仓库根的一次性脚本
+# 仓库根的一次性脚本（正式脚本放 scripts/，临时产物放 artifacts/）
 _*.py
 _*.js
 _*.txt
+/check_*.py
+/update_*.py
+/verify_*.py
+/*.sql
 *.db
 *.dump

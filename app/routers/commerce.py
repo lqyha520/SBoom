@@ -2,13 +2,14 @@
 
 import asyncio
 from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+
 from app.deps import require_admin
 from app.library_deps import no_store, require_mini_user
-from app.models.commerce import PlanInput, OrderInput, RefundInput, RefundReview, BillInput
+from app.models.commerce import BillInput, OrderInput, PlanInput, RefundInput, RefundReview
 from app.models.membership_cards import CardCreate, CardRedeem
-from app.services import membership_cards
-from app.services import mini_orders, mini_refunds, payment_bills
+from app.services import membership_cards, mini_orders, mini_refunds, payment_bills
 from app.services.mini_auth import MiniUser
 from app.services.user_store import CurrentUser
 from app.services.wechat_pay import PaymentError, WeChatPay
@@ -150,6 +151,11 @@ def reconcile(body: BillInput, user: CurrentUser = Depends(require_admin)):
     return payment_call(payment_bills.reconcile, user.id, body.bill_date)
 
 
+def _verify_callback(headers, raw: bytes):
+    """RSA 验签 + AES-GCM 解密 + 读取密钥文件都是同步 CPU/IO，放线程池执行，别占事件循环。"""
+    return WeChatPay().callback(headers, raw)
+
+
 async def receive(request, refund=False):
     raw = bytearray()
     async for chunk in request.stream():
@@ -157,7 +163,7 @@ async def receive(request, refund=False):
         if len(raw) > 1048576:
             raise HTTPException(413, detail={"error": "通知过大"})
     try:
-        identifier, kind, value = WeChatPay().callback(request.headers, bytes(raw))
+        identifier, kind, value = await asyncio.to_thread(_verify_callback, request.headers, bytes(raw))
     except PaymentError as error:
         raise HTTPException(400 if error.code in ("INVALID_CALLBACK", "INVALID_SIGNATURE") else 503, detail={"error": "无法验证支付通知"}) from error
     if refund:

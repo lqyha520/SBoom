@@ -7,7 +7,6 @@ from fastapi import HTTPException
 from app.db import db
 from app.models import GameType
 
-
 TYPE_LABELS = {
     "quiz": "选择题", "fill_blank": "填空题", "match_pair": "连线配对", "challenge": "闯关练习",
     "oral_math": "口算", "reading": "阅读理解", "vertical_calc": "竖式计算", "recursive_calc": "脱式计算",
@@ -61,6 +60,14 @@ def save_policy(conn, catalog_id, body, preserve_missing=False):
         for key in policy:
             if key not in body.model_fields_set:
                 policy[key] = previous[key] if previous else "inherit"
+    if not preserve_missing and not conn.execute("SELECT 1 FROM catalog_question_types WHERE catalog_id = ?", (catalog_id,)).fetchone():
+        from app.config import get_settings
+        settings = get_settings()
+        for key, default in (("view_access", settings.import_default_view_access), ("download_access", settings.import_default_download_access)):
+            if policy[key] == "inherit":
+                policy[key] = default
+        if policy["view_access"] == "vip":
+            policy["download_access"] = "vip"
     if policy["view_access"] == "vip" and policy["download_access"] == "free":
         raise HTTPException(422, detail={"error": "VIP 观看的习题不能向普通用户开放下载"})
     conn.execute("INSERT INTO catalog_access(catalog_id, view_access, download_access) VALUES (?, ?, ?) "

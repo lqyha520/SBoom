@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { loadEnv } from 'vite'
 
 const project = fileURLToPath(new URL('../', import.meta.url))
-const output = path.join(project, 'dist/build/mp-weixin')
+const output = process.env.UNI_OUTPUT_DIR ? path.resolve(process.env.UNI_OUTPUT_DIR) : path.join(project, 'dist/build/mp-weixin')
 const wxssCompiler = process.env.WECHAT_WCSC_PATH
 let wxssCount = 0
 const json = async file => JSON.parse(await readFile(file, 'utf8'))

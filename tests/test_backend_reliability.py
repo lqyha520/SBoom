@@ -20,11 +20,14 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from app import db as database, security
+
+from app import db as database
+from app import security
 from app.config import Settings, get_settings
 from app.deps import SESSION_COOKIE
 from app.routers import generate, me
-from app.services import generation_control as control, user_store
+from app.services import generation_control as control
+from app.services import user_store
 from app.services.llm_client import LLMClient
 from app.services.question_qc import arithmetic_value, question_issue
 
@@ -42,7 +45,7 @@ class BackendReliability(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
-        root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="lc-test-")))
+        _root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="lc-test-")))
         pg_support.case_database(self.stack)
         self.stack.enter_context(patch.object(get_settings(), "generation_repair_limit", 0))
         self.stack.enter_context(patch.object(get_settings(), "generation_daily_limit", 100))

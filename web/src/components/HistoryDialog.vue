@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import DraftManager from './DraftManager.vue'
 import { useExamStore } from '../stores/exam'
 import type { HistoryReason } from '../persistence'
 
-defineProps<{ open: boolean }>()
+const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const store = useExamStore()
 const search = ref('')
@@ -11,13 +12,14 @@ const pendingRestore = ref('')
 const pendingDelete = ref('')
 const busy = ref(false)
 const error = ref('')
-const entries = computed(() => {
-  const query = search.value.trim().toLowerCase()
-  return store.history.filter(entry => [entry.title, entry.grade, entry.subject, entry.keyword].join(' ').toLowerCase().includes(query))
-})
+const draftsOpen = ref(false)
+const entries = computed(() => store.history)
 const reasons: Record<HistoryReason, string> = { manual: '手动保存', generated: '生成完成', 'before-restore': '恢复前版本', 'before-generate': '重新生成前' }
 const formatTime = (value: number) => new Date(value).toLocaleString('zh-CN', { hour12: false })
-onMounted(() => store.refreshHistory())
+let searchTimer: ReturnType<typeof setTimeout> | undefined
+watch(search, value => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { void store.refreshHistory(value, 0) }, 250) })
+watch(() => props.open, open => { if (open) { search.value = store.historyQuery; void store.refreshHistory() } }, { immediate: true })
+onBeforeUnmount(() => clearTimeout(searchTimer))
 async function save() {
   error.value = ''
   if (!await store.saveVersion()) error.value = store.storageError || '暂时无法保存版本'
@@ -40,12 +42,15 @@ async function remove() {
   <UModal :open="open" title="本机历史" :ui="{ content: 'max-w-2xl' }" @update:open="value => { if (!value) emit('close') }">
     <template #body>
       <div class="history-toolbar">
+        <UButton label="整理草稿" color="neutral" variant="outline" @click="draftsOpen = true" />
         <UInput v-model="search" icon="i-lucide-search" placeholder="搜索试卷" aria-label="搜索历史版本" class="flex-1" />
         <UButton icon="i-lucide-save" label="保存版本" :loading="store.historyBusy" :disabled="store.generating || store.layoutMode || !store.sections.length" @click="save" />
       </div>
-      <UAlert v-if="error" :title="error" color="error" variant="soft" class="mt-4" role="alert" />
-      <div v-if="!entries.length" class="empty-state"><UIcon name="i-lucide-history" class="size-9" /><h3>{{ search ? '没有匹配的版本' : '还没有历史版本' }}</h3></div>
-      <div class="history-list">
+      <UAlert v-if="error || store.historyError" :title="error || store.historyError" color="error" variant="soft" class="mt-4" role="alert" />
+      <UButton v-if="store.historyError" label="重新加载" :loading="store.historyLoading" @click="store.refreshHistory(search, store.historyOffset)" />
+      <div v-if="!entries.length && !store.historyLoading && !store.historyError" class="empty-state"><UIcon name="i-lucide-history" class="size-9" /><h3>{{ search ? '没有匹配的版本' : '还没有历史版本' }}</h3></div>
+      <div v-if="store.historyLoading" role="status">正在加载历史记录…</div>
+      <div class="history-list" :aria-busy="store.historyLoading">
         <article v-for="entry in entries" :key="entry.id" class="history-row">
           <UIcon name="i-lucide-file-clock" class="size-5 shrink-0 text-secondary" />
           <div class="history-detail">
@@ -57,8 +62,14 @@ async function remove() {
           <UTooltip text="删除版本"><UButton icon="i-lucide-trash-2" color="neutral" variant="ghost" size="sm" :aria-label="'删除版本 ' + entry.title" :disabled="busy || store.historyBusy" @click="pendingDelete = entry.id" /></UTooltip>
         </article>
       </div>
+      <div class="history-toolbar mt-4">
+        <UButton label="上一页" :disabled="store.historyLoading || !store.historyOffset" @click="store.refreshHistory(search, Math.max(0, store.historyOffset - 20))" />
+        <span>第 {{ Math.floor(store.historyOffset / 20) + 1 }} 页</span>
+        <UButton label="下一页" :disabled="store.historyLoading || !store.historyHasMore" @click="store.refreshHistory(search, store.historyOffset + 20)" />
+      </div>
     </template>
   </UModal>
+  <DraftManager :open="draftsOpen" @close="draftsOpen = false" />
   <UModal :open="!!pendingRestore" title="恢复历史版本" description="当前内容会先保存为恢复前版本，然后切换到所选版本。" @update:open="value => { if (!value && !store.historyBusy) pendingRestore = '' }">
     <template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="store.historyBusy" @click="pendingRestore = ''" /><UButton icon="i-lucide-rotate-ccw" label="确认恢复" :loading="store.historyBusy" @click="restore" /></template>
   </UModal>

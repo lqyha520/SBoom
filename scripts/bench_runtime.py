@@ -17,6 +17,7 @@ import tracemalloc
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -28,7 +29,7 @@ def source_at(revision, path):
 
 
 def rate_benchmark(source):
-    namespace = {}
+    namespace: dict[str, Any] = {}
     exec(compile(source, "rate_limit_benchmark", "exec"), namespace)
     allow = namespace["allow"]
     for index in range(10_001):

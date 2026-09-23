@@ -40,6 +40,7 @@ export interface Snapshot {
   export_options: { mode: 'student' | 'withAnswers' | 'answersOnly'; addDay: boolean; renderer_version: 'web-v1' }
 }
 export interface PaperSummary {
+  revision?: number
   download_mode?: 'pdf' | 'external'
   tags?: import('./services/growth').CatalogTag[]
   can_view: boolean; can_download: boolean; required_view: 'free' | 'vip'; required_download: 'free' | 'vip'

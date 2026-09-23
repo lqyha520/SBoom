@@ -6,7 +6,7 @@ import DictionaryManager from '../components/DictionaryManager.vue'
 import UsersPage from '../components/UsersPage.vue'
 import AdminAccounts from '../components/AdminAccounts.vue'
 import type { CatalogPaper } from '../catalog'
-import { uiStubs } from './ui-stubs'
+import { uiStubs } from '../../../shared/test/ui-stubs'
 
 const mocks = vi.hoisted(() => ({ request: vi.fn(), batch: vi.fn(), tags: vi.fn() }))
 vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), request: mocks.request }))

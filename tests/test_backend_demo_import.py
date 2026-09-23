@@ -11,15 +11,16 @@ import unittest
 import uuid
 from contextlib import ExitStack, closing
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit
 from unittest.mock import patch
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
+import pg_support  # 建一次性测试库，必须在 import app 之前
 import psycopg
 from psycopg import sql
 
-import pg_support  # 建一次性测试库，必须在 import app 之前
-
 pg_support.install_module_database()
+
+from test_backend_library import bundle, snapshot
 
 from app import db as database
 from app.config import get_settings
@@ -29,7 +30,6 @@ from app.models.mini import MembershipUpdate
 from app.services import catalog_access, mini_auth, paper_library, public_catalog, user_store
 from app.services.paper_storage import LocalStorage
 from scripts.import_demo_catalog import import_catalog
-from test_backend_library import bundle, snapshot
 
 # 导出为 SQLite 源文件所需的表：users 供 importer 校验身份，其余为导入清单
 _EXPORT_TABLES = ("users", "mini_users", "mini_user_sessions", "paper_archives", "paper_assets",
@@ -141,7 +141,7 @@ class DemoImportContracts(unittest.TestCase):
         self.assertTrue(mini_auth.resolve_session(self.vip["token"]).is_vip)
         restricted = public_catalog.get_paper(self.reader["user"]["id"], self.paper["id"])
         self.assertFalse(restricted["can_view"])
-        self.assertIsNone(restricted["snapshot"])
+        self.assertNotIn("snapshot", restricted)
         detail = public_catalog.get_paper(self.vip["user"]["id"], self.paper["id"])
         self.assertTrue(detail["can_download"])
         for asset in detail["assets"]:

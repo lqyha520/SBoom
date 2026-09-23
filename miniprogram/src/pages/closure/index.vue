@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import ServicePage from '../../components/ServicePage.vue'
-import { useConsumerPage } from '../../services/consumer-page'
+import { useConsumerPage, type ConsumerTicket } from '../../services/consumer-page'
 import { applyClosure, cancelClosure, fetchClosure, closureStatus, type Closure } from '../../services/growth'
 import { confirmAction } from '../../services/navigation'
 import { formatDate } from '../../content'
 const item = ref<Closure | null>(null), reason = ref(''), acknowledged = ref(false), resolved = ref(false)
-async function load(valid: () => boolean) { const result = await fetchClosure(); if (valid()) { item.value = result.request; resolved.value = true } }
+async function load(valid: ConsumerTicket) { const result = await fetchClosure({ scope: valid }); if (valid()) { item.value = result.request; resolved.value = true } }
 const page = useConsumerPage(load, () => { item.value = null; reason.value = ''; acknowledged.value = false; resolved.value = false })
 const { error, loading, busy } = page
 function apply() { if (!acknowledged.value) return; void page.act(async valid => { if (!await confirmAction('申请注销账号', '审核通过后，个人资料、收藏、下载与浏览记录会清除，会员权益会失效。确认提交？') || !valid()) return; const result = await applyClosure(reason.value.trim()); if (valid()) { item.value = result.request; reason.value = ''; acknowledged.value = false } }) }

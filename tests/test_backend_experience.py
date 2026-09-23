@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import test_backend_catalog as fixtures
+
 from app import db as database
 from app.models.mini import MembershipUpdate
 from app.routers import engagement, experience, site
@@ -137,7 +138,9 @@ class ExperienceContracts(unittest.TestCase):
         self.assertEqual(result.status_code, 200, result.text)
         path = '/api/v1/admin/catalog/papers/' + paper['id'] + '/preview'
         normal = self.client.get(path + '?membership=regular').json()
-        self.assertFalse(normal['can_view']); self.assertIsNone(normal['snapshot']); self.assertEqual(normal['assets'], [])
+        self.assertFalse(normal['can_view'])
+        self.assertIsNone(normal['snapshot'])
+        self.assertEqual(normal['assets'], [])
         self.assertTrue(self.client.get(path + '?membership=vip').json()['can_download'])
         self.sign_in(self.viewer)
         self.assertEqual(self.client.get('/api/v1/catalog/papers?only_free=true').json()['total'], 0)
@@ -261,7 +264,8 @@ class ExperienceContracts(unittest.TestCase):
         self.assertEqual(self.client.delete('/api/v1/library/papers/' + original['id']).status_code, 409)
         self.sign_in(self.viewer)
         detail = self.client.get('/api/v1/catalog/papers/' + paper['id']).json()
-        self.assertTrue(detail['favorite']); self.assertEqual(detail['update_note'], body['note'])
+        self.assertTrue(detail['favorite'])
+        self.assertEqual(detail['update_note'], body['note'])
         self.assertEqual(self.client.get('/api/v1/catalog/papers?downloaded=true').json()['total'], 1)
         self.assertEqual(self.client.get(old_asset).status_code, 404)
 

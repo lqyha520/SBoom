@@ -6,10 +6,20 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.db import db
 from app.deps import require_admin
 from app.library_deps import bearer_token, no_store, require_mini_user
-from app.models.mini import MAX_AVATAR_BASE64, AdminProfileUpdate, MembershipUpdate, MiniAvatarUpdate, MiniCredentials, MiniPasswordUpdate, MiniProfileUpdate, MiniRegistration
-from app.services import mini_auth, mini_avatars
+from app.models.mini import (
+    MAX_AVATAR_BASE64,
+    AdminProfileUpdate,
+    MembershipUpdate,
+    MiniAvatarUpdate,
+    MiniCredentials,
+    MiniPasswordUpdate,
+    MiniProfileUpdate,
+    MiniRegistration,
+)
+from app.services import mini_auth, mini_avatars, mini_messages
 from app.services.mini_auth import MiniUser
 from app.services.rate_limit import allow
 from app.services.user_store import CurrentUser
@@ -52,7 +62,10 @@ def register(body: MiniRegistration, request: Request):
 
 @router.get("/mini/me")
 def me(user: MiniUser = Depends(require_mini_user)):
-    return user.public()
+    """账号信息附带未读消息数（走索引的单条 COUNT），小程序不必再为角标单独拉收件箱。"""
+    with db() as conn:
+        unread = mini_messages.unread_count(conn, user.id)
+    return {**user.public(), "unread": unread}
 
 
 @router.patch("/mini/me")

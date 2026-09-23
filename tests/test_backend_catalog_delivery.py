@@ -4,6 +4,7 @@ import time
 from types import SimpleNamespace
 
 import test_backend_catalog as fixtures
+
 from app import db as database
 from app.services import catalog_ops
 

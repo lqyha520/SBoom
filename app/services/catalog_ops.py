@@ -6,13 +6,13 @@ from types import SimpleNamespace
 
 from app.db import db
 from app.mini_schema import index_question_types
-from app.services import catalog_access, public_catalog as catalog
+from app.services import catalog_access, catalog_editions
+from app.services import public_catalog as catalog
 from app.services.mini_experience import fail
 from app.services.mini_messages import notify
-from app.services import catalog_editions
 
 
-def batch(body):
+def batch(body, admin_id=None):
     with db(serialized=True) as conn:
         category = None
         tag_kinds = {}
@@ -66,6 +66,9 @@ def batch(body):
                     for identifier in identifiers:
                         conn.execute("INSERT INTO catalog_paper_tags(catalog_id, tag_id) VALUES (?, ?)", (row["id"], identifier))
             conn.execute("UPDATE catalog_papers SET revision = revision + 1, updated_at = ? WHERE id = ?", (now, row["id"]))
+            if body.action == "published":
+                from app.services.catalog_review import confirm
+                confirm(conn, row["id"], admin_id)
     return {"updated": len(rows)}
 
 
@@ -124,6 +127,10 @@ def revise(admin_id, catalog_id, body):
         conn.execute("DELETE FROM catalog_question_types WHERE catalog_id = ?", (catalog_id,))
         index_question_types(conn, catalog_id, source["snapshot_json"])
         conn.execute("DELETE FROM catalog_print_editions WHERE catalog_id = ?", (catalog_id,))
+        conn.execute("UPDATE catalog_papers SET reviewed_at = 0, reviewed_by = NULL, answer_readiness = 'unknown' WHERE id = ?", (catalog_id,))
+        if body.confirm_publication:
+            from app.services.catalog_review import confirm
+            confirm(conn, catalog_id, admin_id)
         if row["status"] == "published":
             recipients = conn.execute("SELECT user_id FROM mini_catalog_favorites WHERE catalog_id = ?", (catalog_id,)).fetchall()
             for recipient in recipients:
@@ -134,13 +141,19 @@ def revise(admin_id, catalog_id, body):
 def topics(admin=False):
     with db() as conn:
         rows = conn.execute("SELECT * FROM site_topics" + ("" if admin else " WHERE is_visible = 1") + " ORDER BY sort_order, created_at DESC, id").fetchall()
+        # 专题条目一次取回再按 topic_id 分组，避免每个专题各打一次库（原来 N 个专题 = N+1 次查询）
+        grouped: dict[str, list[dict]] = {}
+        for item in conn.execute("SELECT i.topic_id, i.catalog_id, c.title, c.status, a.file_status FROM site_topic_items i "
+                                 "JOIN site_topics t ON t.id = i.topic_id "
+                                 "JOIN catalog_papers c ON c.id = i.catalog_id JOIN paper_archives a ON a.id = c.paper_id "
+                                 + ("WHERE 1 = 1 " if admin else f"WHERE t.is_visible = 1 AND {catalog.VISIBLE} ")
+                                 + "ORDER BY i.topic_id, i.sort_order, i.catalog_id").fetchall():
+            grouped.setdefault(item["topic_id"], []).append({key: item[key] for key in ("catalog_id", "title", "status", "file_status")})
         result = []
         for row in rows:
-            items = conn.execute("SELECT i.catalog_id, c.title, c.status, a.file_status FROM site_topic_items i "
-                                 "JOIN catalog_papers c ON c.id = i.catalog_id JOIN paper_archives a ON a.id = c.paper_id WHERE i.topic_id = ? "
-                                 + ("" if admin else f"AND {catalog.VISIBLE} ") + "ORDER BY i.sort_order, i.catalog_id", (row["id"],)).fetchall()
+            items = grouped.get(row["id"], [])
             result.append({**dict(row), "is_visible": bool(row["is_visible"]), "paper_count": len(items),
-                           "paper_ids": [item["catalog_id"] for item in items], "papers": [dict(item) for item in items]})
+                           "paper_ids": [item["catalog_id"] for item in items], "papers": items})
     return {"items": result}
 
 

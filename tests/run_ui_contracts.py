@@ -36,7 +36,7 @@ def main():
             else:
                 raise TimeoutError("Disposable service did not become healthy")
             subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_ui_contracts.py", "-v"], cwd=ROOT, env=env, check=True)
-            subprocess.run([sys.executable, "test_admin_console.py"], cwd=ROOT, env=env, check=True)
+            subprocess.run([sys.executable, "scripts/admin_console_check.py"], cwd=ROOT, env=env, check=True)
         except Exception:
             log.seek(0)
             print(log.read(), file=sys.stderr)

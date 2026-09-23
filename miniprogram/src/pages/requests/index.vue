@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { onLoad, onReachBottom } from '@dcloudio/uni-app'
 import ServicePage from '../../components/ServicePage.vue'
-import { useConsumerPage } from '../../services/consumer-page'
+import { useConsumerPage, type ConsumerTicket } from '../../services/consumer-page'
 import { fetchRequests, fetchResourceRequest, submitRequest, requestStatus, type ResourceRequest } from '../../services/growth'
 import { openCatalogPaper } from '../../services/navigation'
 import { decodeParam } from '../../services/return-route'
@@ -16,10 +16,10 @@ const displayed = computed(() => focused.value ? [focused.value, ...items.value.
 let seed = { title: '', grade: '', subject: '' }
 onLoad(options => { seed = { title: decodeParam(options?.title).slice(0, 120), grade: decodeParam(options?.grade).slice(0, 80), subject: decodeParam(options?.subject).slice(0, 80) }; resetForm(); highlight.value = decodeParam(options?.id); activeTab.value = highlight.value ? 'history' : 'new' })
 function resetForm() { title.value = seed.title; grade.value = seed.grade; subject.value = seed.subject; details.value = ''; fieldError.value = '' }
-async function load(valid: () => boolean, append = false) {
-  const result = await fetchRequests(append ? items.value.length : 0)
+async function load(valid: ConsumerTicket, append = false) {
+  const result = await fetchRequests(append ? items.value.length : 0, { scope: valid })
   if (valid()) { items.value = append ? [...items.value, ...result.items.filter(item => !items.value.some(old => old.id === item.id))] : result.items; more.value = result.has_more }
-  if (!append && highlight.value && valid()) { const selected = await fetchResourceRequest(highlight.value); if (valid()) focused.value = selected }
+  if (!append && highlight.value && valid()) { const selected = await fetchResourceRequest(highlight.value, { scope: valid }); if (valid()) focused.value = selected }
 }
 const page = useConsumerPage(load, () => { items.value = []; focused.value = null; more.value = false; resetForm() })
 const { error, loading, busy } = page

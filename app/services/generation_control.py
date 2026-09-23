@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 
 from app.config import get_settings
 from app.db import db
+from app.metrics import generation_requests_total, llm_attempts_total, llm_tokens_total, provider_model
 
 
 @dataclass
@@ -31,6 +32,7 @@ current_usage: ContextVar[Usage | None] = ContextVar("generation_usage", default
 
 
 def record_attempt() -> None:
+    llm_attempts_total.labels(provider_model.get()).inc()
     usage = current_usage.get()
     if usage is not None:
         usage.model_calls += 1
@@ -38,10 +40,14 @@ def record_attempt() -> None:
 
 def record_usage(value) -> None:
     usage = current_usage.get()
-    if usage is None or not isinstance(value, dict):
+    if not isinstance(value, dict):
         return
     prompt, completion = value.get("prompt_tokens"), value.get("completion_tokens")
     if type(prompt) is not int or type(completion) is not int or min(prompt, completion) < 0:
+        return
+    llm_tokens_total.labels(provider_model.get(), "prompt").inc(prompt)
+    llm_tokens_total.labels(provider_model.get(), "completion").inc(completion)
+    if usage is None:
         return
     usage.reported_calls += 1
     usage.prompt_tokens += prompt
@@ -69,16 +75,6 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
     now = int(time.time())
     # One short transaction serializes admission across workers, including PostgreSQL.
     with db(serialized="generation") as conn:
-        conn.execute(
-            "UPDATE generation_requests SET status = 'unknown', finished_at = ? "
-            "WHERE status = 'running' AND created_at < ?",
-            (now, now - settings.generation_lease_seconds),
-        )
-        conn.execute(
-            "UPDATE generation_requests SET result_json = '' "
-            "WHERE result_json != '' AND finished_at < ?",
-            (now - settings.generation_result_days * 86400,),
-        )
         row = conn.execute(
             "SELECT * FROM generation_requests WHERE user_id = ? AND request_id = ?",
             (user_id, request_id),
@@ -87,7 +83,7 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
             if row["payload_hash"] != fingerprint:
                 raise HTTPException(409, detail={"error": "请求 ID 已用于其他出题条件"})
             if row["status"] == "succeeded":
-                if row["result_json"]:
+                if row["result_json"] and row["finished_at"] >= now - settings.generation_result_days * 86400:
                     # 缓存由 _finish 用 json.dumps 写入，必然是对象；cast 只补类型、不改行为
                     return cast(dict, json.loads(row["result_json"]))
                 raise HTTPException(410, detail={"error": "该请求已完成，结果缓存已过期或不支持重放，不会再次调用模型"})
@@ -97,9 +93,9 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
                 "error": "该请求仍在处理或结果尚不确定，不会重复调用模型",
                 "code": "generation_pending", "request_id": request_id,
             })
-        total = conn.execute("SELECT COUNT(*) FROM generation_requests WHERE status = 'running'").fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) FROM generation_requests WHERE status = 'running' AND created_at >= ?", (now - settings.generation_lease_seconds,)).fetchone()[0]
         active = conn.execute(
-            "SELECT COUNT(*) FROM generation_requests WHERE user_id = ? AND status = 'running'", (user_id,),
+            "SELECT COUNT(*) FROM generation_requests WHERE user_id = ? AND status = 'running' AND created_at >= ?", (user_id, now - settings.generation_lease_seconds),
         ).fetchone()[0]
         used = conn.execute(
             "SELECT COUNT(*) FROM generation_requests WHERE user_id = ? AND created_at >= ?",
@@ -109,6 +105,9 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
             raise HTTPException(429, detail={"error": "已达到过去 24 小时的生成请求额度", "code": "generation_quota"})
         if total >= settings.generation_global_concurrency or active >= settings.generation_user_concurrency:
             raise HTTPException(429, detail={"error": "生成任务繁忙，请稍后再试", "code": "generation_busy"}, headers={"Retry-After": "5"})
+        if kind == "image":
+            from app.services.image_assets import admit
+            admit(conn, user_id)
         conn.execute(
             "INSERT INTO generation_requests (user_id, request_id, kind, payload_hash, status, created_at) "
             "VALUES (?, ?, ?, ?, 'running', ?)", (user_id, request_id, kind, fingerprint, now),
@@ -144,6 +143,7 @@ def metered(kind: str):
                 detail = exc.detail if isinstance(exc.detail, dict) else {"error": exc.detail}
                 raise HTTPException(exc.status_code, {**detail, "request_id": request_id}, headers=exc.headers) from exc
             if cached is not None:
+                generation_requests_total.labels(kind, "replayed").inc()
                 return cached
             usage = Usage()
             token = current_usage.set(usage)
@@ -169,6 +169,7 @@ def metered(kind: str):
                                             outcome = "failed"
                                     yield chunk
                         finally:
+                            generation_requests_total.labels(kind, outcome).inc()
                             current_usage.reset(stream_token)
                             await asyncio.shield(asyncio.to_thread(_finish, user.id, request_id, usage, outcome))
 
@@ -176,10 +177,15 @@ def metered(kind: str):
                     result.headers["X-Request-ID"] = request_id
                     return result
                 data = result.model_dump(mode="json") if hasattr(result, "model_dump") else dict(result)
+                if kind == "image":
+                    from app.services.image_assets import persist
+                    data = await asyncio.to_thread(persist, user.id, request_id, data)
                 data["request_id"] = request_id
                 await asyncio.to_thread(_finish, user.id, request_id, usage, "succeeded", data)
+                generation_requests_total.labels(kind, "succeeded").inc()
                 return data
-            except BaseException as exc:
+            except (Exception, asyncio.CancelledError) as exc:
+                generation_requests_total.labels(kind, "failed").inc()
                 status_code = exc.status_code if isinstance(exc, HTTPException) else 503
                 # 不复用上面 except 分支的 detail：那里的 detail 已被收窄为 dict，而这里可能是 str
                 failure_detail = exc.detail if isinstance(exc, HTTPException) else {"error": "生成中断，结果尚不确定，请先查询请求状态"}
@@ -193,6 +199,15 @@ def metered(kind: str):
                     raise
                 raise HTTPException(status_code, detail=failure_detail,
                                     headers=exc.headers if isinstance(exc, HTTPException) else None) from exc
+            except BaseException:
+                # KeyboardInterrupt / SystemExit 等进程级信号：只把请求标记为结果未知，原样上抛，
+                # 不能翻译成 503——那会把 Ctrl+C 吞成一次普通失败
+                generation_requests_total.labels(kind, "failed").inc()
+                await asyncio.shield(asyncio.to_thread(
+                    _finish, user.id, request_id, usage, "unknown", None,
+                    (503, {"error": "服务中断，结果尚不确定，请先查询请求状态", "request_id": request_id}),
+                ))
+                raise
             finally:
                 current_usage.reset(token)
         return wrapped

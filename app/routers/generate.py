@@ -4,32 +4,32 @@ import asyncio
 import json
 import logging
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-import httpx
 
+from app.config import get_settings
+from app.deps import require_user
 from app.models import (
-    GenerateRequest,
-    GameResult,
-    ValidateRequest,
-    ValidateResult,
-    FeedbackRequest,
-    ErrorResponse,
-    KnowledgeScope,
     BatchGenerateRequest,
     BatchGenerateResponse,
     BatchItem,
+    ErrorResponse,
+    FeedbackRequest,
+    GameResult,
+    GenerateRequest,
+    KnowledgeScope,
+    ValidateRequest,
+    ValidateResult,
 )
-from app.services.knowledge_scope import knowledge_scope_service
-from app.services.prompt_builder import prompt_builder
-from app.services.llm_client import llm_client
 from app.services import app_config
-from app.services.rate_limit import allow
-from app.services.user_store import CurrentUser
-from app.config import get_settings
-from app.deps import require_user
 from app.services.generation_control import metered
 from app.services.generation_results import match_sections, normalize_result
+from app.services.knowledge_scope import knowledge_scope_service
+from app.services.llm_client import llm_client
+from app.services.prompt_builder import prompt_builder
+from app.services.rate_limit import allow
+from app.services.user_store import CurrentUser
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["生成"])
@@ -150,13 +150,13 @@ async def _call_llm_and_parse(system_prompt: str, user_message: str) -> dict:
         raise HTTPException(
             status_code=502,
             detail={"error": "LLM 返回格式异常，请重试", "detail": str(e)},
-        )
+        ) from e
     except httpx.HTTPStatusError as e:
         logger.error("模型 API 错误: HTTP %s", e.response.status_code)
         raise HTTPException(
             status_code=502,
             detail={"error": f"模型服务请求失败 ({e.response.status_code})", "detail": "未自动重发，请先查询原请求状态"},
-        )
+        ) from e
     except httpx.TimeoutException as e:
         # 注意：TimeoutException 是 TransportError 的子类，必须先于其捕获。
         # 超时意味着请求已到达服务端（很可能已被处理甚至计费），不能自动重试。
@@ -168,16 +168,16 @@ async def _call_llm_and_parse(system_prompt: str, user_message: str) -> dict:
                 "detail": "请求已发送给模型服务，超时前未返回结果（服务端可能已处理并计费）。"
                           "未自动重发。请先查询原请求状态，重新生成会发起新的模型调用。",
             },
-        )
+        ) from e
     except httpx.TransportError as e:
         logger.error("模型连接异常: %s", type(e).__name__)
         raise HTTPException(
             status_code=502,
             detail={"error": "模型连接中断", "detail": "请先查询原请求状态，再联系管理员检查模型配置"},
-        )
+        ) from e
     except Exception:
         logger.exception("LLM 调用未知错误")
-        raise HTTPException(status_code=500, detail={"error": "内部错误", "detail": "服务异常，请稍后重试；若持续出现请联系管理员查看服务日志"})
+        raise HTTPException(status_code=500, detail={"error": "内部错误", "detail": "服务异常，请稍后重试；若持续出现请联系管理员查看服务日志"}) from None
 
 
 
@@ -231,12 +231,12 @@ async def generate_batch(request: BatchGenerateRequest, http_request: Request, u
         raise
     except (RuntimeError, ValueError, TypeError) as e:
         logger.exception("批量生成失败: %s", type(e).__name__)
-        raise HTTPException(status_code=502, detail={"error": "批量生成失败", "detail": "生成链路异常，请重试；若持续失败请联系管理员"})
+        raise HTTPException(status_code=502, detail={"error": "批量生成失败", "detail": "生成链路异常，请重试；若持续失败请联系管理员"}) from e
 
     matched = match_sections(raw, request.items)
     seen: set[str] = set()
     sections = []
-    for index, (item, section) in enumerate(zip(request.items, matched)):
+    for index, (item, section) in enumerate(zip(request.items, matched, strict=False)):
         resolved = item.model_copy(update={"section_id": item.section_id or f"section-{index + 1}"})
         sections.append(await normalize_result(section, request, resolved, scope, _call_llm_and_parse, seen))
     return BatchGenerateResponse(sections=sections)
@@ -399,7 +399,7 @@ def get_available_scopes(user: CurrentUser = Depends(require_user)):
         ).fetchall()
         links = conn.execute("SELECT parent_id, child_id FROM site_dict_links").fetchall()
     grades = [row for row in rows if row["kind"] == "grade"]
-    subject_value_by_id = {row["id"]: row["value"] for row in rows if row["kind"] == "subject"}
+    _subject_value_by_id = {row["id"]: row["value"] for row in rows if row["kind"] == "subject"}
     linked_by_grade: dict[str, set[str]] = {}
     for row in links:
         linked_by_grade.setdefault(row["parent_id"], set()).add(row["child_id"])
@@ -459,7 +459,7 @@ async def validate_oob(request: ValidateRequest, http_request: Request, user: Cu
         raise
     except (RuntimeError, ValueError, TypeError, json.JSONDecodeError) as e:
         logger.exception("超纲校验失败: %s", type(e).__name__)
-        raise HTTPException(status_code=502, detail={"error": "校验请求失败", "detail": "校验链路异常，请重试；若持续失败请联系管理员"})
+        raise HTTPException(status_code=502, detail={"error": "校验请求失败", "detail": "校验链路异常，请重试；若持续失败请联系管理员"}) from e
 
 
 # ─── 反馈收集 ───

@@ -12,14 +12,15 @@ from fastapi import HTTPException
 from app.config import get_settings
 from app.db import db
 from app.models.library import ArchiveCreate, ArchiveUpdate
-from app.services.paper_storage import storage_for, unpack_bundle
+from app.services.file_retention import enqueue
+from app.services.paper_storage import storage_for, thumbnail, unpack_bundle
 
 logger = logging.getLogger(__name__)
 UPLOAD_LEASE = 180
 SUMMARY_COLUMNS = """a.id, a.source_id, a.version, a.title, a.grade, a.subject, a.keyword,
     a.question_count, a.folder_id, f.name AS folder_name, a.group_id, a.group_name, a.favorite,
     a.file_status, a.file_error, a.upload_started_at, a.page_count, a.created_at, a.updated_at,
-    (SELECT id FROM paper_assets WHERE paper_id = a.id AND kind = 'page' AND page_number = 1) AS thumbnail_id"""
+    (SELECT id FROM paper_assets WHERE paper_id = a.id AND kind IN ('thumbnail', 'page') AND page_number = 1 ORDER BY CASE WHEN kind = 'thumbnail' THEN 0 ELSE 1 END LIMIT 1) AS thumbnail_id"""
 
 
 def _missing():
@@ -52,7 +53,7 @@ def _summary(row) -> dict:
 
 def _assets(conn, paper_id: str):
     rows = conn.execute(
-        "SELECT id, kind, page_number, mime_type, byte_size FROM paper_assets WHERE paper_id = ? ORDER BY page_number",
+        "SELECT id, kind, page_number, mime_type, byte_size FROM paper_assets WHERE paper_id = ? AND kind <> 'thumbnail' ORDER BY page_number",
         (paper_id,),
     ).fetchall()
     return [{**dict(row), "url": f"/api/v1/library/assets/{row['id']}"} for row in rows]
@@ -172,11 +173,11 @@ def update_paper(user_id: int, paper_id: str, request: ArchiveUpdate):
 
 
 def _cleanup(files):
-    for backend, key in files:
-        try:
-            storage_for(backend).delete(key)
-        except Exception:
-            logger.warning("Private paper file cleanup failed; retry through the storage retention process")
+    # Record intent first; process exits and transient disk failures can be retried.
+    with db() as conn:
+        enqueue(conn, files)
+    from app.services.file_retention import drain
+    drain()
 
 
 def delete_paper(user_id: int, paper_id: str):
@@ -189,6 +190,7 @@ def delete_paper(user_id: int, paper_id: str):
         if conn.execute("SELECT 1 FROM catalog_edition_history WHERE paper_id = ?", (paper_id,)).fetchone():
             raise HTTPException(409, detail={"error": "此原稿属于公共资料的打印版本，请先处理公共条目"})
         assets = conn.execute("SELECT storage, storage_key FROM paper_assets WHERE paper_id = ?", (paper_id,)).fetchall()
+        enqueue(conn, [(row["storage"], row["storage_key"]) for row in assets])
         conn.execute("DELETE FROM paper_archives WHERE id = ? AND user_id = ?", (paper_id, user_id))
     _cleanup([(row["storage"], row["storage_key"]) for row in assets])
 
@@ -200,6 +202,8 @@ def publish_bundle(user_id: int, paper_id: str, data: bytes):
     if ready:
         return get_paper(user_id, paper_id)
     files = unpack_bundle(data)
+    first = next(raw for kind, page, mime, raw in files if kind == "page" and page == 1)
+    files.append(("thumbnail", 1, "image/jpeg", thumbnail(first)))
     size = sum(len(content) for _, _, _, content in files)
     token, now = secrets.token_hex(16), int(time.time())
     with db(serialized=True) as conn:
@@ -229,7 +233,7 @@ def publish_bundle(user_id: int, paper_id: str, data: bytes):
         storage = storage_for(backend)
         manifest = []
         for kind, page, mime, content in files:
-            filename = "paper.pdf" if kind == "pdf" else f"page-{page}.jpg"
+            filename = "paper.pdf" if kind == "pdf" else "thumbnail.jpg" if kind == "thumbnail" else f"page-{page}.jpg"
             key = f"{paper_id}/{token}/{filename}"
             written.append((backend, key))
             storage.put(key, content, mime)
@@ -241,7 +245,7 @@ def publish_bundle(user_id: int, paper_id: str, data: bytes):
             conn.executemany("INSERT INTO paper_assets(id, paper_id, kind, page_number, storage, storage_key, mime_type, byte_size, sha256) "
                              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", manifest)
             conn.execute("UPDATE paper_archives SET file_status = 'ready', file_error = '', page_count = ?, upload_token = '', "
-                         "upload_reserved_bytes = 0, updated_at = ? WHERE id = ?", (len(files) - 1, int(time.time()), paper_id))
+                         "upload_reserved_bytes = 0, updated_at = ? WHERE id = ?", (sum(kind == "page" for kind, _, _, _ in files), int(time.time()), paper_id))
     except Exception as exc:
         _cleanup(written)
         with db(serialized=True) as conn:

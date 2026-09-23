@@ -35,7 +35,16 @@ def render_pdf(entry, path):
     from reportlab.lib.enums import TA_CENTER
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
-    from reportlab.platypus import HRFlowable, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import (
+        HRFlowable,
+        KeepTogether,
+        PageBreak,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
 
     paper = entry["request"]["snapshot"]["paper"]
     accent = colors.HexColor({"数学": "#176D5A", "语文": "#A34142", "英语": "#266C96"}[paper["subject"]])
@@ -88,7 +97,7 @@ def render_pdf(entry, path):
                 block.append(para("    ".join(f"{chr(65 + i)}. {option}" for i, option in enumerate(value["options"]))))
             if value.get("left_items"):
                 pairs = [[para(f"{i + 1}. {left}"), para(f"{chr(65 + i)}. {right}")]
-                         for i, (left, right) in enumerate(zip(value["left_items"], value["right_items"]))]
+                         for i, (left, right) in enumerate(zip(value["left_items"], value["right_items"], strict=False))]
                 block.append(Table(pairs, colWidths=[width / 2] * 2, hAlign="LEFT"))
             if not value.get("options") and not value.get("left_items") and "____" not in readable_stem(value):
                 block.append(Spacer(1, 18 if part["type"] == "word_problem" else 10))

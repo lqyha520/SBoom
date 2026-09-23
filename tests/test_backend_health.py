@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import httpx
 from fastapi import FastAPI
+
 from app.deps import require_user
 from app.routers import auth, generate, health
 
@@ -33,6 +34,32 @@ class HealthContracts(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.client.get("/health")).status_code, 200)
             self.assertEqual((await self.client.get("/readyz")).json(), {"status": "ready"})
 
+    async def test_detail_uses_http_failure_and_never_claims_provider_connectivity(self):
+        with patch.object(health, "database_ready", side_effect=[False, True]):
+            failed = await self.client.get("/health/detail")
+            self.assertEqual(failed.status_code, 503)
+            self.assertEqual(failed.json()["checks"], {"database": False, "provider_connectivity": "not_probed"})
+            self.assertEqual((await self.client.get("/health/detail")).status_code, 200)
+
+    async def test_import_finalization_keeps_liveness_responsive(self):
+        from app.deps import require_admin
+        from app.routers import catalog
+        self.app.include_router(catalog.admin_router)
+        self.app.dependency_overrides[require_admin] = lambda: SimpleNamespace(id=1)
+        entered, release = threading.Event(), threading.Event()
+        def finalize(*args):
+            entered.set()
+            self.assertTrue(release.wait(2))
+            return {"id": "catalog"}
+        with patch.object(catalog.catalog_import, "import_paper", return_value={"id": "archive", "title": "test"}), patch.object(catalog.catalog, "create_paper", side_effect=finalize):
+            job = asyncio.create_task(self.client.post("/api/v1/admin/catalog/import?grade=三年级&subject=数学", content=b"%PDF-test", headers={"Content-Type": "application/pdf"}))
+            try:
+                self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+                self.assertEqual((await self.client.get("/health")).status_code, 200)
+            finally:
+                release.set()
+            self.assertEqual((await job).status_code, 201)
+
     async def test_slow_probe_times_out_and_overlapping_probes_share_one_worker(self):
         entered, release = threading.Event(), threading.Event()
         def slow():
@@ -57,7 +84,7 @@ class HealthContracts(unittest.IsolatedAsyncioTestCase):
             with self.subTest(route=route):
                 entered, release = threading.Event(), threading.Event()
                 resumed_before_return = []
-                def slow(*args, **kwargs):
+                def slow(*args, entered=entered, resumed_before_return=resumed_before_return, release=release, route=route, **kwargs):
                     entered.set()
                     resumed_before_return.append(release.wait(1))
                     return (SimpleNamespace(id=1, username="worker-user") if route == "register" else

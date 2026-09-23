@@ -9,14 +9,19 @@ from pydantic import ValidationError
 from app.deps import require_admin
 from app.library_deps import no_store, optional_mini_user, require_mini_user
 from app.library_files import asset_response
-from app.models.catalog import CatalogCreate, CatalogFavorite, CatalogUpdate, TypeAccessUpdate
+from app.models.catalog import CatalogCreate, CatalogFavorite, CatalogUpdate, CatalogWindow, TypeAccessUpdate
 from app.services import catalog_access, catalog_import
-from app.services.mini_auth import MiniUser
 from app.services import public_catalog as catalog
+from app.services.mini_auth import MiniUser
 from app.services.user_store import CurrentUser
 
 router = APIRouter(prefix="/api/v1/catalog", tags=["公共试卷库"], dependencies=[Depends(no_store)])
 admin_router = APIRouter(prefix="/api/v1/admin/catalog", tags=["公共试卷管理"], dependencies=[Depends(no_store)])
+
+
+@router.post("/window")
+def catalog_window(body: CatalogWindow, user: MiniUser | None = Depends(optional_mini_user)):
+    return catalog.revalidate_window(user.id if user else None, body.ids)
 
 
 @router.get("/summary")
@@ -115,10 +120,13 @@ async def _pdf_body(request: Request, limit: int):
 
 
 @admin_router.post("/import", status_code=201)
+@catalog_import.admitted_import
 async def import_paper(request: Request,
                        title: str = Query("", max_length=240), grade: str = Query("", max_length=80),
                        subject: str = Query("", max_length=80), description: str = Query("", max_length=2000),
                        category_id: str = Query("", max_length=64),
+                       keyword: str = Query("", max_length=500), question_types: str = Query("", max_length=500),
+                       question_count: int = Query(0, ge=0, le=10000),
                        mode: Literal["student", "answersOnly", "withAnswers"] = Query("withAnswers"),
                        view_access: Literal["inherit", "free", "vip"] = "inherit",
                        download_access: Literal["inherit", "free", "vip"] = "inherit",
@@ -132,26 +140,37 @@ async def import_paper(request: Request,
                              download_mode=download_mode, external_url=external_url, external_code=external_code)
     except ValidationError as exc:
         raise HTTPException(422, detail={"error": "下载配置无效，请检查网盘链接、提取码与访问权限"}) from exc
+    from app.models import GameType
+    types = list(dict.fromkeys(value.strip() for value in question_types.split(",") if value.strip()))
+    if any(value not in {kind.value for kind in GameType} for value in types):
+        raise HTTPException(422, detail={"error": "未知的题型"})
     content = await _pdf_body(request, catalog_import.MAX_IMPORT_BYTES)
-    archive = await asyncio.to_thread(catalog_import.import_paper, user.id, title, grade, subject, content, mode)
+    archive = await asyncio.to_thread(catalog_import.import_paper, user.id, title, grade, subject, content, mode,
+                                      keyword=keyword, question_types=types, question_count=question_count)
     body = body.model_copy(update={"paper_id": archive["id"], "title": archive["title"]})
-    return catalog.create_paper(user.id, body)
+    return await asyncio.to_thread(catalog.create_paper, user.id, body)
 
 
 @admin_router.post("/papers/{catalog_id}/editions/import")
+@catalog_import.admitted_import
 async def import_edition(catalog_id: str, request: Request,
                          kind: Literal["student", "answers"] = Query("answers"),
+                         revision: int | None = Query(None, ge=1), confirm_publication: bool = False,
                          user: CurrentUser = Depends(require_admin)):
     """导入一份外部 PDF 直接挂为该资料的打印版本（默认答案解析版），不单独创建公共条目。"""
     from app.models.engagement import EditionInput
     from app.services import catalog_editions
 
-    content = await _pdf_body(request, catalog_import.MAX_IMPORT_BYTES)
     detail = await asyncio.to_thread(catalog.get_paper, user.id, catalog_id, admin=True)
+    if revision is not None and revision != detail["revision"]:
+        raise HTTPException(409, detail={"error": "资料已更新，请刷新后重试"})
+    if detail["status"] == "published" and (revision is None or not confirm_publication):
+        raise HTTPException(422, detail={"error": "请核对当前版本及会员权限，确认发布后再上传"})
+    content = await _pdf_body(request, catalog_import.MAX_IMPORT_BYTES)
     mode, suffix = ("answersOnly", "答案") if kind == "answers" else ("student", "练习版")
     archive = await asyncio.to_thread(catalog_import.import_paper, user.id,
                                       f"{detail['title']}·{suffix}", detail["grade"], detail["subject"], content, mode)
-    body = EditionInput(revision=detail["revision"], kind=kind, paper_id=archive["id"])
+    body = EditionInput(revision=detail["revision"], kind=kind, paper_id=archive["id"], confirm_publication=confirm_publication)
     return await asyncio.to_thread(catalog_editions.assign, user.id, catalog_id, body)
 
 

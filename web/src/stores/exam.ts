@@ -1,5 +1,4 @@
 import { defineStore } from 'pinia'
-import { watch, type WatchStopHandle } from 'vue'
 import {
   DEFAULT_LAYOUT,
   MAX_QUESTIONS_PER_TYPE,
@@ -31,6 +30,8 @@ import { useAuthStore, userPrefix } from './auth'
 import { createGenerationRun, runGenerationJob, GenerationStopped, type GenerationContext, type GenerationMode, type GenerationRun } from '../generation'
 import * as persistence from '../persistence'
 import type { HistoryEntry, HistoryReason, WorkspaceSnapshot } from '../persistence'
+import { createWorkspaceDraft, workspaceSnapshot, type WorkspaceDraft } from '../workspace-draft'
+import { captureEdit, recordEdit, undoEdit, redoEdit, type EditSnapshot } from '../workspace-history'
 export { deepClone } from '../utils'
 
 /** 当前登录用户的 localStorage 命名空间前缀（多用户数据隔离）。
@@ -171,18 +172,10 @@ const STYLE_DEFAULTS: PaperStyle = {
 }
 
 /** 卷面样式持久化的防抖句柄（模块级，store 重建也共用） */
-interface DraftRuntime {
-  owner: string
-  id: string
-  sequence: number
-  pending: Promise<unknown>
-  timer?: ReturnType<typeof setTimeout>
-  stop?: WatchStopHandle
-}
-const draftRuntimes = new WeakMap<object, DraftRuntime>()
+const draftRuntimes = new WeakMap<object, WorkspaceDraft>()
+const draftReleases = new WeakMap<object, () => void>()
+const historyReads = new WeakMap<object, number>()
 const styleSaveTimers = new WeakMap<object, ReturnType<typeof setTimeout>>()
-const editBursts = new WeakMap<object, { key: string; at: number }>()
-type EditSnapshot = Pick<WorkspaceSnapshot, 'sections' | 'papers' | 'title' | 'titleHtml' | 'style' | 'hiddenElements' | 'templateId' | 'customTemplate'>
 
 function generationSections(sections: Section[]): GenerationContext['sections'] {
   return sections.map(section => ({ id: section.id, type: section.type, name: section.name,
@@ -222,6 +215,12 @@ export const useExamStore = defineStore('exam', {
       storageError: '',
       history: [] as HistoryEntry[],
       historyBusy: false,
+      historyLoading: false,
+      historyError: '',
+      historyOffset: 0,
+      historyQuery: '',
+      historyHasMore: false,
+      draftId: '',
       pendingRun: null as GenerationRun | null,
       generationJobs: [] as import('../generation').GenerationJob[],
       stopRequested: false,
@@ -344,33 +343,10 @@ export const useExamStore = defineStore('exam', {
   },
 
   actions: {
-    editSnapshot(): EditSnapshot {
-      return deepClone({ sections: this.sections, papers: this.papers, title: this.title, titleHtml: this.titleHtml,
-        style: this.style, hiddenElements: this.hiddenElements, templateId: this.templateId, customTemplate: this.customTemplate })
-    },
-    recordEdit(key = '') {
-      if (this.generating || this.accountChanged || this.hasPendingEdits) return
-      const previous = editBursts.get(this), at = Date.now()
-      editBursts.set(this, { key, at })
-      if (key && previous?.key === key && at - previous.at < 500) return
-      const snapshot = this.editSnapshot()
-      const encoded = JSON.stringify(snapshot)
-      if (JSON.stringify(this.undoStack[this.undoStack.length - 1]) === encoded) return
-      this.undoStack.push(snapshot); this.redoStack = []
-      while (this.undoStack.length > 20 || JSON.stringify(this.undoStack).length > 4_000_000) this.undoStack.shift()
-    },
-    undo() {
-      if (!this.canUndo) return
-      editBursts.delete(this)
-      this.redoStack.push(this.editSnapshot())
-      Object.assign(this, deepClone(this.undoStack.pop()!))
-    },
-    redo() {
-      if (!this.canRedo) return
-      editBursts.delete(this)
-      this.undoStack.push(this.editSnapshot())
-      Object.assign(this, deepClone(this.redoStack.pop()!))
-    },
+    editSnapshot(): EditSnapshot { return captureEdit(this) },
+    recordEdit(key = '') { recordEdit(this, key) },
+    undo() { undoEdit(this) },
+    redo() { redoEdit(this) },
     questionSection(id: string, paperIndex?: number): Section | PaperSection | undefined {
       const section = paperIndex === undefined ? this.sections.find(item => item.id === id)
         : this.papers[paperIndex]?.sections.find((item, index) => (item._sid || String(index)) === id)
@@ -439,15 +415,7 @@ export const useExamStore = defineStore('exam', {
     },
 
     captureSnapshot(): WorkspaceSnapshot {
-      return deepClone({
-        version: 1, grade: this.grade, subject: this.subject, keyword: this.keyword,
-        selectedTags: this.selectedTags, title: this.title, titleHtml: this.titleHtml,
-        difficulty: this.difficulty, hiddenElements: this.hiddenElements,
-        sections: this.sections, papers: this.papers, view: this.view,
-        paperCount: this.paperCount, addDayLabel: this.addDayLabel,
-        templateId: this.templateId, customTemplate: this.customTemplate, style: this.style,
-        generateWarn: this.generateWarn, generateError: this.generateError, pendingRun: this.pendingRun,
-      })
+      return deepClone(workspaceSnapshot(this))
     },
 
     applySnapshot(snapshot: WorkspaceSnapshot) {
@@ -490,83 +458,83 @@ export const useExamStore = defineStore('exam', {
       if (!this.ownerId) { this.persistenceReady = true; this.draftState = 'saved'; return }
       // draftSession 抛错也必须留下 runtime：否则 flushDraft() 恒返回 false，
       // 「退出登录」会被「草稿未保存」永久拦下，而真正的原因（存储不可用）没人看得到。
-      let session: { previous: string | null; current: string } = { previous: null, current: randomId() }
-      try { session = persistence.draftSession(this.ownerId) }
+      let session: { previous: string | null; current: string; release?: () => void } = { previous: null, current: randomId() }
+      try { session = await persistence.claimDraftSession(this.ownerId, persistence.draftSession(this.ownerId)) }
       catch (error) {
         this.storageError = error instanceof Error ? error.message : '本地草稿会话初始化失败'
       }
-      const runtime: DraftRuntime = { owner: this.ownerId, id: session.current, sequence: 0, pending: Promise.resolve() }
+      const owner = this.ownerId
+      this.draftId = session.current
+      if (session.release) draftReleases.set(this, session.release)
+      const runtime = createWorkspaceDraft({
+        source: this,
+        save: snapshot => persistence.saveDraft(owner, session.current, snapshot),
+        canQueue: () => this.persistenceReady && !this.accountChanged,
+        saving: () => { this.draftState = 'saving' },
+        saved: updatedAt => { this.draftSavedAt = updatedAt; this.draftState = 'saved'; this.storageError = '' },
+        failed: () => {
+          this.draftState = 'error'
+          this.storageError = '本地保存失败，可能存储空间不足或浏览器禁用了存储；当前内容仍在页面中'
+        },
+      })
       draftRuntimes.set(this, runtime)
       try {
-        const draft = await persistence.loadDraft(runtime.owner, session.previous)
+        const draft = await persistence.loadDraft(owner, session.previous)
         if (draft) {
           this.applySnapshot(draft.snapshot)
           this.draftSavedAt = draft.updatedAt
         }
-        this.history = await persistence.listHistory(runtime.owner)
+        await this.refreshHistory()
         this.draftState = 'saved'
       } catch (error) {
         this.draftState = 'error'
         this.storageError = error instanceof Error ? error.message : '本地草稿读取失败'
       }
       this.persistenceReady = true
-      runtime.stop = watch(() => [
-        this.grade, this.subject, this.keyword, this.selectedTags, this.title, this.titleHtml,
-        this.difficulty, this.hiddenElements, this.sections, this.papers, this.view,
-        this.paperCount, this.addDayLabel, this.templateId, this.customTemplate, this.style,
-        this.generateWarn, this.generateError, this.pendingRun,
-      ], () => this.queueDraft(), { deep: true })
     },
 
-    queueDraft() {
-      const runtime = draftRuntimes.get(this)
-      if (!runtime || this.accountChanged) return
-      clearTimeout(runtime.timer)
-      this.draftState = 'saving'
-      runtime.timer = setTimeout(() => { void this.flushDraft() }, 350)
-    },
+    queueDraft() { draftRuntimes.get(this)?.queue() },
 
     async flushDraft(): Promise<boolean> {
-      const runtime = draftRuntimes.get(this)
-      if (!runtime) return false
-      clearTimeout(runtime.timer)
-      const snapshot = this.captureSnapshot()
-      const sequence = ++runtime.sequence
-      this.draftState = 'saving'
-      const write = runtime.pending.catch(() => {}).then(() => persistence.saveDraft(runtime.owner, runtime.id, snapshot))
-      runtime.pending = write
-      try {
-        const updated = await write
-        if (runtime.sequence === sequence) {
-          this.draftSavedAt = updated
-          this.draftState = 'saved'
-          this.storageError = ''
-        }
-        return true
-      } catch {
-        this.draftState = 'error'
-        this.storageError = '本地保存失败，可能存储空间不足或浏览器禁用了存储；当前内容仍在页面中'
-        return false
-      }
+      return draftRuntimes.get(this)?.flush() ?? false
     },
 
     async suspendForAccountChange(): Promise<boolean> {
       this.accountChanged = true
       const saved = await this.flushDraft()
-      draftRuntimes.get(this)?.stop?.()
+      draftRuntimes.get(this)?.stop()
       return saved
     },
 
     disposePersistence() {
       const runtime = draftRuntimes.get(this)
-      if (runtime) { clearTimeout(runtime.timer); runtime.stop?.(); draftRuntimes.delete(this) }
+      const release = draftReleases.get(this)
+      if (runtime) { runtime.stop(); void runtime.idle().finally(() => release?.()); draftRuntimes.delete(this) }
+      else release?.()
+      draftReleases.delete(this)
+      historyReads.set(this, (historyReads.get(this) || 0) + 1)
       clearTimeout(styleSaveTimers.get(this))
     },
 
-    async refreshHistory() {
+    async refreshHistory(query?: string, offset?: number) {
       if (!this.ownerId) return
-      try { this.history = await persistence.listHistory(this.ownerId) }
-      catch { this.storageError = '历史记录读取失败，现有数据未删除' }
+      query ??= this.historyQuery
+      offset ??= this.historyOffset
+      const sequence = (historyReads.get(this) || 0) + 1
+      historyReads.set(this, sequence)
+      this.historyLoading = true
+      this.historyError = ''
+      try {
+        const entries = await persistence.listHistory(this.ownerId, { query, offset, limit: 21 })
+        if (historyReads.get(this) !== sequence) return
+        if (!entries.length && offset > 0) { await this.refreshHistory(query, Math.max(0, offset - 20)); return }
+        this.history = entries.slice(0, 20); this.historyHasMore = entries.length > 20
+        this.historyQuery = query; this.historyOffset = offset
+        if (this.storageError === '历史记录读取失败，现有数据未删除') this.storageError = ''
+      } catch {
+        if (historyReads.get(this) === sequence) this.historyError = this.storageError = '历史记录读取失败，现有数据未删除'
+      }
+      finally { if (historyReads.get(this) === sequence) this.historyLoading = false }
     },
 
     async saveHistory(reason: HistoryReason = 'manual'): Promise<boolean> {

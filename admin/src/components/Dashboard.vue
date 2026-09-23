@@ -119,11 +119,14 @@ watch(tab, value => {
 const activeTab = computed(() => flat.value.find(item => item.id === tab.value)!)
 const activeGroup = computed(() => groups.find(group => group.items.some(item => item.id === tab.value))!)
 const loggingOut = ref(false)
+const logoutError = ref('')
 async function logout() {
   if (loggingOut.value) return
   loggingOut.value = true
-  await api.logout()
-  emit('logout')
+  logoutError.value = ''
+  try { await api.logout(); emit('logout') }
+  catch (error) { logoutError.value = error instanceof Error ? error.message : '退出失败，请重试' }
+  finally { loggingOut.value = false }
 }
 </script>
 
@@ -158,6 +161,7 @@ async function logout() {
         <div class="sidebar-footer"><UIcon name="i-lucide-shield-check" class="size-4" /><span>管理员</span></div>
       </aside>
       <main class="admin-main">
+        <UAlert v-if="logoutError" :title="logoutError" color="error" role="alert" />
         <div class="admin-page-heading"><div class="breadcrumb">{{ activeGroup.label }} <UIcon name="i-lucide-chevron-right" class="size-3" /> {{ activeTab.label }}</div><h1>{{ activeTab.label }}</h1></div>
         <KeepAlive><component :is="views[tab]" :user="props.user" @configure="tab = 'llm'" /></KeepAlive>
       </main>

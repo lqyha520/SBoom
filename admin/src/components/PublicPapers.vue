@@ -305,7 +305,9 @@ async function remove() {
         <UFormField label="完整原稿观看"><USelect v-model="form.view_access" :items="accessOptions" :disabled="busy" class="w-full" /></UFormField>
         <UFormField label="下载 / 获取链接权限"><USelect v-model="form.download_access" :items="accessOptions" :disabled="busy || form.view_access === 'vip'" class="w-full" /></UFormField>
         <UAlert v-if="publishing" color="warning" variant="soft" title="发布后，习题、答案和文件按所设权限提供给小程序用户。请确认拥有发布权限且不含学生隐私。" />
-        <UCheckbox v-if="publishing" v-model="form.confirm_publication" label="已核对内容，确认公开发布" :disabled="busy" />
+        <p v-if="target" class="text-sm text-muted">当前已保存权限：{{ target.required_view === 'vip' ? '仅 VIP 可看' : '所有人可看' }} · {{ target.required_download === 'vip' ? '仅 VIP 可下载' : '登录后可下载' }}。{{ target.question_types?.length ? '' : '此资料无可继承题型；请选择明确的观看和下载权限。' }}</p>
+        <p v-if="target" class="text-sm text-muted">内容复核：{{ target.reviewed_at ? '已记录人工确认' : '尚未记录' }} · 答案文件：{{ ({ included: '原稿包含答案', separate: '已关联答案版', missing: '未配套', unknown: '待核对' } as Record<string, string>)[target.answer_readiness || 'unknown'] }}。导入题量为申报值，请与文件逐页核对。</p>
+        <UCheckbox v-if="target" v-model="form.confirm_publication" label="已核对内容，确认公开发布" :disabled="busy" />
         <UAlert v-if="dialogNotice" :title="dialogNotice" color="success" variant="soft" /><UAlert v-if="dialogError" :title="dialogError" color="error" variant="soft" />
       </form></template><template #footer><UButton :label="importing ? '完成并返回列表' : '关闭'" color="neutral" variant="outline" :disabled="busy" @click="dialog = false" /><UButton v-if="!target && mode === 'import' && importQueue.failed.length" :label="'仅重试失败项（' + importQueue.failed.length + '）'" color="warning" variant="outline" :disabled="busy || !!categoryError || !!dictionaryError || categoryLoading || dictionaryLoading" @click="runImport(true)" /><UButton type="submit" form="publication-form" :label="publishing ? '确认发布' : target ? '保存更改' : mode === 'images' ? '合并图片并创建草稿' : mode === 'import' ? '导入待处理文件（' + importQueue.pending.length + '）' : '创建草稿'" :loading="busy" :disabled="busy || !valid" /></template></UModal>
 

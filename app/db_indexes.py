@@ -57,6 +57,11 @@ _INDEXES = (
         "idx_dict_links_child",
         "CREATE INDEX IF NOT EXISTS idx_dict_links_child ON site_dict_links(child_id)",
     ),
+    # 小程序会话：后台任务按 expires_at 分批清理过期会话（登录路径不再全表扫）
+    (
+        "idx_mini_sessions_expires",
+        "CREATE INDEX IF NOT EXISTS idx_mini_sessions_expires ON mini_user_sessions(expires_at)",
+    ),
 )
 
 
@@ -74,3 +79,14 @@ def add_optimization_indexes(conn):
         logger.warning("本次跳过的索引：%s（请核对表/列名是否已变更）", ", ".join(failed))
     else:
         logger.info("优化索引就绪（%d 条）", len(_INDEXES))
+
+
+def add_search_indexes(conn):
+    # Optional on managed databases without extension privileges; the query remains correct.
+    try:
+        with savepoint(conn):
+            conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+            for table, column in (("catalog_papers", "title"), ("catalog_papers", "category"), ("paper_archives", "keyword")):
+                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_search_{table}_{column} ON {table} USING gin (LOWER({column}) gin_trgm_ops)")
+    except Exception:
+        logger.warning("Trigram indexes unavailable; ask the database administrator to enable pg_trgm")

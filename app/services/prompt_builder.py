@@ -2,7 +2,6 @@
 
 from app.models import GenerateRequest, KnowledgeScope
 
-
 # ─── System Prompt 模板 ───
 
 SYSTEM_PROMPT_TEMPLATE = """你是一位专业的{subject}教育游戏设计师，面向{grade}学生。
@@ -378,7 +377,6 @@ class PromptBuilder:
             section_id = getattr(it, "section_id", None) or f"section-{i + 1}"
             item_descs.append(f"{i + 1}. section_id={section_id}，{t}（{desc}）：{it.question_count} 道题")
 
-        from app.models import GameType
         lang_block = _lang_block_for_grade(grade).format(grade=grade)
         calc_note = "计算类题型（oral_math/vertical_calc/recursive_calc/smart_calc）题干必须是纯算式，禁止汉字。"
 

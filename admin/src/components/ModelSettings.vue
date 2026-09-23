@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import * as api from '../api'
+import ImageModelSettings from './ImageModelSettings.vue'
 
 const config = ref({ baseUrl: '', model: '', apiKey: '', timeout: 60 })
 const hasKey = ref(false)
@@ -73,4 +74,5 @@ onMounted(load)
       <template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="!!busy" @click="clearOpen = false" /><UButton label="确认清除" color="error" :loading="busy === 'clear'" :disabled="!!busy" @click="execute('clear')" /></template>
     </UModal>
   </section>
+  <ImageModelSettings />
 </template>

@@ -10,7 +10,7 @@ import CatalogFilterSheet from './CatalogFilterSheet.vue'
 import FavoriteGroups from './FavoriteGroups.vue'
 import { clearHistory, fetchTopics, type Topic } from '../services/experience'
 import { readPreferences, rememberSearch, writePreferences } from '../services/preferences'
-import { errorMessage, favoriteCatalogPaper, fetchCatalog, fetchCatalogSummary } from '../services/api'
+import { errorMessage, favoriteCatalogPaper, fetchCatalogWindow, fetchCatalog, fetchCatalogSummary } from '../services/api'
 import { ensureSession, requireLogin, session } from '../services/session'
 import { createLatestRequest } from '../services/latest-request'
 import { catalogSelection, openCatalog, openCatalogPaper, confirmAction } from '../services/navigation'
@@ -23,6 +23,12 @@ import { safeDestination } from '../services/return-route'
 const props = withDefaults(defineProps<{ view?: 'all' | 'favorites' | 'downloads' | 'recent'; topicId?: string }>(), { view: 'all', topicId: '' })
 const canBrowse = computed(() => props.view === 'all' || !!session.user)
 const items = ref<PaperSummary[]>([])
+// 每组最多 200 条，继续浏览通过显式翻组，列表始终直接渲染。
+const windowSize = 200
+const windowStart = ref(0)
+const nextOffset = ref(0)
+const imagesActive = ref(false)
+const windowFull = computed(() => nextOffset.value >= windowStart.value + windowSize)
 const summary = ref<CatalogSummary | null>(null)
 const total = ref(0)
 const more = ref(false)
@@ -104,9 +110,9 @@ async function loadMetadata(force = false) {
   const current = metadataRequests.begin()
   metadataLoading.value = true
   const results = await Promise.allSettled([
-    fetchCatalogSummary().then(value => { if (current()) summary.value = value }),
-    fetchTopics().then(value => { if (current()) topics.value = value.items }),
-    fetchTags().then(value => { if (current()) tags.value = value.items }),
+    fetchCatalogSummary({ scope: current }).then(value => { if (current()) summary.value = value }),
+    fetchTopics({ scope: current, force }).then(value => { if (current()) topics.value = value.items }),
+    fetchTags({ scope: current, force }).then(value => { if (current()) tags.value = value.items }),
   ])
   if (!current()) return
   metadataError.value = results.flatMap((result, index) => result.status === 'rejected' ? [['分类', '专题', '教学标签'][index]] : []).join('、')
@@ -127,35 +133,54 @@ async function clearRecent() {
 async function refresh(reset = true, preserveWindow = false) {
   if (!canBrowse.value || !active) { uni.stopPullDownRefresh(); return }
   if (reset) expandedRow.value = ''
-  if (!reset && (loading.value || !more.value)) return
+  if (!reset && (loading.value || !more.value || windowFull.value)) return
   const current = requests.begin()
   const revision = favoriteRevision
+  const offset = reset ? windowStart.value : nextOffset.value
   loading.value = true; appending.value = !reset; error.value = ''; appendError.value = ''
   try {
     const filters = { q: q.value, grade: grade.value, subject: subject.value, category: category.value,
       favorite: props.view === 'favorites', downloaded: props.view === 'downloads', recent: props.view === 'recent',
       favorite_group: favoriteGroup.value, topic: topic.value, only_free: onlyFree.value, sort: sort.value,
       ...tagFilters }
-    const wanted = preserveWindow ? Math.max(20, items.value.length) : 20
-    const result = await fetchCatalog({ ...filters, offset: reset ? 0 : items.value.length, limit: 20 })
-    while (current() && reset && result.has_more && result.items.length < wanted) {
-      const next = await fetchCatalog({ ...filters, offset: result.items.length, limit: 20 })
-      if (!next.items.length) { result.has_more = false; break }
-      result.items.push(...next.items)
-      result.total = next.total; result.has_more = next.has_more
-    }
+    // Revalidate the retained window in one bounded request, alongside its head.
+    // The server returns current rights for every retained row; no private policy is cached.
+    const [result, window] = await Promise.all([
+      fetchCatalog({ ...filters, offset, limit: Math.min(20, windowStart.value + windowSize - offset) }, { scope: current }),
+      preserveWindow ? fetchCatalogWindow(items.value.map(item => item.id), { scope: current }) : Promise.resolve(null),
+    ])
     if (!current()) return
-    for (const item of result.items) {
+    if (!result.items.length && windowStart.value && result.total <= windowStart.value) {
+      windowStart.value = Math.max(0, Math.floor((result.total - 1) / windowSize) * windowSize)
+      items.value = []; loaded = false; scrollTop = 0
+      return await refresh()
+    }
+    for (const item of [...result.items, ...(window?.items || [])]) {
       const update = favoriteUpdates.get(item.id)
       if (update && update.revision > revision) item.favorite = update.favorite
     }
-    items.value = reset ? result.items : [...items.value, ...result.items.filter(item => !items.value.some(old => old.id === item.id))]
-    total.value = result.total; more.value = result.has_more
+    const retained = window?.items || []
+    const headUnchanged = preserveWindow && result.items.every((item, index) => item.id === items.value[index]?.id)
+      && retained.length === items.value.length && result.total === total.value
+    const existing = new Map(items.value.map(item => [item.id, item]))
+    const validWindow = headUnchanged && retained.every(item => existing.has(item.id) && existing.get(item.id)!.revision === item.revision)
+    const byId = new Map(retained.map(item => [item.id, item]))
+    items.value = validWindow ? items.value.map(old => ({ ...old, ...byId.get(old.id) })) : reset ? result.items : [...items.value, ...result.items.filter(item => !existing.has(item.id))]
+    if (!validWindow) nextOffset.value = offset + result.items.length
+    total.value = result.total; more.value = nextOffset.value < result.total && (validWindow || result.has_more !== false) && result.items.length > 0
     loaded = true
-    if (preserveWindow) { await nextTick(); if (current()) uni.pageScrollTo({ scrollTop, duration: 0 }) }
+    if (preserveWindow) { if (!validWindow) scrollTop = 0; await nextTick(); if (current()) uni.pageScrollTo({ scrollTop, duration: 0 }) }
 
   } catch (cause) { if (current()) { if (reset) error.value = errorMessage(cause); else appendError.value = errorMessage(cause) } }
   finally { if (current()) { loading.value = false; appending.value = false; uni.stopPullDownRefresh() } }
+}
+async function turnWindow(direction: -1 | 1) {
+  if (!active || loading.value || (direction < 0 ? !windowStart.value : !windowFull.value || !more.value)) return
+  windowStart.value = Math.max(0, windowStart.value + direction * windowSize)
+  nextOffset.value = windowStart.value
+  items.value = []; loaded = false; scrollTop = 0; invalidateActions()
+  uni.pageScrollTo({ scrollTop: 0, duration: 0 })
+  await refresh()
 }
 async function activate() {
   const run = ++activation
@@ -177,18 +202,21 @@ async function activate() {
     await nextTick()
     if (run !== activation) return
     active = true
+    imagesActive.value = true
     void groupControl.value?.refresh()
     void loadMetadata()
     void refresh(true, loaded && previousSelection === catalogSelection.revision)
   } else active = true
 }
 function deactivate() {
+  imagesActive.value = false
   invalidateActions()
   active = false; activation++; cancelSearch(); requests.invalidate(); metadataRequests.invalidate()
   loading.value = false; metadataLoading.value = false; filterOpen.value = false; gradeOpen.value = false; expandedRow.value = ''
   uni.stopPullDownRefresh()
 }
 watch([q, grade, subject, category, topic, sort, onlyFree, favoriteGroup, () => Object.values(tagFilters).join(':')], () => {
+  windowStart.value = 0; nextOffset.value = 0
   invalidateActions(); items.value = []; total.value = 0; appendError.value = ''
   requests.invalidate(); more.value = false
   loaded = false; scrollTop = 0; expandedRow.value = ''
@@ -198,6 +226,7 @@ watch([grade, subject], () => {
   if (session.user) writePreferences(session.user.id, { ...readPreferences(session.user.id), grade: grade.value, subject: subject.value })
 })
 watch(() => session.user?.id, (owner, previous) => {
+  windowStart.value = 0; nextOffset.value = 0
   invalidateActions(); appendError.value = ''; appending.value = false
   requests.invalidate(); metadataRequests.invalidate(); cancelSearch(); metadataAt = 0; metadataError.value = ''; metadataLoading.value = false; searchInput.value = ''; expandedRow.value = ''; items.value = []; summary.value = null; total.value = 0; more.value = false
   error.value = ''; loading.value = false; q.value = ''; grade.value = ''; subject.value = ''; category.value = ''
@@ -244,7 +273,15 @@ function handleShare(paper: PaperSummary) {
   // #endif
 }
 defineExpose({ activate, deactivate, refresh, reload, rememberScroll: (top: number) => { scrollTop = top }, loadMore: () => refresh(false), shareTitle: computed(() => topicHeader.value?.title || '习题专题') })
-onMounted(activate)
+function reconnect() { if (active && !changing.size) { void refresh(true, loaded); void loadMetadata(true) } }
+function memoryWarning() {
+  // 可见页面保留当前阅读位置；隐藏页释放行数据，下次进入重新核验权限。
+  if (active) return
+  items.value = []; summary.value = null; topics.value = []; tags.value = []
+  metadataAt = 0; loaded = false; scrollTop = 0; nextOffset.value = windowStart.value
+}
+onMounted(() => { uni.$on?.('lc-network-restored', reconnect); uni.$on?.('lc-memory-warning', memoryWarning); void activate() })
+onBeforeUnmount(() => { uni.$off?.('lc-network-restored', reconnect); uni.$off?.('lc-memory-warning', memoryWarning) })
 onBeforeUnmount(deactivate)
 </script>
 
@@ -277,7 +314,7 @@ onBeforeUnmount(deactivate)
       <view v-if="error" class="error-strip"><text class="grow">{{ error }}</text><wd-button icon="refresh" type="danger" variant="text" role="button" aria-label="重试加载" @click="refresh()" /></view>
       <view class="list-caption"><text class="result-count">{{ loading && !appending ? '正在检索习题' : '共 ' + total + ' 份习题' }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="filtered" class="section-link" role="button" @click="resetFilters"><wd-icon name="close-circle" size="14px" /><text>清除筛选</text></button><text v-else>{{ topicId ? '专题顺序' : view === 'all' ? (sort === 'latest' ? '最新发布' : sort === 'popular' ? '热门习题' : '精选优先') : view === 'downloads' ? '最近下载' : view === 'recent' ? '最近浏览' : '最近收藏' }}</text></view>
       <EnhancedSkeleton v-if="loading && !items.length" :count="4" type="row" />
-      <view v-else-if="items.length" class="paper-list catalog-paper-list"><PaperRow v-for="paper in items" :key="paper.id" :paper="paper" :busy="changing.has(paper.id)" :expanded="expandedRow === paper.id" @expand="expandedRow = $event ? paper.id : ''" @favorite="favorite(paper)" @download="handleDownload(paper)" @share="handleShare(paper)" /></view>
+      <view v-else-if="items.length" class="paper-list catalog-paper-list"><PaperRow v-for="paper in items" :key="paper.id" :paper="paper" :active="imagesActive" :busy="changing.has(paper.id)" :expanded="expandedRow === paper.id" @expand="expandedRow = $event ? paper.id : ''" @favorite="favorite(paper)" @download="handleDownload(paper)" @share="handleShare(paper)" /></view>
       <view v-else-if="!loading && !error" class="catalog-empty">
         <wd-empty :icon="filtered ? 'no-result' : view === 'favorites' ? 'no-collection' : 'no-content'" :tip="filtered ? '没有匹配的习题' : view === 'favorites' ? '还没有收藏的习题' : view === 'downloads' ? '暂无下载记录' : view === 'recent' ? '暂无浏览记录' : '新的习题正在准备中'">
           <template #bottom>
@@ -292,8 +329,9 @@ onBeforeUnmount(deactivate)
       </view>
       <view v-if="loading && items.length" class="loading-line"><wd-loading size="18px" /><text>正在加载</text></view>
       <view v-if="view === 'all' && !loading && !error && !items.length" class="request-entry"><text>没有找到需要的资料？</text><wd-button variant="plain" size="small" @click="openRequests({ q, grade, subject })">提交资料需求</wd-button></view>
-      <view v-else-if="appendError" class="error-strip" role="alert"><text class="grow">下一页加载失败，已加载的资料仍可查看</text><wd-button variant="text" icon="refresh" @click="refresh(false)">重试下一页</wd-button></view><view v-else-if="more && !loading" class="loading-line"><wd-button variant="text" icon="down" role="button" @click="refresh(false)">加载更多</wd-button></view>
-      <view v-else-if="items.length && !loading && !more" class="list-end">已显示全部 {{ total }} 份习题</view>
+      <view v-else-if="appendError" class="error-strip" role="alert"><text class="grow">下一页加载失败，已加载的资料仍可查看</text><wd-button variant="text" icon="refresh" @click="refresh(false)">重试下一页</wd-button></view><view v-else-if="more && !loading && !windowFull" class="loading-line"><wd-button variant="text" icon="down" role="button" @click="refresh(false)">加载更多</wd-button></view>
+      <view v-else-if="items.length && !loading && !more" class="list-end">{{ windowStart ? '已到最后一组' : '已显示全部 ' + total + ' 份习题' }}</view>
+      <view v-if="windowStart || windowFull" class="loading-line window-controls"><wd-button variant="plain" :disabled="loading || !windowStart" @click="turnWindow(-1)">上一组</wd-button><text>{{ nextOffset > windowStart ? (windowStart + 1) + '–' + nextOffset : '等待加载' }} / {{ total }}</text><wd-button variant="plain" :disabled="loading || !windowFull || !more" @click="turnWindow(1)">下一组</wd-button></view>
     </view>
     <GradePicker :open="gradeOpen" :value="grade" :options="summary?.grades || []" @close="gradeOpen = false" @select="grade = $event" />
     <CatalogFilterSheet :open="filterOpen" :grade="grade" :category="category" :grades="summary?.grades || []" :categories="summary?.categories || []" :tags="tags" :tag-filters="tagFilters" @close="filterOpen = false" @apply="applyFilters" />

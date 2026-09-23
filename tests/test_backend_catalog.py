@@ -24,7 +24,9 @@ pg_support.install_module_database({"SECRET_KEY": "catalog-tests-disposable-secr
                                     "LLM_API_KEY": "", "ADMIN_USERNAME": "", "ADMIN_PASSWORD": ""})
 
 from test_backend_library import bundle, snapshot
-from app import db as database, security
+
+from app import db as database
+from app import security
 from app.config import get_settings
 from app.deps import SESSION_COOKIE
 from app.models.library import ArchiveCreate
@@ -416,7 +418,7 @@ class PublicCatalogContracts(unittest.TestCase):
         path = f"/api/v1/catalog/papers/{item['id']}"
         result = self.client.get(path).json()
         self.assertFalse(result["can_view"])
-        self.assertIsNone(result["snapshot"])
+        self.assertNotIn("snapshot", result)  # 公开详情不再携带快照，难度单独顶层返回
         self.assertEqual(result["assets"], [])
         self.assertIsNone(result["thumbnail_url"])
         self.assertIsNone(self.client.get("/api/v1/catalog/papers").json()["items"][0]["thumbnail_id"])
@@ -435,7 +437,8 @@ class PublicCatalogContracts(unittest.TestCase):
         result = self.client.get(f"/api/v1/catalog/papers/{item['id']}").json()
         self.assertTrue(result["can_view"])
         self.assertFalse(result["can_download"])
-        self.assertTrue(result["snapshot"])
+        self.assertNotIn("snapshot", result)
+        self.assertEqual(result["difficulty"], "medium")
         self.assertEqual({asset["kind"] for asset in result["assets"]}, {"page"})
         self.assertEqual(self.client.get(result["assets"][0]["url"]).status_code, 200)
         pdf = next(asset for asset in item["assets"] if asset["kind"] == "pdf")

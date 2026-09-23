@@ -1,4 +1,4 @@
-import { AUTH_EXPIRED_EVENT, AuthError, request } from './api'
+import { AUTH_EXPIRED_EVENT, AuthError, accountChanged, request } from './api'
 import type { DownloadSettings } from './download-settings'
 
 export type PublicationStatus = 'draft' | 'published' | 'withdrawn'
@@ -9,6 +9,7 @@ export interface CatalogPaper extends DownloadSettings {
   id: string; title: string; description: string; category: string; category_id?: string; status: PublicationStatus
   featured: boolean; revision: number; grade: string; subject: string; version: number
   release_number?: number; update_note?: string; can_view?: boolean; can_download?: boolean
+  reviewed_at?: number; answer_readiness?: string
   question_count: number; page_count: number; file_status: string; thumbnail_url: string | null
   updated_at: number; favorite_count?: number; download_users?: number
 }
@@ -67,6 +68,7 @@ export function uploadPdf<T>(url: string, userId: number, file: File, progress?:
       try { data = JSON.parse(xhr.responseText) } catch { reject(new Error('服务响应无效，请检查是否已创建草稿')); return }
       if (xhr.status < 200 || xhr.status >= 300) {
         const detail = data?.detail
+        if (detail?.code === 'account_changed') { accountChanged(); reject(new AuthError('登录账号已变化，请刷新后重试')); return }
         reject(new Error(typeof detail === 'string' ? detail : detail?.error || `HTTP ${xhr.status}`)); return
       }
       resolve(data as T)
@@ -81,8 +83,8 @@ export function importPublication(userId: number, file: File, meta: CatalogImpor
   return uploadPdf<CatalogDetail>(base + '/import?' + params, userId, file, progress)
 }
 /** 导入一份外部 PDF 直接挂为该资料的打印版本（默认答案解析版），不单独创建公共条目 */
-export function attachImportedEdition(userId: number, catalogId: string, revision: number, kind: 'student' | 'answers', file: File, progress?: UploadProgress) {
-  return uploadPdf<{ revision: number; editions: { kind: string; label: string }[] }>(base + '/papers/' + encodeURIComponent(catalogId) + '/editions/import?kind=' + kind, userId, file, progress)
+export function attachImportedEdition(userId: number, catalogId: string, revision: number, kind: 'student' | 'answers', file: File, progress?: UploadProgress, confirmPublication = false) {
+  return uploadPdf<{ revision: number; editions: NonNullable<CatalogDetail['editions']> }>(base + '/papers/' + encodeURIComponent(catalogId) + '/editions/import?kind=' + kind + '&revision=' + revision + '&confirm_publication=' + confirmPublication, userId, file, progress)
 }
 export function updatePublication(userId: number, id: string, body: PublicationEdit) {
   return request<CatalogDetail>(base + '/papers/' + encodeURIComponent(id), mutation('PUT', userId, body))

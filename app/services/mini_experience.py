@@ -3,11 +3,12 @@
 import json
 import time
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.db import db
 from app.models.experience import SupportSettings
-from app.services import mini_auth, public_catalog as catalog
+from app.services import mini_auth
+from app.services import public_catalog as catalog
 from app.services.mini_errors import fail
 from app.services.mini_messages import notify
 
@@ -149,7 +150,7 @@ def assign_group(user_id, catalog_id, group_id):
 
 
 def record_view(user_id, catalog_id):
-    with db(serialized=True) as conn:
+    with db(content_user=user_id) as conn:
         catalog._visible(conn, catalog_id)
         conn.execute("INSERT INTO mini_recent_views(user_id, catalog_id, viewed_at) VALUES (?, ?, ?) "
                      "ON CONFLICT(user_id, catalog_id) DO UPDATE SET viewed_at = excluded.viewed_at", (user_id, catalog_id, int(time.time())))
@@ -159,7 +160,7 @@ def record_view(user_id, catalog_id):
 
 
 def clear_history(user_id):
-    with db() as conn:
+    with db(content_user=user_id) as conn:
         conn.execute("DELETE FROM mini_recent_views WHERE user_id = ?", (user_id,))
 
 
@@ -167,14 +168,13 @@ def record_event(user_id, kind, identifier=None, catalog_id=None, detail=""):
     now = int(time.time())
     # One active marker per account/day. Business event identifiers deduplicate network retries.
     event_id = f"active-{user_id}-{(now + 28800) // 86400}" if kind == "active" else f"{user_id}-{identifier or uuid.uuid4().hex}"
-    with db(serialized=True) as conn:
+    with db(content_user=user_id) as conn:
         if catalog_id:
             catalog._visible(conn, catalog_id)
         if kind.startswith("download_"):
             if not catalog_id or not conn.execute("SELECT 1 FROM mini_catalog_downloads WHERE user_id = ? AND catalog_id = ? AND requested_at > ?",
                                                  (user_id, catalog_id, now - 3600)).fetchone():
                 fail("未找到对应下载请求", 422)
-        conn.execute("DELETE FROM mini_usage_events WHERE created_at < ?", (now - 60 * 86400,))
         conn.execute("INSERT INTO mini_usage_events(id, user_id, kind, detail, catalog_id, created_at) VALUES (?, ?, ?, ?, ?, ?) "
                      "ON CONFLICT(id) DO NOTHING", (event_id, user_id, kind, detail[:120], catalog_id, now))
 

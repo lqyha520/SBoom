@@ -7,6 +7,7 @@ import { fetchSupport, fetchFeedback, fetchFeedbackItem, submitFeedback, feedbac
 import { errorMessage } from '../../services/api'
 import { ensureSession, session } from '../../services/session'
 import { formatDate } from '../../content'
+import { diagnosticSummary } from '../../services/runtime'
 const settings = ref<SupportSettings | null>(null)
 const records = ref<Feedback[]>([])
 const selectedId = ref(''), focused = ref<Feedback | null>(null)
@@ -64,12 +65,15 @@ watch(() => session.user?.id, () => { sequence++; records.value = []; focused.va
 onLoad(options => { paper.value = typeof options?.paper === 'string' ? options.paper : ''; selectedId.value = typeof options?.id === 'string' ? options.id : ''; activeTab.value = selectedId.value ? 'history' : 'new'; const choice = feedbackKinds.find(item => item.value === options?.kind); if (choice) kind.value = choice.value })
 onShow(() => { active = true; void load() })
 function leave() { active = false; sequence++; loading.value = false }
-onHide(leave); onUnload(leave)
+function reconnect() { if (active && !busy.value) void load() }
+uni.$on?.('lc-network-restored', reconnect)
+onHide(leave); onUnload(() => { leave(); uni.$off?.('lc-network-restored', reconnect) })
 </script>
 <template>
   <view class="support-page-shell"><PageChrome back fallback="/pages/account/index" /><view class="content-width support-page">
     <text class="page-title">服务与反馈</text>
     <text class="support-description">咨询使用问题，查看反馈处理进度</text>
+    <view class="contact-actions"><wd-button variant="text" role="button" @click="copy(diagnosticSummary())">复制故障记录</wd-button><text class="feedback-hint">仅含错误类别、时间与次数，不含账号或填写内容。由你决定是否发给客服。</text></view>
     <view v-if="session.user" class="service-tabs" role="group" aria-label="服务与反馈内容"><button role="button" hover-class="control-pressed" :class="{ selected: activeTab === 'new' }" :aria-pressed="activeTab === 'new'" :disabled="busy" @click="activeTab = 'new'">联系与反馈</button><button role="button" hover-class="control-pressed" :class="{ selected: activeTab === 'history' }" :aria-pressed="activeTab === 'history'" :disabled="busy" @click="activeTab = 'history'">我的反馈</button></view>
     <view v-if="settings && activeTab === 'new'" class="support-card"><text class="card-heading">联系客服</text><text class="paragraph">{{ settings.benefits }}</text><text v-if="settings.hours" class="paragraph">服务时间：{{ settings.hours }}</text><view class="contact-actions"><wd-button role="button" v-if="settings.wechat" variant="plain" @click="copy(settings.wechat)">复制微信号</wd-button><wd-button role="button" v-if="settings.phone" variant="plain" @click="phone">拨打电话</wd-button><wd-button role="button" v-if="settings.email" variant="plain" @click="copy(settings.email)">复制邮箱</wd-button></view><view v-if="settings.qr_url" class="support-qr"><image :src="settings.qr_url" mode="aspectFit" show-menu-by-longpress @click="previewQr" /><text>点击放大客服二维码</text></view><text v-if="!settings.wechat && !settings.phone && !settings.email && !settings.qr_url" class="paragraph">可以提交问题，回复后会通过消息中心通知你。</text></view>
     <view v-if="error" class="error-strip" role="alert"><text class="grow">{{ error }}</text><button hover-class="control-pressed" role="button" class="section-link" :disabled="loading" @click="load()">重试</button></view><view v-if="notice" class="notice-strip" role="status">{{ notice }}</view>

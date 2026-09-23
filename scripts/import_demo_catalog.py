@@ -119,7 +119,7 @@ def import_catalog(source_db, source_files, publisher_id, *, apply=False):
                         raise ValueError("An existing destination file does not match the source")
             else:
                 storage.put(asset["storage_key"], source.read_bytes(), asset["mime_type"])
-        series = {}
+        series: dict[str, int] = {}
         for archive in rows["paper_archives"]:
             archive.update(user_id=publisher_id, folder_id=None, favorite=0,
                            upload_token="", upload_started_at=0, upload_reserved_bytes=0)

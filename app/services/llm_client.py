@@ -8,20 +8,30 @@ import asyncio
 import json
 import logging
 from collections import OrderedDict
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
 import httpx
+
 from app.config import get_settings
+from app.metrics import observe_provider
 from app.services.generation_control import record_attempt, record_usage
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
-RETRYABLE = (httpx.ConnectError,)  # Read/write/protocol errors may occur after the provider billed the request.
-# 注意：ReadTimeout/ConnectTimeout 不在重试之列——超时意味着请求很可能已到达
-# 服务端并计费，盲目重发会造成重复扣费（中转站按次计费场景尤其敏感）
+RETRYABLE = (httpx.ConnectError, httpx.ConnectTimeout)  # Read/write/protocol errors may occur after the provider billed the request.
+# 注意：ReadTimeout 不在重试之列——读超时意味着请求很可能已到达服务端并计费，
+# 盲目重发会造成重复扣费（中转站按次计费场景尤其敏感）。
+# ConnectTimeout 则可以安全重试：TCP/TLS 握手都没完成，请求体根本没发出去，不可能被计费。
+
+# 连接/取池超时单独收紧：整体超时可配到 600s，但握手 10s 还不通就该报错，
+# 否则一个不可达的中转站会把生成请求挂满整个超时窗口。
+CONNECT_TIMEOUT = 10.0
+POOL_TIMEOUT = 10.0
+# 单个 (base_url, api_key) 的连接池上限；全局并发由 generation_global_concurrency 限制，这里只兜底
+CLIENT_LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10)
 
 
 def _should_retry(e: Exception) -> bool:
@@ -37,8 +47,8 @@ class LLMClient:
     MAX_CACHED_CLIENTS = 8  # 连接池缓存上限（LRU 淘汰），防止 key/地址变化导致无限增长
 
     def __init__(self):
-        self._clients: "OrderedDict[Tuple[str, str], httpx.AsyncClient]" = OrderedDict()
-        self._busy: Dict[httpx.AsyncClient, int] = {}
+        self._clients: OrderedDict[tuple[str, str], httpx.AsyncClient] = OrderedDict()
+        self._busy: dict[httpx.AsyncClient, int] = {}
 
     def _evict_oldest(self, free_slots: int = 1) -> None:
         """缓存超限时淘汰最久未用的 client（连接在后台异步关闭，不阻塞调用方）。"""
@@ -79,7 +89,8 @@ class LLMClient:
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            timeout=httpx.Timeout(self.DEFAULT_TIMEOUT),
+            timeout=httpx.Timeout(self.DEFAULT_TIMEOUT, connect=CONNECT_TIMEOUT, pool=POOL_TIMEOUT),
+            limits=CLIENT_LIMITS,
         )
         self._clients[cache_key] = client
         return client
@@ -92,20 +103,26 @@ class LLMClient:
             pass
 
     @staticmethod
-    def _req_timeout(timeout: Optional[float]) -> httpx.Timeout:
-        """单次请求的超时覆盖（连接池 client 的默认超时较长，按调用方配置收紧）。"""
-        return httpx.Timeout(float(timeout)) if timeout else httpx.Timeout(LLMClient.DEFAULT_TIMEOUT)
+    def _req_timeout(timeout: float | None) -> httpx.Timeout:
+        """单次请求的超时覆盖（连接池 client 的默认超时较长，按调用方配置收紧）。
 
+        read/write 用调用方配置的整体超时；connect/pool 固定收紧为 10s——
+        否则 timeout=600 时，连不上的地址也要等满 600s 才报错。
+        """
+        total = float(timeout) if timeout else LLMClient.DEFAULT_TIMEOUT
+        return httpx.Timeout(total, connect=CONNECT_TIMEOUT, pool=POOL_TIMEOUT)
+
+    @observe_provider
     async def chat(
         self,
-        messages: List[Dict],
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        base_url: Optional[str] = None,
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
-        timeout: Optional[float] = None,
+        messages: list[dict],
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        timeout: float | None = None,
     ) -> str:
         """非流式调用，返回完整响应文本。可选传入 base_url/model/api_key/timeout 覆盖默认配置。"""
         url = base_url or settings.llm_base_url
@@ -123,7 +140,7 @@ class LLMClient:
         }
 
         async with self._borrow_client(url, key) as client:
-            response: Optional[httpx.Response] = None
+            response: httpx.Response | None = None
             for attempt in range(1, self.MAX_ATTEMPTS + 1):
                 try:
                     record_attempt()
@@ -152,16 +169,17 @@ class LLMClient:
                 logger.error("模型响应结构异常: %s", type(e).__name__)
                 raise RuntimeError(f"LLM 响应结构异常: {e}") from e
 
+    @observe_provider
     async def chat_stream(
         self,
-        messages: List[Dict],
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        base_url: Optional[str] = None,
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
-        timeout: Optional[float] = None,
+        messages: list[dict],
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        timeout: float | None = None,
     ) -> AsyncGenerator[str, None]:
         """流式调用，逐 token 产出文本。可选传入 base_url/model/api_key/timeout 覆盖默认配置。"""
         url = base_url or settings.llm_base_url

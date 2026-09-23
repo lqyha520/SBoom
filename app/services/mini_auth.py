@@ -13,8 +13,14 @@ from fastapi import HTTPException
 
 from app.config import get_settings
 from app.db import db
-from app.models.mini import NEW_USERNAME_PATTERN, AdminProfileUpdate, MembershipUpdate, MiniPasswordUpdate, MiniProfileUpdate
-from app.security import hash_password, verify_password, encrypt_secret
+from app.models.mini import (
+    NEW_USERNAME_PATTERN,
+    AdminProfileUpdate,
+    MembershipUpdate,
+    MiniPasswordUpdate,
+    MiniProfileUpdate,
+)
+from app.security import encrypt_secret, hash_password, verify_password
 
 
 class _RedactWeChatURL(logging.Filter):
@@ -81,10 +87,15 @@ def get_user(user_id):
 
 
 def _session(conn, user_id):
+    """签发一个新会话。
+
+    全表的过期会话清理不再放在登录路径上（每次登录都全表扫一遍 expires_at），
+    改由 mini_jobs.tick 定期分批调用 sweep_expired_sessions；这里只保留按
+    user_id 索引的「每账号最多 10 个会话」裁剪，代价很小。
+    """
     user = _user(conn, user_id)
     token, now = "lc_reader_" + secrets.token_urlsafe(32), int(time.time())
     expires = now + get_settings().mini_session_days * 86400
-    conn.execute("DELETE FROM mini_user_sessions WHERE expires_at <= ?", (now,))
     conn.execute("INSERT INTO mini_user_sessions(token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
                  (digest(token), user_id, now, expires))
     conn.execute("DELETE FROM mini_user_sessions WHERE token_hash IN (SELECT token_hash FROM mini_user_sessions "
@@ -93,14 +104,28 @@ def _session(conn, user_id):
     return {"status": "authenticated", "token": token, "expires_at": expires, "user": user.public()}
 
 
+def sweep_expired_sessions(conn, now=None, limit=500) -> int:
+    """分批删除已过期的会话（走 idx_mini_sessions_expires 索引），供后台任务周期调用。
+
+    每次最多删 limit 条，避免长事务；返回本批删除数量，调用方可据此决定是否继续。
+    """
+    cursor = conn.execute("DELETE FROM mini_user_sessions WHERE token_hash IN (SELECT token_hash FROM mini_user_sessions "
+                          "WHERE expires_at <= ? ORDER BY expires_at LIMIT ?)", (int(now if now is not None else time.time()), limit))
+    return max(0, cursor.rowcount or 0)
+
+
 def resolve_session(token: str) -> MiniUser:
     if not token.startswith("lc_reader_") or len(token) > 100:
         _error()
+    # 会话与账号一次 JOIN 取回：每个带登录态的请求都会走这里，省掉一次往返。
     with db() as conn:
-        row = conn.execute("SELECT user_id, expires_at FROM mini_user_sessions WHERE token_hash = ?", (digest(token),)).fetchone()
-        if not row or row["expires_at"] <= time.time():
-            _error()
-        return _user(conn, row["user_id"])
+        row = conn.execute("SELECT u.* FROM mini_user_sessions s JOIN mini_users u ON u.id = s.user_id "
+                           "WHERE s.token_hash = ? AND s.expires_at > ?", (digest(token), int(time.time()))).fetchone()
+    if not row:
+        _error()
+    if not row["is_active"]:
+        _error("账号已被禁用，请联系管理员", 403, "account_disabled")
+    return _row_user(row)
 
 
 def logout(token: str):
@@ -115,20 +140,37 @@ def register(username: str, password: str, *, admin=False):
         _error("账号需为 2-32 位英文字母、数字、下划线或短横线，不能使用中文", 422)
     password_hash = hash_password(password)
     now, user_id = int(time.time()), uuid.uuid4().hex
-    with db(serialized="accounts") as conn:
-        if conn.execute("SELECT id FROM mini_users WHERE username = ?", (username,)).fetchone():
+    # 用户名占用由 mini_users.username 的 UNIQUE 约束保证：INSERT ... ON CONFLICT DO NOTHING
+    # 没插进去就是被占用，不需要全局 accounts 锁来串行化「先查后插」。
+    with db() as conn:
+        inserted = conn.execute("INSERT INTO mini_users(id, username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?) "
+                                "ON CONFLICT(username) DO NOTHING RETURNING id", (user_id, username, password_hash, now, now)).fetchone()
+        if not inserted:
             _error("小程序用户名已被占用", 409)
-        conn.execute("INSERT INTO mini_users(id, username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                     (user_id, username, password_hash, now, now))
         return _session(conn, user_id)
+
+
+_dummy_password_hash = ""
+
+
+def _dummy_hash() -> str:
+    """账号不存在或没设密码时也要跑一次同等代价的校验，避免用响应时间探测用户名是否存在。"""
+    global _dummy_password_hash
+    if not _dummy_password_hash:
+        _dummy_password_hash = hash_password(secrets.token_urlsafe(32))
+    return _dummy_password_hash
 
 
 def login_password(username: str, password: str):
     with db() as conn:
         row = conn.execute("SELECT id, password_hash FROM mini_users WHERE username = ?", (username,)).fetchone()
-    if not row or not row["password_hash"] or not verify_password(password, row["password_hash"]):
+    usable = bool(row and row["password_hash"])
+    # 无论账号是否存在都做一次 PBKDF2 校验，再合并判断，保证耗时一致
+    matched = verify_password(password, row["password_hash"] if usable else _dummy_hash())
+    if not usable or not matched:
         _error("小程序用户名或密码错误")
-    with db(serialized="accounts") as conn:
+    # 签发会话只写本账号的行，无需 accounts 全局锁
+    with db() as conn:
         return _session(conn, row["id"])
 
 
@@ -167,35 +209,45 @@ def _default_username(conn) -> str:
     worker picking the same login identifier. The editable nickname is separate.
     """
     for _ in range(20):
-        username = "wx%010d" % secrets.randbelow(10_000_000_000)
+        username = f"wx{secrets.randbelow(10_000_000_000):010d}"
         if not conn.execute("SELECT 1 FROM mini_users WHERE username = ?", (username,)).fetchone():
             return username
     return "wx" + uuid.uuid4().hex[:24]
 
 
+def _wechat_session(conn, account_id, openid):
+    if openid:
+        conn.execute("UPDATE mini_users SET wechat_openid_enc = ? WHERE id = ?", (encrypt_secret(openid), account_id))
+    return _session(conn, account_id)
+
+
 def login_public_identity(identity: str, openid=""):
     if openid and digest(get_settings().wechat_app_id + ":" + openid) != identity:
         _error("微信身份不一致，请重新登录")
+    # 绝大多数登录是老用户：只读自己的账号行 + 签发会话，不需要 accounts 全局锁。
+    with db() as conn:
+        account = conn.execute("SELECT id FROM mini_users WHERE wechat_identity = ?", (identity,)).fetchone()
+        if account:
+            return _wechat_session(conn, account["id"], openid)
+    if not get_settings().mini_registration_enabled:
+        _error("小程序注册暂未开放，请联系管理员", 403)
+    # 首次登录要分配随机登录名（_default_username 的「查可用→插入」依赖串行化），
+    # 只有这一段仍持 accounts 锁；锁内重查一次 wechat_identity，避免并发首登建出两个账号。
     with db(serialized="accounts") as conn:
         account = conn.execute("SELECT id FROM mini_users WHERE wechat_identity = ?", (identity,)).fetchone()
         if account:
-            if openid:
-                conn.execute("UPDATE mini_users SET wechat_openid_enc = ? WHERE id = ?", (encrypt_secret(openid), account["id"]))
-            return _session(conn, account["id"])
-        if not get_settings().mini_registration_enabled:
-            _error("小程序注册暂未开放，请联系管理员", 403)
+            return _wechat_session(conn, account["id"], openid)
         user_id, now = uuid.uuid4().hex, int(time.time())
         conn.execute("INSERT INTO mini_users(id, username, nickname, wechat_identity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
                      (user_id, _default_username(conn), secrets.choice(_NICKNAME_SPIRITS), identity, now, now))
-        if openid:
-            conn.execute("UPDATE mini_users SET wechat_openid_enc = ? WHERE id = ?", (encrypt_secret(openid), user_id))
-        return _session(conn, user_id)
+        return _wechat_session(conn, user_id, openid)
 
 
 def update_profile(user_id: str, body: MiniProfileUpdate):
     """用户自助改昵称/头像；昵称允许重复，固定登录名不随资料编辑改变。"""
-    with db(serialized="accounts") as conn:
-        row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
+    # 只改自己的一行：用 FOR UPDATE 行锁代替 accounts 全局锁
+    with db() as conn:
+        row = conn.execute("SELECT * FROM mini_users WHERE id = ? FOR UPDATE", (user_id,)).fetchone()
         if not row:
             _error()
         if not row["is_active"]:
@@ -223,8 +275,9 @@ def update_password(user_id: str, body: MiniPasswordUpdate, current_token: str =
     改完吊销该账号的其它会话（当前会话保留），这样密码泄露后改密能立刻把
     别处的登录踢下线，而用户自己不用重新登录。
     """
-    with db(serialized="accounts") as conn:
-        row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
+    # 只改自己的一行 + 自己的会话：FOR UPDATE 行锁足够，不必持 accounts 全局锁
+    with db() as conn:
+        row = conn.execute("SELECT * FROM mini_users WHERE id = ? FOR UPDATE", (user_id,)).fetchone()
         if not row:
             _error()
         if not row["is_active"]:
@@ -300,6 +353,8 @@ def admin_user(user_id):
 
 
 def update_membership(admin_id, user_id, body: MembershipUpdate):
+    # 保留 accounts 锁：会员字段与支付回调 / 续期（membership_ledger.append）共享同一状态机，
+    # 那些路径在锁内先读后写，这里若不串行化会让它们基于过期快照覆盖会员到期时间。
     with db(serialized="accounts") as conn:
         row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
         if not row:
@@ -324,8 +379,9 @@ def update_admin_profile(admin_id, user_id, body: AdminProfileUpdate):
     只落传上来的字段；带 ``revision`` 乐观锁，避免两个管理员互相覆盖。
     重置密码会吊销该账号的全部会话——旧密码对应的登录态立刻失效。
     """
-    with db(serialized="accounts") as conn:
-        row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
+    # 只动昵称/头像/密码（不碰会员字段），revision 乐观锁 + FOR UPDATE 行锁即可，无需 accounts 全局锁
+    with db() as conn:
+        row = conn.execute("SELECT * FROM mini_users WHERE id = ? FOR UPDATE", (user_id,)).fetchone()
         if not row:
             _error("小程序用户不存在", 404)
         if row["revision"] != body.revision:
@@ -380,6 +436,8 @@ def delete_user_data(conn, user_id):
 
 def delete_user(admin_id, user_id):
     """彻底删除小程序账号（不可恢复），连带会话、收藏、下载记录与操作留痕。"""
+    # 保留双域锁：ensure_deletable 的「无未结订单/退款」检查与随后的级联删除必须和
+    # 下单、退款状态机互斥；这是低频管理操作，串行化代价可接受。
     with db(serialized=("content", "accounts")) as conn:
         row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
         if not row:

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { onHide, onLoad, onPullDownRefresh, onShow, onUnload, onShareAppMessage } from '@dcloudio/uni-app'
+import { computed, nextTick, ref, watch } from 'vue'
+import { onHide, onLoad, onPullDownRefresh, onShow, onUnload, onShareAppMessage, onPageScroll } from '@dcloudio/uni-app'
 import PageChrome from '../../components/PageChrome.vue'
 import PrivateImage from '../../components/PrivateImage.vue'
 import PaperPreview from '../../components/PaperPreview.vue'
@@ -19,6 +19,8 @@ import { shareCard } from '../../services/return-route'
 const id = ref('')
 const edition = ref<PrintEdition['kind']>('original')
 const paper = ref<PaperDetail | null>(null)
+const verified = ref(false)
+let scrollTop = 0
 const loading = ref(false)
 const error = ref('')
 const downloading = ref(false)
@@ -42,8 +44,8 @@ let actionRevision = 0
 const pdf = computed(() => paper.value?.assets.find(asset => asset.kind === 'pdf'))
 const external = computed(() => paper.value?.download_mode === 'external')
 const selectedEdition = computed(() => paper.value?.editions?.find(item => item.kind === edition.value))
-const pages = computed(() => paper.value?.assets.filter(asset => asset.kind === 'page') || [])
-const cover = computed(() => pages.value[0]?.url || paper.value?.thumbnail_url || null)
+const pages = computed(() => verified.value ? paper.value?.assets.filter(asset => asset.kind === 'page') || [] : [])
+const cover = computed(() => verified.value ? paper.value?.thumbnail_url || pages.value[0]?.url || null : null)
 let pdfLabel = '下载 PDF'
 let pdfGuide = '下载后可在浏览器下载记录中查看文件'
 // #ifdef MP-WEIXIN
@@ -70,26 +72,29 @@ watch(() => session.user?.id, (owner, previous) => {
 async function load() {
   if (!id.value || !active || changing.value) { uni.stopPullDownRefresh(); return }
   const current = requests.begin()
-  loading.value = true; error.value = ''; retryDownload.value = false; paper.value = null
+  const restoring = !!paper.value
+  loading.value = true; verified.value = false; error.value = ''; retryDownload.value = false
   previewOpen.value = false
   clearLink()
   try {
-    const result = await fetchCatalogPaper(id.value)
+    const result = await fetchCatalogPaper(id.value, { scope: current })
     if (current()) {
       if (!result.can_view || !result.can_download) clearAssetCache()
       paper.value = result
+      verified.value = true
+      if (restoring) { await nextTick(); if (current()) uni.pageScrollTo?.({ scrollTop, duration: 0 }) }
       if (!result.editions?.some(item => item.kind === edition.value)) edition.value = 'original'
-      if (session.user) void recordView(result.id).catch(() => {})
+      if (current() && session.user) void recordView(result.id).catch(() => {})
     }
   } catch (cause) {
     if (current()) {
       error.value = errorMessage(cause)
-      if (cause instanceof ApiError && cause.status === 404) paper.value = null
+      if (cause instanceof ApiError && [401, 403, 404].includes(cause.status)) { paper.value = null; clearAssetCache() }
     }
   } finally { if (current()) { loading.value = false; uni.stopPullDownRefresh() } }
 }
 async function favorite() {
-  if (!paper.value || changing.value) return
+  if (!paper.value || !verified.value || loading.value || changing.value) return
   if (!requireLogin()) return
   const current = requests.begin()
   loading.value = false; changing.value = true
@@ -100,7 +105,7 @@ async function favorite() {
   finally { changing.value = false; if (active && !current()) void load() }
 }
 async function download() {
-  if (!paper.value || downloading.value) return
+  if (!paper.value || !verified.value || loading.value || downloading.value) return
   if (!requireLogin()) return
   if (!paper.value.can_download) { membershipOpen.value = true; return }
   if (!external.value && !pdf.value) return
@@ -162,7 +167,7 @@ async function selectGroup(groupId: string | null) {
   finally { if (revision === actionRevision) groupBusy.value = false }
 }
 function preview() {
-  if (paper.value?.can_view && pages.value.length) previewOpen.value = true
+  if (verified.value && paper.value?.can_view && pages.value.length) previewOpen.value = true
 }
 async function createAndAssignGroup() {
   const name = groupName.value.trim()
@@ -196,17 +201,21 @@ function sharePaper() {
 }
 // #endif
 onLoad(options => { id.value = typeof options?.id === 'string' ? options.id : '' })
+onPageScroll(event => { scrollTop = event.scrollTop })
 onShareAppMessage(() => shareCard('paper', id.value, paper.value?.title))
 onShow(async () => { active = true; await ensureSession(); if (active) void load() })
 function leave() {
-  active = false; actionRevision++; requests.invalidate(); loading.value = false; paper.value = null
+  active = false; actionRevision++; requests.invalidate(); loading.value = false; verified.value = false
+  if (paper.value) paper.value = { ...paper.value, assets: [], snapshot: null, thumbnail_url: null, editions: paper.value.editions?.map(({ url: _url, ...item }) => item) }
   cancelPdfDownload()
   previewOpen.value = false; membershipOpen.value = false; uni.stopPullDownRefresh()
   clearLink()
   groupOpen.value = false; groupBusy.value = false; groupError.value = ''; groupItems.value = []; groupName.value = ''
 }
 onHide(leave)
-onUnload(leave)
+function reconnect() { if (active && !changing.value && !downloading.value) void load() }
+uni.$on?.('lc-network-restored', reconnect)
+onUnload(() => { leave(); paper.value = null; uni.$off?.('lc-network-restored', reconnect) })
 onPullDownRefresh(() => { void load() })
 </script>
 
@@ -215,7 +224,8 @@ onPullDownRefresh(() => { void load() })
     <view class="detail-hero" :class="subjectTone(paper?.subject || '')">
       <PageChrome back fallback="/pages/library/index" />
       <view v-if="paper" class="paper-stage">
-        <view v-if="!paper.can_view" class="preview-sheet locked-sheet"><wd-icon name="lock" size="31px" /><text>VIP 专享习题</text></view>
+        <view v-if="!verified" class="preview-sheet locked-sheet"><wd-loading v-if="loading" /><text>{{ loading ? '正在核验访问权限' : '请重试加载资料' }}</text></view>
+        <view v-else-if="!paper.can_view" class="preview-sheet locked-sheet"><wd-icon name="lock" size="31px" /><text>VIP 专享习题</text></view>
         <view v-else-if="external && !pages.length" class="preview-sheet locked-sheet"><wd-icon name="folder" size="31px" /><text>网盘资料</text></view><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-else class="preview-sheet preview-entry" :disabled="!pages.length" role="button" aria-label="查看完整习题预览" @click="preview"><PrivateImage :src="cover" label="习题原稿封面" /></button>
         <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="paper.can_view && pages.length" class="preview-pill" role="button" @click="preview"><wd-icon name="fullscreen" size="16px" /><text>预览 {{ pages.length }} 页</text></button>
         <view v-else-if="!paper.can_view" class="preview-access access-badge"><wd-icon name="lock" size="12px" /><text>VIP 专享</text></view>
@@ -241,8 +251,8 @@ onPullDownRefresh(() => { void load() })
           <view class="detail-service"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" v-if="paper.favorite" class="section-link" :disabled="groupBusy || changing" @click="chooseGroup">收藏分组</button><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" class="section-link" @click="openSupport('correction', paper.id)">资料纠错</button><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" class="section-link" @click="openSupport('download', paper.id)">下载遇到问题</button></view>
           <view v-if="!external && paper.file_status !== 'ready'" class="notice-strip">{{ exerciseText(paper.file_error) || fileStatus(paper.file_status) }}</view>
 
-          <view v-if="!paper.can_view" class="vip-locked"><text>完整内容仅对有效 VIP 会员开放</text><wd-button variant="text" icon="star" role="button" @click="viewMembership">{{ session.user ? '查看会员状态' : '登录查看会员权益' }}</wd-button></view>
-          <view v-else-if="!pages.length" class="preview-empty"><wd-empty icon="file-pdf" :tip="external ? '文件由网盘提供，获取链接后可前往查看' : pdf ? '暂无预览图' : '习题文件暂未就绪'"><template #bottom><view class="empty-actions"><wd-button variant="plain" icon="refresh" role="button" @click="load">刷新状态</wd-button></view></template></wd-empty></view>
+          <view v-if="verified && !paper.can_view" class="vip-locked"><text>完整内容仅对有效 VIP 会员开放</text><wd-button variant="text" icon="star" role="button" @click="viewMembership">{{ session.user ? '查看会员状态' : '登录查看会员权益' }}</wd-button></view>
+          <view v-else-if="verified && !pages.length" class="preview-empty"><wd-empty icon="file-pdf" :tip="external ? '文件由网盘提供，获取链接后可前往查看' : pdf ? '暂无预览图' : '习题文件暂未就绪'"><template #bottom><view class="empty-actions"><wd-button variant="plain" icon="refresh" role="button" @click="load">刷新状态</wd-button></view></template></wd-empty></view>
         </view>
         <view class="detail-dock">
           <text class="download-hint">{{ downloadAccessHint(paper) }}</text>
@@ -250,14 +260,14 @@ onPullDownRefresh(() => { void load() })
           <text v-if="downloading" class="transfer-status" role="status">{{ external ? '正在获取网盘链接…' : downloadProgress === null ? '正在准备文件…' : downloadProgress < 100 ? '正在下载 ' + downloadProgress + '%' : '下载完成，正在打开 PDF…' }}</text>
           <text v-if="retryDownload && error" class="download-error" role="alert">{{ error }}</text>
           <view class="detail-actions">
-            <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="detail-utility detail-favorite" :class="{ selected: paper.favorite }" role="button" :disabled="changing" :aria-pressed="paper.favorite" :aria-label="paper.favorite ? '取消收藏' : '收藏习题'" @click="favorite"><wd-icon :name="paper.favorite ? 'heart-fill' : 'heart'" size="22px" /><text>{{ paper.favorite ? '已收藏' : '收藏' }}</text></button>
+            <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="detail-utility detail-favorite" :class="{ selected: paper.favorite }" role="button" :disabled="changing || loading || !verified" :aria-pressed="paper.favorite" :aria-label="paper.favorite ? '取消收藏' : '收藏习题'" @click="favorite"><wd-icon :name="paper.favorite ? 'heart-fill' : 'heart'" size="22px" /><text>{{ paper.favorite ? '已收藏' : '收藏' }}</text></button>
             <!-- #ifdef MP-WEIXIN -->
             <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="detail-utility detail-share" role="button" aria-label="分享这份资料给好友" open-type="share"><wd-icon name="share-external" size="22px" /><text>分享</text></button>
             <!-- #endif -->
             <!-- #ifdef H5 -->
             <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="detail-utility detail-share" role="button" aria-label="复制资料分享链接" @click="sharePaper"><wd-icon name="share-external" size="22px" /><text>分享</text></button>
             <!-- #endif -->
-            <view class="download-button"><wd-button role="button" block :icon="paper.can_download ? 'download' : 'lock'" :loading="downloading" :disabled="(!!session.user && paper.can_download && !external && !pdf) || downloading" @click="download">{{ actionLabel }}</wd-button></view>
+            <view class="download-button"><wd-button role="button" block :icon="paper.can_download ? 'download' : 'lock'" :loading="downloading" :disabled="!verified || loading || (!!session.user && paper.can_download && !external && !pdf) || downloading" @click="download">{{ actionLabel }}</wd-button></view>
           </view>
           <text v-if="!external && paper.can_download" class="download-guide">{{ pdfGuide }}</text>
         </view>

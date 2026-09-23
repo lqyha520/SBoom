@@ -6,21 +6,22 @@
 """
 
 import asyncio
+import ipaddress
 import logging
+import socket
 from pathlib import Path
-from typing import Optional
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
 from psycopg.errors import UniqueViolation
+from pydantic import BaseModel
 
-from app.config import get_settings, APP_VERSION
-from app.deps import require_admin, require_user
+from app.config import APP_VERSION, get_settings
+from app.deps import require_admin
 from app.security import encryption_backend, security_warnings
 from app.services import app_config, user_store
-from app.services.llm_client import llm_client
-from app.services.user_store import CurrentUser
 from app.services.generation_control import usage_summary
+from app.services.user_store import CurrentUser
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin", tags=["后台管理"])
@@ -112,9 +113,9 @@ def create_user(req: AdminCreateUser, admin: CurrentUser = Depends(require_admin
 
 
 class AdminUpdateUser(BaseModel):
-    password: Optional[str] = None
-    role: Optional[str] = None
-    is_active: Optional[bool] = None
+    password: str | None = None
+    role: str | None = None
+    is_active: bool | None = None
 
 
 @router.put("/users/{user_id}", summary="更新用户（重置密码 / 改角色 / 启用禁用）")
@@ -239,22 +240,71 @@ def clear_llm_config(admin: CurrentUser = Depends(require_admin)):
     return {"status": "ok", "message": "模型配置已清除"}
 
 
+def _resolve_public_ip(hostname: str, port: int) -> str:
+    """把主机名解析为公网 IP（同步 DNS，调用方放线程池）。
+
+    任何一条解析记录落在回环/内网/链路本地（169.254.x 云元数据）/保留段都拒绝，
+    与 image_generation._public_image 的公网 IP 钉死策略一致。
+    """
+    try:
+        addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError(f"无法解析主机名 {hostname}") from exc
+    ips = [str(entry[4][0]).split("%")[0] for entry in addresses]
+    if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
+        raise ValueError("接口地址不能指向本机、内网或云元数据地址")
+    return ips[0]
+
+
+def _pin_public_url(url: str) -> tuple[str, str]:
+    """校验未保存的接口地址并把连接钉到公网 IP，返回 (主机替换成 IP 的 URL, 原始 Host 头)。
+
+    只按主机名解析一次、随后直接连该 IP，避免 DNS 重绑定把探测请求引到内网。
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
+        raise ValueError("接口地址须为 http(s)://主机[:端口]/路径 形式，且不能包含账号密码")
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    ip = _resolve_public_ip(parts.hostname, port)
+    host = parts.hostname.encode("idna").decode("ascii")
+    host_header = host if parts.port is None else f"{host}:{parts.port}"
+    import httpx as _httpx
+    return str(_httpx.URL(url).copy_with(host=ip)), host_header
+
+
 @router.post("/test-llm", summary="测试模型连通性（流式探测：拿到首个响应即判定成功）")
-async def test_llm(req: Optional[AdminLlmConfigIn] = None, admin: CurrentUser = Depends(require_admin)):
+async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Depends(require_admin)):
     """连通性测试用流式请求：服务端开始吐第一个 token 就证明链路+鉴权都通。
-    超时耐心 = 配置的 timeout（中转站拥堵时首 token 可能 20-60s，不宜截断）。"""
+    超时耐心 = 配置的 timeout（中转站拥堵时首 token 可能 20-60s，不宜截断）。
+
+    防 SSRF：只有「已保存的全局配置地址」可以原样探测；表单里填的其他地址必须解析到公网 IP，
+    否则管理员账号（或被盗的管理员会话）可以拿这个接口扫内网 / 读云元数据。
+    """
     import httpx as _httpx
 
     g = await asyncio.to_thread(app_config.get_llm, with_key=True)
-    base_url = (req.baseUrl if req and req.baseUrl else g["baseUrl"]) or settings.llm_base_url
+    saved_base = (g["baseUrl"] or settings.llm_base_url).rstrip("/")
+    requested = req.baseUrl.strip().rstrip("/") if req and req.baseUrl else ""
+    base_url = requested or saved_base
     model = (req.model if req and req.model else g["model"]) or settings.llm_model
     api_key = (req.apiKey if req and req.apiKey else g["api_key"]) or settings.llm_api_key
     timeout = (req.timeout if req and req.timeout else g["timeout"]) or 60
+    request_headers: dict[str, str] = {}
+    extensions: dict = {}
+    if requested and requested != saved_base:
+        try:
+            base_url, host_header = await asyncio.to_thread(_pin_public_url, requested)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": "接口地址不允许", "detail": str(exc)}) from exc
+        request_headers["Host"] = host_header
+        extensions["sni_hostname"] = host_header.split(":")[0]  # TLS 证书仍按原始域名校验
     try:
         async with _httpx.AsyncClient(
             base_url=base_url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            timeout=_httpx.Timeout(max(float(timeout), 90.0)),
+            # 整体耐心按配置放宽，但握手 10s 不通就该报错，别让不可达地址挂满整个窗口
+            timeout=_httpx.Timeout(max(float(timeout), 90.0), connect=10.0, pool=10.0),
+            trust_env=False,
         ) as client:
             async with client.stream(
                 "POST",
@@ -265,6 +315,8 @@ async def test_llm(req: Optional[AdminLlmConfigIn] = None, admin: CurrentUser = 
                     "max_tokens": 5,
                     "stream": True,
                 },
+                headers=request_headers,
+                extensions=extensions,
             ) as resp:
                 if resp.status_code != 200:
                     body = (await resp.aread()).decode("utf-8", errors="replace")[:200]
@@ -279,17 +331,17 @@ async def test_llm(req: Optional[AdminLlmConfigIn] = None, admin: CurrentUser = 
                 return {"status": "ok", "reply": "已连通"}
     except HTTPException:
         raise
-    except _httpx.TimeoutException as e:
+    except _httpx.TimeoutException:
         # 注意：必须放在 TransportError 之前（Timeout 是 TransportError 的子类，
         # 顺序反了会把超时误报成"无法连接"——请求其实已到达服务端并计费）
         raise HTTPException(
             status_code=502,
             detail={"error": "模型服务响应超时", "detail": f"等待 {max(timeout, 90)}s 未见任何输出（服务端可能极度拥堵）"},
-        )
+        ) from None
     except _httpx.TransportError as e:
         raise HTTPException(
             status_code=502,
             detail={"error": "无法连接模型服务", "detail": f"{e}（检查接口地址/网络）"},
-        )
+        ) from e
     except Exception as e:
-        raise HTTPException(status_code=502, detail={"error": "模型连接失败", "detail": str(e)})
+        raise HTTPException(status_code=502, detail={"error": "模型连接失败", "detail": str(e)}) from e

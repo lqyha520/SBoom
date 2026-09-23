@@ -9,17 +9,32 @@ from datetime import date, datetime, timedelta, timezone
 from app.config import get_settings
 from app.db import db
 from app.security import decrypt_secret
-from app.services import mini_auth, membership_ledger
+from app.services import membership_ledger, mini_auth
 from app.services.mini_errors import fail
 from app.services.mini_messages import notify
 from app.services.wechat_pay import PaymentError, WeChatPay, configuration
 
 PUBLIC_FIELDS = ("id", "plan_id", "plan_name", "plan_days", "amount_fen", "currency", "status", "revision", "created_at", "expires_at", "paid_at", "closed_at", "updated_at")
 REFUND_FIELDS = ("id", "reason", "reply", "status", "revision", "created_at", "updated_at", "completed_at")
+#: 列表查询把退款与下单人一次 LEFT JOIN 带出来（列名加前缀避免和订单列撞名），public_order(joined=True) 直接消费
+JOINED_COLUMNS = ", ".join(f"f.{key} AS refund_{key}" for key in REFUND_FIELDS) + ", u.username AS owner_username, u.nickname AS owner_nickname"
+JOINED_TABLES = "mini_orders o LEFT JOIN mini_users u ON u.id = o.user_id LEFT JOIN mini_refunds f ON f.order_id = o.id"
 
 
-def public_order(conn, row, admin=False):
+def public_order(conn, row, admin=False, *, joined=False):
+    """订单对外视图。
+
+    单条查询（detail/create/pay 等）保持原样按需补查退款与下单人；
+    列表查询传 joined=True，退款/下单人已随 JOINED_COLUMNS 一并取回，不再逐行补查（原来 50 行要打 100 次库）。
+    mini_refunds.order_id 是 UNIQUE，LEFT JOIN 不会让订单行翻倍。
+    """
     result = {key: row[key] for key in PUBLIC_FIELDS}
+    if joined:
+        result["refund"] = {key: row["refund_" + key] for key in REFUND_FIELDS} if row["refund_id"] else None
+        if admin:
+            result.update(user_id=row["user_id"], username=row["owner_username"] if row["owner_username"] is not None else "已注销用户",
+                          nickname=row["owner_nickname"] if row["owner_username"] is not None else "", transaction_id=row["transaction_id"])
+        return result
     refund = conn.execute("SELECT * FROM mini_refunds WHERE order_id = ?", (row["id"],)).fetchone()
     result["refund"] = {key: refund[key] for key in REFUND_FIELDS} if refund else None
     if admin:
@@ -49,9 +64,11 @@ def plans(admin=False):
 
 def save_plan(body, identifier=None):
     now = int(time.time())
-    with db(serialized="accounts") as conn:
+    # 套餐维护是单行 revision 乐观锁写入：FOR UPDATE 行锁即可。下单侧读到的永远是已提交快照，
+    # 并按 plan_revision 校验，所以不需要 accounts 全局锁把它和下单串起来。
+    with db() as conn:
         if identifier:
-            row = conn.execute("SELECT revision FROM mini_membership_plans WHERE id = ?", (identifier,)).fetchone()
+            row = conn.execute("SELECT revision FROM mini_membership_plans WHERE id = ? FOR UPDATE", (identifier,)).fetchone()
             if not row:
                 fail("会员套餐不存在", 404)
             if row[0] != body.revision:
@@ -245,20 +262,24 @@ def cancel(identifier, user_id=None):
 def listing(user_id=None, status="", q="", limit=20, offset=0, start_date="", end_date=""):
     clauses, args = [], []
     if user_id is not None:
-        clauses.append("o.user_id = ?"); args.append(user_id)
+        clauses.append("o.user_id = ?")
+        args.append(user_id)
     if status.startswith("refund_"):
         clauses.append("EXISTS (SELECT 1 FROM mini_refunds f WHERE f.order_id = o.id AND f.status = ?)")
         args.append(status.removeprefix("refund_"))
     elif status:
-        clauses.append("o.status = ?"); args.append(status)
+        clauses.append("o.status = ?")
+        args.append(status)
     try:
         zone = timezone(timedelta(hours=8))
         if start_date and end_date and date.fromisoformat(start_date) > date.fromisoformat(end_date):
             raise ValueError("Reversed range")
         if start_date:
-            clauses.append("o.created_at >= ?"); args.append(int(datetime.combine(date.fromisoformat(start_date), datetime.min.time(), zone).timestamp()))
+            clauses.append("o.created_at >= ?")
+            args.append(int(datetime.combine(date.fromisoformat(start_date), datetime.min.time(), zone).timestamp()))
         if end_date:
-            clauses.append("o.created_at < ?"); args.append(int(datetime.combine(date.fromisoformat(end_date) + timedelta(days=1), datetime.min.time(), zone).timestamp()))
+            clauses.append("o.created_at < ?")
+            args.append(int(datetime.combine(date.fromisoformat(end_date) + timedelta(days=1), datetime.min.time(), zone).timestamp()))
     except (ValueError, OverflowError):
         fail("订单日期范围无效", 422)
     if q:
@@ -268,8 +289,8 @@ def listing(user_id=None, status="", q="", limit=20, offset=0, start_date="", en
     where = " AND ".join(clauses) or "1=1"
     with db() as conn:
         total = conn.execute(f"SELECT COUNT(*) FROM mini_orders o LEFT JOIN mini_users u ON u.id = o.user_id WHERE {where}", args).fetchone()[0]
-        rows = conn.execute(f"SELECT o.* FROM mini_orders o LEFT JOIN mini_users u ON u.id = o.user_id WHERE {where} ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?", [*args, limit, offset]).fetchall()
-        items = [public_order(conn, row, user_id is None) for row in rows]
+        rows = conn.execute(f"SELECT o.*, {JOINED_COLUMNS} FROM {JOINED_TABLES} WHERE {where} ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?", [*args, limit, offset]).fetchall()
+        items = [public_order(conn, row, user_id is None, joined=True) for row in rows]
         summary = dict(conn.execute("SELECT COUNT(*) AS orders, COALESCE(SUM(CASE WHEN o.paid_at IS NOT NULL THEN o.amount_fen ELSE 0 END),0) AS paid_fen, "
                                    "COALESCE(SUM(CASE WHEN o.status = 'refunded' THEN o.amount_fen ELSE 0 END),0) AS refunded_fen "
                                    f"FROM mini_orders o LEFT JOIN mini_users u ON u.id = o.user_id WHERE {where}", args).fetchone())

@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest'
 import { defineComponent, h, KeepAlive } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import PublicPapers from '../components/PublicPapers.vue'
-import { uiStubs } from './ui-stubs'
+import { uiStubs } from '../../../shared/test/ui-stubs'
 import { readAdminRoute } from '../navigation'
 import * as catalog from '../catalog'
 const mocks = vi.hoisted(() => ({ categories: vi.fn(), dictionary: vi.fn() }))

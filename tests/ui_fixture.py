@@ -8,8 +8,8 @@ The demo additionally creates ui_reader / reader-pass-123, with no private archi
 
 import argparse
 import asyncio
-import os
 import json
+import os
 import re
 import sys
 import tempfile
@@ -36,14 +36,56 @@ pg_support.install_module_database({
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+
 from app.db import db, init_db
-from app.deps import require_admin, require_user
-from app.routers import admin, auth, generate, me, library, mini, catalog, site, experience, engagement, commerce
-from app.services import app_config, mini_auth, user_store
+from app.deps import require_admin
 from app.models.mini import MembershipUpdate
-from app.services.user_store import CurrentUser
+from app.routers import (
+    admin,
+    auth,
+    catalog,
+    commerce,
+    engagement,
+    experience,
+    generate,
+    image_generation,
+    library,
+    me,
+    mini,
+    site,
+)
+from app.services import app_config, mini_auth, user_store
 from app.services.generation_control import record_attempt, record_usage
 from app.services.llm_client import llm_client
+from app.services.user_store import CurrentUser
+
+
+async def fixture_image(config, prompt):
+    """Deterministic local PNG for UI checks; never contacts an image provider."""
+    import io
+
+    from PIL import Image, ImageDraw
+
+    from app.services.image_generation import normalize_image
+    record_attempt()
+    await asyncio.sleep(0.25)
+    position = re.search(r"这是第 (\d+) 张", prompt)
+    page_number = int(position[1]) if position else 1
+    if "模拟生图超时" in prompt or ("模拟第2张超时" in prompt and page_number == 2):
+        raise HTTPException(504, detail={"error": "模拟生图超时，未自动重发"})
+    picture = Image.new("RGB", (768, 1024), "#ffffff")
+    draw = ImageDraw.Draw(picture)
+    draw.rectangle((30, 30, 738, 135), fill="#e5f1eb")
+    draw.text((60, 65), "OFFLINE IMAGE FIXTURE - NOT AI OUTPUT", fill="#295542", font_size=24)
+    draw.text((60, 145), f"PAGE {page_number}", fill="#295542", font_size=24)
+    for index in range(6):
+        draw.text((60, 190 + index * 110), f"{index + 1}.    {index + 12} + 8 = __________", fill="#26332c", font_size=28)
+    stream = io.BytesIO()
+    picture.save(stream, format="PNG")
+    return {**normalize_image(stream.getvalue()), "prompt": prompt}
+
+
+image_generation.generate_image = fixture_image
 
 
 def question(kind, index, version=0):
@@ -163,6 +205,7 @@ fixture.include_router(mini.router)
 fixture.include_router(catalog.router)
 fixture.include_router(catalog.admin_router)
 fixture.include_router(generate.router)
+fixture.include_router(image_generation.router)
 fixture.include_router(admin.router)
 fixture.include_router(site.router)
 fixture.include_router(site.admin_router)
@@ -176,8 +219,8 @@ async def admin_redirect():
     return RedirectResponse("/admin/")
 
 
-fixture.mount("/admin", StaticFiles(directory=ROOT / "admin" / "dist", html=True), name="admin")
-fixture.mount("/", StaticFiles(directory=ROOT / "web" / "dist", html=True), name="web")
+fixture.mount("/admin", StaticFiles(directory=Path(os.environ.get("LC_ADMIN_DIST", ROOT / "admin" / "dist")), html=True), name="admin")
+fixture.mount("/", StaticFiles(directory=Path(os.environ.get("LC_WEB_DIST", ROOT / "web" / "dist")), html=True), name="web")
 
 
 if __name__ == "__main__":

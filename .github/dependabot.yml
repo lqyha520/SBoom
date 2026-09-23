@@ -1,0 +1,65 @@
+# Dependabot：按周合并成组的小步升级；重大版本单独出 PR。
+# Actions 已按 commit SHA 固定，Dependabot 会同时更新 SHA 与行尾的版本注释。
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /admin
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      admin-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /miniprogram
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      miniprogram-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # uni-app 的日期式版本号跨版本升级需人工验证微信包，不自动提
+      - dependency-name: "@dcloudio/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker-compose
+    directory: /deploy
+    schedule:
+      interval: weekly

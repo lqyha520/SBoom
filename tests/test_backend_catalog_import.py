@@ -14,8 +14,9 @@ pg_support.install_module_database({"SECRET_KEY": "import-tests-disposable-secre
                                     "LLM_API_KEY": "", "ADMIN_USERNAME": "", "ADMIN_PASSWORD": ""})
 
 import test_backend_catalog as fixtures  # noqa: E402
+
 from app import db as database  # noqa: E402
-from app.routers import catalog, engagement  # noqa: E402
+from app.routers import engagement  # noqa: E402
 
 
 def tiny_pdf(label: str = "Hello Import") -> bytes:

@@ -33,4 +33,13 @@ describe('request identity', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: { error: 'Conflict', code: 'template_conflict' } }), { status: 409 })))
     await expect(api.deleteTemplateOnServer('Template', 2)).rejects.toMatchObject({ status: 409, code: 'template_conflict' })
   })
+
+  it('keeps the paid request identity when a 200 response body is interrupted', async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.reject(new TypeError('terminated')) })
+    vi.stubGlobal('fetch', fetch)
+    await expect(api.generateBatch(params, 'body-interrupted')).rejects.toMatchObject({
+      status: 0, code: 'network_unknown', requestId: 'body-interrupted',
+    })
+    expect(fetch).toHaveBeenCalledOnce()
+  })
 })

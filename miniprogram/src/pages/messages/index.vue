@@ -2,29 +2,40 @@
 import { ref } from 'vue'
 import { onReachBottom } from '@dcloudio/uni-app'
 import ServicePage from '../../components/ServicePage.vue'
-import { useConsumerPage } from '../../services/consumer-page'
-import { fetchMessages, inboxState, messageDestination, subscriptionConfig, grantSubscription, requestKey, type Message } from '../../services/growth'
+import { useConsumerPage, type ConsumerTicket } from '../../services/consumer-page'
+import { fetchMessages, inboxState, unreadTracker, messageDestination, subscriptionConfig, grantSubscription, requestKey, type Message } from '../../services/growth'
 import { visitDestination } from '../../services/navigation'
 import { session } from '../../services/session'
 import { formatDate } from '../../content'
 import { applyPendingReads, markAllMessagesRead, markMessageRead, readSync, syncMessageReads } from '../../services/message-reads'
 
 const items = ref<Message[]>([]), more = ref(false), unreadOnly = ref(false)
+const nextOffset = ref(0)
+let listVersion = ''
 const subscribe = ref({ available: false, template_id: '' })
-async function load(valid: () => boolean, append = false) {
-  await syncMessageReads()
+async function load(valid: ConsumerTicket, append = false) {
+  if (append && unreadOnly.value && readSync.busy) return
+  void syncMessageReads()
   if (!valid()) return
-  const result = await fetchMessages(unreadOnly.value, append ? items.value.length : 0)
+  const version = unreadTracker.version()
+  // 未读集合在回执完成后会缩短，重新读取首页，避免旧 offset 跳过消息。
+  if (unreadOnly.value && version !== listVersion) append = false
+  const apply = unreadTracker.read()
+  const offset = append ? nextOffset.value : 0
+  const result = await fetchMessages(unreadOnly.value, offset, 20, { scope: valid })
   if (!valid()) return
-  applyPendingReads(result.items, result.unread)
-  items.value = append ? [...items.value, ...result.items.filter(item => !items.value.some(old => old.id === item.id))] : result.items
+  applyPendingReads(result.items, result.unread, apply)
+  nextOffset.value = offset + result.items.length
+  listVersion = version
+  const visible = unreadOnly.value ? result.items.filter(item => !item.read_at) : result.items
+  items.value = append ? [...items.value, ...visible.filter(item => !items.value.some(old => old.id === item.id))] : visible
   more.value = result.has_more
-  if (!append) { const config = await subscriptionConfig(); if (valid()) subscribe.value = config }
+  if (!append) { const config = await subscriptionConfig({ scope: valid }); if (valid()) subscribe.value = config }
 }
-const page = useConsumerPage(load, () => { items.value = []; more.value = false; subscribe.value = { available: false, template_id: '' } })
+const page = useConsumerPage(load, () => { items.value = []; nextOffset.value = 0; more.value = false; subscribe.value = { available: false, template_id: '' } })
 const { error, busy, loading } = page
 function filter(value: boolean) { if (busy.value || loading.value || unreadOnly.value === value) return; unreadOnly.value = value; void page.refresh() }
-function loadMore() { if (more.value) void page.act(valid => load(valid, true)) }
+function loadMore() { if (more.value && !(unreadOnly.value && readSync.busy)) void page.act(valid => load(valid, true)) }
 function open(message: Message) {
   if (!page.ticket()()) return
   markMessageRead(message)
@@ -57,7 +68,7 @@ onReachBottom(loadMore)
     <view v-if="subscribe.available && session.user?.has_wechat" class="service-card"><text class="service-card-title">微信服务提醒</text><text class="service-copy">主动订阅后，下一次处理结果可通过微信提醒你。</text><view class="service-actions"><wd-button role="button" size="small" variant="plain" :disabled="busy || loading" @click="requestSubscription">订阅下一次提醒</wd-button></view></view>
     <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" v-for="message in items" :key="message.id" class="service-card message-card" :class="{ unread: !message.read_at }" @click="open(message)"><view class="service-row"><text class="service-card-title">{{ message.title }}</text><view v-if="!message.read_at" class="unread-dot" aria-label="未读" /></view><text class="service-copy">{{ message.body }}</text><text class="service-meta">{{ formatDate(message.created_at) }} · 点击查看</text></button>
     <view v-if="!items.length && !loading && !error" class="service-empty"><wd-empty icon="no-content" :tip="unreadOnly ? '暂无未读消息' : '暂无服务消息'" /></view>
-    <view v-if="more" class="loading-line"><wd-button role="button" variant="text" :loading="busy" :disabled="busy || loading" @click="loadMore">加载更多</wd-button></view>
+    <view v-if="more" class="loading-line"><wd-button role="button" variant="text" :loading="busy" :disabled="busy || loading || unreadOnly && readSync.busy" @click="loadMore">加载更多</wd-button></view>
   </ServicePage>
 </template>
 <style scoped>

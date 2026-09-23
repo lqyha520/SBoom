@@ -10,15 +10,15 @@ import pg_support
 
 pg_support.install_module_database({"SECRET_KEY": "optimization-tests-disposable-secret"})
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from app import db as database, security
+
+from app import db as database
+from app import security
 from app.deps import SESSION_COOKIE
-from app.routers import admin
-from app.services import generation_control, user_store
-from app.services import app_config, mini_auth, mini_experience
 from app.models.experience import FeedbackCreate
-from fastapi import HTTPException
+from app.routers import admin
+from app.services import app_config, generation_control, mini_auth, mini_experience, user_store
 
 
 class OptimizationContracts(unittest.TestCase):

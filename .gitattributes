@@ -1,0 +1,21 @@
+# 统一按 LF 入库；检出时也用 LF（Windows 上的编辑器/工具链都支持）。
+# 注意：本文件加入后不要立刻 `git add --renormalize .`，待当前功能改动合入后再单独提交一次规范化，见 CONTRIBUTING.md。
+* text=auto eol=lf
+
+# Windows 专用脚本保持 CRLF
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制资源：不做换行/diff 处理
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.zip binary

@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { onLaunch, onShow } from '@dcloudio/uni-app'
+import { onLaunch, onShow, onError, onUnhandledRejection } from '@dcloudio/uni-app'
+import { initializeRuntime, recordDiagnostic } from './services/runtime'
 import { ensureSession } from './services/session'
 import { hideNativeTabBar } from './services/tabbar-overlay'
 
-onLaunch(() => { void ensureSession() })
+onLaunch(() => { initializeRuntime(); void ensureSession() })
+onError(() => recordDiagnostic('runtime'))
+onUnhandledRejection(() => recordDiagnostic('promise'))
 onShow(hideNativeTabBar)
 </script>
 

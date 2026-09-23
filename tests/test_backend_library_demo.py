@@ -13,19 +13,20 @@ import pg_support  # 建一次性测试库，必须在 import app 之前
 
 pg_support.install_module_database()
 
-from test_backend_library import bundle
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from library_demo import DATASET, FOLDERS, catalog, catalog_digest, seed_library, seed_public_catalog
+from test_backend_library import bundle
 
-from app import db as database, security
+from app import db as database
+from app import security
 from app.config import get_settings
 from app.deps import SESSION_COOKIE
-from app.models.library import ArchiveCreate, ArchiveUpdate
 from app.models.catalog import CatalogUpdate
+from app.models.library import ArchiveCreate, ArchiveUpdate
 from app.models.mini import MembershipUpdate
 from app.routers import library
 from app.services import mini_auth, paper_library, public_catalog, user_store
-from library_demo import DATASET, FOLDERS, catalog, catalog_digest, seed_library, seed_public_catalog
 
 
 class DemoLibraryContracts(unittest.TestCase):

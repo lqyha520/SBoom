@@ -1,6 +1,7 @@
 """Validated wire contracts for discovery and consumer service."""
 
 from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 TagKind = Literal["textbook", "term", "unit", "knowledge"]

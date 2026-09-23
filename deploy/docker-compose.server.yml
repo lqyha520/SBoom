@@ -1,37 +1,31 @@
-# learn-coach 服务器部署编排（对外直连 0.0.0.0:33403，另有 https 入口）
+# Secure server deployment. Set up the encrypted upstream before applying.
+# The application port is reachable only from the host; remote proxies use a TLS
+# or SSH tunnel. See docs/optimization-2026-09-21.md for migration and rollback.
+# docker compose -p learncoach --env-file .env.production -f docker-compose.server.yml up -d --build
 #
-# 与 docker-compose.yml 的差异：
-#   - app 绑 0.0.0.0:33403，经服务商 NAT 直接对外（无 TLS）；宿主机 cloudflared 亦可回源同一端口
-#   - 不含 caddy 服务：不做本地证书签发（80/443 被服务商封锁，ACME 不可用）
-#
-# 对外入口（两条并存）：
-#   1) http://43.248.3.161:33403      —— NAT 直连，明文
-#   2) https://sboom.bcxtech.cn       —— 81.71.94.132 上的宝塔 nginx 反代回 33403，
-#      Let's Encrypt 证书由宝塔自动续期。**小程序必须用这条**（微信强制 https + 域名备案）。
-#      配置在 81.71.94.132:/www/server/panel/vhost/nginx/{sboom.bcxtech.cn.conf,proxy/sboom.bcxtech.cn/}
-#
-# ⚠️ 形态约束：
-#   1. 必须 FORCE_HTTPS=false，否则会话 Cookie 带 Secure 标志、明文 HTTP 直连下浏览器不回传 → 登录失效
-#      （走 sboom 域名时是 https，本可置 true，但直连入口会一起坏，故保持 false）
-#   2. 直连入口无 TLS → 该入口下登录口令明文过网；对外建议一律走 sboom 域名
-#
-# 用法（在服务器 /opt/learn-coach/deploy 下）：
-#   docker compose -p learncoach --env-file .env.production -f docker-compose.server.yml up -d --build
-#   docker compose -p learncoach --env-file .env.production -f docker-compose.server.yml logs -f app
-#
-# 重建镜像（改了代码/依赖后必须重建，只 up -d 不会生效）：
-#   ⚠️ 该机到官方 PyPI 只有 ~14 kB/s，整层 pip install 要爬 30-40 分钟（实测 cryptography
-#      4.7MB 花了 357s）。用国内镜像可到 ~1 MB/s，实测 51s 装完：
-#   docker compose -p learncoach --env-file .env.production -f docker-compose.server.yml \
-#     build --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ app
-#   docker compose -p learncoach --env-file .env.production -f docker-compose.server.yml up -d
-#   （PIP_INDEX_URL 由 Dockerfile 的 ARG 声明，默认仍是官方源，别处构建行为不变）
+# 镜像内应用以非 root（uid 10001）运行；从旧版镜像升级时 appdata 卷需一次性
+# chown，网络改为固定网段后首次 up 前需先 `docker compose down`（不带 -v），见 docs/deploy.md。
+
+# 服务共用的日志轮转：单文件 10m × 3 份，防止 json-file 日志把磁盘吃满
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   db:
-    # 用 postgres:16（宿主机已有该镜像）；不用 -alpine 变体是为了免去额外拉取
-    image: postgres:16
+    # 与根目录 docker-compose.yml、deploy/docker-compose.yml、CI 统一用 16-alpine（宿主机现有的
+    # deploy-db-1 / learncoach-db 也是这个镜像）。不要在 postgres:16（glibc）与 16-alpine（musl）之间
+    # 切换已有的 pgdata 卷：两者文本排序规则不同，换镜像后需要 REINDEX，见 docs/deploy.md。
+    image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
+    shm_size: 256m
+    deploy:
+      resources:
+        limits:
+          memory: 1g
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-learncoach}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
@@ -50,44 +44,40 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file: .env.production
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "3"
+    logging: *default-logging
+    # 给在途生成任务/连接池收尾留时间；超过后才 SIGKILL
+    stop_grace_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
     environment:
       # 容器内固定项：监听全部网卡、连 compose 网络里的 db、开多 worker
       HOST: 0.0.0.0
       PORT: "8000"
       LOG_TO_FILE: "false"
-      # 覆盖 .env.production 的 FORCE_HTTPS=true：直连形态没有 TLS，
-      # 若保持 true，auth.py 的会话 Cookie 会带 Secure 标志，明文 HTTP 下
-      # 浏览器不回传 → 管理台/工作台登录全部失效（curl 也不回传，已实测）。
-      # 放在这里而不是改 .env.production：compose 的 environment 优先级更高，
-      # 且以后重新拷 .env.production 也不会把这个部署形态专属的开关覆盖掉。
-      FORCE_HTTPS: "false"
-      # https 入口（含小程序）走 81.71.94.132 上的宝塔 nginx：
-      #   https://sboom.bcxtech.cn -> proxy_pass http://43.248.3.161:33403
-      # 该机回源时，容器看到的源 IP 就是 nginx 的 81.71.94.132（DNAT 保留源地址，
-      # 已用 new-api 日志实测）。uvicorn 默认只信 127.0.0.1，若不放行这一条，
-      # request.client.host 会恒等于 81.71.94.132，而 auth.py 的限流按它分桶：
-      #   register:{ip} 10 次/小时、login-ip:{ip} 30 次/5 分钟
-      # → 全平台共用一个桶，第 11 个注册的人直接被 429。
-      # 这里只白名单这一个具体 IP（不是 "*"）：外部直连 33403 时对端不是它，
-      # uvicorn 就不会采信其 X-Forwarded-For，伪造头绕限流的路仍被堵死。
-      FORWARDED_ALLOW_IPS: "127.0.0.1,81.71.94.132"
+      FORCE_HTTPS: "true"
+      # 宿主机上的隧道/反代连到 127.0.0.1:33403 时，容器看到的来源是 docker 网桥网关（172.30.0.1），
+      # 不是 127.0.0.1。旧默认值 127.0.0.1 会让 uvicorn 丢弃 X-Forwarded-For，所有请求共用一个限流桶。
+      # 下面把网段固定为 172.30.0.0/24 并默认信任它（uvicorn 0.34 支持 CIDR）。绝不要填 "*"。
+      # 若反代直接在容器网络之外且来源不同，请在 .env.production 里按实测值覆盖。
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.30.0.0/24}
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env.production}
       DATABASE_URL: postgresql://${POSTGRES_USER:-learncoach}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}@db:5432/${POSTGRES_DB:-learncoach}
     ports:
-      # 绑全部网卡以便服务商 NAT 直连；0.0.0.0 同时覆盖回环，
-      # 因此宿主机 cloudflared 若日后加回源规则仍可用 http://localhost:33403。
-      # 配套：ufw allow 33403/tcp + 服务商控制台放行 33403 + FORCE_HTTPS=false。
-      - "0.0.0.0:33403:8000"
+      - "127.0.0.1:33403:8000"
     volumes:
       - appdata:/app/data
     depends_on:
       db:
         condition: service_healthy
+
+# 固定网段，使 FORWARDED_ALLOW_IPS 默认值可预期；改网段后需要 `docker compose down` 让 compose 重建网络
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
 
 volumes:
   pgdata:

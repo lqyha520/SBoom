@@ -11,7 +11,6 @@ from collections import deque
 from heapq import heappop, heappush
 from math import isfinite
 
-
 _lock = threading.Lock()
 _MAX_KEYS = 10_000
 _CLEANUP_BATCH = 64

@@ -80,7 +80,7 @@ Completed on 2026-09-13:
 | `pnpm build` in `web/` and `admin/` | Both passed |
 | `pnpm test` in `web/` | 20 tests passed |
 | `python tests/test_ui_contracts.py` | 6 isolated API contract tests passed |
-| `python test_admin_console.py` against the fixture | 12 checks passed |
+| `python scripts/admin_console_check.py` against the fixture | 12 checks passed |
 | Desktop and 390px mobile layouts | Verified workbench, results, and admin; no page-level horizontal overflow |
 | Workbench interactions | Login, conditions, type selection, sorting, layout, editing, template round trips, multi-paper generation, answers, and result selection verified |
 | Admin interactions | Role rejection, navigation, model form/test UI, self-protection, template inspection, search, empty create-form validation, feedback filtering, and logs verified |
@@ -108,7 +108,7 @@ python tests/ui_fixture.py --port 8105
 ```powershell
 $env:LC_TEST_BASE = 'http://127.0.0.1:8105'
 python tests/test_ui_contracts.py
-python test_admin_console.py
+python scripts/admin_console_check.py
 ```
 
 The fixture binds to loopback, creates a disposable SQLite database, reuses real

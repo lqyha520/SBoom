@@ -1,7 +1,7 @@
 """Normalize model output against the requested sections, never invented questions."""
 
 from collections import Counter
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from app.models import BatchItem, GameResult, GameType, GenerateRequest, Question
 from app.services.generation_control import reserve_repairs

@@ -1,0 +1,6 @@
+[Unit]
+Description=Record Learning Coach backup failure
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -p daemon.err -t learn-coach-backup Backup failed. Inspect journalctl -u learn-coach-backup.service.

@@ -3,10 +3,13 @@
 import base64
 import hashlib
 import json
+import os
 import re
 import secrets
+import threading
 import time
-from datetime import datetime, timezone
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -18,9 +21,35 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.asymmetric.types import PublicKeyTypes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 from app.config import get_settings
 
 API_ORIGIN = "https://api.mch.weixin.qq.com"
+
+# ─── 进程内共享的 httpx.Client ───
+# 每次调用都 new 一个 Client 意味着每次都重新握 TLS；微信支付接口固定同一台主机，
+# 复用一个 Client（线程安全）即可复用连接。超时按请求单独传，不同接口耐心不同。
+_HTTP_LIMITS = httpx.Limits(max_connections=5, max_keepalive_connections=5)
+_http_lock = threading.Lock()
+_http_shared: httpx.Client | None = None
+
+
+def _http_client() -> httpx.Client:
+    global _http_shared
+    if _http_shared is None or _http_shared.is_closed:
+        with _http_lock:
+            if _http_shared is None or _http_shared.is_closed:
+                _http_shared = httpx.Client(timeout=12, follow_redirects=False, limits=_HTTP_LIMITS)
+    return _http_shared
+
+
+def _file_stat(path: str) -> tuple[int, int] | None:
+    """(mtime_ns, size)；文件不存在/不可读返回 None。一次 stat 同时拿到两项，别 stat 两遍。"""
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    return st.st_mtime_ns, st.st_size
 
 
 class PaymentError(Exception):
@@ -54,21 +83,57 @@ def _key_material(private_path, private_stat, public_path, public_stat, serial):
 
 def _keys(settings):
     try:
-        paths = [Path(settings.wechat_pay_private_key_path), Path(settings.wechat_pay_platform_key_path)]
-        stats = [(path.stat().st_mtime_ns, path.stat().st_size) for path in paths]
-        private, public, certificate = _key_material(str(paths[0]), stats[0], str(paths[1]), stats[1], settings.wechat_pay_platform_serial)
-        if certificate and not certificate.not_valid_before_utc <= datetime.now(timezone.utc) <= certificate.not_valid_after_utc:
+        paths = [str(settings.wechat_pay_private_key_path), str(settings.wechat_pay_platform_key_path)]
+        stats = [_file_stat(path) for path in paths]
+        if stats[0] is None or stats[1] is None:
+            raise OSError("key file missing")
+        private, public, certificate = _key_material(paths[0], stats[0], paths[1], stats[1], settings.wechat_pay_platform_serial)
+        if certificate and not certificate.not_valid_before_utc <= datetime.now(UTC) <= certificate.not_valid_after_utc:
             raise ValueError("Expired platform certificate")
         return private, public
     except (OSError, ValueError, TypeError, UnsupportedAlgorithm) as error:
         raise PaymentError("INVALID_KEYS") from error
 
 
+# configuration() 会被订单/套餐/维护任务反复调用，每次都要 stat 密钥文件 + 正则 + 解析证书。
+# 缓存 5s；缓存键带上全部相关配置值和密钥文件的 (mtime, size)，
+# 所以改配置（含测试里 patch settings）或换密钥文件都会立即失效，不用等 TTL。
+_CONFIG_TTL_SECONDS = 5.0
+_config_lock = threading.Lock()
+_config_cache: tuple[float, tuple, dict] | None = None  # (过期时刻, 缓存键, 结果)
+
+
+def _config_key(settings) -> tuple:
+    return (
+        settings.wechat_pay_enabled, settings.wechat_app_id, settings.wechat_pay_mchid,
+        settings.wechat_pay_serial_no, settings.wechat_pay_private_key_path, settings.wechat_pay_platform_serial,
+        settings.wechat_pay_platform_key_path, settings.wechat_pay_api_v3_key, settings.wechat_pay_notify_origin,
+        settings.wechat_pay_ios_enabled,
+        _file_stat(str(settings.wechat_pay_private_key_path)) if settings.wechat_pay_private_key_path else None,
+        _file_stat(str(settings.wechat_pay_platform_key_path)) if settings.wechat_pay_platform_key_path else None,
+    )
+
+
 def configuration():
+    global _config_cache
     settings = get_settings()
+    key = _config_key(settings)
+    now = time.monotonic()
+    cached = _config_cache
+    if cached is not None and cached[0] > now and cached[1] == key:
+        return {**cached[2], "missing": list(cached[2]["missing"])}
+    value = _compute_configuration(settings)
+    with _config_lock:
+        # 同时算新鲜值的线程各算各的，谁后写谁生效——结果由同一 key 决定，无所谓先后
+        _config_cache = (now + _CONFIG_TTL_SECONDS, key, value)
+    return {**value, "missing": list(value["missing"])}
+
+
+def _compute_configuration(settings):
     def key_exists(value):
         try:
-            return bool(value and Path(value).is_file() and Path(value).stat().st_size <= 32768)
+            stat = _file_stat(str(value)) if value else None
+            return bool(stat is not None and Path(value).is_file() and stat[1] <= 32768)
         except (OSError, ValueError):
             return False
     checks = {
@@ -107,6 +172,15 @@ class WeChatPay:
         self.transport = transport
         self.private, self.public = _keys(self.settings)
 
+    @contextmanager
+    def _client(self, timeout: float):
+        """默认复用进程内共享 Client；显式传 transport（测试用 MockTransport）时才单独建一个。"""
+        if self.transport is not None:
+            with httpx.Client(timeout=timeout, follow_redirects=False, transport=self.transport) as client:
+                yield client
+        else:
+            yield _http_client()
+
     def sign(self, value):
         return base64.b64encode(self.private.sign(value.encode(), padding.PKCS1v15(), hashes.SHA256())).decode()
 
@@ -137,8 +211,8 @@ class WeChatPay:
             raise PaymentError("INVALID_PATH")
         body = json.dumps(value, ensure_ascii=False, separators=(",", ":")) if value is not None else ""
         try:
-            with httpx.Client(timeout=12, follow_redirects=False, transport=self.transport) as client:
-                response = client.request(method, API_ORIGIN + path, content=body.encode(), headers=self.headers(method, path, body))
+            with self._client(12) as client:
+                response = client.request(method, API_ORIGIN + path, content=body.encode(), headers=self.headers(method, path, body), timeout=12)
             if len(response.content) > 1048576:
                 raise PaymentError("OVERSIZED_RESPONSE")
             # WeChat signs successful responses; some error responses have no signature.
@@ -158,7 +232,7 @@ class WeChatPay:
         return self.request("POST", "/v3/pay/transactions/jsapi", {
             "appid": order["appid"], "mchid": order["mchid"], "description": order["plan_name"],
             "out_trade_no": order["id"], "notify_url": configuration()["payment_callback"],
-            "time_expire": datetime.fromtimestamp(order["expires_at"], timezone.utc).isoformat(),
+            "time_expire": datetime.fromtimestamp(order["expires_at"], UTC).isoformat(),
             "amount": {"total": order["amount_fen"], "currency": "CNY"}, "payer": {"openid": openid},
         })
 
@@ -216,8 +290,8 @@ class WeChatPay:
             path = url.path + ("?" + url.query if url.query else "")
             content = bytearray()
             deadline = time.monotonic() + 45
-            with httpx.Client(timeout=10, follow_redirects=False, transport=self.transport) as client:
-                with client.stream("GET", API_ORIGIN + path, headers=self.headers("GET", path, "")) as response:
+            with self._client(10) as client:
+                with client.stream("GET", API_ORIGIN + path, headers=self.headers("GET", path, ""), timeout=10) as response:
                     response.raise_for_status()
                     for chunk in response.iter_bytes():
                         content.extend(chunk)

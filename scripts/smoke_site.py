@@ -30,8 +30,9 @@ def _env_database_url() -> str:
 
 def _create_temp_pg(url: str) -> tuple[str, str]:
     """在同一个 PG 实例上建一个一次性库；返回 (测试库连接串, 库名)。"""
-    import psycopg
     from urllib.parse import urlsplit, urlunsplit
+
+    import psycopg
 
     parts = urlsplit(url)
     temp_name = "lc_smoke_" + uuid.uuid4().hex[:10]
@@ -42,8 +43,9 @@ def _create_temp_pg(url: str) -> tuple[str, str]:
 
 
 def _drop_temp_pg(url: str, name: str) -> None:
-    import psycopg
     from urllib.parse import urlsplit, urlunsplit
+
+    import psycopg
 
     parts = urlsplit(url)
     admin_url = urlunsplit((parts.scheme, parts.netloc, "/postgres", "", ""))
@@ -64,12 +66,18 @@ print(f"使用一次性 PostgreSQL 测试库：{_pg_temp[1]}")
 
 from app.db import init_db  # noqa: E402
 from app.models.site import (  # noqa: E402
-    BannerInput, BannerUpdate, CategoryInput, CategoryUpdate,
-    DictionaryInput, DocumentUpdate, NoticeInput, NoticeUpdate,
+    BannerInput,
+    BannerUpdate,
+    CategoryInput,
+    CategoryUpdate,
+    DictionaryInput,
+    DocumentUpdate,
+    NoticeInput,
+    NoticeUpdate,
 )
 from app.services import site_content as site  # noqa: E402
 
-failures = []
+failures: list[str] = []
 
 
 def check(label, condition, extra=""):

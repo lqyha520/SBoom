@@ -22,7 +22,7 @@ def money(value):
             raise ValueError("Invalid bill amount")
         return int(number)
     except (ValueError, InvalidOperation):
-        raise PaymentError("INVALID_BILL_AMOUNT")
+        raise PaymentError("INVALID_BILL_AMOUNT") from None
 
 
 def parse_bill(content, record_kind=None):
@@ -47,7 +47,7 @@ def parse_bill(content, record_kind=None):
             break
         if len(values) != len(header):
             raise PaymentError("INVALID_BILL_ROW")
-        row = {key: value.lstrip("`").strip() for key, value in zip(header, values)}
+        row = {key: value.lstrip("`").strip() for key, value in zip(header, values, strict=False)}
         if row["交易状态"] not in ("SUCCESS", "REFUND") or not row["商户订单号"] or not row["微信订单号"]:
             raise PaymentError("INVALID_BILL_ROW")
         result.append({"order_id": row["商户订单号"], "transaction_id": row["微信订单号"], "status": record_kind or row["交易状态"],

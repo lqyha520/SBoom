@@ -1,7 +1,6 @@
 """Workbench cookies and consumer bearer sessions use disjoint account domains."""
 
 import asyncio
-from typing import Optional
 
 from fastapi import Cookie, Header, HTTPException, Response
 
@@ -21,25 +20,25 @@ def bearer_token(authorization: str | None) -> str:
 
 
 async def require_library_user(
-    token: Optional[str] = Cookie(None, alias=SESSION_COOKIE),
-    authorization: Optional[str] = Header(None),
-    workspace_user: Optional[str] = Header(None, alias="X-Workspace-User"),
+    token: str | None = Cookie(None, alias=SESSION_COOKIE),
+    authorization: str | None = Header(None),
+    workspace_user: str | None = Header(None, alias="X-Workspace-User"),
 ):
     if authorization is not None:
         raise HTTPException(403, detail={"error": "小程序账号不可访问出题工作台的私人资料"})
     return await require_user(token=token, workspace_user=workspace_user)
 
 
-async def require_mini_user(authorization: Optional[str] = Header(None),
-                            mini_user: Optional[str] = Header(None, alias="X-Mini-User")):
+async def require_mini_user(authorization: str | None = Header(None),
+                            mini_user: str | None = Header(None, alias="X-Mini-User")):
     user = await asyncio.to_thread(resolve_session, bearer_token(authorization))
     if mini_user is not None and mini_user != user.id:
         raise HTTPException(409, detail={"error": "登录账号已变化，请重新登录", "code": "account_changed"})
     return user
 
 
-async def optional_mini_user(authorization: Optional[str] = Header(None),
-                             mini_user: Optional[str] = Header(None, alias="X-Mini-User")):
+async def optional_mini_user(authorization: str | None = Header(None),
+                             mini_user: str | None = Header(None, alias="X-Mini-User")):
     """Anonymous reads are allowed; supplied credentials must still be valid."""
     if authorization is None and mini_user is None:
         return None

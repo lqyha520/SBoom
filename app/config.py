@@ -1,7 +1,9 @@
-from pathlib import Path
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
 from functools import lru_cache
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_VERSION = "0.5.0"  # 唯一版本号来源（main.py / admin stats 都引用这里）
 
@@ -35,10 +37,29 @@ class Settings(BaseSettings):
     debug: bool = False  # 仅开发时设 true：启用热重载。生产必须为 false
     workers: int = 1  # worker 进程数；>1 时建议配合 PostgreSQL 使用
     log_to_file: bool = False
+    # 日志格式：auto = FORCE_HTTPS 时 JSON、否则文本（沿用旧行为）；也可显式指定 json / text
+    log_format: Literal["auto", "json", "text"] = "auto"
+    # 非上传接口的请求体上限（按 Content-Length 在中间件层直接 413）；上传接口自带流式限额
+    max_request_body_bytes: int = Field(4 * 1024 * 1024, ge=1024, le=1024 * 1024 * 1024)
+    metrics_enabled: bool = False
+    metrics_host: str = "127.0.0.1"
+    metrics_port: int = Field(9090, ge=1, le=65535)
+    maintenance_enabled: bool = True
+    import_default_view_access: Literal["free", "vip"] = "free"
+    import_default_download_access: Literal["free", "vip"] = "free"
+    image_storage_mb: int = Field(512, ge=16, le=102400)
 
     # 数据库：PostgreSQL 连接串（必填；本服务仅支持 PG），例如
     #   postgresql://learncoach:learncoach@127.0.0.1:5432/learncoach
     database_url: str = ""
+    # 连接池：每个 worker 进程各自一池；DB_POOL_MAX 应 >= 预期并发（线程池上限会按它放大）
+    db_pool_min: int = Field(1, ge=1, le=100)
+    db_pool_max: int = Field(10, ge=1, le=500)
+    db_pool_timeout: float = Field(30.0, ge=1.0, le=600.0)  # 池耗尽时最多等多久（秒）
+    # 服务端超时（毫秒，0 = 不限）：单条语句 / 等锁（含 db(serialized=...) 的事务级咨询锁）/ 事务内空闲
+    db_statement_timeout_ms: int = Field(30000, ge=0, le=3_600_000)
+    db_lock_timeout_ms: int = Field(10000, ge=0, le=3_600_000)
+    db_idle_in_transaction_timeout_ms: int = Field(60000, ge=0, le=3_600_000)
 
     # 注册开关
     registration_enabled: bool = True  # 关闭后 /auth/register 返回 403
@@ -126,6 +147,6 @@ class Settings(BaseSettings):
             )
 
 
-@lru_cache()
+@lru_cache
 def get_settings() -> Settings:
     return Settings()

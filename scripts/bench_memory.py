@@ -63,9 +63,9 @@ def _stat(pid):
         try:
             with open(f"/proc/{pid}/status") as fh:
                 txt = fh.read()
-            rss = next(int(l.split()[1]) * 1024 for l in txt.splitlines() if l.startswith("VmRSS:"))
-            peak = next(int(l.split()[1]) * 1024 for l in txt.splitlines() if l.startswith("VmHWM:"))
-            th = next(int(l.split()[1]) for l in txt.splitlines() if l.startswith("Threads:"))
+            rss = next(int(line.split()[1]) * 1024 for line in txt.splitlines() if line.startswith("VmRSS:"))
+            peak = next(int(line.split()[1]) * 1024 for line in txt.splitlines() if line.startswith("VmHWM:"))
+            th = next(int(line.split()[1]) for line in txt.splitlines() if line.startswith("Threads:"))
             return rss, peak, th, len(os.listdir(f"/proc/{pid}/fd"))
         except Exception:
             return None
@@ -73,7 +73,8 @@ def _stat(pid):
     if not h:
         return None
     try:
-        pmc = _PMC(); pmc.cb = ctypes.sizeof(_PMC)
+        pmc = _PMC()
+        pmc.cb = ctypes.sizeof(_PMC)
         _psapi.GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb)
         hd = wt.DWORD()
         _kernel32.GetProcessHandleCount(h, ctypes.byref(hd))
@@ -101,7 +102,8 @@ def find_workers(port, cwd):
             if pp == master and "python" in nm.lower()] if IS_WIN else []
     if not kids and not IS_WIN:
         try:
-            kids = [int(l.split()[1]) for l in open(f"/proc/{master}/task/{master}/children").read().split()]
+            with open(f"/proc/{master}/task/{master}/children") as children:
+                kids = [int(pid) for pid in children.read().split()]
         except Exception:
             kids = []
 
@@ -150,6 +152,7 @@ def main():
     args = ap.parse_args()
 
     import os as _os
+
     import httpx
     for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
         _os.environ.pop(k, None)
@@ -206,12 +209,11 @@ def main():
     print(f"\n压测结束，总请求 {sum(counts)}")
 
     time.sleep(3)
-    rss1 = snap(workers)[0] / 1048576
     print(f"\n静置 {args.settle}s（看是否归还）:")
-    for k in range(max(1, args.settle // 15)):
+    for sample_index in range(max(1, args.settle // 15)):
         time.sleep(15)
         r = snap(workers)[0] / 1048576
-        print(f"  +{(k+1)*15:3d}s  RSS {r:7.1f} MB")
+        print(f"  +{(sample_index+1)*15:3d}s  RSS {r:7.1f} MB")
 
     print("\n── 判定 ──")
     n = max(1, len(samples) // 5)
@@ -222,7 +224,7 @@ def main():
         print("  ⚠️ 后段明显高于前段，建议进一步排查（可能是泄漏或分配器水位偏高）")
     else:
         print("  ✅ 未出现单调增长 —— 内存占用收敛，无泄漏迹象")
-    print(f"  （参考：Python 会保留空闲内存块以便复用，涨到水位后横盘属正常）")
+    print("  （参考：Python 会保留空闲内存块以便复用，涨到水位后横盘属正常）")
 
 
 if __name__ == "__main__":

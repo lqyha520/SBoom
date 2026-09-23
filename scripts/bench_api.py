@@ -55,17 +55,20 @@ async def bench(path, base, headers, times):
             await one(cli, "GET", path, headers)
         rows = [await one(cli, "GET", path, headers) for _ in range(times)]
     lat = sorted(r[0] for r in rows)
-    codes = {}
+    codes: dict[str | int, int] = {}
     for r in rows:
         codes[r[1]] = codes.get(r[1], 0) + 1
-    p = lambda q: lat[min(len(lat) - 1, int(len(lat) * q))]
+    def p(q):
+        return lat[min(len(lat) - 1, int(len(lat) * q))]
     print(f"{path[:44]:46s} avg={statistics.mean(lat):6.1f}ms p50={p(.5):6.1f} "
           f"p95={p(.95):6.1f} max={lat[-1]:6.1f} | {rows[0][2]/1024:6.1f}KB | {codes}")
 
 
 async def conc(path, base, headers, concurrency, total):
     """每并发独立 client，避免单连接池成为客户端瓶颈。"""
-    lat, codes, box, lock = [], {}, [0], asyncio.Lock()
+    lat: list[float] = []
+    codes: dict[str | int, int] = {}
+    box, lock = [0], asyncio.Lock()
 
     async def worker():
         async with httpx.AsyncClient(base_url=base) as cli:
@@ -98,7 +101,7 @@ async def main():
     headers = {"Authorization": f"Bearer {args.token}"} if args.token else {}
     print(f"=== 基线 @ {args.base} ===\n")
     print(f"── 单请求延迟（顺序 {args.times} 次）──")
-    for name, path in PUBLIC_ENDPOINTS + [("GET /api/v1/site/home（未登录 401）", "/api/v1/site/home")]:
+    for _name, path in PUBLIC_ENDPOINTS + [("GET /api/v1/site/home（未登录 401）", "/api/v1/site/home")]:
         await bench(path, args.base, {}, args.times)
     if headers:
         print("\n── 真实业务接口（鉴权 + DB 查询）──")

@@ -2,6 +2,7 @@
 
 import logging
 import logging.handlers
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,23 +12,28 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.body_limit import BodySizeLimit
+from app.config import APP_VERSION, get_settings
+from app.db import close_pg_pool, init_db
+from app.metrics import RequestMetrics
 from app.routers.admin import router as admin_router
 from app.routers.auth import router as auth_router
-from app.routers.generate import router as generate_router
-from app.routers.me import router as me_router
-from app.routers.health import router as health_router
-from app.routers.library import router as library_router
-from app.routers.mini import router as mini_router
-from app.routers.catalog import router as catalog_router, admin_router as catalog_admin_router
-from app.routers.site import router as site_router, admin_router as site_admin_router
-from app.routers.experience import router as experience_router
-from app.routers.engagement import router as engagement_router
+from app.routers.catalog import admin_router as catalog_admin_router
+from app.routers.catalog import router as catalog_router
 from app.routers.commerce import router as commerce_router
-from app.services.llm_client import llm_client
-from app.services import user_store
-from app.config import get_settings, APP_VERSION
-from app.db import init_db, close_pg_pool
+from app.routers.engagement import router as engagement_router
+from app.routers.experience import router as experience_router
+from app.routers.generate import router as generate_router
+from app.routers.health import router as health_router
+from app.routers.image_generation import router as image_generation_router
+from app.routers.library import router as library_router
+from app.routers.me import router as me_router
+from app.routers.mini import router as mini_router
+from app.routers.site import admin_router as site_admin_router
+from app.routers.site import router as site_router
 from app.security import security_warnings
+from app.services import user_store
+from app.services.llm_client import llm_client
 
 settings = get_settings()
 
@@ -40,8 +46,9 @@ if settings.log_to_file:
     _log_handlers.append(logging.handlers.RotatingFileHandler(
         _LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"))
 
-# 配置日志格式：生产环境（FORCE_HTTPS=true）使用 JSON 格式，开发环境使用文本格式
-use_json_logging = settings.force_https
+# 配置日志格式：LOG_FORMAT=json/text 显式指定；auto 沿用旧行为——
+# 生产环境（FORCE_HTTPS=true）使用 JSON 格式，开发环境使用文本格式
+use_json_logging = settings.log_format == "json" or (settings.log_format == "auto" and settings.force_https)
 formatter: logging.Formatter
 if use_json_logging:
     try:
@@ -62,7 +69,14 @@ logging.basicConfig(
     level=logging.INFO,
     handlers=_log_handlers,
 )
+# httpx/httpcore 的 INFO 日志会把完整请求 URL 打出来（微信接口的 access_token 挂在 query 上），
+# 一律压到 WARNING，避免密钥进日志
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
+
+# 保留导出，方便现有测试和外部集成使用同一中间件。
 
 
 # ─── 生命周期 ───
@@ -79,33 +93,51 @@ async def lifespan(app: FastAPI):
     # 初始化监控指标
     from app.metrics import init_metrics, start_metrics_server
     init_metrics(APP_VERSION)
-    # 仅在生产环境启动 metrics 服务器
-    if settings.force_https:
-        start_metrics_server(9090)
 
-    init_db()  # 用户库建表 + 迁移（幂等）
-    for warning in security_warnings():
-        logger.warning("Security configuration: %s", warning)
-    # 环境变量种子管理员（可选）：确保存在并对齐角色/状态/密码
-    if settings.admin_username and settings.admin_password:
-        user_store.ensure_admin(settings.admin_username, settings.admin_password)
-        logger.info(f"已确保种子管理员账号存在: {settings.admin_username}")
-    # 模型配置收归后台：老部署里用户自配的 LLM 一次性迁移为全局配置
-    from app.services.app_config import seed_llm_from_user_configs
-    seed_llm_from_user_configs()
-    logger.info("🚀 Learning Coach API 启动（多用户模式）")
-    logger.info(f"   LLM 模型（全局兜底）: {settings.llm_model}")
-    from app.services.mini_jobs import start
-    maintenance_stop, maintenance_task = start()
+    # 同步 DB 调用都走 asyncio.to_thread（anyio 默认线程池 40 个 token）；
+    # 线程数至少要盖得住连接池，否则池还有空闲、请求却在排队等线程
+    import anyio.to_thread
+    anyio.to_thread.current_default_thread_limiter().total_tokens = max(40, settings.db_pool_max * 2)
+
+    exporter = None
+    maintenance_stop = None
+    maintenance_task = None
     try:
+        init_db()  # 用户库建表 + 迁移（幂等）
+        for warning in security_warnings():
+            logger.warning("Security configuration: %s", warning)
+        # 环境变量种子管理员（可选）：确保存在并对齐角色/状态/密码
+        if settings.admin_username and settings.admin_password:
+            user_store.ensure_admin(settings.admin_username, settings.admin_password)
+            logger.info(f"已确保种子管理员账号存在: {settings.admin_username}")
+        # 模型配置收归后台：老部署里用户自配的 LLM 一次性迁移为全局配置
+        from app.services.app_config import seed_llm_from_user_configs
+        seed_llm_from_user_configs()
+        logger.info("🚀 Learning Coach API 启动（多用户模式）")
+        logger.info(f"   LLM 模型（全局兜底）: {settings.llm_model}")
+        from app.services.mini_jobs import start
+        maintenance_stop, maintenance_task = start()
+        if settings.metrics_enabled and not os.environ.get("LC_METRICS_MANAGED"):
+            if settings.workers > 1:
+                raise RuntimeError("Multi-worker metrics require the run.py launcher")
+            exporter = start_metrics_server(settings.metrics_port, settings.metrics_host)
         yield
     finally:
-        maintenance_stop.set()
-        if maintenance_task:
-            await maintenance_task
-    logger.info("🛑 应用关闭，清理资源...")
-    await llm_client.close()
-    close_pg_pool()
+        if maintenance_stop:
+            maintenance_stop.set()
+        try:
+            if maintenance_task:
+                await maintenance_task
+        finally:
+            if exporter:
+                exporter[0].shutdown()
+                exporter[0].server_close()
+                exporter[1].join(timeout=3)
+            if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+                from prometheus_client import multiprocess
+                multiprocess.mark_process_dead(os.getpid())
+            await llm_client.close()
+            close_pg_pool()
 
 
 # ─── 创建应用 ───
@@ -115,6 +147,9 @@ app = FastAPI(
     version=APP_VERSION,
     lifespan=lifespan,
 )
+
+# 请求体上限最先注册（最内层）：CORS/指标中间件在外层，413 响应同样带 CORS 头并计入指标
+app.add_middleware(BodySizeLimit, limit=settings.max_request_body_bytes)
 
 # CORS：默认仅同源（前端由本服务直接托管，或经 Vite 代理，同源携带 Cookie）。
 # 需要跨域部署时，在 .env 设置 CORS_ORIGINS=https://a.com,https://b.com
@@ -135,29 +170,9 @@ if settings.cors_origins.strip():
     )
 
 
-# ─── 监控中间件 ───
-@app.middleware("http")
-async def track_requests(request, call_next):
-    """跟踪 API 请求的指标"""
-    from app.metrics import api_requests_total, api_request_duration
-    import time
+# Metrics cover the complete ASGI response, including streams.
 
-    start_time = time.time()
-    response = await call_next(request)
-    duration = time.time() - start_time
-
-    # 记录请求指标
-    api_requests_total.labels(
-        method=request.method,
-        endpoint=request.url.path,
-        status=response.status_code
-    ).inc()
-    api_request_duration.labels(
-        method=request.method,
-        endpoint=request.url.path
-    ).observe(duration)
-
-    return response
+app.add_middleware(RequestMetrics)
 
 
 # ─── 前端目录 ───
@@ -181,6 +196,7 @@ app.include_router(experience_router)
 app.include_router(engagement_router)
 app.include_router(commerce_router)
 app.include_router(generate_router)
+app.include_router(image_generation_router)
 app.include_router(admin_router)
 
 

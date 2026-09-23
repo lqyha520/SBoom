@@ -1,9 +1,11 @@
 """用户数据访问层 —— 账号 / 每用户 LLM 配置 / 每用户模板 / 管理员操作"""
 
 import json
+import secrets
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from functools import lru_cache
+from typing import Any
 
 from app.db import db
 from app.security import hash_password, verify_password
@@ -29,14 +31,14 @@ def create_user(username: str, password: str, role: str = "user") -> CurrentUser
         return CurrentUser(id=row[0], username=username, role=role)
 
 
-def get_user_by_username(username: str) -> Optional[Any]:
+def get_user_by_username(username: str) -> Any | None:
     with db() as conn:
         return conn.execute(
             "SELECT * FROM users WHERE username = ?", (username,)
         ).fetchone()
 
 
-def get_user_by_id(user_id: int) -> Optional[CurrentUser]:
+def get_user_by_id(user_id: int) -> CurrentUser | None:
     with db() as conn:
         row = conn.execute(
             "SELECT id, username, role, is_active, token_valid_after FROM users WHERE id = ?", (user_id,)
@@ -50,12 +52,36 @@ def get_user_by_id(user_id: int) -> Optional[CurrentUser]:
     )
 
 
-def authenticate(username: str, password: str) -> Optional[Any]:
+@lru_cache(maxsize=1)
+def _dummy_password_hash() -> str:
+    """用户不存在时也跑一遍等价的 PBKDF2，让"用户名不存在"和"密码错误"耗时一致，
+    防止通过响应时间探测用户名是否已注册。首次调用时懒生成（240k 迭代约 100ms），之后复用。"""
+    return hash_password(secrets.token_urlsafe(24))
+
+
+def authenticate(username: str, password: str) -> Any | None:
     """校验用户名密码，返回完整用户行（含 role/is_active，由调用方决定如何处理）；失败返回 None。"""
     row = get_user_by_username(username)
-    if not row or not verify_password(password, row["password_hash"]):
+    if not row:
+        verify_password(password, _dummy_password_hash())  # 结果无意义，只为拉平耗时
+        return None
+    if not verify_password(password, row["password_hash"]):
         return None
     return row
+
+
+def revoke_sessions(user_id: int, not_before: int | None = None) -> None:
+    """吊销该用户在 not_before（Unix 秒，默认当前时刻）之前签发的所有会话。
+
+    与重置密码共用 users.token_valid_after 机制：require_user 对 iat 早于它的令牌一律 401。
+    只允许向后推进，避免并发登出把更晚的吊销点改早。
+    """
+    cutoff = int(not_before if not_before is not None else time.time())
+    with db() as conn:
+        conn.execute(
+            "UPDATE users SET token_valid_after = ? WHERE id = ? AND token_valid_after < ?",
+            (cutoff, user_id, cutoff),
+        )
 
 
 # ─── 管理员 ───
@@ -111,9 +137,9 @@ def list_users(query: str = "", role: str = "", limit: int = 20, offset: int = 0
 
 def update_user(
     user_id: int,
-    password: Optional[str] = None,
-    role: Optional[str] = None,
-    is_active: Optional[bool] = None,
+    password: str | None = None,
+    role: str | None = None,
+    is_active: bool | None = None,
 ) -> bool:
     """管理端更新用户（重置密码/改角色/启停）。返回是否命中。"""
     with db() as conn:
@@ -141,7 +167,7 @@ class UserHasCatalogPapers(ValueError):
 
 def delete_user(user_id: int) -> bool:
     """删除用户（模板、LLM 配置级联删除）。"""
-    with db(serialized=True) as conn:
+    with db(serialized=("content", "accounts", "generation")) as conn:
         if conn.execute("SELECT c.id FROM catalog_papers c JOIN paper_archives a ON a.id = c.paper_id WHERE a.user_id = ? LIMIT 1",
                         (user_id,)).fetchone():
             raise UserHasCatalogPapers("该用户的试卷仍在公共库中，请先在公共试卷管理中处理对应条目")
@@ -150,6 +176,9 @@ def delete_user(user_id: int) -> bool:
             raise UserHasCatalogPapers("该用户的原稿仍被公共资料的修订历史引用，请先处理公共条目")
         if conn.execute("SELECT 1 FROM catalog_edition_history e JOIN paper_archives a ON a.id = e.paper_id WHERE a.user_id = ? LIMIT 1", (user_id,)).fetchone():
             raise UserHasCatalogPapers("该用户的原稿仍被公共资料的打印版本引用，请先处理公共条目")
+        from app.services.file_retention import enqueue
+        files = conn.execute("SELECT s.storage, s.storage_key FROM paper_assets s JOIN paper_archives a ON a.id = s.paper_id WHERE a.user_id = ? UNION SELECT storage, storage_key FROM image_assets WHERE user_id = ?", (user_id, user_id)).fetchall()
+        enqueue(conn, [(row["storage"], row["storage_key"]) for row in files])
         cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         return int(cur.rowcount) > 0
 
@@ -205,7 +234,7 @@ def list_templates(user_id: int) -> list:
     return out
 
 
-def upsert_template(user_id: int, name: str, data: dict, expected_revision: Optional[int] = None) -> int:
+def upsert_template(user_id: int, name: str, data: dict, expected_revision: int | None = None) -> int:
     payload = _template_payload(data, name)
     with db() as conn:
         revision = _next_template_revision(conn, user_id)
@@ -255,7 +284,7 @@ def bulk_upsert_templates(user_id: int, templates: list) -> int:
     return n
 
 
-def delete_template(user_id: int, name: str, expected_revision: Optional[int] = None) -> bool:
+def delete_template(user_id: int, name: str, expected_revision: int | None = None) -> bool:
     with db() as conn:
         _next_template_revision(conn, user_id)
         revision_clause = " AND revision = ?" if expected_revision is not None else ""
@@ -271,7 +300,7 @@ def delete_template(user_id: int, name: str, expected_revision: Optional[int] = 
 
 # ─── 管理端模板查看 ───
 
-def get_user_by_id_or_none(user_id: int) -> Optional[CurrentUser]:
+def get_user_by_id_or_none(user_id: int) -> CurrentUser | None:
     return get_user_by_id(user_id)
 
 
@@ -288,7 +317,7 @@ def list_templates_for_admin(user_id: int) -> list:
     return [dict(r) for r in rows]
 
 
-def get_template_for_admin(tpl_id: int, user_id: int) -> Optional[dict]:
+def get_template_for_admin(tpl_id: int, user_id: int) -> dict | None:
     """管理端：取指定用户的模板完整内容（单查询同时校验归属）。返回 dict（无匹配返回 None）。"""
     with db() as conn:
         row = conn.execute(

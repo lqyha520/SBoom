@@ -12,27 +12,38 @@ import io
 import json
 import threading
 import time
-import uuid
 import zipfile
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-import ui_fixture as base  # Establish disposable environment before importing services.
 import httpx
+import ui_fixture as base  # Establish disposable environment before importing services.
 import uvicorn
-from PIL import Image
-from fastapi.staticfiles import StaticFiles
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from fastapi.staticfiles import StaticFiles
+from PIL import Image
+
 from app.config import get_settings
 from app.db import db
-from app.security import encrypt_secret, decrypt_secret
-from app.models.commerce import PlanInput, OrderInput, RefundInput
-from app.models.engagement import TagInput, PaperLabels, ContentRequest, EditionInput
+from app.models.commerce import OrderInput, PlanInput, RefundInput
+from app.models.engagement import ContentRequest, EditionInput, PaperLabels, TagInput
 from app.models.experience import FeedbackCreate, FeedbackUpdate, TopicInput
 from app.models.library import ArchiveCreate
-from app.services import mini_auth, mini_orders, mini_refunds, payment_bills, mini_messages, mini_experience, catalog_discovery, catalog_editions, catalog_ops, paper_library
+from app.security import decrypt_secret, encrypt_secret
+from app.services import (
+    catalog_discovery,
+    catalog_editions,
+    catalog_ops,
+    mini_auth,
+    mini_experience,
+    mini_messages,
+    mini_orders,
+    mini_refunds,
+    paper_library,
+    payment_bills,
+)
 from app.services.wechat_pay import WeChatPay
 
 
@@ -56,7 +67,7 @@ def configure_provider():
         with db() as conn:
             refund = conn.execute('SELECT * FROM mini_refunds WHERE id = ?', (identifier,)).fetchone()
             order = mini_orders.owned(conn, refund['order_id'])
-            return {'out_refund_no': identifier, 'refund_id': 'fixture-refund-' + identifier, 'out_trade_no': order['id'], 'transaction_id': order['transaction_id'], 'mchid': settings.wechat_pay_mchid, 'amount': {'total': order['amount_fen'], 'refund': order['amount_fen'], 'currency': 'CNY'}, 'status': 'SUCCESS' if success else 'PROCESSING', 'success_time': datetime.now(timezone.utc).isoformat()}
+            return {'out_refund_no': identifier, 'refund_id': 'fixture-refund-' + identifier, 'out_trade_no': order['id'], 'transaction_id': order['transaction_id'], 'mchid': settings.wechat_pay_mchid, 'amount': {'total': order['amount_fen'], 'refund': order['amount_fen'], 'currency': 'CNY'}, 'status': 'SUCCESS' if success else 'PROCESSING', 'success_time': datetime.now(UTC).isoformat()}
 
     bill = '微信订单号,商户订单号,交易状态,订单金额,商户退款单号,申请退款金额,退款状态\n总交易单数\n`0\n'.encode()
 
@@ -70,7 +81,7 @@ def configure_provider():
         if path.startswith('/v3/pay/transactions/out-trade-no/'):
             with db() as conn:
                 order = dict(mini_orders.owned(conn, path.rsplit('/', 1)[1]))
-            value = {'out_trade_no': order['id'], 'appid': order['appid'], 'mchid': order['mchid'], 'payer': {'openid': decrypt_secret(order['payer_enc'])}, 'amount': {'total': order['amount_fen'], 'currency': 'CNY'}, 'transaction_id': order['transaction_id'] or 'fixture-trade-' + order['id'], 'trade_state': 'CLOSED' if order['status'] == 'closed' else 'SUCCESS', 'success_time': datetime.fromtimestamp(order['paid_at'] or time.time(), timezone.utc).isoformat()}
+            value = {'out_trade_no': order['id'], 'appid': order['appid'], 'mchid': order['mchid'], 'payer': {'openid': decrypt_secret(order['payer_enc'])}, 'amount': {'total': order['amount_fen'], 'currency': 'CNY'}, 'transaction_id': order['transaction_id'] or 'fixture-trade-' + order['id'], 'trade_state': 'CLOSED' if order['status'] == 'closed' else 'SUCCESS', 'success_time': datetime.fromtimestamp(order['paid_at'] or time.time(), UTC).isoformat()}
             return signed(value)
         if path == '/v3/refund/domestic/refunds' and request.method == 'POST':
             return signed(refund_result(json.loads(request.content)['out_refund_no'], False))
@@ -96,15 +107,19 @@ def edition_bundle():
     objects = [b'<< /Type /Catalog /Pages 2 0 R >>', b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>', b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>', b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', b'<< /Length ' + str(len(stream)).encode() + b' >>\nstream\n' + stream + b'\nendstream']
     pdf, offsets = bytearray(b'%PDF-1.4\n'), [0]
     for index, value in enumerate(objects, 1):
-        offsets.append(len(pdf)); pdf.extend(str(index).encode() + b' 0 obj\n' + value + b'\nendobj\n')
+        offsets.append(len(pdf))
+        pdf.extend(str(index).encode() + b' 0 obj\n' + value + b'\nendobj\n')
     start = len(pdf)
     pdf.extend(b'xref\n0 6\n0000000000 65535 f \n')
-    for offset in offsets[1:]: pdf.extend(f'{offset:010d} 00000 n \n'.encode())
+    for offset in offsets[1:]:
+        pdf.extend(f'{offset:010d} 00000 n \n'.encode())
     pdf.extend(f'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n'.encode())
-    page = io.BytesIO(); Image.new('RGB', (210, 297), 'white').save(page, 'JPEG')
+    page = io.BytesIO()
+    Image.new('RGB', (210, 297), 'white').save(page, 'JPEG')
     result = io.BytesIO()
     with zipfile.ZipFile(result, 'w') as archive:
-        archive.writestr('paper.pdf', pdf); archive.writestr('page-1.jpg', page.getvalue())
+        archive.writestr('paper.pdf', pdf)
+        archive.writestr('page-1.jpg', page.getvalue())
     return result.getvalue()
 
 
@@ -127,7 +142,8 @@ def seed_growth():
     if paper:
         tags = [catalog_discovery.save(TagInput(kind=kind, name=name)) for kind, name in [('textbook', '人教版'), ('term', '上学期'), ('unit', '第一单元'), ('knowledge', '两位数加法')]]
         labels = catalog_discovery.assign(paper['id'], PaperLabels(revision=paper['revision'], tag_ids=[tag['id'] for tag in tags]))
-        snapshot = json.loads(paper['snapshot_json']); snapshot['export_options']['mode'] = 'answersOnly'
+        snapshot = json.loads(paper['snapshot_json'])
+        snapshot['export_options']['mode'] = 'answersOnly'
         alternate = paper_library.create_paper(admin, ArchiveCreate(request_id='fixture-answers', source_id='fixture-answer-source', snapshot=snapshot))
         paper_library.publish_bundle(admin, alternate['id'], edition_bundle())
         catalog_editions.assign(admin, paper['id'], EditionInput(revision=labels['revision'], kind='answers', paper_id=alternate['id'], confirm_publication=True))
@@ -161,9 +177,12 @@ if __name__ == '__main__':
     app.router.routes[:] = [route for route in app.router.routes if getattr(route, 'name', '') != 'web']
     app.mount('/', StaticFiles(directory=base.ROOT / 'miniprogram' / 'dist' / 'build' / 'h5', html=True), name='mini')
     server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=args.port, log_level='warning'))
-    timer = threading.Timer(args.seconds, lambda: setattr(server, 'should_exit', True)); timer.daemon = True; timer.start()
+    timer = threading.Timer(args.seconds, lambda: setattr(server, 'should_exit', True))
+    timer.daemon = True
+    timer.start()
     print(f'Disposable growth UI: http://127.0.0.1:{args.port} — auto-stop in {args.seconds}s', flush=True)
     try:
         server.run()
     finally:
-        timer.cancel(); base.TEMP.cleanup()
+        timer.cancel()
+        base.TEMP.cleanup()

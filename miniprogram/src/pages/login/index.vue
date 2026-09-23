@@ -115,7 +115,6 @@ onUnload(leave)
       </view>
       <button class="browse-entry" hover-class="control-pressed" role="button" :disabled="busy" @click="openCatalog()">暂不登录，先逛习题库<wd-icon name="arrow-right" size="14px" /></button>
     </view>
-    <text class="login-brand">Learning Coach</text>
     <!-- #ifdef H5 -->
     <wd-popup :model-value="accountOpen" position="bottom" :z-index="1200" :close-on-click-modal="!busy" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0" @update:model-value="!$event && closeAccount()">
       <view class="sheet account-login-sheet" role="dialog" aria-modal="true" aria-label="账号登录">
@@ -139,7 +138,7 @@ onUnload(leave)
 .login-art image { width: 226px; height: 226px; max-width: 100%; }
 .login-title { display: block; font-size: 26px; line-height: 1.4; font-weight: 650; margin: 10px 0 7px; }
 .login-subtitle { display: block; color: var(--lc-secondary); font-size: 13px; }
-.login-body { padding: 35px 26px 0; }
+.login-body { padding: 35px 26px 28px; }
 .login-body :deep(.login-primary) { position: relative; --wot-button-height-medium: 54px; font-size: 15px; font-weight: 600; }
 .login-trail { position: absolute; right: 20px; top: 0; height: 100%; display: flex; align-items: center; }
 .login-feedback { min-height: 31px; padding: 8px 0 3px; color: #a33e37; text-align: center; font-size: 12px; overflow-wrap: anywhere; }
@@ -149,10 +148,9 @@ onUnload(leave)
 .consent-copy { padding-top: 9px; }
 .consent-links { display: flex; align-items: center; flex-wrap: wrap; gap: 0; margin-top: -3px; }
 .legal-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0; margin: 0; background: transparent; border-radius: 0; color: var(--lc-primary); font-size: 12px; line-height: 1.5; }
-.login-brand { margin-top: auto; padding: 70px 24px 28px; text-align: center; color: var(--lc-muted); font-size: 12px; }
 .account-login-sheet { max-height: 84vh; overflow-y: auto; }
 .login-form :deep(.login-input) { background: var(--lc-background); border-radius: 8px; --wot-input-padding: 14px; --wot-input-inner-height: 24px; --wot-input-bg: transparent; }
 .login-submit { padding-top: 24px; }
 @media (max-width: 359px) { .login-body { padding-left: 22px; padding-right: 22px; } }
-@media (max-height: 680px) { .login-art { height: 190px; margin-top: 12px; } .login-art image { width: 190px; height: 190px; } .login-body { padding-top: 26px; } .login-brand { padding-top: 32px; } }
+@media (max-height: 680px) { .login-art { height: 190px; margin-top: 12px; } .login-art image { width: 190px; height: 190px; } .login-body { padding-top: 26px; } }
 </style>

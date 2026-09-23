@@ -2,7 +2,7 @@
 import { getCurrentInstance, onMounted, onUnmounted, ref, watch } from 'vue'
 import { acquireAsset } from '../services/assets'
 import type { FileHandle } from '../services/file-pool'
-const props = defineProps<{ src: string | null; preview?: boolean; label?: string; lazy?: boolean; fit?: boolean }>()
+const props = withDefaults(defineProps<{ src: string | null; preview?: boolean; label?: string; lazy?: boolean; fit?: boolean; active?: boolean }>(), { active: true })
 const instance = getCurrentInstance()
 const visible = ref(!props.lazy)
 let observer: UniApp.IntersectionObserver | undefined
@@ -18,18 +18,22 @@ async function load() {
   handle = null
   failed.value = false
   source.value = ''
-  if (!props.src || !visible.value) return
+  if (!props.src || !visible.value || props.active === false) return
   handle = acquireAsset(props.src)
   try { const value = await handle.ready; if (run === sequence) source.value = value }
   catch { if (run === sequence) failed.value = true }
 }
-watch(() => props.src, load, { immediate: true })
+watch([() => props.src, () => props.active], load, { immediate: true })
 onMounted(() => {
   if (visible.value) return
-  const reveal = () => { if (disposed || visible.value) return; visible.value = true; observer?.disconnect(); void load() }
+  const reveal = () => { if (disposed || visible.value) return; visible.value = true; void load() }
   try {
     observer = uni.createIntersectionObserver(instance?.proxy, { thresholds: [0] })
-    observer.relativeToViewport({ bottom: 200 }).observe('.private-image', result => { if (result.intersectionRatio > 0) reveal() })
+    observer.relativeToViewport({ top: 400, bottom: 400 }).observe('.private-image', result => {
+      if (disposed) return
+      if (result.intersectionRatio > 0) reveal()
+      else if (visible.value) { visible.value = false; sequence++; handle?.release(); handle = null; source.value = ''; failed.value = false }
+    })
   } catch { reveal() }
 })
 onUnmounted(() => { disposed = true; observer?.disconnect(); sequence++; handle?.release() })

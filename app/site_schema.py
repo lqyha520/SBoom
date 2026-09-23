@@ -8,7 +8,11 @@ import time
 import uuid
 
 from app.site_defaults import (
-    DEFAULT_DOCUMENTS, DEFAULT_GRADES, DEFAULT_SUBJECTS, PREVIOUS_DOCUMENT_HASHES, RETIRED_DICTIONARY_VALUES,
+    DEFAULT_DOCUMENTS,
+    DEFAULT_GRADES,
+    DEFAULT_SUBJECTS,
+    PREVIOUS_DOCUMENT_HASHES,
+    RETIRED_DICTIONARY_VALUES,
 )
 
 SITE_TABLES = """
@@ -155,7 +159,7 @@ def _seed_dictionary_scope(conn, now: int) -> None:
     data_path = Path(__file__).parent / "data" / "knowledge_scope.json"
     if not data_path.exists():
         return
-    with open(data_path, "r", encoding="utf-8") as handle:
+    with open(data_path, encoding="utf-8") as handle:
         scope_data = json.load(handle)
 
     grades = {row["value"]: row["id"] for row in conn.execute("SELECT id, value FROM site_dictionary WHERE kind = 'grade'")}

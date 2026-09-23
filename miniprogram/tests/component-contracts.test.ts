@@ -51,10 +51,19 @@ test('consumer routes and UI do not expose workbench accounts or private spaces'
 
 test('detail content and downloads are gated by server-provided permissions', () => {
   const source = readFileSync(new URL('../src/pages/paper/index.vue', import.meta.url), 'utf8')
-  assert.ok(source.includes('v-if="!paper.can_view"'))
+  assert.ok(source.includes('v-if="verified && !paper.can_view"'))
+  assert.ok(source.includes('if (!paper.value || !verified.value || loading.value || downloading.value) return'))
   assert.ok(source.includes('if (!paper.value.can_download)'))
   assert.ok(source.includes('await requestCatalogDownload(id.value, edition.value)'))
   assert.ok(!source.includes('fetchPaper('))
+})
+
+test('catalog rows remain renderable without an intersection observer callback', () => {
+  const source = readFileSync(new URL('../src/components/CatalogList.vue', import.meta.url), 'utf8')
+  const template = parse(source).descriptor.template!.content
+  assert.ok(template.includes('<PaperRow v-for="paper in items"'))
+  assert.ok(!template.includes('WindowSection'))
+  assert.ok(!template.includes('pageVisible'))
 })
 
 test('custom page chrome is enabled on WeChat as well as H5', () => {

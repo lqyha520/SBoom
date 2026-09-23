@@ -4,15 +4,16 @@
 不替代教师对语义、知识范围与开放题答案的审核。
 """
 
-import logging
-import re
 import ast
 import json
+import logging
 import operator
+import re
 from fractions import Fraction
-from typing import Optional
-from app.models import Question
+
 from pydantic import ValidationError
+
+from app.models import Question
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ _SAME_NUM_CHAIN3 = re.compile(
 )
 
 
-def reject_reason(stem: Optional[str]) -> Optional[str]:
+def reject_reason(stem: str | None) -> str | None:
     """检查题干，返回拒绝原因；None = 合格。
 
     只检查算式类特征，纯文字题干（应用题等）不受影响。
@@ -49,7 +50,7 @@ def reject_reason(stem: Optional[str]) -> Optional[str]:
     return None
 
 
-def arithmetic_value(expression: str) -> Optional[Fraction]:
+def arithmetic_value(expression: str) -> Fraction | None:
     """Evaluate a bounded arithmetic AST only; never execute model-provided code."""
     # dict 值类型显式写宽：str.maketrans 的重载要 dict[str, str | int | None]，而 dict 是不变的
     translation: dict[str, str | int | None] = {"×": "*", "÷": "/", "−": "-", "（": "(", "）": ")", "[": "(", "]": ")"}
@@ -81,7 +82,7 @@ def arithmetic_value(expression: str) -> Optional[Fraction]:
         return None
 
 
-def _number(value) -> Optional[Fraction]:
+def _number(value) -> Fraction | None:
     if type(value) not in (int, float, str) or len(str(value)) > 80:
         return None
     try:
@@ -90,7 +91,7 @@ def _number(value) -> Optional[Fraction]:
         return None
 
 
-def question_issue(question) -> Optional[str]:
+def question_issue(question) -> str | None:
     if not isinstance(question, dict):
         return "题目不是有效对象"
     try:
@@ -175,7 +176,7 @@ def question_fingerprint(question: dict, namespace: str = "") -> str:
     return namespace + re.sub(r"\s+", "", json.dumps(content, sort_keys=True, ensure_ascii=False)).casefold()
 
 
-def filter_questions(questions: list, context: str = "", seen: Optional[set] = None, namespace: str = "") -> tuple:
+def filter_questions(questions: list, context: str = "", seen: set | None = None, namespace: str = "") -> tuple:
     """拦截不合格题目。返回 (保留列表, 被拦截题目列表)。
 
     注意：被拦截的题【不删除】——由调用方决定替换重出或提示用户，

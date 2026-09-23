@@ -1,7 +1,7 @@
 """UI/API regression checks. Refuses to run against a non-fixture service."""
 
-import os
 import io
+import os
 import time
 import unittest
 import zipfile

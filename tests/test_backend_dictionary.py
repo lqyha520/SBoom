@@ -1,11 +1,9 @@
 """Dictionary contracts: explicit grade-subject links, knowledge points and scope/available."""
 
+
 import test_backend_catalog as fixtures  # Initializes isolated environment before app imports.
 
-import unittest
-
 from app.routers import site
-from app.services import site_content
 
 
 class DictionaryContracts(fixtures.PublicCatalogContracts):
@@ -108,7 +106,7 @@ class DictionaryContracts(fixtures.PublicCatalogContracts):
     def test_update_and_reorder_within_pair_keep_parent(self):
         grade, math = self.grade('小学四年级'), self.subject('数学')
         parent = f"{grade['id']}|{math['id']}"
-        first = self.client.post('/api/v1/admin/site/dictionary', json={
+        _first = self.client.post('/api/v1/admin/site/dictionary', json={
             'kind': 'knowledge_point', 'parent': parent, 'value': '排序知识点甲'}).json()
         second = self.client.post('/api/v1/admin/site/dictionary', json={
             'kind': 'knowledge_point', 'parent': parent, 'value': '排序知识点乙', 'sort_order': 20}).json()

@@ -1,4 +1,4 @@
-import { request } from './api'
+import { request, type ReadOptions } from './api'
 
 export interface SupportSettings { revision: number; wechat: string; phone: string; email: string; hours: string; benefits: string; qr_url?: string }
 export interface Topic { id: string; title: string; description: string; paper_count: number }
@@ -13,8 +13,8 @@ export const feedbackKinds: { value: FeedbackKind; label: string }[] = [
   { value: 'membership', label: '会员开通或续期' }, { value: 'other', label: '其他问题' },
 ]
 export const feedbackStatus = { pending: '待处理', processing: '处理中', resolved: '已解决', closed: '已关闭' }
-export const fetchSupport = () => request<SupportSettings>('/api/v1/site/support')
-export const fetchTopics = () => request<{ items: Topic[] }>('/api/v1/site/topics')
+export const fetchSupport = (options: ReadOptions = {}) => request<SupportSettings>('/api/v1/site/support', 'GET', undefined, options)
+export const fetchTopics = (options: ReadOptions = {}) => request<{ items: Topic[] }>('/api/v1/site/topics', 'GET', undefined, options)
 export const fetchFeedback = (offset = 0) => request<{ items: Feedback[]; total: number; has_more: boolean }>('/api/v1/mini/feedback?offset=' + offset)
 export const fetchFeedbackItem = (id: string) => request<Feedback>('/api/v1/mini/feedback/' + encodeURIComponent(id))
 export const submitFeedback = (body: { kind: FeedbackKind; body: string; catalog_id?: string }) => request<Feedback>('/api/v1/mini/feedback', 'POST', body)

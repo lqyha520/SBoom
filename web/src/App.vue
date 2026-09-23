@@ -7,6 +7,7 @@ import { AUTH_CHANGED_EVENT } from './api'
 const LeftPanel = defineAsyncComponent(() => import('./components/LeftPanel.vue'))
 const MiddleColumn = defineAsyncComponent(() => import('./components/MiddleColumn.vue'))
 const PreviewPane = defineAsyncComponent(() => import('./components/PreviewPane.vue'))
+const ImageWorkbench = defineAsyncComponent(() => import('./components/ImageWorkbench.vue'))
 const StepResult = defineAsyncComponent(() => import('./components/StepResult.vue'))
 const AdvancedDrawer = defineAsyncComponent(() => import('./components/AdvancedDrawer.vue'))
 const MyTemplatesDialog = defineAsyncComponent(() => import('./components/MyTemplatesDialog.vue'))
@@ -20,6 +21,9 @@ const showAdv = ref(false)
 const showTpl = ref(false)
 const showHistory = ref(false)
 const showCloud = ref(false)
+const imageMode = ref(false)
+const imageOpened = ref(false)
+function openImages() { imageOpened.value = true; imageMode.value = true }
 const accountError = ref('')
 const suggestedKeyword = ref((new URLSearchParams(location.search).get('keyword') || '').slice(0, 100))
 function applySuggestedKeyword() { store.keyword = suggestedKeyword.value; store.view = 'build'; suggestedKeyword.value = ''; history.replaceState(null, '', location.pathname) }
@@ -111,14 +115,16 @@ onBeforeUnmount(() => {
           <div><div class="brand-name">出题工作台</div><div class="brand-caption">Learning Coach</div></div>
         </div>
         <nav class="top-nav" aria-label="工作台导航">
-          <button :class="{ active: store.view === 'build' }" :aria-current="store.view === 'build' ? 'page' : undefined" @click="store.backToBuild()">
+          <button :class="{ active: !imageMode && store.view === 'build' }" :aria-current="!imageMode && store.view === 'build' ? 'page' : undefined" @click="imageMode = false; store.backToBuild()">
             <UIcon name="i-lucide-panels-top-left" class="size-4" /><span>试卷搭建</span>
           </button>
-          <button :class="{ active: store.view === 'result' }" :disabled="!store.papers.length" :aria-current="store.view === 'result' ? 'page' : undefined" @click="store.view = 'result'">
+          <button :class="{ active: !imageMode && store.view === 'result' }" :disabled="!store.papers.length" :aria-current="!imageMode && store.view === 'result' ? 'page' : undefined" @click="imageMode = false; store.view = 'result'">
             <UIcon name="i-lucide-files" class="size-4" /><span>生成结果</span><span v-if="store.papers.length" class="nav-count">{{ store.papers.length }}</span>
           </button>
+          <button :class="{ active: imageMode }" :aria-current="imageMode ? 'page' : undefined" @click="openImages"><UIcon name="i-lucide-image" class="size-4" /><span>图片出题</span></button>
         </nav>
         <div class="topbar-actions">
+          <template v-if="!imageMode">
           <UTooltip text="撤销（Ctrl+Z）"><UButton icon="i-lucide-undo-2" aria-label="撤销编辑" variant="ghost" :disabled="!store.canUndo" @click="store.undo()" /></UTooltip>
           <UTooltip text="重做（Ctrl+Shift+Z）"><UButton icon="i-lucide-redo-2" aria-label="重做编辑" variant="ghost" :disabled="!store.canRedo" @click="store.redo()" /></UTooltip>
           <UTooltip text="云端试卷"><UButton icon="i-lucide-cloud" color="neutral" variant="ghost" aria-label="云端试卷" class="icon-tool" @click="showCloud = true" /></UTooltip>
@@ -128,6 +134,7 @@ onBeforeUnmount(() => {
             <UButton icon="i-lucide-settings-2" color="neutral" variant="ghost" aria-label="卷面设置" class="icon-tool" @click="showAdv = true" />
           </UTooltip>
           <div class="header-divider"></div>
+          </template>
           <UDropdownMenu :items="userMenu">
             <UButton color="neutral" variant="ghost" :aria-label="'账号菜单：' + auth.user.username" class="account-button">
               <span class="user-avatar">{{ auth.user.username.slice(0, 1).toUpperCase() }}</span>
@@ -139,10 +146,10 @@ onBeforeUnmount(() => {
       </header>
       <div class="workspace-heading no-print">
         <div class="workspace-title">
-          <h1>{{ store.view === 'build' ? '试卷搭建' : '生成结果' }}</h1>
-          <UBadge v-if="store.grade" color="neutral" variant="subtle" size="sm">{{ store.grade }}{{ store.subject ? ' / ' + store.subject : '' }}</UBadge>
+          <h1>{{ imageMode ? '图片出题' : store.view === 'build' ? '试卷搭建' : '生成结果' }}</h1>
+          <UBadge v-if="store.grade && !imageMode" color="neutral" variant="subtle" size="sm">{{ store.grade }}{{ store.subject ? ' / ' + store.subject : '' }}</UBadge>
         </div>
-        <div class="workspace-meta">
+        <div v-if="!imageMode" class="workspace-meta">
           <span class="draft-state" :class="{ 'text-error': store.draftState === 'error' }" role="status" :title="store.draftSavedAt ? '本机保存于 ' + new Date(store.draftSavedAt).toLocaleString() : ''"><UIcon :name="store.draftState === 'saving' ? 'i-lucide-loader-circle' : store.draftState === 'error' ? 'i-lucide-cloud-off' : 'i-lucide-hard-drive'" class="size-3.5" :class="{ 'animate-spin': store.draftState === 'saving' }" />{{ draftLabel }}</span>
           <span v-if="store.generating" role="status" class="generation-state"><UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />{{ store.generateProgress || '正在生成' }}</span>
           <template v-else><span class="status-dot"></span><span>{{ store.sections.length }} 个大题</span><span class="meta-divider">/</span><span>{{ store.totalQuestions }} 道题目</span></template>
@@ -154,15 +161,16 @@ onBeforeUnmount(() => {
         </template>
       </UAlert>
       <UAlert v-if="suggestedKeyword && store.persistenceReady" title="从运营统计带入的出题需求" :description="suggestedKeyword" class="workspace-alert no-print"><template #actions><UButton label="应用知识点" :disabled="store.generating" @click="applySuggestedKeyword" /><UButton label="忽略" variant="ghost" @click="suggestedKeyword = ''" /></template></UAlert>
-      <UTabs v-if="store.view === 'build'" v-model="mobilePanel" :items="workspaceTabs" :content="false" class="workspace-tabs no-print" :ui="{ list: 'w-full', trigger: 'flex-1' }" />
+      <UTabs v-if="!imageMode && store.view === 'build'" v-model="mobilePanel" :items="workspaceTabs" :content="false" class="workspace-tabs no-print" :ui="{ list: 'w-full', trigger: 'flex-1' }" />
       <div v-if="!store.persistenceReady" class="loading-screen" role="status">正在恢复草稿</div>
-      <main v-else class="workbench" :class="{ 'result-only': store.view === 'result' }" :data-panel="mobilePanel" @focusin="captureEdit">
-        <template v-if="store.view === 'build'">
+      <main v-else class="workbench" :class="{ 'result-only': imageMode || store.view === 'result' }" :data-panel="imageMode ? 'image' : mobilePanel" @focusin="captureEdit">
+        <ImageWorkbench v-if="imageOpened" v-show="imageMode" />
+        <template v-if="!imageMode && store.view === 'build'">
           <LeftPanel />
           <MiddleColumn @open-templates="showTpl = true" @preview="mobilePanel = 'preview'" />
           <PreviewPane @open-settings="showAdv = true" />
         </template>
-        <StepResult v-else @library="showCloud = true" />
+        <StepResult v-else-if="!imageMode" @library="showCloud = true" />
       </main>
       <AdvancedDrawer v-if="showAdv" :open="showAdv" @close="showAdv = false" />
       <MyTemplatesDialog v-if="showTpl" :open="showTpl" @close="showTpl = false" />

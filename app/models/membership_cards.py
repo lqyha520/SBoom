@@ -1,5 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field
 
+
 class CardCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     days: int = Field(ge=1, le=3660)

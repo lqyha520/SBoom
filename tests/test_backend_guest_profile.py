@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import test_backend_catalog as fixtures
 from PIL import Image, PngImagePlugin
+
 from app import db as database
 from app.routers import engagement, experience, site
 from app.services import mini_auth
@@ -52,7 +53,8 @@ class GuestProfileContracts(unittest.TestCase):
         self.assertFalse(result["items"][0]["favorite"])
         self.assertFalse(result["items"][0]["can_download"])
         detail = self.client.get("/api/v1/catalog/papers/" + paper["id"]).json()
-        self.assertIsNotNone(detail["snapshot"])
+        self.assertNotIn("snapshot", detail)
+        self.assertEqual(detail["difficulty"], "medium")
         self.assertNotIn("private-only-marker", str(detail))
         self.assertTrue(detail["assets"])
         for asset in detail["assets"]:
@@ -73,7 +75,7 @@ class GuestProfileContracts(unittest.TestCase):
         self.assertFalse(detail["can_view"])
         self.guest()
         detail = self.client.get("/api/v1/catalog/papers/" + vip["id"]).json()
-        self.assertIsNone(detail["snapshot"])
+        self.assertNotIn("snapshot", detail)
         self.assertIsNone(detail["thumbnail_url"])
         self.assertEqual(detail["assets"], [])
         self.assertEqual(self.client.get(vip_page).status_code, 403)

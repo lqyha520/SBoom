@@ -1,9 +1,10 @@
 """Operator-controlled curriculum tags and combined catalog filters."""
 
 import uuid
+
 from app.db import db
-from app.services.mini_errors import fail
 from app.services.catalog_delivery import availability_sql
+from app.services.mini_errors import fail
 
 KINDS = ("textbook", "term", "unit", "knowledge")
 

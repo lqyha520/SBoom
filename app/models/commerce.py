@@ -1,6 +1,7 @@
 """Only the server determines payment amounts and membership grants."""
 
 from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
