@@ -25,10 +25,10 @@ IS_WIN = platform.system() == "Windows"
 
 if IS_WIN:
     import ctypes.wintypes as wt
-    # WinDLL 是 Windows 专属符号；CI 的 mypy 在 Linux 上跑，直接写 ctypes.WinDLL 会报
-    # attr-defined，而 pyproject 开了 warn_unused_ignores，平台相关的 type: ignore
-    # 又会在 Windows 本机变成"未使用"。故经 getattr 取用，两端判定一致。
-    _WinDLL = getattr(ctypes, "WinDLL")
+    # WinDLL 只存在于 Windows。CI 的 mypy 跑在 Linux 上，直接写 ctypes.WinDLL 会报
+    # attr-defined；而 pyproject 开了 warn_unused_ignores，平台相关的 type: ignore
+    # 又会在 Windows 本机变成"未使用"。故用常量取属性，两个平台判定一致。
+    _WinDLL = getattr(ctypes, "WinDLL")  # noqa: B009 — 取属性只为绕过平台差异，理由见上
     _kernel32 = _WinDLL("kernel32")
     _psapi = _WinDLL("psapi")
 
