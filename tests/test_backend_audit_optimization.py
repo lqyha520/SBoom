@@ -87,15 +87,27 @@ class OptimizationContracts(unittest.TestCase):
     def test_orphan_grace_and_referenced_files_are_preserved(self):
         source = self.source()
         root = self.root / "files"
-        old, fresh = root / "orphan-old.png", root / "orphan-new.png"
-        old.write_bytes(b"old")
-        fresh.write_bytes(b"new")
-        os.utime(old, (time.time() - 90000, time.time() - 90000))
+        orphans = root / "images" / "1"
+        orphans.mkdir(parents=True)
+        old, fresh = orphans / f"{'a' * 32}.png", orphans / f"{'b' * 32}.png"
+        # 不是应用生成的存储键（例如 ARCHIVE_LOCAL_DIR 误指到数据目录时的密钥文件）：再旧也不能被回收
+        foreign = root / "secret_key.txt"
+        for path, data in ((old, b"old"), (fresh, b"new"), (foreign, b"secret")):
+            path.write_bytes(data)
+        with db() as conn:
+            rows = conn.execute("SELECT storage_key FROM paper_assets WHERE paper_id = ?", (source["id"],)).fetchall()
+        kept = [root / row["storage_key"] for row in rows]
+        stale = time.time() - 90000
+        for path in (old, foreign, *kept):
+            os.utime(path, (stale, stale))
         file_retention._scan = None
         file_retention.scan_orphans()
         file_retention.drain()
         self.assertFalse(old.exists())
         self.assertTrue(fresh.exists())
+        self.assertTrue(foreign.exists())
+        self.assertTrue(kept)
+        self.assertTrue(all(path.exists() for path in kept))
         self.assertEqual(len(paper_library.get_paper(self.admin.id, source["id"])["assets"]), 2)
 
     def test_import_default_policy_is_explicit(self):

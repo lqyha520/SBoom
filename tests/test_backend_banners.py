@@ -1,14 +1,30 @@
 """Banner upload, versioned public images and migration using disposable data."""
 
+import importlib.util
 import io
+import os
+import time
 import unittest
+from pathlib import Path
 
+import psycopg
 import test_backend_catalog as fixtures
 from PIL import Image
 
 from app import db as database
+from app.config import get_settings
 from app.routers import site
+from app.services import file_retention
 from app.site_schema import init_site_schema
+
+
+def backup_script():
+    """按路径加载备份脚本（scripts/ 不是包），用来核对备份清单。"""
+    spec = importlib.util.spec_from_file_location("backup_restore", Path(__file__).resolve().parents[1] / "scripts" / "backup_restore.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class BannerContracts(unittest.TestCase):
@@ -117,6 +133,32 @@ class BannerContracts(unittest.TestCase):
         item = self.create()
         self.client.cookies.clear()
         self.assertEqual(self.upload(item).status_code, 401)
+
+    def test_orphan_scan_keeps_live_banner_images_and_collects_leftovers(self):
+        # 回归：孤儿回收曾只认试卷与生图文件，上传满 24 小时的 Banner 图会被当成孤儿删掉
+        uploaded = self.upload(self.create()).json()
+        folder = self.root / "files" / "site" / "banners"
+        [live] = list(folder.iterdir())
+        leftover = folder / f"{'c' * 32}.png"  # 替换或删除 Banner 时没删掉的旧图
+        leftover.write_bytes(self.photo())
+        stale = time.time() - 90000
+        for path in (live, leftover):
+            os.utime(path, (stale, stale))
+        file_retention._scan = None
+        file_retention.scan_orphans()
+        file_retention.drain()
+        self.assertTrue(live.exists())
+        self.assertFalse(leftover.exists())
+        self.client.cookies.clear()
+        self.assertEqual(self.client.get(uploaded["image_url"]).status_code, 200)
+
+    def test_backup_manifest_includes_banner_images(self):
+        uploaded = self.upload(self.create()).json()
+        with database.db() as conn:
+            key = conn.execute("SELECT image_key FROM site_banners WHERE id = ?", (uploaded["id"],)).fetchone()[0]
+        with psycopg.connect(get_settings().database_url) as conn:
+            files = backup_script().private_files(conn)
+        self.assertIn(("local", key), files)
 
 
 if __name__ == "__main__":

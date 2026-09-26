@@ -5,6 +5,7 @@ import time
 
 from app.db import db
 from app.services.paper_storage import storage_for
+from app.storage_registry import MANAGED_KEY, REFERENCES
 
 logger = logging.getLogger(__name__)
 _scan = None
@@ -14,8 +15,10 @@ def enqueue(conn, files):
     conn.executemany("INSERT INTO file_deletions(storage, storage_key) VALUES (?, ?) ON CONFLICT DO NOTHING", files)
 
 def referenced(conn, storage, key):
-    return (conn.execute("SELECT 1 FROM paper_assets WHERE storage = ? AND storage_key = ?", (storage, key)).fetchone()
-            or conn.execute("SELECT 1 FROM image_assets WHERE storage = ? AND storage_key = ?", (storage, key)).fetchone())
+    # 任一登记表（app/storage_registry.py）引用即视为在用；空后端名与 local 都指本地磁盘
+    backends = ("local", "") if storage in ("local", "") else (storage, storage)
+    return any(conn.execute(f"SELECT 1 FROM {ref.table} WHERE {ref.storage_column} IN (?, ?) AND {ref.key_column} = ?",
+                            (*backends, key)).fetchone() for ref in REFERENCES)
 
 def drain(limit=50):
     now = int(time.time())
@@ -48,9 +51,10 @@ def scan_orphans(limit=500):
     with db() as conn:
         for path in paths:
             try:
-                if path.is_symlink() or not path.is_file() or path.stat().st_mtime >= cutoff:
-                    continue
                 key = path.relative_to(root).as_posix()
+                # 只回收应用自己生成的存储键：目录里的密钥、备份等其他文件再旧也不碰
+                if not MANAGED_KEY.fullmatch(key) or path.is_symlink() or not path.is_file() or path.stat().st_mtime >= cutoff:
+                    continue
                 if not referenced(conn, "local", key):
                     # Active uploads may be writing into an older directory.
                     parts = key.split("/")

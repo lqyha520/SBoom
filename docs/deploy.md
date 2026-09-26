@@ -94,5 +94,6 @@ docker run --rm -v <卷名>:/app/data --entrypoint sh <镜像> -c 'find /app/dat
 
 - **多 worker 只在 Linux 可用**：`WORKERS=2` 在容器里没问题；Windows 本机仍是单 worker。
 - **文件存储固定为本地磁盘**（`appdata` 卷内的 `data/paper-files`，可用 `ARCHIVE_LOCAL_DIR` 调整）；COS 支持已移除，多实例部署需自行提供共享存储。
+- **私有文件的回收与备份共用一份登记表**（`app/storage_registry.py`）：维护任务只回收登记过的键格式里、超过 24 小时且没有任何登记表引用的文件，目录里的其他文件不碰；备份脚本按同一份登记表复制文件。新增写入私有存储的功能必须先在这里登记。
 - 域名必须备案，否则 443 会被云厂商拦截。
 - `.env.production` 含密钥，已在 `.gitignore` 排除，不要提交。

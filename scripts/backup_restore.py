@@ -15,6 +15,9 @@ from pathlib import Path
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.storage_registry import REFERENCES
+
 LOCKS = [70634195, 70634191, 70634192, 70634193, 70634194]
 
 def digest(path):
@@ -55,6 +58,17 @@ def pg_tool(args, dsn, program, file, snapshot=None):
         # Never print command arguments or environment: these may contain credentials.
         raise RuntimeError(program + ' failed; backup/restore remains incomplete')
 
+def private_files(conn):
+    """备份要复制的私有文件：与孤儿回收共用 app/storage_registry.py 的登记表，漏登记的表不会进备份。"""
+    selects = []
+    for ref in REFERENCES:
+        exists = conn.execute('SELECT to_regclass(%s)', (ref.table,)).fetchone()
+        if exists and exists[0]:
+            # 空后端名等同本地磁盘（Banner 的 image_storage 默认为空串）；没有文件的行不进清单
+            selects.append(f"SELECT CASE WHEN {ref.storage_column} = '' THEN 'local' ELSE {ref.storage_column} END, {ref.key_column} "
+                           f"FROM {ref.table} WHERE {ref.key_column} <> ''")
+    return conn.execute(' UNION '.join(selects)).fetchall() if selects else []
+
 def backup(args):
     root = args.destination.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -73,11 +87,7 @@ def backup(args):
             raise RuntimeError('Database snapshot was not returned')
         snapshot = snapshot_row[0]
         pg_tool(args, dsn, 'pg_dump', root / 'database.dump', snapshot)
-        query = "SELECT storage, storage_key FROM paper_assets"
-        image_table = conn.execute("SELECT to_regclass('image_assets')").fetchone()
-        if image_table and image_table[0]:
-            query += " UNION SELECT storage, storage_key FROM image_assets"
-        records = conn.execute(query).fetchall()
+        records = private_files(conn)
         for backend, key in records:
             if backend != 'local':
                 raise ValueError('Unsupported storage backend')
