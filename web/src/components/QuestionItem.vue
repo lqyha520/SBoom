@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import type { Question, SecLayout } from '../types'
 import { answerOf, cirNum, escHtml, isBlankVal, spaceOps, stripOptPrefix, tfStem } from '../utils'
 import { sanitizeRich } from '../sanitize'
+import { labelPattern, optionLabel, readEdited, startsWithLabel } from '../rich-edit'
 
 const props = defineProps<{
   q: Question
@@ -40,37 +41,42 @@ const fs = computed(() => (props.layout.fontSize ? { fontSize: props.layout.font
 const stemHtml = computed(() =>
   props.q._stemHtml ? sanitizeRich(props.q._stemHtml) : escHtml(lvTag.value + stemText.value),
 )
+/** 选项 = 字母 + 内容；编辑缓存只存内容（早期缓存可能已带字母，此时不再重复加） */
 function optHtml(j: number): string {
   const cached = props.q._optsHtml?.[j]
-  if (cached != null) return sanitizeRich(cached)
-  return `${String.fromCharCode(65 + j)}. ${escHtml(spaceOps(stripOptPrefix(props.q.options?.[j] ?? '')))}`
+  if (cached != null && startsWithLabel(cached, optionLabel(j))) return sanitizeRich(cached)
+  const body = cached != null ? sanitizeRich(cached) : escHtml(spaceOps(stripOptPrefix(props.q.options?.[j] ?? '')))
+  return `${String.fromCharCode(65 + j)}. ${body}`
 }
 
-/* ── 编辑回写（同时捕获富文本 HTML 和纯文本） ── */
-function stripPrefix(text: string, re: RegExp): string {
-  const m = text.trim().match(re)
-  return (m ? m[1] : text).trim()
-}
+/* ── 编辑回写（同时捕获富文本 HTML 和纯文本）──
+   题号、选项字母、连线序号是渲染时加在最前面的标签，回写时按渲染的原样去掉（见 rich-edit.ts）。
+   只是点进去又离开、内容没变时不写回，免得把渲染用的格式（运算符空格、判断题括号）写进数据。 */
 function onStemBlur(e: FocusEvent) {
   if (!props.editable) return
-  const el = e.target as HTMLElement
+  const label = props.layout.showNo === false ? null : labelPattern(cirNum(props.no))
   // 写入前净化：剥离粘贴富文本里的事件/脚本，只保留排版标签
-  props.q._stemHtml = sanitizeRich(el.innerHTML.replace(/^[①-㊿]\s*/, ''))
-  props.q.stem = stripPrefix(stripPrefix(el.innerText, /^[①-㊿]\s*/), /^\[第\d+关\]\s*/)
+  const edited = readEdited(e.target as HTMLElement, label)
+  if (edited.html === readEdited(noTag.value + stemHtml.value, label).html) return
+  props.q._stemHtml = edited.html
+  props.q.stem = edited.text.replace(/^\[第\d+关\]\s*/, '')
 }
 function onOptBlur(e: FocusEvent, j: number) {
   if (!props.editable || !props.q.options) return
-  const el = e.target as HTMLElement
+  const label = optionLabel(j)
+  const edited = readEdited(e.target as HTMLElement, label)
+  if (edited.html === readEdited(optHtml(j), label).html) return
   if (!props.q._optsHtml) props.q._optsHtml = []
-  props.q._optsHtml[j] = sanitizeRich(el.innerHTML.replace(/^[A-H][.、：:．]\s*/, ''))
-  props.q.options[j] = stripPrefix(el.innerText, /^[A-H][.、：:．]\s*/)
+  props.q._optsHtml[j] = edited.html
+  props.q.options[j] = edited.text
 }
 function onMatchBlur(e: FocusEvent, side: 'left' | 'right', i: number) {
   if (!props.editable) return
-  const t = (e.target as HTMLElement).innerText
-  const v = stripPrefix(t, /^（\d+）\s*/)
-  if (side === 'left' && props.q.left_items) props.q.left_items[i] = v || ' '
-  if (side === 'right' && props.q.right_items) props.q.right_items[i] = v || ' '
+  const items = side === 'left' ? props.q.left_items : props.q.right_items
+  if (!items) return
+  const text = readEdited(e.target as HTMLElement, labelPattern(`（${i + 1}）`)).text
+  if (text === spaceOps(items[i] ?? '').trim()) return
+  items[i] = text || ' '
 }
 function onSplitBlur(e: FocusEvent, field: 'top' | 'left' | 'right') {
   if (!props.editable) return
