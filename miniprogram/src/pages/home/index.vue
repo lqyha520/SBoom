@@ -9,7 +9,7 @@ import NoticePopup from '../../components/NoticePopup.vue'
 import PaperCard from '../../components/PaperCard.vue'
 import TopicCard from '../../components/TopicCard.vue'
 import EnhancedSkeleton from '../../components/EnhancedSkeleton.vue'
-import SearchField from '../../components/SearchField.vue'
+import SearchGradeBar from '../../components/SearchGradeBar.vue'
 import GradePicker from '../../components/GradePicker.vue'
 import { errorMessage, favoriteCatalogPaper, fetchCatalog, fetchCatalogSummary, fetchSiteHome } from '../../services/api'
 import { ensureSession, requireLogin, session } from '../../services/session'
@@ -156,10 +156,7 @@ onShareAppMessage(() => shareCard('home'))
 <template>
   <view class="home-page has-tabbar">
     <PageChrome />
-    <view class="content-width home-search-row">
-      <view class="grow home-search"><SearchField v-model="q" placeholder="搜知识点、习题" @search="search" /></view>
-      <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="grade-entry" role="button" aria-label="选择年级" :disabled="loading || !!changing" @click="gradePicker = true"><text>{{ grade.replace(/^小学/, '') || '全部年级' }}</text><wd-icon name="down" size="11px" /></button>
-    </view>
+    <view class="content-width home-search-row"><SearchGradeBar v-model="q" :grade="grade" placeholder="搜知识点、习题" :disabled="loading || !!changing" @search="search" @select-grade="gradePicker = true" /></view>
     <HomeBanner :banners="banners" :grade="grade" :recent="recentPaper" :loading="contentLoading" :active="imagesActive" />
     <view class="content-width home-subjects">
       <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="item in subjects" :key="item.label" class="subject-entry" role="button" :aria-label="item.subject ? item.label + '习题' : '全部习题'" @click="openCatalog({ subject: item.subject, grade })"><view class="subject-symbol" :class="item.tone"><wd-icon :name="item.icon" size="24px" /></view><text>{{ item.label }}</text></button>
@@ -204,10 +201,7 @@ onShareAppMessage(() => shareCard('home'))
 
 <style scoped>
 .home-page { background: var(--lc-canvas); }
-.home-search-row { display: flex; align-items: center; gap: 8px; padding-top: 12px; padding-bottom: 12px; }
-.grade-entry { display: flex; align-items: center; justify-content: center; gap: 5px; flex: none; width: 96px; min-height: 46px; padding: 0 8px; margin: 0; border: 1px solid var(--lc-card-line); border-radius: var(--lc-radius-control); background: var(--lc-primary-soft); font-size: 13px; line-height: 1.5; color: var(--lc-primary); }
-.grade-entry text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.grade-entry[disabled] { opacity: .6; }
+.home-search-row { padding-top: 12px; padding-bottom: 12px; }
 .home-subjects { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding-top: 14px; padding-bottom: 16px; animation: fade-in 0.4s ease-out; }
 .subject-entry { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; width: 100%; margin: 0; padding: 0; background: transparent; font-size: 12px; line-height: 1.5; color: #374c3d; }
 .subject-entry > text { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -273,5 +267,5 @@ onShareAppMessage(() => shareCard('home'))
 }
 .home-subjects { animation: fade-in 0.4s ease-out; }
 .collection-track { animation: slide-up 0.6s ease-out; }
-@media (max-width: 359px) { .home-search-row { gap: 6px; } .grade-entry { width: 88px; font-size: 12px; } .home-cards { gap: 10px; } .feed-tabs { gap: 14px; } .feed-tabs button { font-size: 14px; } .feed-tabs button.active { font-size: 17px; } .category-entry { gap: 5px; padding: 12px 8px; } .category-symbol { width: 25px; } .collection-track { padding-left: 16px; padding-right: 16px; } .collection-card { width: 235px; } }
+@media (max-width: 359px) { .home-cards { gap: 10px; } .feed-tabs { gap: 14px; } .feed-tabs button { font-size: 14px; } .feed-tabs button.active { font-size: 17px; } .category-entry { gap: 5px; padding: 12px 8px; } .category-symbol { width: 25px; } .collection-track { padding-left: 16px; padding-right: 16px; } .collection-card { width: 235px; } }
 </style>

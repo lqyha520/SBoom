@@ -5,7 +5,7 @@ import AppTabBar from './AppTabBar.vue'
 import PageChrome from './PageChrome.vue'
 import PaperRow from './PaperRow.vue'
 import EnhancedSkeleton from './EnhancedSkeleton.vue'
-import SearchField from './SearchField.vue'
+import SearchGradeBar from './SearchGradeBar.vue'
 import CatalogFilterSheet from './CatalogFilterSheet.vue'
 import FavoriteGroups from './FavoriteGroups.vue'
 import { clearHistory, fetchTopics, type Topic } from '../services/experience'
@@ -288,10 +288,10 @@ onBeforeUnmount(deactivate)
 <template>
   <view class="catalog-page" :class="{ 'has-tabbar': hasTabbar }">
     <view class="catalog-sticky"><PageChrome :back="!hasTabbar" fallback="/pages/account/index" />
-    <view v-if="recordTitle" class="content-width record-heading"><view class="record-title-row"><text class="page-title">{{ recordTitle }}</text><button v-if="view === 'recent' && canBrowse" class="section-link" hover-class="control-pressed" role="button" :disabled="loading || (!items.length && !filtered)" @click="clearRecent">清空记录</button></view><text class="record-description">{{ recordDescription }}</text></view>
+    <view v-if="recordTitle && view !== 'favorites'" class="content-width record-heading"><view class="record-title-row"><text class="page-title">{{ recordTitle }}</text><button v-if="view === 'recent' && canBrowse" class="section-link" hover-class="control-pressed" role="button" :disabled="loading || (!items.length && !filtered)" @click="clearRecent">清空记录</button></view><text class="record-description">{{ recordDescription }}</text></view>
     <view v-if="topicId" class="content-width topic-header"><text class="topic-page-title">{{ topicHeader?.title || '习题专题' }}</text><text v-if="topicHeader?.description">{{ topicHeader.description }}</text><text v-if="!loading && !metadataLoading && !metadataError && !error && canBrowse && !topicHeader">该专题已下架或暂不可用</text><!-- #ifdef MP-WEIXIN --><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="topicHeader" class="section-link" open-type="share">分享专题</button><!-- #endif --></view>
     <view class="catalog-band"><view class="content-width catalog-header">
-      <template v-if="canBrowse"><view class="catalog-search-row"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="catalog-grade" role="button" aria-label="选择年级" @click="gradeOpen = true"><text>{{ grade.replace(/^小学/, '') || '全部年级' }}</text><wd-icon name="down" size="11px" /></button><view class="grow"><SearchField v-model="searchInput" :placeholder="view === 'favorites' ? '搜索收藏' : view === 'downloads' ? '搜索下载记录' : '搜索习题'" @search="search()" /></view></view><view class="catalog-tab-row"><view class="catalog-tabs"><wd-tabs v-model="subject" :slidable-num="4" :map-num="100" line-theme="text"><wd-tab name="" title="全部" /><wd-tab v-for="value in subjects" :key="value" :name="value" :title="value" /></wd-tabs></view><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon catalog-filter" :class="{ selected: filterCount }" role="button" aria-label="更多筛选" title="更多筛选" @click="filterOpen = true"><wd-icon name="filter" size="19px" /><view v-if="filterCount" class="filter-dot" /></button></view></template>
+      <template v-if="canBrowse"><SearchGradeBar v-model="searchInput" :grade="grade" :placeholder="view === 'favorites' ? '搜索收藏' : view === 'downloads' ? '搜索下载记录' : '搜索习题'" @search="search()" @select-grade="gradeOpen = true" /><view class="catalog-tab-row"><view class="catalog-tabs"><wd-tabs v-model="subject" :slidable-num="4" :map-num="100" line-theme="text"><wd-tab name="" title="全部" /><wd-tab v-for="value in subjects" :key="value" :name="value" :title="value" /></wd-tabs></view><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon catalog-filter" :class="{ selected: filterCount }" role="button" aria-label="更多筛选" title="更多筛选" @click="filterOpen = true"><wd-icon name="filter" size="19px" /><view v-if="filterCount" class="filter-dot" /></button></view></template>
     </view></view></view>
     <AuthGate v-if="!canBrowse" :title="view === 'favorites' ? '收藏好资料，下次接着练' : '登录查看使用记录'" description="登录后可同步收藏、分组和下载记录" browse @restored="activate" />
     <view v-else class="content-width catalog-body">
@@ -362,9 +362,6 @@ onBeforeUnmount(deactivate)
 .catalog-sticky { position:sticky;top:0;z-index:10;background:var(--lc-background);border-bottom:1px solid var(--lc-card-line); }
 .metadata-status { display:flex;align-items:center;gap:8px;font-size:12px;color:var(--lc-secondary); }
 .catalog-header { padding-top: 18px; --wot-search-plain-block-bg: #fff; }
-.catalog-search-row { display: flex; align-items: center; gap: 9px; }
-.catalog-grade { display: flex; align-items: center; justify-content: space-between; gap: 4px; width: 96px; min-height: 46px; flex: none; padding: 0 10px; margin: 0; border:1px solid var(--lc-card-line);border-radius:var(--lc-radius-control);background:var(--lc-primary-soft);color:var(--lc-primary);font-size:13px;line-height:1.5; }
-.catalog-grade text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .catalog-tab-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .catalog-tabs { flex: 1; min-width: 0; margin-left: -10px; --wot-tabs-nav-item-padding: 14px 8px; --wot-tabs-nav-item-font-size: 14px; }
 .catalog-filter { position: relative; }
@@ -378,5 +375,5 @@ onBeforeUnmount(deactivate)
 .catalog-empty .empty-actions { flex-wrap:wrap;gap:10px; }
 .request-entry { padding-top:20px; }
 .catalog-body .list-caption { min-height: 44px; }
-@media (max-width:359px) { .catalog-paper-list { padding:0 10px; }.catalog-grade { width:88px;padding:0 8px;font-size:12px; } }
+@media (max-width:359px) { .catalog-paper-list { padding:0 10px; } }
 </style>
