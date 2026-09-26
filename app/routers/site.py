@@ -1,9 +1,9 @@
 """小程序运营内容接口：后台管理端（增删改查 / 排序 / 上下线）与小程序端（只读）。"""
 
-import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
+from app.blocking import run_sync
 from app.deps import require_admin
 from app.library_deps import no_store, optional_mini_user
 from app.library_files import asset_response
@@ -123,7 +123,7 @@ def delete_banner(banner_id: str, revision: int = Query(ge=1), user: CurrentUser
 @admin_router.put("/banners/{banner_id}/image")
 async def upload_banner_image(banner_id: str, request: Request, revision: int | None = Query(default=None, ge=1), user: CurrentUser = Depends(require_admin)):
     content_type, content = await _image_body(request)
-    return await asyncio.to_thread(site.save_banner_image, banner_id, content_type, content, revision=revision)
+    return await run_sync(site.save_banner_image, banner_id, content_type, content, revision=revision)
 
 
 @admin_router.delete("/banners/{banner_id}/image")

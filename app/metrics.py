@@ -18,6 +18,7 @@ llm_tokens_total = Counter("llm_tokens_total", "Reported provider tokens", ["mod
 generation_requests_total = Counter("generation_requests_total", "Generation outcomes", ["kind", "status"])
 db_pool_connections = Gauge("db_pool_connections", "Pool connections", ["state"], multiprocess_mode="livesum")
 db_wait = Histogram("db_wait_seconds", "Database pool and lock wait", ["kind"])
+thread_wait = Histogram("thread_wait_seconds", "Wait before synchronous work starts")
 maintenance_failures = Counter("maintenance_failures_total", "Failed maintenance iterations")
 app_info = Info("app_info", "Application version")
 provider_model: ContextVar[str] = ContextVar("provider_model", default="unknown")

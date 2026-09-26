@@ -14,6 +14,7 @@ from typing import cast
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.blocking import run_sync
 from app.config import get_settings
 from app.db import db
 from app.metrics import generation_requests_total, llm_attempts_total, llm_tokens_total, provider_model
@@ -138,7 +139,7 @@ def metered(kind: str):
             request = kwargs["request"]
             request_id = (http_request.headers.get("X-Request-ID") if http_request else None) or uuid.uuid4().hex
             try:
-                cached = await asyncio.to_thread(_begin, user.id, request_id, kind, request.model_dump(mode="json"))
+                cached = await run_sync(_begin, user.id, request_id, kind, request.model_dump(mode="json"))
             except HTTPException as exc:
                 detail = exc.detail if isinstance(exc.detail, dict) else {"error": exc.detail}
                 raise HTTPException(exc.status_code, {**detail, "request_id": request_id}, headers=exc.headers) from exc
@@ -171,7 +172,7 @@ def metered(kind: str):
                         finally:
                             generation_requests_total.labels(kind, outcome).inc()
                             current_usage.reset(stream_token)
-                            await asyncio.shield(asyncio.to_thread(_finish, user.id, request_id, usage, outcome))
+                            await asyncio.shield(run_sync(_finish, user.id, request_id, usage, outcome))
 
                     result.body_iterator = tracked_stream()
                     result.headers["X-Request-ID"] = request_id
@@ -179,9 +180,9 @@ def metered(kind: str):
                 data = result.model_dump(mode="json") if hasattr(result, "model_dump") else dict(result)
                 if kind == "image":
                     from app.services.image_assets import persist
-                    data = await asyncio.to_thread(persist, user.id, request_id, data)
+                    data = await run_sync(persist, user.id, request_id, data)
                 data["request_id"] = request_id
-                await asyncio.to_thread(_finish, user.id, request_id, usage, "succeeded", data)
+                await run_sync(_finish, user.id, request_id, usage, "succeeded", data)
                 generation_requests_total.labels(kind, "succeeded").inc()
                 return data
             except (Exception, asyncio.CancelledError) as exc:
@@ -191,7 +192,7 @@ def metered(kind: str):
                 failure_detail = exc.detail if isinstance(exc, HTTPException) else {"error": "生成中断，结果尚不确定，请先查询请求状态"}
                 if isinstance(failure_detail, dict):
                     failure_detail = {**failure_detail, "request_id": request_id}
-                await asyncio.shield(asyncio.to_thread(
+                await asyncio.shield(run_sync(
                     _finish, user.id, request_id, usage,
                     "unknown" if status_code >= 500 else "failed", None, (status_code, failure_detail),
                 ))
@@ -203,7 +204,7 @@ def metered(kind: str):
                 # KeyboardInterrupt / SystemExit 等进程级信号：只把请求标记为结果未知，原样上抛，
                 # 不能翻译成 503——那会把 Ctrl+C 吞成一次普通失败
                 generation_requests_total.labels(kind, "failed").inc()
-                await asyncio.shield(asyncio.to_thread(
+                await asyncio.shield(run_sync(
                     _finish, user.id, request_id, usage, "unknown", None,
                     (503, {"error": "服务中断，结果尚不确定，请先查询请求状态", "request_id": request_id}),
                 ))

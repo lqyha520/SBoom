@@ -1,11 +1,11 @@
 """Guest catalog browsing and authenticated personal / administrator actions."""
 
-import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import ValidationError
 
+from app.blocking import run_sync
 from app.deps import require_admin
 from app.library_deps import no_store, optional_mini_user, require_mini_user
 from app.library_files import asset_response
@@ -145,10 +145,10 @@ async def import_paper(request: Request,
     if any(value not in {kind.value for kind in GameType} for value in types):
         raise HTTPException(422, detail={"error": "未知的题型"})
     content = await _pdf_body(request, catalog_import.MAX_IMPORT_BYTES)
-    archive = await asyncio.to_thread(catalog_import.import_paper, user.id, title, grade, subject, content, mode,
+    archive = await run_sync(catalog_import.import_paper, user.id, title, grade, subject, content, mode,
                                       keyword=keyword, question_types=types, question_count=question_count)
     body = body.model_copy(update={"paper_id": archive["id"], "title": archive["title"]})
-    return await asyncio.to_thread(catalog.create_paper, user.id, body)
+    return await run_sync(catalog.create_paper, user.id, body)
 
 
 @admin_router.post("/papers/{catalog_id}/editions/import")
@@ -161,17 +161,17 @@ async def import_edition(catalog_id: str, request: Request,
     from app.models.engagement import EditionInput
     from app.services import catalog_editions
 
-    detail = await asyncio.to_thread(catalog.get_paper, user.id, catalog_id, admin=True)
+    detail = await run_sync(catalog.get_paper, user.id, catalog_id, admin=True)
     if revision is not None and revision != detail["revision"]:
         raise HTTPException(409, detail={"error": "资料已更新，请刷新后重试"})
     if detail["status"] == "published" and (revision is None or not confirm_publication):
         raise HTTPException(422, detail={"error": "请核对当前版本及会员权限，确认发布后再上传"})
     content = await _pdf_body(request, catalog_import.MAX_IMPORT_BYTES)
     mode, suffix = ("answersOnly", "答案") if kind == "answers" else ("student", "练习版")
-    archive = await asyncio.to_thread(catalog_import.import_paper, user.id,
+    archive = await run_sync(catalog_import.import_paper, user.id,
                                       f"{detail['title']}·{suffix}", detail["grade"], detail["subject"], content, mode)
     body = EditionInput(revision=detail["revision"], kind=kind, paper_id=archive["id"], confirm_publication=confirm_publication)
-    return await asyncio.to_thread(catalog_editions.assign, user.id, catalog_id, body)
+    return await run_sync(catalog_editions.assign, user.id, catalog_id, body)
 
 
 @admin_router.get("/papers/{catalog_id}")

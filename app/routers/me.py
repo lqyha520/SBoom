@@ -4,12 +4,12 @@
 （模型配置已收归后台管理：/api/v1/admin/llm-config，全体用户共用。）
 """
 
-import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.blocking import run_sync
 from app.deps import require_user
 from app.services import user_store
 from app.services.generation_control import request_status, usage_summary
@@ -21,12 +21,12 @@ router = APIRouter(prefix="/api/v1/me", tags=["个人数据"])
 
 @router.get("/usage", summary="最近 24 小时的生成用量")
 async def generation_usage(user: CurrentUser = Depends(require_user)):
-    return await asyncio.to_thread(usage_summary, user.id)
+    return await run_sync(usage_summary, user.id)
 
 
 @router.get("/generations/{request_id}", summary="查询本人生成请求的状态及结果")
 async def generation_status(request_id: str, user: CurrentUser = Depends(require_user)):
-    return await asyncio.to_thread(request_status, user.id, request_id)
+    return await run_sync(request_status, user.id, request_id)
 
 
 # ─── 每用户模板 ───
@@ -52,7 +52,7 @@ def _check_template_size(template: dict) -> None:
 
 @router.get("/templates", summary="列出当前用户的模板")
 async def list_templates(user: CurrentUser = Depends(require_user)):
-    return {"templates": await asyncio.to_thread(user_store.list_templates, user.id)}
+    return {"templates": await run_sync(user_store.list_templates, user.id)}
 
 
 @router.put("/templates", summary="保存/覆盖模板（按 name upsert）")
@@ -62,7 +62,7 @@ async def upsert_template(req: TemplateIn, user: CurrentUser = Depends(require_u
         raise HTTPException(status_code=400, detail={"error": "模板名称需为 1 至 120 个字符"})
     _check_template_size(req.template)
     try:
-        revision = await asyncio.to_thread(user_store.upsert_template, user.id, name, req.template, req.expected_revision)
+        revision = await run_sync(user_store.upsert_template, user.id, name, req.template, req.expected_revision)
     except user_store.TemplateConflict as exc:
         raise HTTPException(409, detail={"error": str(exc), "code": "template_conflict"}) from exc
     return {"status": "ok", "revision": revision}
@@ -71,7 +71,7 @@ async def upsert_template(req: TemplateIn, user: CurrentUser = Depends(require_u
 @router.delete("/templates", summary="删除模板")
 async def delete_template(name: str, expected_revision: int | None = Query(None, ge=0), user: CurrentUser = Depends(require_user)):
     try:
-        ok = await asyncio.to_thread(user_store.delete_template, user.id, name, expected_revision)
+        ok = await run_sync(user_store.delete_template, user.id, name, expected_revision)
     except user_store.TemplateConflict as exc:
         raise HTTPException(409, detail={"error": str(exc), "code": "template_conflict"}) from exc
     if not ok:
@@ -86,5 +86,5 @@ async def bulk_upload(req: BulkTemplatesIn, user: CurrentUser = Depends(require_
         if not isinstance(t["name"], str) or not t["name"].strip() or len(t["name"]) > 120:
             raise HTTPException(400, detail={"error": "模板名称需为 1 至 120 个字符"})
         _check_template_size(t)
-    n = await asyncio.to_thread(user_store.bulk_upsert_templates, user.id, templates)
+    n = await run_sync(user_store.bulk_upsert_templates, user.id, templates)
     return {"status": "ok", "imported": n}

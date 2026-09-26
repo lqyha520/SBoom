@@ -1,9 +1,9 @@
 """Workbench cookies and consumer bearer sessions use disjoint account domains."""
 
-import asyncio
 
 from fastapi import Cookie, Header, HTTPException, Response
 
+from app.blocking import run_sync
 from app.deps import SESSION_COOKIE, require_user
 from app.services.mini_auth import resolve_session
 
@@ -31,7 +31,7 @@ async def require_library_user(
 
 async def require_mini_user(authorization: str | None = Header(None),
                             mini_user: str | None = Header(None, alias="X-Mini-User")):
-    user = await asyncio.to_thread(resolve_session, bearer_token(authorization))
+    user = await run_sync(resolve_session, bearer_token(authorization))
     if mini_user is not None and mini_user != user.id:
         raise HTTPException(409, detail={"error": "登录账号已变化，请重新登录", "code": "account_changed"})
     return user

@@ -2,6 +2,7 @@
 # PYSEC-2026-1941/1942/161/2281/2280/249/248；python-dotenv 1.2.3 修 PYSEC-2026-2270。
 # 改这两个版本前请先跑全量 tests/test_backend_*.py 回归。
 fastapi==0.141.1
+anyio>=4.1,<5  # 同步任务统一使用工作线程容量限制与上下文传播
 uvicorn[standard]==0.34.0
 httpx==0.28.1
 pydantic==2.10.4

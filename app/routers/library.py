@@ -1,10 +1,10 @@
 """Private paper archives belonging exclusively to workbench users."""
 
-import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import ValidationError
 
+from app.blocking import run_sync
 from app.config import get_settings
 from app.deps import require_user
 from app.library_deps import no_store, require_library_user
@@ -53,7 +53,7 @@ async def create_paper(request: Request, user: CurrentUser = Depends(require_use
         body = ArchiveCreate.model_validate_json(raw)
     except ValidationError as exc:
         raise HTTPException(422, detail={"error": "试卷快照不完整或格式不正确，请刷新后重试"}) from exc
-    return await asyncio.to_thread(library.create_paper, user.id, body)
+    return await run_sync(library.create_paper, user.id, body)
 
 
 @router.get("/papers/{paper_id}")
@@ -75,9 +75,9 @@ def delete_paper(paper_id: str, user: CurrentUser = Depends(require_library_user
 
 @router.put("/papers/{paper_id}/files")
 async def upload_files(paper_id: str, request: Request, user: CurrentUser = Depends(require_user)):
-    await asyncio.to_thread(library.get_paper, user.id, paper_id)
+    await run_sync(library.get_paper, user.id, paper_id)
     content = await _limited_body(request, get_settings().archive_max_bundle_mb * 1024 * 1024, "application/zip")
-    return await asyncio.to_thread(library.publish_bundle, user.id, paper_id, content)
+    return await run_sync(library.publish_bundle, user.id, paper_id, content)
 
 
 @router.get("/assets/{asset_id}")

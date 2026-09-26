@@ -1,10 +1,10 @@
 """Authenticated order operations and signature-verified payment notifications."""
 
-import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
+from app.blocking import run_sync
 from app.deps import require_admin
 from app.library_deps import no_store, require_mini_user
 from app.models.commerce import BillInput, OrderInput, PlanInput, RefundInput, RefundReview
@@ -163,17 +163,17 @@ async def receive(request, refund=False):
         if len(raw) > 1048576:
             raise HTTPException(413, detail={"error": "通知过大"})
     try:
-        identifier, kind, value = await asyncio.to_thread(_verify_callback, request.headers, bytes(raw))
+        identifier, kind, value = await run_sync(_verify_callback, request.headers, bytes(raw))
     except PaymentError as error:
         raise HTTPException(400 if error.code in ("INVALID_CALLBACK", "INVALID_SIGNATURE") else 503, detail={"error": "无法验证支付通知"}) from error
     if refund:
         if kind not in ("REFUND.SUCCESS", "REFUND.ABNORMAL", "REFUND.CLOSED") or value.get("refund_status") != kind.split(".")[-1]:
             raise HTTPException(400, detail={"error": "通知类型不匹配"})
-        await asyncio.to_thread(mini_refunds.apply, value, identifier)
+        await run_sync(mini_refunds.apply, value, identifier)
     else:
         if kind != "TRANSACTION.SUCCESS":
             raise HTTPException(400, detail={"error": "通知类型不匹配"})
-        await asyncio.to_thread(mini_orders.confirm_payment, value, identifier)
+        await run_sync(mini_orders.confirm_payment, value, identifier)
     return Response(status_code=204)
 
 

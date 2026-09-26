@@ -1,6 +1,5 @@
 """生成路由 —— 题目/游戏生成 API 端点"""
 
-import asyncio
 import json
 import logging
 
@@ -8,6 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from app.blocking import run_sync
 from app.config import get_settings
 from app.deps import require_user
 from app.models import (
@@ -124,7 +124,7 @@ def _merged_llm_params() -> dict:
 
 async def _call_llm_and_parse(system_prompt: str, user_message: str) -> dict:
     """调用 LLM 并解析返回的 JSON。配置来源：后台全局配置 > .env 兜底。"""
-    p = await asyncio.to_thread(_merged_llm_params)
+    p = await run_sync(_merged_llm_params)
     if not p["api_key"]:
         raise HTTPException(
             status_code=400,
@@ -195,7 +195,7 @@ async def _call_llm_and_parse(system_prompt: str, user_message: str) -> dict:
 async def generate_batch(request: BatchGenerateRequest, http_request: Request, user: CurrentUser = Depends(require_user)):
     """一次 LLM 调用生成整卷的多个题型"""
     # 1. 知识范围
-    scope = await asyncio.to_thread(knowledge_scope_service.get_scope, request.grade, request.subject)
+    scope = await run_sync(knowledge_scope_service.get_scope, request.grade, request.subject)
     if not scope.allowed and not scope.forbidden:
         raise HTTPException(
             status_code=400,
@@ -266,7 +266,7 @@ async def generate_questions(request: GenerateRequest, http_request: Request, us
         )
 
     # 1. 获取知识范围
-    scope = await asyncio.to_thread(knowledge_scope_service.get_scope, request.grade, request.subject)
+    scope = await run_sync(knowledge_scope_service.get_scope, request.grade, request.subject)
 
     if not scope.allowed and not scope.forbidden:
         raise HTTPException(
@@ -311,7 +311,7 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
         )
 
     # 2. 知识范围
-    scope = await asyncio.to_thread(knowledge_scope_service.get_scope, request.grade, request.subject)
+    scope = await run_sync(knowledge_scope_service.get_scope, request.grade, request.subject)
     if not scope.allowed and not scope.forbidden:
         raise HTTPException(
             status_code=400,
@@ -324,7 +324,7 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
     ]
-    p = await asyncio.to_thread(_merged_llm_params)
+    p = await run_sync(_merged_llm_params)
 
     if not p["api_key"]:
         raise HTTPException(400, detail={"error": "尚未配置模型，请联系管理员"})
@@ -423,7 +423,7 @@ def get_available_scopes(user: CurrentUser = Depends(require_user)):
 @metered("validate")
 async def validate_oob(request: ValidateRequest, http_request: Request, user: CurrentUser = Depends(require_user)):
     """校验题目是否超纲"""
-    scope = await asyncio.to_thread(knowledge_scope_service.get_scope, request.grade, request.subject)
+    scope = await run_sync(knowledge_scope_service.get_scope, request.grade, request.subject)
 
     system_prompt = (
         f"你是一位教育内容审查专家。请判断以下题目是否超出了{request.grade}学生的知识范围。\n\n"
@@ -440,7 +440,7 @@ async def validate_oob(request: ValidateRequest, http_request: Request, user: Cu
     ]
 
     try:
-        p = await asyncio.to_thread(_merged_llm_params)
+        p = await run_sync(_merged_llm_params)
         if not p["api_key"]:
             raise HTTPException(
                 status_code=400,

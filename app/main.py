@@ -94,10 +94,9 @@ async def lifespan(app: FastAPI):
     from app.metrics import init_metrics, start_metrics_server
     init_metrics(APP_VERSION)
 
-    # 同步 DB 调用都走 asyncio.to_thread（anyio 默认线程池 40 个 token）；
-    # 线程数至少要盖得住连接池，否则池还有空闲、请求却在排队等线程
-    import anyio.to_thread
-    anyio.to_thread.current_default_thread_limiter().total_tokens = max(40, settings.db_pool_max * 2)
+    # FastAPI 同步路由与异步入口的阻塞工作共用同一个线程容量。
+    from app.blocking import configure_threads
+    configure_threads(settings.db_pool_max)
 
     exporter = None
     maintenance_stop = None

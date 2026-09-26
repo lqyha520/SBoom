@@ -5,7 +5,6 @@
 - 被禁用用户的现有会话立即失效（require_user 每次校验 is_active）
 """
 
-import asyncio
 import ipaddress
 import logging
 import socket
@@ -16,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from psycopg.errors import UniqueViolation
 from pydantic import BaseModel
 
+from app.blocking import run_sync
 from app.config import APP_VERSION, get_settings
 from app.deps import require_admin
 from app.security import encryption_backend, security_warnings
@@ -282,7 +282,7 @@ async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Dep
     """
     import httpx as _httpx
 
-    g = await asyncio.to_thread(app_config.get_llm, with_key=True)
+    g = await run_sync(app_config.get_llm, with_key=True)
     saved_base = (g["baseUrl"] or settings.llm_base_url).rstrip("/")
     requested = req.baseUrl.strip().rstrip("/") if req and req.baseUrl else ""
     base_url = requested or saved_base
@@ -293,7 +293,7 @@ async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Dep
     extensions: dict = {}
     if requested and requested != saved_base:
         try:
-            base_url, host_header = await asyncio.to_thread(_pin_public_url, requested)
+            base_url, host_header = await run_sync(_pin_public_url, requested)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": "接口地址不允许", "detail": str(exc)}) from exc
         request_headers["Host"] = host_header

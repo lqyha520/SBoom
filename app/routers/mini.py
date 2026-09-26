@@ -1,11 +1,11 @@
 """Consumer-only login and administrator-managed memberships. No account binding."""
 
-import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.blocking import run_sync
 from app.db import db
 from app.deps import require_admin
 from app.library_deps import bearer_token, no_store, require_mini_user
@@ -44,7 +44,7 @@ async def public_login(body: CodeInput, request: Request):
     _limit(request, "login")
     identity = await mini_auth.exchange_code(body.code, with_openid=True)
     credentials = identity if isinstance(identity, tuple) else (identity, "")
-    return await asyncio.to_thread(mini_auth.login_public_identity, *credentials)
+    return await run_sync(mini_auth.login_public_identity, *credentials)
 
 
 @router.post("/mini/login-password")
@@ -89,7 +89,7 @@ async def upload_avatar(request: Request, user: MiniUser = Depends(require_mini_
     except ValidationError as exc:
         message = str(exc.errors(include_input=False)[0]["msg"]).removeprefix("Value error, ")
         raise HTTPException(422, detail={"error": message if "昵称" in message else "头像数据无效，请重新选择"}) from exc
-    return await asyncio.to_thread(mini_avatars.save, user.id, body)
+    return await run_sync(mini_avatars.save, user.id, body)
 
 
 def _avatar_response(content: bytes):

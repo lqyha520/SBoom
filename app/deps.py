@@ -1,10 +1,10 @@
 """请求级依赖 —— 登录用户解析 / 管理员权限校验"""
 
-import asyncio
 import logging
 
 from fastapi import Cookie, Depends, Header, HTTPException
 
+from app.blocking import run_sync
 from app.security import parse_token
 from app.services.user_store import CurrentUser, get_user_by_id
 
@@ -23,7 +23,7 @@ async def require_user(token: str | None = Cookie(None, alias=SESSION_COOKIE),
         raise HTTPException(status_code=401, detail={"error": "登录已过期，请重新登录"})
     user_id = payload["sub"]
     # DB 查询是同步 PG I/O，放线程池执行，避免阻塞事件循环
-    user = await asyncio.to_thread(get_user_by_id, user_id)
+    user = await run_sync(get_user_by_id, user_id)
     if user is None:
         raise HTTPException(status_code=401, detail={"error": "账号不存在"})
     if not user.is_active:

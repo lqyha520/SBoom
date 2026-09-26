@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from fastapi import HTTPException
 
+from app.blocking import run_sync
 from app.config import get_settings
 from app.db import db
 from app.services import mini_auth, mini_messages, mini_orders, mini_refunds, payment_bills, wechat_notices
@@ -80,7 +81,7 @@ def start():
     async def run():
         while not stop.is_set():
             try:
-                await asyncio.to_thread(tick, stop)
+                await run_sync(tick, stop)
             except Exception:
                 from app.metrics import maintenance_failures
                 maintenance_failures.inc()

@@ -14,6 +14,7 @@ import httpx
 from fastapi import HTTPException
 from PIL import Image, UnidentifiedImageError
 
+from app.blocking import run_sync
 from app.metrics import observe_provider
 from app.models.image_generation import ImageWorksheetRequest
 from app.services.generation_control import record_attempt, record_usage
@@ -98,7 +99,7 @@ async def _public_image(url: str) -> bytes:
             if (parts.scheme != "https" or not parts.hostname or parts.username or parts.password
                     or parts.port not in (None, 443)):
                 raise ValueError("图片下载地址必须为公开 HTTPS 地址")
-            addresses = await asyncio.to_thread(socket.getaddrinfo, parts.hostname, 443, type=socket.SOCK_STREAM)
+            addresses = await run_sync(socket.getaddrinfo, parts.hostname, 443, type=socket.SOCK_STREAM)
             ips = [entry[4][0] for entry in addresses]
             if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
                 raise ValueError("图片下载地址不能指向本地或内网")
@@ -158,7 +159,7 @@ async def generate_image(config: dict, prompt: str) -> dict:
                 raw = await _public_image(item["url"])
             else:
                 raise ValueError("接口未返回 b64_json 或图片 URL")
-            image = await asyncio.to_thread(normalize_image, raw)
+            image = await run_sync(normalize_image, raw)
         return {**image, "prompt": prompt}
     except (TimeoutError, httpx.TimeoutException) as exc:
         raise HTTPException(504, detail={"error": "生图等待超时，未自动重发；可查询原请求状态"}) from exc

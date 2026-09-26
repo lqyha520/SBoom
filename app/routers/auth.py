@@ -6,7 +6,6 @@
 注：REGISTRATION_ENABLED=false 可关闭注册（管理员可在后台开用户）。
 """
 
-import asyncio
 import logging
 import re
 import time
@@ -15,6 +14,7 @@ from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, 
 from psycopg.errors import UniqueViolation
 from pydantic import BaseModel, Field
 
+from app.blocking import run_sync
 from app.config import get_settings
 from app.deps import SESSION_COOKIE, require_user
 from app.security import create_token, parse_token
@@ -85,7 +85,7 @@ async def login(req: Credentials, request: Request, response: Response):
         logger.warning(f"登录限流触发: ip={ip} username={req.username!r}")
         raise HTTPException(status_code=429, detail={"error": "尝试次数过多，请 5 分钟后再试"})
     # PBKDF2 校验是 240k 迭代的纯 CPU 操作（约 50-150ms），放线程池避免阻塞事件循环
-    row = await asyncio.to_thread(user_store.authenticate, req.username, req.password)
+    row = await run_sync(user_store.authenticate, req.username, req.password)
     if row is None:
         raise HTTPException(status_code=401, detail={"error": "用户名或密码错误"})
     if not row["is_active"]:
@@ -109,7 +109,7 @@ async def logout(response: Response, token: str | None = Cookie(None, alias=SESS
         raise HTTPException(409, detail={"error": "登录账号已变化，请刷新后继续", "code": "account_changed"})
     if payload is not None:
         not_before = max(int(time.time()), int(payload.get("iat", 0)) + 1)
-        await asyncio.to_thread(user_store.revoke_sessions, payload["sub"], not_before)
+        await run_sync(user_store.revoke_sessions, payload["sub"], not_before)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"status": "ok"}
 

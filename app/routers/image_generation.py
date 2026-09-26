@@ -1,7 +1,7 @@
-import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.blocking import run_sync
 from app.deps import require_admin, require_user
 from app.library_deps import no_store
 from app.models.image_generation import ImageModelConfig, ImageWorksheetRequest
@@ -44,8 +44,8 @@ def preview_prompt(request: ImageWorksheetRequest, user: CurrentUser = Depends(r
 @router.post("/generate-image")
 @metered("image")
 async def generate(request: ImageWorksheetRequest, http_request: Request, user: CurrentUser = Depends(require_user)):
-    prompt = await asyncio.to_thread(build_prompt, request)
-    config = await asyncio.to_thread(image_config.get_config, with_key=True)
+    prompt = await run_sync(build_prompt, request)
+    config = await run_sync(image_config.get_config, with_key=True)
     if not config["api_key"] or not config["baseUrl"] or not config["model"]:
         raise HTTPException(400, detail={"error": "尚未配置生图服务，请在后台「模型配置 → 图片生成服务」中设置"})
     return await generate_image(config, prompt)

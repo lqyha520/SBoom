@@ -4,6 +4,7 @@ import asyncio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from app.blocking import run_sync
 from app.db import database_ready
 
 router = APIRouter(tags=["系统"])
@@ -12,7 +13,7 @@ async def probe_database(request: Request) -> bool:
     # Both probes share one pending task, even when a caller times out.
     task = getattr(request.app.state, "readiness_probe", None)
     if task is None or task.done():
-        task = asyncio.create_task(asyncio.to_thread(database_ready))
+        task = asyncio.create_task(run_sync(database_ready))
         request.app.state.readiness_probe = task
     try:
         return bool(await asyncio.wait_for(asyncio.shield(task), timeout=2.5))
