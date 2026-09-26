@@ -789,12 +789,20 @@ while (true) {
 
 ## 开发验证
 
+工作台认证加载与业务界面分开挂载；网络故障保留账号标识并可重试。草稿、生成任务、模板同步分别位于 `web/src/stores/exam-{draft,generation,templates}.ts`，撤销逻辑位于 `web/src/workspace-history.ts`。分页算法位于 `web/src/paper-pagination.ts`。浏览器回归使用固定 API 响应和真实 IndexedDB，不访问业务库或付费模型；失败截图和 trace 写入 `artifacts/browser-tests/`。
+
+图片出题支持点选推荐知识点、一键安排 8 / 12 题及展开自定义题型。手机生成后进入结果页，可直接暂停、查询和继续；结果始终标明原批次条件，支持复用设置、历史恢复、逐张下载和 PDF 合并。图片交互回归见 `web/browser-tests/image-workbench.spec.ts`，覆盖上述流程且不调用付费模型；完整说明见 [图片出题](docs/image-workbench.md)。
+
+后端同步路由与异步入口的阻塞操作统一使用 AnyIO 线程容量，按 `max(40, DB_POOL_MAX * 2)` 配置。异步入口通过 `app.blocking.run_sync` 提交任务，`thread_wait_seconds` 记录进入工作线程前的等待，可与数据库连接池和锁等待指标一起排查排队。
+
 在仓库根目录执行（先安装前后端依赖）：
 
 ```bash
 pnpm --dir web typecheck
 pnpm --dir web test
 pnpm --dir web build
+pnpm --dir web exec playwright install chromium # 首次安装浏览器；Linux CI 另加 --with-deps
+pnpm --dir web test:browser # 生产构建上的编辑、分页、PDF、断网和跨标签页回归
 pnpm --dir admin typecheck
 pnpm --dir admin test
 pnpm --dir admin build
