@@ -3,10 +3,10 @@
 # 改这两个版本前请先跑全量 tests/test_backend_*.py 回归。
 fastapi==0.141.1
 anyio>=4.1,<5  # 同步任务统一使用工作线程容量限制与上下文传播
-uvicorn[standard]==0.34.0
+uvicorn[standard]==0.53.0
 httpx==0.28.1
-pydantic==2.10.4
-pydantic-settings==2.7.1
+pydantic==2.13.5
+pydantic-settings==2.15.0
 python-dotenv==1.2.3
 cryptography>=42.0.0
 psycopg[binary,pool]>=3.2  # PostgreSQL（DATABASE_URL 启用时使用；pool 提供连接池）
