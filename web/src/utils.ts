@@ -23,6 +23,9 @@ const CIRCLES = (
 export function cirNum(n: number): string {
   return n >= 1 && n <= 50 ? CIRCLES[n - 1] : `${n}.`
 }
+/** 文字开头的圈号：只认 CIRCLES 的三段码位（①~⑳、㉑~㉟、㊱~㊿）。
+ *  不能写成 [①-㊿]：那是 U+2460–U+32BF 整段，会把《「【□○△ 等正文首字当成题号 */
+export const CIRCLED_NO = /^\s*[①-⑳㉑-㉟㊱-㊿]\s*/
 
 /* ── 判断题题干格式化：去末尾句号，补（　） ── */
 export function tfStem(s: string): string {

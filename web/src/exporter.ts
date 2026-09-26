@@ -352,6 +352,8 @@ async function renderPaperCanvases(
       }
     }
     if (stableFrames < 3) throw new Error('试卷分页尚未完成，请稍后重试导出')
+    const overflow = holder.querySelector<HTMLElement>('[data-pagination-error]')?.dataset.paginationError
+    if (overflow) throw new Error(overflow)
     return await canvasesOf(holder, style)
   } finally {
     app.unmount()
@@ -370,6 +372,8 @@ async function studentCanvases(
 }
 
 /** 打印预览栈（打印样式由 CSS @media print 控制；无需额外的 body 标记类） */
-export function printStack(_studentStack: HTMLElement) {
+export function printStack(studentStack: HTMLElement) {
+  const overflow = studentStack.querySelector<HTMLElement>('[data-pagination-error]')?.dataset.paginationError
+  if (overflow) throw new Error(overflow)
   window.print()
 }

@@ -62,10 +62,13 @@ export const useAuthStore = defineStore('auth', {
   state: () => ({
     user: null as { id: number; username: string; role: string } | null,
     ready: false,
+    bootError: '',
   }),
   actions: {
-    /** 应用启动时调用（main.ts 在 mount 之前 await），确保 exam store 能拿到 lc_uid */
+    /** 网络错误保留账号标识；只有明确的无会话响应才广播退出。 */
     async init() {
+      this.ready = false
+      this.bootError = ''
       try {
         const u = await api.fetchMe()
         if (u) {
@@ -73,11 +76,11 @@ export const useAuthStore = defineStore('auth', {
           rememberUser(u.id)
           await migrateLegacyData(u.id)
         } else {
+          this.user = null
           rememberUser(null)
         }
-      } catch {
-        // 后端不可达：保持未登录，让登录页展示错误
-        rememberUser(null)
+      } catch (error) {
+        this.bootError = error instanceof Error ? error.message : '无法连接服务，请稍后重试'
       } finally {
         this.ready = true
       }

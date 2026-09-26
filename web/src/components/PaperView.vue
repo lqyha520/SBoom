@@ -10,6 +10,7 @@ import Sortable from 'sortablejs'
 import type { PaperData, PaperSection, PaperStyle, PaperTemplate } from '../types'
 import { computeScores, gradeNumOf } from '../utils'
 import PaperPage from './PaperPage.vue'
+import { paginateSections, type PageChunk, type MeasuredSection } from '../paper-pagination'
 
 const props = defineProps<{
   paper: PaperData
@@ -38,12 +39,12 @@ const emit = defineEmits<{
 const stackEl = ref<HTMLElement | null>(null)
 const measureEl = ref<HTMLElement | null>(null)
 /** 每页的大题分段：sec = 大题索引；qFrom/qTo = 题目切片 [from, to)；first = 本段带大题标题 */
-interface PageChunk { sec: number; qFrom: number; qTo: number; first: boolean }
 const pages = ref<PageChunk[][]>([])
 /** 强制重挂载测量纸 */
 const measureTick = ref(0)
 /** 分页是否已完成至少一次（导出等待用；声明在使用前，避免可读性陷阱） */
 const measured = ref(false)
+const paginationError = ref('')
 
 const kidOn = computed(() => {
   if (props.style.kidFont === 'on') return true
@@ -58,24 +59,17 @@ const scores = computed(() => computeScores(props.paper.sections))
 const allChunks = computed(() => props.paper.sections.map((_, i) => ({ sec: i, qFrom: 0, qTo: Infinity, first: true })))
 
 /* ── 分页测量 ── */
-/* titleOffsetY 只影响卷头 margin、不改变任何块的高度，不参与测量键——
-   否则拖拽标题时每个 mousemove 都会触发全卷 JSON 序列化 + 重分页（卡顿主源） */
-const styleForMeasure = computed(() => {
-  const { titleOffsetY: _off, ...rest } = props.style as any
-  return rest
-})
-const measureKey = computed(() =>
-  JSON.stringify([
-    props.paper.sections.map(s => [s.type, (s.data.questions || []).map(q => [q._qid, q.stem, q.options?.length]), s.layout]),
-    props.paper.title,
-    props.paper.footerOverride,
-    props.showAnswers,
-    props.template,
-    styleForMeasure.value,
-    kidOn.value,
-    measureTick.value,
-  ]),
-)
+/** 只订阅可改变卷面高度的内容；锁定和请求状态不参与测量。 */
+const measureKey = computed(() => JSON.stringify([
+  props.paper.sections.map(s => [s.type, s.name, s.data.passage, s.data.topic,
+    (s.data.questions || []).map(q => [q._qid, q.stem, q._stemHtml, q.options, q._optsHtml,
+      q.answer, q.left_items, q.right_items, q.top, q.left, q.right, q.left_expr,
+      q.right_expr, q.difficulty_level]), s.layout]),
+  props.paper.title, props.paper.titleHtml, props.paper.footerOverride,
+  props.paper.hiddenElements, props.paper.grade, props.paper.subject, props.paper.keyword,
+  props.paper.difficulty, props.paper.day, props.addDay, props.showAnswers,
+  props.template, props.style, kidOn.value, measureTick.value,
+]))
 
 /* 输入类变化（标题逐字输入、字号滑条拖动）防抖后再重分页，
    避免每个按键都做一次全卷测量；挂载时首次分页仍然立即执行 */
@@ -111,8 +105,7 @@ async function paginate() {
   const cap = availH - headH - 16 // 每页内容容量（每页都有卷头；留 16px 余量防溢出）
 
   // ── 大题 → 段流：整块放得下就一段；超高就块内按行切 ──
-  interface Segment { sec: number; total: number; headBlockH: number; rows: number[]; rowStride: number }
-  const segments: Segment[] = []
+  const segments: MeasuredSection[] = []
   blocks.forEach((b, i) => {
     const qEls = Array.from(b.querySelectorAll('.q')) as HTMLElement[]
     const total = qEls.length
@@ -136,73 +129,19 @@ async function paginate() {
     }
   })
 
-  // ── 段流 → 页 ──
-  const out: PageChunk[][] = []
-  let page: PageChunk[] = []
-  let used = 0
-  const pushPage = () => {
-    if (page.length) out.push(page)
-    page = []
-    used = 0
-  }
-  for (const seg of segments) {
-    const wholeH = seg.headBlockH + seg.rows.reduce((s, r) => s + r, 0)
-    if (used + wholeH <= cap) {
-      // 整段放得下
-      page.push({ sec: seg.sec, qFrom: 0, qTo: seg.total, first: true })
-      used += wholeH
-      continue
-    }
-    // 块内切分：逐行装
-    let from = 0
-    let first = true
-    while (from < seg.total) {
-      const room = cap - used
-      const headExtra = first ? seg.headBlockH : 0
-      if (room - headExtra < 50 && page.length) { pushPage(); continue }
-      let acc = headExtra
-      let rowCount = 0
-      while (from + rowCount * seg.rowStride < seg.total) {
-        const rowIdx = Math.floor((from + rowCount * seg.rowStride) / seg.rowStride)
-        const rh = seg.rows[rowIdx] ?? 40
-        if (acc + rh > room && rowCount > 0) break
-        acc += rh
-        rowCount++
-        if (acc > room) break // 单行超高兜底：独占一页
-      }
-      const to = Math.min(from + rowCount * seg.rowStride, seg.total)
-      if (to <= from) break // 防死循环
-      page.push({ sec: seg.sec, qFrom: from, qTo: to, first })
-      used += acc
-      first = false
-      from = to
-      if (from < seg.total) pushPage()
-    }
-  }
-  if (page.length) pushPage()
-
-  // 最后一页装下卷尾（奖励区 + 页脚）：装不下则把最后一段推到新页
-  if (out.length) {
-    const lastPage = out[out.length - 1]
-    if (lastPage.length > 1 && tailH > 30) {
-      // 粗略：最后一页剩余空间不足 tailH 就挪走最后一段
-      const lastSeg = lastPage[lastPage.length - 1]
-      const seg = segments[lastSeg.sec]
-      const segH = (lastSeg.first ? seg.headBlockH : 0) + seg.rows.slice(Math.floor(lastSeg.qFrom / seg.rowStride), Math.ceil(lastSeg.qTo / seg.rowStride)).reduce((s, r) => s + r, 0)
-      if (used + tailH > cap && segH > 100) {
-        const moved = lastPage.pop()!
-        out.push([moved])
-      }
-    }
-  }
-  pages.value = out.length ? out : [[{ sec: 0, qFrom: 0, qTo: 0, first: true }]]
+  const oversized = tailH > cap || segments.some(segment =>
+    segment.headBlockH + (segment.rows[0] || 0) > cap || segment.rows.some(row => row > cap))
+  paginationError.value = oversized ? '内容超出 A4 页面，请缩小字号、缩短单题或页脚后再导出' : ''
+  pages.value = paginateSections(segments, cap, tailH)
   measured.value = true
   // 分页会整建 DOM：表格列宽/行高手柄需要随分页结果重新注入（否则丢失）
   setupTableResize()
 }
 
 // 纸张宽度随字体加载可能变化，稍后复测一次
-onMounted(() => setTimeout(() => { measureTick.value++ }, 800))
+let fontTimer: ReturnType<typeof setTimeout> | undefined
+onMounted(() => { fontTimer = setTimeout(() => { measureTick.value++ }, 800) })
+onBeforeUnmount(() => { clearTimeout(_pagTimer); clearTimeout(fontTimer) })
 
 /* ── 表格缩放：editable 即启用（不必进排版模式）；分页重建 DOM 后由 paginate 末尾重注入 ── */
 async function setupTableResize() {
@@ -501,6 +440,7 @@ onMounted(() => measureStackH())
 </script>
 
 <template>
+  <p v-if="paginationError" role="alert" class="no-print p-3 text-error">{{ paginationError }}</p>
   <!-- 预览缩放：transform:scale（纯视觉，不影响 mm 布局；zoom 会改 mm→px 换算压扁纸面）
        wrapper 的高度用 scale 后的值占位，避免滚动区留白/裁切 -->
   <div
@@ -509,7 +449,7 @@ onMounted(() => measureStackH())
   >
     <!-- pv-zoom 类供 @media print 强制重置缩放：zoom<100% 时打印出来的应是原尺寸而非缩小版 -->
     <div class="pv-zoom" :style="{ width: '210mm', transform: `scale(${zoom ?? 1})`, transformOrigin: 'top left' }">
-      <div ref="stackEl" class="paper-stack">
+      <div ref="stackEl" class="paper-stack" :data-pagination-error="paginationError || undefined">
       <PaperPage
         v-for="(pg, i) in pages"
         :key="i"

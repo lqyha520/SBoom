@@ -51,7 +51,7 @@ function exportBatch(mergeOnly: boolean) {
   run(mergeOnly ? '正在合并 PDF' : '正在打包 ZIP', () => exporter.exportBatch(store.papers, store.template, store.style,
     { addDay: store.addDayLabel, mergeOnly }, message => { exporting.value = message }))
 }
-function printPaper() { if (stackEl.value) exporter.printStack(stackEl.value) }
+function printPaper() { if (stackEl.value) run('正在准备打印', async () => exporter.printStack(stackEl.value!)) }
 const pdfMenu = [
   { label: '学生卷 PDF', icon: 'i-lucide-file-text', onSelect: () => exportPdf('student') },
   { label: '试卷与答案 PDF', icon: 'i-lucide-files', onSelect: () => exportPdf('withAnswers') },

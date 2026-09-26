@@ -9,11 +9,30 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "esModuleInterop": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2020",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "skipLibCheck": true,
     "noEmit": true,
     "noUnusedLocals": false,
-    "paths": { "@/*": ["./src/*"], "vue": ["./node_modules/vue"] }
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ],
+      "vue": [
+        "./node_modules/vue"
+      ]
+    }
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "components.d.ts", "auto-imports.d.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.d.ts",
+    "src/**/*.vue",
+    "components.d.ts",
+    "auto-imports.d.ts",
+    "browser-tests/**/*.ts",
+    "playwright.config.ts"
+  ]
 }

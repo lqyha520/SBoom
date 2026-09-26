@@ -41,6 +41,19 @@ jobs:
       - run: pnpm --dir ${{ matrix.project }} test
       - if: matrix.project != 'miniprogram'
         run: pnpm --dir ${{ matrix.project }} build
+      - name: Install browser for workspace regression
+        if: matrix.project == 'web'
+        run: pnpm --dir web exec playwright install --with-deps chromium
+      - name: Workspace browser regression
+        if: matrix.project == 'web'
+        run: pnpm --dir web test:browser
+      - name: Browser failure evidence
+        if: failure() && matrix.project == 'web'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: workspace-browser-failures
+          path: artifacts/browser-tests
+          retention-days: 7
       - if: matrix.project == 'miniprogram'
         run: |
           pnpm --dir miniprogram build:mp-weixin
