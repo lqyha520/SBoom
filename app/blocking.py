@@ -4,21 +4,17 @@ import asyncio
 import threading
 import time
 from collections.abc import Callable
-from typing import ParamSpec, TypeVar
 
 import anyio.to_thread
 
 from app.metrics import thread_wait
-
-P = ParamSpec("P")
-T = TypeVar("T")
 
 
 def configure_threads(pool_max: int) -> None:
     anyio.to_thread.current_default_thread_limiter().total_tokens = max(40, pool_max * 2)
 
 
-async def run_sync(function: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+async def run_sync[T, **P](function: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
     queued_at = time.perf_counter()
     cancelled = threading.Event()
 
