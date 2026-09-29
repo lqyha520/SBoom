@@ -24,6 +24,7 @@ export interface GenerationChunk {
   state: 'new' | 'running' | 'succeeded' | 'failed' | 'unknown'
   result?: api.BatchRespSection[]
   error?: string
+  errorCode?: string
 }
 
 export interface GenerationJob {
@@ -41,6 +42,7 @@ export interface GenerationRun {
 }
 
 export type GenerationMode = 'send' | 'recover' | 'retry'
+export class RequestNotRecorded extends Error { constructor() { super('请求记录保存失败，请先恢复本地存储；未发送付费请求') } }
 export class GenerationStopped extends Error { constructor() { super('已停止后续请求，可稍后继续') } }
 
 export function createGenerationRun(context: GenerationContext): GenerationRun {
@@ -48,13 +50,21 @@ export function createGenerationRun(context: GenerationContext): GenerationRun {
   const items = snapshot.sections.map(section => ({ section_id: section.id, game_type: section.type,
     question_count: section.count - (section.lockedQuestions?.length || 0),
   })).filter(item => item.question_count > 0)
+  const groups: api.BatchItemReq[][] = []
+  for (const item of items) {
+    let group = groups[groups.length - 1]
+    if (!group || group.length >= 10 || group.reduce((n, value) => n + value.question_count, 0) + item.question_count > 30) {
+      group = []; groups.push(group)
+    }
+    group.push(item)
+  }
   return {
     context: snapshot,
     jobs: Array.from({ length: snapshot.count }, (_, index) => ({
       index,
-      chunks: Array.from({ length: Math.ceil(items.length / 10) }, (_, chunk) => ({
+      chunks: groups.map(items => ({
         requestId: randomId(), state: 'new' as const,
-        items: items.slice(chunk * 10, chunk * 10 + 10),
+        items: deepClone(items),
       })),
     })),
   }
@@ -64,8 +74,26 @@ function hasQuestions(result?: api.BatchRespSection[]): boolean {
   return !!result?.some(section => Array.isArray(section.questions) && section.questions.length)
 }
 
+function completedResults(chunk: GenerationChunk, values?: api.BatchRespSection[]): api.BatchRespSection[] {
+  if (!Array.isArray(values)) return []
+  return chunk.items.flatMap(item => {
+    const matches = values.filter(value => value?.section_id === item.section_id)
+    const value = matches[0]
+    return matches.length === 1 && value.game_type === item.game_type
+      && Array.isArray(value.questions) && value.questions.length === item.question_count
+      && !value.missing_count && (item.game_type !== 'reading' || !!value.passage?.trim()) ? [deepClone(value)] : []
+  })
+}
+
+function retainTruncated(chunk: GenerationChunk, values?: api.BatchRespSection[]) {
+  chunk.result = completedResults(chunk, values)
+  chunk.errorCode = 'generation_truncated'
+  chunk.state = chunk.result.length === chunk.items.length ? 'succeeded' : 'failed'
+}
+
 async function runChunk(chunk: GenerationChunk, context: GenerationContext, mode: GenerationMode, beforeSend?: () => Promise<void>) {
   if (chunk.state === 'succeeded' && hasQuestions(chunk.result)) return
+  if (chunk.errorCode === 'generation_truncated' && mode === 'retry') return
   if (mode !== 'send' && chunk.state !== 'new') {
     try {
       const status = await api.fetchGenerationStatus(chunk.requestId)
@@ -78,6 +106,11 @@ async function runChunk(chunk: GenerationChunk, context: GenerationContext, mode
         chunk.result = deepClone(status.result.sections)
         chunk.state = 'succeeded'
         if (hasQuestions(chunk.result)) return
+      }
+      if (status.error?.code === 'generation_truncated') {
+        retainTruncated(chunk, status.error.partial_sections)
+        chunk.error = status.error.error || '生成达到输出上限，已保留完整大题，请手动补齐'
+        if (chunk.state === 'succeeded' || mode === 'retry') return
       }
       if (mode === 'recover') {
         chunk.error = status.error?.error || (status.cache_expired ? '原请求结果缓存已过期' : '原请求没有可恢复的结果')
@@ -93,6 +126,7 @@ async function runChunk(chunk: GenerationChunk, context: GenerationContext, mode
   if (mode === 'retry') chunk.requestId = randomId()
   chunk.state = 'running'
   chunk.error = ''
+  chunk.errorCode = ''
   try {
     await beforeSend?.()
     chunk.result = deepClone(await api.generateBatch({
@@ -101,8 +135,15 @@ async function runChunk(chunk: GenerationChunk, context: GenerationContext, mode
     }, chunk.requestId))
     chunk.state = 'succeeded'
   } catch (error) {
-    chunk.state = error instanceof GenerationStopped ? 'new' : error instanceof api.ApiError && error.status >= 400 && error.status < 500
+    if (error instanceof api.ApiError && error.code === 'generation_truncated') {
+      retainTruncated(chunk, error.partialSections)
+      chunk.error = error.message
+      if (chunk.state === 'succeeded') return
+      throw error
+    }
+    chunk.state = error instanceof GenerationStopped || error instanceof RequestNotRecorded ? 'new' : error instanceof api.ApiError && error.status >= 400 && error.status < 500
       && error.code !== 'generation_pending' ? 'failed' : 'unknown'
+    chunk.errorCode = error instanceof api.ApiError ? error.code : ''
     chunk.error = error instanceof Error ? error.message : '生成失败'
     throw error
   }
@@ -113,14 +154,29 @@ export function matchSectionResults(context: GenerationContext, responses: api.B
   context.sections.forEach(section => types.set(section.type, (types.get(section.type) || 0) + 1))
   return context.sections.map(section => {
     const exact = responses.filter(value => value.section_id === section.id)
-    if (exact.length) return exact.length === 1 && exact[0].game_type === section.type ? exact[0] : undefined
+    if (exact.length) {
+      if (exact.some(value => value.game_type !== section.type)) return undefined
+      return exact.length === 1 ? exact[0] : undefined
+    }
     const legacy = responses.filter(value => !value.section_id && value.game_type === section.type)
     return types.get(section.type) === 1 && legacy.length === 1 ? legacy[0] : undefined
   })
 }
 
 export function assemblePaper(context: GenerationContext, job: GenerationJob): PaperData {
-  const responses = job.chunks.flatMap(chunk => chunk.result || [])
+  let responses = job.chunks.flatMap(chunk => chunk.result || [])
+  // 只合并本地拆分到不同请求的大题；同一响应内的重复 ID 仍视为不明确。
+  for (const section of context.sections) {
+    const parts = job.chunks.filter(chunk => chunk.items.some(item => item.section_id === section.id))
+    if (section.type === 'reading' || parts.length < 2) continue
+    const results = parts.map(part => (part.result || []).filter(value => value.section_id === section.id))
+    if (!results.every(values => values.length === 1 && values[0].game_type === section.type)) continue
+    const values = results.map(value => value[0])
+    responses = responses.filter(value => value.section_id !== section.id)
+    responses.push({ ...values[0], questions: values.flatMap(value => value.questions || []),
+      missing_count: values.reduce((sum, value) => sum + (value.missing_count || 0), 0),
+      quality_warnings: values.flatMap(value => value.quality_warnings || []) })
+  }
   const matched = matchSectionResults(context, responses)
   const sections = context.sections.map((section, index) => {
     const result = matched[index]
@@ -149,7 +205,34 @@ export function assemblePaper(context: GenerationContext, job: GenerationJob): P
   }
 }
 
+function splitTruncated(chunk: GenerationChunk): GenerationChunk[] {
+  const result = completedResults(chunk, chunk.result)
+  const completed = new Set(result.map(value => value.section_id))
+  const pending = chunk.items.filter(item => !completed.has(item.section_id))
+  const kept: GenerationChunk[] = result.length ? [{ ...chunk, state: 'succeeded', result,
+    items: chunk.items.filter(item => completed.has(item.section_id)), error: '', errorCode: '' }] : []
+  if (!pending.length) return kept
+  const groups: api.BatchItemReq[][] = chunk.items.length > 1 ? pending.map(item => [item]) : []
+  if (!groups.length) {
+    const item = pending[0]
+    if (item.question_count < 2 || item.game_type === 'reading') {
+      throw new Error('这一部分已达到模型输出上限且无法继续拆分，请减少题量或请管理员提高输出上限后重新生成；已完成的结果仍保留')
+    }
+    const half = Math.ceil(item.question_count / 2)
+    groups.push([{ ...item, question_count: half }], [{ ...item, question_count: item.question_count - half }])
+  }
+  return [...kept, ...groups.map(items => ({ requestId: randomId(), state: 'new' as const, items }))]
+}
+
 export async function runGenerationJob(context: GenerationContext, job: GenerationJob, mode: GenerationMode, beforeSend?: () => Promise<void>) {
-  for (const chunk of job.chunks) await runChunk(chunk, context, mode, beforeSend)
+  for (let index = 0; index < job.chunks.length; index++) {
+    const chunk = job.chunks[index]
+    await runChunk(chunk, context, mode, beforeSend)
+    // 原请求查询也可能第一次发现截断；先保留完整结果，再准备新的小请求。
+    if (mode === 'retry' && chunk.state !== 'succeeded' && chunk.errorCode === 'generation_truncated') {
+      job.chunks.splice(index, 1, ...splitTruncated(chunk))
+      index--
+    }
+  }
   return assemblePaper(context, job)
 }

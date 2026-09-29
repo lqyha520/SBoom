@@ -78,7 +78,7 @@ class BannerContracts(unittest.TestCase):
         image = self.client.get(home["image_url"])
         self.assertEqual(image.status_code, 200)
         self.assertEqual(image.content, replacement)
-        self.assertIn("no-store", image.headers["cache-control"])
+        self.assertIn("immutable", image.headers["cache-control"])
 
     def test_stale_upload_does_not_overwrite_a_newer_image(self):
         item = self.create()
@@ -148,6 +148,8 @@ class BannerContracts(unittest.TestCase):
         file_retention.scan_orphans()
         file_retention.drain()
         self.assertTrue(live.exists())
+        from pg_support import drain_after_file_grace
+        drain_after_file_grace()
         self.assertFalse(leftover.exists())
         self.client.cookies.clear()
         self.assertEqual(self.client.get(uploaded["image_url"]).status_code, 200)

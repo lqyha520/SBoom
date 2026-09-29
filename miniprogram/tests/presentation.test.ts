@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { AVATAR_CHOICES, avatarChoice, difficultyLabel, exerciseText, exerciseTitle, membershipBadge, profileAvatar, subjectOptions, subjectTagType } from '../src/presentation'
+import { AVATAR_CHOICES, avatarChoice, difficultyLabel, exerciseText, exerciseTitle, membershipBadge, profileAvatar, subjectOptions } from '../src/presentation'
 import type { User } from '../src/types'
 
 test('legacy labels are presented as exercises without changing source records', () => {
@@ -36,10 +36,6 @@ test('subject tabs are unique and ordered without losing new subjects', () => {
   const subjects = ['物理', '英语', '数学', '语文', '数学', '科学']
   assert.deepEqual(subjectOptions(subjects), ['语文', '数学', '英语', '物理', '科学'])
   assert.equal(subjects.length, 6)
-  assert.equal(subjectTagType('语文'), 'volcano')
-  assert.equal(subjectTagType('数学'), 'primary')
-  assert.equal(subjectTagType('英语'), 'success')
-  assert.equal(subjectTagType('科学'), 'warning')
 })
 
 test('membership badge stays short enough for the profile overview cell', () => {

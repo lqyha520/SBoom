@@ -1,3 +1,4 @@
+import { navigatePage } from './page-navigation'
 import { request, type ReadOptions } from './api'
 
 export interface SupportSettings { revision: number; wechat: string; phone: string; email: string; hours: string; benefits: string; qr_url?: string }
@@ -15,10 +16,10 @@ export const feedbackKinds: { value: FeedbackKind; label: string }[] = [
 export const feedbackStatus = { pending: '待处理', processing: '处理中', resolved: '已解决', closed: '已关闭' }
 export const fetchSupport = (options: ReadOptions = {}) => request<SupportSettings>('/api/v1/site/support', 'GET', undefined, options)
 export const fetchTopics = (options: ReadOptions = {}) => request<{ items: Topic[] }>('/api/v1/site/topics', 'GET', undefined, options)
-export const fetchFeedback = (offset = 0) => request<{ items: Feedback[]; total: number; has_more: boolean }>('/api/v1/mini/feedback?offset=' + offset)
-export const fetchFeedbackItem = (id: string) => request<Feedback>('/api/v1/mini/feedback/' + encodeURIComponent(id))
+export const fetchFeedback = (offset = 0, options: ReadOptions = {}) => request<{ items: Feedback[]; total: number; has_more: boolean }>('/api/v1/mini/feedback?offset=' + offset, 'GET', undefined, options)
+export const fetchFeedbackItem = (id: string, options: ReadOptions = {}) => request<Feedback>('/api/v1/mini/feedback/' + encodeURIComponent(id), 'GET', undefined, options)
 export const submitFeedback = (body: { kind: FeedbackKind; body: string; catalog_id?: string }) => request<Feedback>('/api/v1/mini/feedback', 'POST', body)
-export const fetchGroups = () => request<{ items: FavoriteGroup[] }>('/api/v1/mini/favorite-groups')
+export const fetchGroups = (options: ReadOptions = {}) => request<{ items: FavoriteGroup[] }>('/api/v1/mini/favorite-groups', 'GET', undefined, options)
 export const createGroup = (name: string) => request<FavoriteGroup>('/api/v1/mini/favorite-groups', 'POST', { name })
 export const renameGroup = (group: FavoriteGroup, name: string) => request<FavoriteGroup>('/api/v1/mini/favorite-groups/' + encodeURIComponent(group.id), 'PUT', { name, revision: group.revision })
 export const deleteGroup = (group: FavoriteGroup) => request<void>('/api/v1/mini/favorite-groups/' + encodeURIComponent(group.id) + '?revision=' + group.revision, 'DELETE')
@@ -30,5 +31,5 @@ export function recordEvent(kind: 'active' | 'download_ok' | 'download_failed', 
     event_id: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 14) })
 }
 export function openSupport(kind: FeedbackKind = 'other', catalogId = '') {
-  uni.navigateTo({ url: '/pages/support/index?kind=' + kind + (catalogId ? '&paper=' + encodeURIComponent(catalogId) : '') })
+  navigatePage({ url: '/subpages/support/index?kind=' + kind + (catalogId ? '&paper=' + encodeURIComponent(catalogId) : '') })
 }

@@ -14,12 +14,12 @@ from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, 
 from psycopg.errors import UniqueViolation
 from pydantic import BaseModel, Field
 
-from app.blocking import run_sync
+from app.blocking import run_sync, run_sync_in
 from app.config import get_settings
 from app.deps import SESSION_COOKIE, require_user
 from app.security import create_token, parse_token
 from app.services import user_store
-from app.services.rate_limit import allow
+from app.services.rate_limit import allow, client_key
 from app.services.user_store import CurrentUser
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ _USERNAME_RE = re.compile(r"^[\w\u4e00-\u9fa5-]{2,32}$")
 
 
 def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    return client_key(request.client.host) if request.client else "unknown"
 
 
 class Credentials(BaseModel):
@@ -38,8 +38,13 @@ class Credentials(BaseModel):
     password: str = Field(min_length=6, max_length=128)
 
 
-def _set_session_cookie(response: Response, user_id: int) -> str:
-    token = create_token(user_id)
+class Registration(Credentials):
+    password: str = Field(min_length=8, max_length=128)
+
+
+def _set_session_cookie(response: Response, user_id: int, issued_after: int = 0, expected_hash: str | None = None) -> str:
+    from app.services.workspace_sessions import create
+    token = create_token(user_id, session_id=create(user_id, expected_hash=expected_hash, expected_after=issued_after), issued_after=issued_after)
     response.set_cookie(
         SESSION_COOKIE,
         token,
@@ -53,7 +58,7 @@ def _set_session_cookie(response: Response, user_id: int) -> str:
 
 
 @router.post("/register", summary="注册新用户")
-def register(req: Credentials, request: Request, response: Response):
+def register(req: Registration, request: Request, response: Response):
     if not settings.registration_enabled:
         raise HTTPException(status_code=403, detail={"error": "注册已关闭，请联系管理员开通账号"})
     if not allow(f"register:{_client_ip(request)}", 10, 3600):
@@ -81,16 +86,16 @@ def register(req: Credentials, request: Request, response: Response):
 async def login(req: Credentials, request: Request, response: Response):
     # 防爆破：按 IP+用户名 组合限流（5 分钟内最多 10 次），也按 IP 全局限流兜底
     ip = _client_ip(request)
-    if not allow(f"login:{ip}:{req.username}", 10, 300) or not allow(f"login-ip:{ip}", 30, 300):
+    if not allow(f"login-ip:{ip}", 30, 300) or not allow(f"login:{ip}:{req.username}", 10, 300):
         logger.warning(f"登录限流触发: ip={ip} username={req.username!r}")
         raise HTTPException(status_code=429, detail={"error": "尝试次数过多，请 5 分钟后再试"})
     # PBKDF2 校验是 240k 迭代的纯 CPU 操作（约 50-150ms），放线程池避免阻塞事件循环
-    row = await run_sync(user_store.authenticate, req.username, req.password)
+    row = await run_sync_in("auth", user_store.authenticate, req.username, req.password)
     if row is None:
         raise HTTPException(status_code=401, detail={"error": "用户名或密码错误"})
     if not row["is_active"]:
         raise HTTPException(status_code=403, detail={"error": "账号已被禁用，请联系管理员"})
-    _set_session_cookie(response, row["id"])
+    await run_sync(_set_session_cookie, response, row["id"], int(row["token_valid_after"] or 0), row["password_hash"])
     logger.info(f"用户登录: {row['username']} (id={row['id']}, role={row['role']})")
     return {"id": row["id"], "username": row["username"], "role": row["role"]}
 
@@ -108,8 +113,12 @@ async def logout(response: Response, token: str | None = Cookie(None, alias=SESS
     if payload is not None and workspace_user is not None and workspace_user != str(payload["sub"]):
         raise HTTPException(409, detail={"error": "登录账号已变化，请刷新后继续", "code": "account_changed"})
     if payload is not None:
-        not_before = max(int(time.time()), int(payload.get("iat", 0)) + 1)
-        await run_sync(user_store.revoke_sessions, payload["sub"], not_before)
+        if payload.get("sid"):
+            from app.services.workspace_sessions import revoke
+            await run_sync(revoke, payload["sid"], payload["sub"])
+        else:
+            not_before = max(int(time.time()), int(payload.get("iat", 0)) + 1)
+            await run_sync(user_store.revoke_sessions, payload["sub"], not_before)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"status": "ok"}
 

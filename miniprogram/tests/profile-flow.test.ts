@@ -1,3 +1,5 @@
+import { usePageLifecycle } from '../src/services/page-lifecycle'
+import { reconcileRows } from '../src/services/catalog-rows'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
@@ -5,19 +7,50 @@ import vm from 'node:vm'
 import ts from 'typescript'
 import * as vue from 'vue'
 import { parse } from 'vue/compiler-sfc'
-import { nicknameError } from '../../shared/mini-profile'
+import { nicknameError, registrationAccountError } from '../../shared/mini-profile'
 
 function moduleFixture(file: string, modules: Record<string, unknown>, expose = '', globals: Record<string, unknown> = {}) {
   let source = readFileSync(new URL('../src/' + file, import.meta.url), 'utf8')
   if (file.endsWith('.vue')) source = parse(source).descriptor.scriptSetup!.content
   const exports: Record<string, any> = {}
   vm.runInNewContext(ts.transpileModule(source + '\n' + expose, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
-    exports, require: (id: string) => id === 'vue' ? vue : modules[id] || {}, ...globals,
+    exports, require: (id: string) => id === 'vue' ? vue : modules[id] || (id.endsWith('/page-lifecycle') ? { usePageLifecycle, captureScroll: (save: (top: number) => void) => save(600) } : id.endsWith('/catalog-rows') ? { reconcileRows } : id.endsWith('/page-navigation') ? { navigatePage: (options: unknown) => (globals.uni as any)?.navigateTo?.(options) } : {}), ...globals,
   })
   return exports
 }
 
 const user = () => ({ id: 'reader', username: 'wx1234567890', nickname: '小海豚', avatar: '', avatar_url: null, is_vip: false })
+
+test('新注册至少8位，已有6位密码仍可进入登录请求', async () => {
+  const calls: string[] = []
+  const api = moduleFixture('pages/login/index.vue', {
+    '@dcloudio/uni-app': { onLoad() {}, onShow() {}, onHide() {}, onUnload() {} },
+    '../../services/privacy': { hasConsent: () => true, rememberConsent() {} },
+    '../../services/api': { errorMessage: String, request: async (path: string) => { calls.push(path); return {} } },
+    '../../services/session': { loginMini() {} },
+    '../../services/navigation': { visitDestination() {} },
+    '../../../../shared/mini-profile': { registrationAccountError },
+  }, 'exports.form = { username, password, webMode, submitWeb, error }')
+  const form = api.form
+  form.username.value = 'reader'; form.password.value = '123456'; form.webMode.value = 'register'
+  await form.submitWeb(); assert.match(form.error.value, /8 位/); assert.equal(calls.length, 0)
+  form.webMode.value = 'login'; await form.submitWeb(); assert.deepEqual(calls, ['/api/v1/mini/login-password'])
+  form.webMode.value = 'register'; form.password.value = '12345678'; await form.submitWeb()
+  assert.equal(calls.at(-1), '/api/v1/mini/register')
+})
+
+test('修改密码拒绝7位新密码，接受6位旧密码与8位新密码', async () => {
+  const calls: string[][] = []
+  const api = moduleFixture('components/PasswordSheet.vue', {
+    '../services/session': { session: { user: { has_password: true } }, savePassword: async (...values: string[]) => { calls.push(values) } },
+    '../services/tabbar-overlay': { useTabBarOverlay() {} },
+  }, 'exports.form = { current, next, confirm, canSave, localError, save }', { defineProps: () => ({ open: true }), defineEmits: () => () => {} })
+  const form = api.form
+  form.current.value = '123456'; form.next.value = form.confirm.value = '1234567'
+  await form.save(); assert.equal(calls.length, 0); assert.match(form.localError.value, /8 位/)
+  form.next.value = form.confirm.value = '12345678'; assert.equal(form.canSave.value, true); await form.save()
+  assert.deepEqual(calls, [['123456', '12345678']])
+})
 
 test('opening a native photo picker keeps the profile draft alive across hide/show', () => {
   const hooks: Record<string, () => void> = {}

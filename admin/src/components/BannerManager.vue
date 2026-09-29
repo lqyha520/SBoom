@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useRevisionConflict } from '../revision-conflict'
 import { computed, onActivated, onDeactivated, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import type { UserInfo } from '../api'
 import BannerPreview from './BannerPreview.vue'
@@ -20,6 +21,7 @@ const checking = ref(false)
 const dialog = ref(false)
 const target = ref<Banner | null>(null)
 const formError = ref('')
+const recovery = useRevisionConflict(target, async id => { const value = (await siteBanners()).items.find(item => item.id === id); if (!value) throw new Error('该条目已删除，请复制修改后新建'); return value }, formError)
 const removing = ref<Banner | null>(null)
 const removeOpen = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -122,6 +124,7 @@ async function save() {
     dialog.value = false
     await load()
   } catch (cause) {
+    recovery.capture(cause)
     formError.value = (savedCopy ? '文案已保存，' + (saveStage.value === '正在上传图片' ? '图片尚未上传成功；选中的图片已保留，可重试。' : '其余更改未完成。') : '') + message(cause)
     if (savedCopy) await load()
   } finally { busy.value = false; saveStage.value = '' }
@@ -226,7 +229,7 @@ onBeforeUnmount(() => { sequence++; imageSequence++; resetImage() })
           <aside class="preview-pane"><div class="preview-heading"><UIcon name="i-lucide-smartphone" /><strong>手机效果预览</strong><span>375 px</span></div><div class="phone-preview"><div class="phone-search"><UIcon name="i-lucide-search" /><span>搜知识点、习题名称</span><small>全部年级⌄</small></div><BannerPreview :content="form" :image-url="previewUrl" /><div class="phone-subjects"><span>语文</span><span>数学</span><span>英语</span><span>全部学科</span></div></div><p class="preview-help">图片在上、文案在下，保持图片本身的颜色。含文字的海报建议选「完整展示」，避免裁掉信息。</p><p v-if="removingImage" class="preview-pending">保存后将移除原图，改为文字卡片。</p><p v-else-if="pendingFile" class="preview-pending">当前预览为待保存图片。</p></aside>
         </form>
       </template>
-      <template #footer><div class="editor-footer"><UAlert v-if="formError" :title="formError" color="error" variant="soft" class="editor-error" /><div class="footer-actions"><span class="save-stage" role="status">{{ saveStage || '图片、文案与展示状态将在保存后生效' }}</span><UButton label="取消" color="neutral" variant="outline" :disabled="busy || checking" @click="dialog = false" /><UButton type="submit" form="banner-form" label="保存 Banner" icon="i-lucide-check" :loading="busy" :disabled="busy || checking || !canSave" /></div></div></template>
+      <template #footer><div class="editor-footer"><UButton v-if="recovery.conflict.value" label="载入最新并保留我的修改" :loading="recovery.recovering.value" @click="recovery.reload" /><UAlert v-if="formError" :title="formError" color="error" variant="soft" class="editor-error" /><div class="footer-actions"><span class="save-stage" role="status">{{ saveStage || '图片、文案与展示状态将在保存后生效' }}</span><UButton label="取消" color="neutral" variant="outline" :disabled="busy || checking" @click="dialog = false" /><UButton type="submit" form="banner-form" label="保存 Banner" icon="i-lucide-check" :loading="busy" :disabled="busy || checking || !canSave" /></div></div></template>
     </UModal>
 
     <UModal v-model:open="removeOpen" title="删除 Banner" :dismissible="!busy" :close="!busy"><template #body><p>确认删除「{{ removing?.title }}」？配图会一并删除。</p></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="removeOpen = false" /><UButton label="确认删除" color="error" icon="i-lucide-trash-2" :loading="busy" :disabled="busy" @click="confirmRemove" /></template></UModal>

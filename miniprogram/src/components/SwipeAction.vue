@@ -52,7 +52,7 @@ defineExpose({ blocksClick })
 
 <template>
   <view class="swipe-container">
-    <view v-show="open || dragging" class="swipe-actions" :aria-hidden="!open">
+    <view v-if="open || dragging" class="swipe-actions" :aria-hidden="!open">
       <button role="button" v-for="action in actions" :key="action.key" class="swipe-action" hover-class="control-pressed"
         :style="{ width: actionWidth + 'px', backgroundColor: action.color }" :disabled="disabled || !open" :tabindex="open ? 0 : -1"
         :open-type="action.openType" :data-paper-id="shareId" :data-paper-title="shareTitle" :aria-label="action.label"

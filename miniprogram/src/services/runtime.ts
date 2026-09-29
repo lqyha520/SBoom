@@ -7,6 +7,11 @@ const events: Diagnostic[] = []
 let initialized = false
 let connected = true
 let networkRevision = 0
+let persistTimer: ReturnType<typeof setTimeout> | undefined
+export function flushDiagnostics() {
+  clearTimeout(persistTimer); persistTimer = undefined
+  try { uni.setStorage({ key: KEY, data: events.map(event => ({ ...event })), fail() {} }) } catch { /* 诊断不能中断应用。 */ }
+}
 export function recordDiagnostic(kind: DiagnosticKind) {
   if (!kinds.has(kind)) return
   const minute = Math.floor(Date.now() / 60000)
@@ -14,7 +19,8 @@ export function recordDiagnostic(kind: DiagnosticKind) {
   if (previous) previous.count = Math.min(999, previous.count + 1)
   else events.push({ kind, minute, count: 1 })
   while (events.length > 40) events.shift()
-  try { uni.setStorageSync(KEY, events.map(event => ({ ...event }))) } catch { /* Quota must not interrupt the app. */ }
+  clearTimeout(persistTimer)
+  persistTimer = setTimeout(flushDiagnostics, 500)
 }
 export function diagnosticSummary() {
   return JSON.stringify({ version: 1, events: events.map(event => ({ ...event })) })

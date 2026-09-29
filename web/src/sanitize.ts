@@ -20,7 +20,18 @@ const ALLOWED_TAGS = [
   'TABLE', 'THEAD', 'TBODY', 'TR', 'TD', 'TH',
 ]
 
-const ALLOWED_ATTR = ['style', 'class', 'color', 'face', 'size', 'align']
+const ALLOWED_ATTR = ['style', 'color', 'face', 'size', 'align']
+const STYLE_PROPERTIES = new Set(['color', 'background-color', 'font-size', 'font-family', 'font-weight', 'font-style', 'text-decoration', 'text-align', 'vertical-align', 'line-height'])
+DOMPurify.addHook('afterSanitizeAttributes', node => {
+  const el = node as HTMLElement
+  if (!el.style) return
+  for (const property of Array.from(el.style)) {
+    const value = el.style.getPropertyValue(property)
+    if (!STYLE_PROPERTIES.has(property) || /url\s*\(|var\s*\(|expression\s*\(/i.test(value)) el.style.removeProperty(property)
+    else el.style.setProperty(property, value, '')
+  }
+  if (!el.style.length) el.removeAttribute('style')
+})
 
 const FORBID_CONTENTS = ['script', 'style', 'iframe', 'object', 'embed', 'form']
 

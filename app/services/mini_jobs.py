@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from app.blocking import run_sync
 from app.config import get_settings
+from app.constants import EXPIRY_SWEEP_LOCK as _EXPIRY_SWEEP_LEASE
 from app.db import db
 from app.services import mini_auth, mini_messages, mini_orders, mini_refunds, payment_bills, wechat_notices
 from app.services.wechat_pay import PaymentError, configuration
@@ -17,7 +18,6 @@ from app.services.wechat_pay import PaymentError, configuration
 logger = logging.getLogger(__name__)
 
 #: 会员到期提醒扫描的单进程租约键（与 app.db._LOCK_IDS、maintenance.tick 的 70634195 错开）
-_EXPIRY_SWEEP_LEASE = 70634196
 
 
 def tick(stop):

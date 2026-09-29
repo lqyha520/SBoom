@@ -50,16 +50,25 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: docker
+    ignore:
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]
     directory: /
     schedule:
       interval: weekly
 
   - package-ecosystem: docker-compose
+    ignore:
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]
     directory: /
     schedule:
       interval: weekly
 
   - package-ecosystem: docker-compose
+    ignore:
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]
     directory: /deploy
     schedule:
       interval: weekly

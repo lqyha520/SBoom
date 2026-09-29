@@ -14,13 +14,19 @@ interface Entry {
   file?: string
   progress?: number
   listeners: Set<(percent: number) => void>
+  expiry?: ReturnType<typeof setTimeout>
 }
 
-// Share active downloads, but keep no files after their last consumer leaves.
-export function createFilePool(download: (key: string, progress: (percent: number) => void, registerCancel: RegisterDownloadCancel) => Promise<string>, dispose: (file: string) => void) {
+// 已完成文件保留短宽限期，仍在途且无人使用的下载立即取消。
+export function createFilePool(download: (key: string, progress: (percent: number) => void, registerCancel: RegisterDownloadCancel) => Promise<string>, dispose: (file: string) => void, options: { graceMs?: number; maxIdle?: number } = {}) {
   const entries = new Map<string, Entry>()
+  const idle = new Map<string, Entry>()
+  const graceMs = options.graceMs ?? 45_000
+  const maxIdle = options.maxIdle ?? 40
 
   function discard(key: string, entry: Entry) {
+    clearTimeout(entry.expiry)
+    if (idle.get(key) === entry) idle.delete(key)
     if (entries.get(key) === entry) entries.delete(key)
     entry.active = false
     entry.listeners.clear()
@@ -52,6 +58,8 @@ export function createFilePool(download: (key: string, progress: (percent: numbe
         entry = created
       }
       const held = entry
+      clearTimeout(held.expiry)
+      idle.delete(key)
       if (progress) { held.listeners.add(progress); if (held.progress !== undefined) progress(held.progress) }
       held.users++
       let released = false
@@ -61,11 +69,19 @@ export function createFilePool(download: (key: string, progress: (percent: numbe
           if (released) return
           released = true
           if (progress) held.listeners.delete(progress)
-          if (--held.users === 0) discard(key, held)
+          if (--held.users === 0) {
+            if (!held.file || !held.active || !graceMs || !maxIdle) { discard(key, held); return }
+            idle.set(key, held)
+            held.expiry = setTimeout(() => discard(key, held), graceMs)
+            // Node 测试进程不必等待缓存到期；小程序定时器返回数字。
+            ;(held.expiry as unknown as { unref?: () => void }).unref?.()
+            while (idle.size > maxIdle) { const oldest = idle.entries().next().value!; discard(...oldest) }
+          }
         },
         invalidate() { discard(key, held) },
       }
     },
     clear() { for (const [key, entry] of entries) discard(key, entry) },
+    trim() { for (const [key, entry] of idle) discard(key, entry) },
   }
 }

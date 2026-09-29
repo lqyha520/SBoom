@@ -118,7 +118,7 @@ class PublicCatalogContracts(unittest.TestCase):
         self.assertEqual(response.json()["scope"], "catalog")
         for asset in response.json()["assets"]:
             self.assertEqual(self.client.get(asset["url"]).status_code, 200)
-            self.assertEqual(self.client.get(asset["url"]).headers["cache-control"], "private, no-store")
+            self.assertEqual(self.client.get(asset["url"]).headers["cache-control"], "private, no-store" if asset["kind"] == "pdf" else "private, max-age=86400")
         self.assertEqual(self.client.get(source["assets"][0]["url"]).status_code, 403)
         public_url = response.json()["assets"][0]["url"]
         self.client.cookies.clear()

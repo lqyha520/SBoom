@@ -1,5 +1,7 @@
 """Normalize model output against the requested sections, never invented questions."""
 
+import json
+import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
 
@@ -7,6 +9,51 @@ from app.models import BatchItem, GameResult, GameType, GenerateRequest, Questio
 from app.services.generation_control import reserve_repairs
 from app.services.prompt_builder import prompt_builder
 from app.services.question_qc import filter_questions
+
+
+def completed_sections(text: str) -> list[dict]:
+    """只解码顶层 sections 数组中已闭合的对象，不补括号或猜测残缺内容。"""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    if "<think>" in text:
+        text = text.split("<think>")[0]
+    start = text.find("{")
+    if start < 0:
+        return []
+    decoder = json.JSONDecoder()
+    tail = text[start + 1:].lstrip()
+    try:
+        while tail:
+            key, end = decoder.raw_decode(tail)
+            tail = tail[end:].lstrip()
+            if not isinstance(key, str) or not tail.startswith(":"):
+                return []
+            tail = tail[1:].lstrip()
+            if key == "sections":
+                if not tail.startswith("["):
+                    return []
+                tail = tail[1:].lstrip()
+                sections: list[dict] = []
+                while tail and not tail.startswith("]"):
+                    try:
+                        section, end = decoder.raw_decode(tail)
+                    except json.JSONDecodeError:
+                        break
+                    if not isinstance(section, dict):
+                        break
+                    sections.append(section)
+                    tail = tail[end:].lstrip()
+                    if not tail.startswith(","):
+                        break
+                    tail = tail[1:].lstrip()
+                return sections
+            _, end = decoder.raw_decode(tail)
+            tail = tail[end:].lstrip()
+            if not tail.startswith(","):
+                break
+            tail = tail[1:].lstrip()
+    except json.JSONDecodeError:
+        pass
+    return []
 
 
 def match_sections(raw, items: list[BatchItem]) -> list[dict | None]:
@@ -70,8 +117,9 @@ def _take_questions(raw, game_type: str, count: int, seen: set, namespace: str) 
 
 async def normalize_result(
     raw, request, item: BatchItem, scope,
-    call_model: Callable[[str, str], Awaitable[dict]],
+    call_model: Callable[..., Awaitable[dict]],
     seen: set | None = None,
+    *, allow_repairs: bool = True,
 ) -> GameResult:
     seen = seen if seen is not None else set()
     warnings = []
@@ -93,7 +141,7 @@ async def normalize_result(
     # Reading repairs could introduce questions about a different passage. Keep
     # the original passage and expose missing counts instead of mixing sources.
     missing = item.question_count - len(kept)
-    if missing and item.game_type != "reading":
+    if missing and allow_repairs and item.game_type != "reading":
         try:
             game_type = GameType(item.game_type)
         except ValueError:
@@ -101,13 +149,13 @@ async def normalize_result(
         if game_type is not None:
             single = GenerateRequest(grade=request.grade, subject=request.subject,
                                      keyword=request.keyword, difficulty=request.difficulty,
-                                     game_type=game_type, question_count=1)
+                                     game_type=game_type, question_count=missing)
             prompt = prompt_builder.build_system_prompt(single, scope)
             # Sequential repairs keep each admitted job at one active provider call.
-            for _ in range(reserve_repairs(missing)):
+            for _ in range(reserve_repairs(1)):
                 try:
-                    patch = await call_model(prompt, prompt_builder.build_user_message(request.keyword))
-                    fixed, _ = _take_questions(patch, item.game_type, 1, seen, namespace)
+                    patch = await call_model(prompt, prompt_builder.build_user_message(request.keyword), missing)
+                    fixed, _ = _take_questions(patch, item.game_type, missing, seen, namespace)
                     kept.extend(fixed)
                 except Exception:
                     continue

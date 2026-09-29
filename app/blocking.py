@@ -3,18 +3,34 @@
 import asyncio
 import threading
 import time
+import weakref
 from collections.abc import Callable
 
 import anyio.to_thread
 
-from app.metrics import thread_wait
+from app.metrics import thread_capacity, thread_wait
+
+_limiters: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _limiter(kind: str):
+    if kind == "default":
+        return anyio.to_thread.current_default_thread_limiter()
+    current = _limiters.setdefault(asyncio.get_running_loop(), {})
+    if kind not in current:
+        current[kind] = anyio.CapacityLimiter({"probe": 1, "auth": 4, "media": 2}[kind])
+    return current[kind]
 
 
 def configure_threads(pool_max: int) -> None:
-    anyio.to_thread.current_default_thread_limiter().total_tokens = max(40, pool_max * 2)
+    anyio.to_thread.current_default_thread_limiter().total_tokens = max(8, pool_max * 2)
 
 
 async def run_sync[T, **P](function: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    return await run_sync_in("default", function, *args, **kwargs)
+
+
+async def run_sync_in[T, **P](kind: str, function: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
     queued_at = time.perf_counter()
     cancelled = threading.Event()
 
@@ -26,7 +42,11 @@ async def run_sync[T, **P](function: Callable[P, T], *args: P.args, **kwargs: P.
 
     # 调用方取消时立即返回，但工作线程结束前仍占用容量；反复取消不能突破线程上限。
     # 尚未开始的任务在取得容量后跳过，不会在请求超时后继续执行写操作。
-    task = asyncio.create_task(anyio.to_thread.run_sync(execute))
+    limiter = _limiter(kind)
+    stats = limiter.statistics()
+    thread_capacity.labels(kind, "borrowed").set(stats.borrowed_tokens)
+    thread_capacity.labels(kind, "waiting").set(stats.tasks_waiting)
+    task = asyncio.create_task(anyio.to_thread.run_sync(execute, limiter=limiter))
 
     def finished(completed: asyncio.Task[T]) -> None:
         if not completed.cancelled():
@@ -38,3 +58,13 @@ async def run_sync[T, **P](function: Callable[P, T], *args: P.args, **kwargs: P.
     except asyncio.CancelledError:
         cancelled.set()
         raise
+
+
+async def sample_limiters() -> None:
+    """定期采样含同步路由在内的默认 AnyIO limiter，而不限于 run_sync 调用。"""
+    while True:
+        for kind in ("default", "probe", "auth", "media"):
+            stats = _limiter(kind).statistics()
+            thread_capacity.labels(kind, "borrowed").set(stats.borrowed_tokens)
+            thread_capacity.labels(kind, "waiting").set(stats.tasks_waiting)
+        await asyncio.sleep(5)

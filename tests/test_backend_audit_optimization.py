@@ -103,6 +103,8 @@ class OptimizationContracts(unittest.TestCase):
         file_retention._scan = None
         file_retention.scan_orphans()
         file_retention.drain()
+        from pg_support import drain_after_file_grace
+        drain_after_file_grace()
         self.assertFalse(old.exists())
         self.assertTrue(fresh.exists())
         self.assertTrue(foreign.exists())

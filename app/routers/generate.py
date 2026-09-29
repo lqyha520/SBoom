@@ -24,9 +24,9 @@ from app.models import (
 )
 from app.services import app_config
 from app.services.generation_control import metered
-from app.services.generation_results import match_sections, normalize_result
+from app.services.generation_results import completed_sections, match_sections, normalize_result
 from app.services.knowledge_scope import knowledge_scope_service
-from app.services.llm_client import llm_client
+from app.services.llm_client import OutputTruncated, llm_client
 from app.services.prompt_builder import prompt_builder
 from app.services.rate_limit import allow
 from app.services.user_store import CurrentUser
@@ -119,10 +119,11 @@ def _merged_llm_params() -> dict:
         # 超时下限 120s：整卷生成 prompt 很长，部分模型需要 1-2 分钟；
         # 超时过短会让客户端先掐断，而服务端通常已开始生成并计费——白白扣钱
         "timeout": max(t, 120.0),
+        "max_tokens": int(g.get("maxTokens") or settings.llm_max_tokens),
     }
 
 
-async def _call_llm_and_parse(system_prompt: str, user_message: str) -> dict:
+async def _call_llm_and_parse(system_prompt: str, user_message: str, question_count: int = 30) -> dict:
     """调用 LLM 并解析返回的 JSON。配置来源：后台全局配置 > .env 兜底。"""
     p = await run_sync(_merged_llm_params)
     if not p["api_key"]:
@@ -141,9 +142,11 @@ async def _call_llm_and_parse(system_prompt: str, user_message: str) -> dict:
     try:
         raw_response = await llm_client.chat(
             messages, base_url=p["base_url"], model=p["model"],
-            api_key=p["api_key"], timeout=p["timeout"],
+            api_key=p["api_key"], timeout=p["timeout"], max_tokens=min(p["max_tokens"], 2048 + 400 * question_count),
         )
         return _extract_json(raw_response)
+    except HTTPException:
+        raise
     except json.JSONDecodeError as e:
         # raw_response 可能未绑定（llm_client 内部解析响应 JSON 就失败时），分别兜底
         logger.error("模型返回内容不是有效 JSON: %s", type(e).__name__)
@@ -194,6 +197,8 @@ async def _call_llm_and_parse(system_prompt: str, user_message: str) -> dict:
 @metered("batch")
 async def generate_batch(request: BatchGenerateRequest, http_request: Request, user: CurrentUser = Depends(require_user)):
     """一次 LLM 调用生成整卷的多个题型"""
+    if sum(item.question_count for item in request.items) > 30:
+        raise HTTPException(422, detail={"code": "generation_batch_too_large", "error": "每次最多生成 30 道题，请拆分请求"})
     # 1. 知识范围
     scope = await run_sync(knowledge_scope_service.get_scope, request.grade, request.subject)
     if not scope.allowed and not scope.forbidden:
@@ -225,8 +230,12 @@ async def generate_batch(request: BatchGenerateRequest, http_request: Request, u
     user_message = prompt_builder.build_batch_user_message(request.keyword)
 
     # 4. 调用 LLM（一次，配置：后台全局 > .env）
+    truncated = None
     try:
-        raw = await _call_llm_and_parse(system_prompt, user_message)
+        raw = await _call_llm_and_parse(system_prompt, user_message, sum(item.question_count for item in request.items))
+    except OutputTruncated as error:
+        truncated = error
+        raw = {"sections": completed_sections(error.partial_text)}
     except HTTPException:
         raise
     except (RuntimeError, ValueError, TypeError) as e:
@@ -238,7 +247,22 @@ async def generate_batch(request: BatchGenerateRequest, http_request: Request, u
     sections = []
     for index, (item, section) in enumerate(zip(request.items, matched, strict=False)):
         resolved = item.model_copy(update={"section_id": item.section_id or f"section-{index + 1}"})
-        sections.append(await normalize_result(section, request, resolved, scope, _call_llm_and_parse, seen))
+        if truncated:
+            # 残片只接受可唯一对应的大题，且不为挽救残片再发付费补题请求。
+            if not section or section.get("section_id") != resolved.section_id or section.get("game_type") != item.game_type:
+                continue
+            candidate_seen = seen.copy()
+            result = await normalize_result(section, request, resolved, scope, _call_llm_and_parse, candidate_seen, allow_repairs=False)
+            if result.missing_count:
+                continue
+            seen = candidate_seen
+        else:
+            result = await normalize_result(section, request, resolved, scope, _call_llm_and_parse, seen)
+        sections.append(result)
+    if truncated:
+        detail = dict(truncated.detail) if isinstance(truncated.detail, dict) else {}
+        detail["partial_sections"] = [section.model_dump(mode="json") for section in sections]
+        raise HTTPException(truncated.status_code, detail=detail) from truncated
     return BatchGenerateResponse(sections=sections)
 
 
@@ -282,7 +306,7 @@ async def generate_questions(request: GenerateRequest, http_request: Request, us
     user_message = prompt_builder.build_user_message(request.keyword)
 
     # 3. 调用 LLM（配置：后台全局 > .env）
-    raw_result = await _call_llm_and_parse(system_prompt, user_message)
+    raw_result = await _call_llm_and_parse(system_prompt, user_message, request.question_count)
 
     return await normalize_result(
         raw_result, request,
@@ -329,13 +353,14 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
     if not p["api_key"]:
         raise HTTPException(400, detail={"error": "尚未配置模型，请联系管理员"})
 
+    question_count = request.question_count
     async def event_generator():
         """SSE 事件流（结束时做质检，违禁题无法撤回已流出的内容，只追加告警事件）"""
         buffered = []
         try:
             async for token in llm_client.chat_stream(
                 messages, base_url=p["base_url"], model=p["model"],
-                api_key=p["api_key"], timeout=p["timeout"],
+                api_key=p["api_key"], timeout=p["timeout"], max_tokens=min(p["max_tokens"], 2048 + 400 * question_count),
             ):
                 buffered.append(token)
                 yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
@@ -355,6 +380,8 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
             except (json.JSONDecodeError, ValueError, TypeError):
                 yield f"data: {json.dumps({'qc_warning': '模型结果无法解析，请人工核对'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
+        except HTTPException as exc:
+            yield f"data: {json.dumps(exc.detail, ensure_ascii=False)}\n\n"
         except (httpx.HTTPError, json.JSONDecodeError, RuntimeError, ValueError) as e:
             # 不向客户端泄漏内部异常细节（可能含内网 URL/密钥提示），详情留日志
             logger.exception("流式生成失败: %s", type(e).__name__)
@@ -451,7 +478,7 @@ async def validate_oob(request: ValidateRequest, http_request: Request, user: Cu
             )
         raw = await llm_client.chat(
             messages, base_url=p["base_url"], model=p["model"],
-            api_key=p["api_key"], timeout=p["timeout"],
+            api_key=p["api_key"], timeout=p["timeout"], max_tokens=min(p["max_tokens"], 4096),
         )
         data = _extract_json(raw)
         return ValidateResult(**data)
@@ -481,9 +508,6 @@ def submit_feedback(request: FeedbackRequest, user: CurrentUser = Depends(requir
             "INSERT INTO feedbacks (user_id, username, game_id, is_oob, comment) VALUES (?, ?, ?, ?, ?)",
             (user.id, user.username, request.game_id, int(request.is_oob), request.comment),
         )
-    logger.info(
-        f"Feedback saved - user: {user.username}, game_id: {request.game_id}, "
-        f"is_oob: {request.is_oob}, comment: {request.comment}"
-    )
+    logger.info("Feedback saved user_id=%s is_oob=%s", user.id, request.is_oob)
     return {"status": "ok", "message": "反馈已记录，感谢您的帮助！"}
 

@@ -38,10 +38,12 @@ const emit = defineEmits<{
 
 const stackEl = ref<HTMLElement | null>(null)
 const measureEl = ref<HTMLElement | null>(null)
+const measureVisible = ref(true)
 /** 每页的大题分段：sec = 大题索引；qFrom/qTo = 题目切片 [from, to)；first = 本段带大题标题 */
 const pages = ref<PageChunk[][]>([])
 /** 强制重挂载测量纸 */
 const measureTick = ref(0)
+const visibleRevision = ref(0)
 /** 分页是否已完成至少一次（导出等待用；声明在使用前，避免可读性陷阱） */
 const measured = ref(false)
 const paginationError = ref('')
@@ -57,6 +59,8 @@ const scores = computed(() => computeScores(props.paper.sections))
 
 /** 测量纸用：每个大题整块一段 */
 const allChunks = computed(() => props.paper.sections.map((_, i) => ({ sec: i, qFrom: 0, qTo: Infinity, first: true })))
+const styleForMeasure = computed(() => ({ ...props.style, titleOffsetY: 0 }))
+let measurementCache: { availH: number; headH: number; tailH: number; segments: MeasuredSection[] } | undefined
 
 /* ── 分页测量 ── */
 /** 只订阅可改变卷面高度的内容；锁定和请求状态不参与测量。 */
@@ -68,7 +72,7 @@ const measureKey = computed(() => JSON.stringify([
   props.paper.title, props.paper.titleHtml, props.paper.footerOverride,
   props.paper.hiddenElements, props.paper.grade, props.paper.subject, props.paper.keyword,
   props.paper.difficulty, props.paper.day, props.addDay, props.showAnswers,
-  props.template, props.style, kidOn.value, measureTick.value,
+  props.template, styleForMeasure.value, kidOn.value, measureTick.value,
 ]))
 
 /* 输入类变化（标题逐字输入、字号滑条拖动）防抖后再重分页，
@@ -79,8 +83,11 @@ watch(measureKey, () => {
   _pagTimer = setTimeout(() => paginate(), 150)
 })
 onMounted(() => paginate())
+// 标题拖动只用已测量的块高度重新分配页面，不再读取每道题的布局。
+watch(() => props.style.titleOffsetY, () => applyMeasurements())
 
 async function paginate() {
+  measureVisible.value = true
   await nextTick()
   await new Promise(r => requestAnimationFrame(() => r(null)))
   // 等字体加载完成再测量（否则块高度偏小，分页错乱）
@@ -97,12 +104,12 @@ async function paginate() {
   const availH = paperH - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)
 
   const headEl = paper.querySelector('.pv-head') as HTMLElement | null
-  const headH = headEl ? headEl.offsetHeight : 0
+  const outerHeight = (el: HTMLElement | null) => el ? el.offsetHeight + (parseFloat(getComputedStyle(el).marginTop) || 0) + (parseFloat(getComputedStyle(el).marginBottom) || 0) : 0
+  const headH = outerHeight(headEl)
   const tailEl = paper.querySelector('.pv-tail') as HTMLElement | null
-  const tailH = tailEl ? tailEl.offsetHeight : 0
+  const tailH = outerHeight(tailEl)
 
   const blocks = Array.from(paper.querySelectorAll('.sec-block')) as HTMLElement[]
-  const cap = availH - headH - 16 // 每页内容容量（每页都有卷头；留 16px 余量防溢出）
 
   // ── 大题 → 段流：整块放得下就一段；超高就块内按行切 ──
   const segments: MeasuredSection[] = []
@@ -129,10 +136,20 @@ async function paginate() {
     }
   })
 
-  const oversized = tailH > cap || segments.some(segment =>
+  measurementCache = { availH, headH, tailH, segments }
+  applyMeasurements()
+  measureVisible.value = false
+}
+
+function applyMeasurements() {
+  if (!measurementCache) return
+  const { availH, headH, tailH, segments } = measurementCache
+  const cap = availH - headH - (props.style.titleOffsetY || 0) * 96 / 25.4 - 16
+  const oversized = cap <= 0 || tailH > cap || segments.some(segment =>
     segment.headBlockH + (segment.rows[0] || 0) > cap || segment.rows.some(row => row > cap))
   paginationError.value = oversized ? '内容超出 A4 页面，请缩小字号、缩短单题或页脚后再导出' : ''
-  pages.value = paginateSections(segments, cap, tailH)
+  const nextPages = paginateSections(segments, Math.max(1, cap), tailH)
+  if (JSON.stringify(nextPages) !== JSON.stringify(pages.value)) pages.value = nextPages
   measured.value = true
   // 分页会整建 DOM：表格列宽/行高手柄需要随分页结果重新注入（否则丢失）
   setupTableResize()
@@ -165,7 +182,7 @@ watch(
   async on => {
     await nextTick()
     if (on) enterLayout()
-    else teardownLayout()
+    else { teardownLayout(); visibleRevision.value++; await nextTick(); void setupTableResize() }
   },
 )
 
@@ -198,27 +215,12 @@ function enterLayout() {
         }),
       )
       // 大题删除按钮
-      const tools = document.createElement('div')
-      tools.className = 'sec-tools'
-      tools.innerHTML = `<span class="tool-btn del">✕ 删除大题</span>`
-      tools.addEventListener('click', e => {
-        if ((e.target as HTMLElement).textContent?.includes('删除大题')) {
-          if (confirm('确定删除整个大题吗？')) (secEl as HTMLElement).remove()
-        }
-      })
-      ;(secEl as HTMLElement).appendChild(tools)
+      addLayoutTools(secEl as HTMLElement, 'sec')
     })
 
     // 题目删除按钮 + 排序手柄 + 自由移动 + 大小调整
     paper.querySelectorAll('.q').forEach(qEl => {
-      const tools = document.createElement('div')
-      tools.className = 'q-tools'
-      tools.innerHTML = `<span class="tool-btn del">✕</span>`
-      tools.addEventListener('click', e => {
-        e.stopPropagation()
-        if (confirm('确定删除这道题吗？')) qEl.remove()
-      })
-      qEl.appendChild(tools)
+      addLayoutTools(qEl as HTMLElement, 'q')
       const stem = qEl.querySelector('[data-e="stem"], .split-wrap, .compare-row')
       if (stem && !stem.querySelector('.sort-handle')) {
         const h = document.createElement('span')
@@ -231,6 +233,25 @@ function enterLayout() {
 
     enableCellResize(paper)
   })
+}
+
+/** 鼠标拖拽以外提供可聚焦的排序和删除按钮。 */
+function addLayoutTools(element: HTMLElement, kind: 'sec' | 'q') {
+  const tools = document.createElement('div')
+  const label = kind === 'sec' ? '大题' : '题目'
+  tools.className = kind + '-tools'
+  tools.innerHTML = `<button type="button" class="tool-btn" data-move="-1" aria-label="上移${label}">↑</button><button type="button" class="tool-btn" data-move="1" aria-label="下移${label}">↓</button><button type="button" class="tool-btn del" aria-label="删除${label}">✕</button>`
+  tools.addEventListener('click', event => {
+    event.stopPropagation()
+    const button = (event.target as HTMLElement).closest('button')
+    if (!button) return
+    if (button.dataset.move) {
+      const items = Array.from(stackEl.value?.querySelectorAll(kind === 'sec' ? '.sec-block' : '.q') || [])
+      const at = items.indexOf(element), delta = Number(button.dataset.move), target = items[at + delta]
+      if (target) { if (delta < 0) target.before(element); else target.after(element); button.focus() }
+    } else if (confirm(`确定删除这${kind === 'sec' ? '个大题' : '道题'}吗？`)) element.remove()
+  })
+  element.appendChild(tools)
 }
 
 function teardownLayout() {
@@ -257,7 +278,7 @@ function applyLayout(): PaperSection[] | null {
   paper.sections.forEach(s => (s.data.questions || []).forEach(q => { if (q._qid) qMap.set(q._qid, q) }))
 
   const newSections: PaperSection[] = []
-  paperEl.querySelectorAll('.sec-block').forEach(block => {
+  stack.querySelectorAll('.sec-block').forEach(block => {
     const sid = block.getAttribute('data-sid') || ''
     const orig = paper.sections.find(s => s._sid === sid)
     if (!orig) return
@@ -266,7 +287,9 @@ function applyLayout(): PaperSection[] | null {
       const q = qMap.get(qEl.getAttribute('data-qid') || '')
       if (q) qs.push(q)
     })
-    newSections.push({ ...orig, data: { ...orig.data, questions: qs } })
+    const existing = newSections.find(section => section._sid === sid)
+    if (existing) existing.data.questions.push(...qs)
+    else newSections.push({ ...orig, data: { ...orig.data, questions: qs } })
   })
   paper.sections = newSections
   teardownLayout()
@@ -360,6 +383,16 @@ function enableTableResize(paper: Element) {
         // 列宽
         const cr = document.createElement('span')
         cr.className = 'col-resizer'
+        cr.tabIndex = 0
+        cr.setAttribute('role', 'separator'); cr.setAttribute('aria-label', '调整列宽（左右方向键）'); cr.setAttribute('aria-orientation', 'vertical')
+        cr.addEventListener('keydown', event => {
+          if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return
+          event.preventDefault()
+          const index = Array.from(td.parentElement!.children).indexOf(td)
+          const widths = [...(sec.layout.colWidths || [])]
+          widths[index] = Math.max(15, (widths[index] || td.offsetWidth) + (event.key === 'ArrowLeft' ? -5 : 5))
+          sec.layout.colWidths = widths; emit('layout-updated', sec._sid || '', { ...sec.layout })
+        })
         td.appendChild(cr)
         cr.addEventListener('mousedown', (e: MouseEvent) => {
           e.preventDefault(); e.stopPropagation()
@@ -394,6 +427,14 @@ function enableTableResize(paper: Element) {
         // 行高
         const rr = document.createElement('span')
         rr.className = 'row-resizer'
+        rr.tabIndex = 0
+        rr.setAttribute('role', 'separator'); rr.setAttribute('aria-label', '调整行高（上下方向键）'); rr.setAttribute('aria-orientation', 'horizontal')
+        rr.addEventListener('keydown', event => {
+          if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return
+          event.preventDefault()
+          sec.layout.rowHeight = Math.max(15, (sec.layout.rowHeight || td.offsetHeight) + (event.key === 'ArrowUp' ? -5 : 5))
+          emit('layout-updated', sec._sid || '', { ...sec.layout })
+        })
         td.appendChild(rr)
         rr.addEventListener('mousedown', (e: MouseEvent) => {
           e.preventDefault(); e.stopPropagation()
@@ -452,7 +493,7 @@ onMounted(() => measureStackH())
       <div ref="stackEl" class="paper-stack" :data-pagination-error="paginationError || undefined">
       <PaperPage
         v-for="(pg, i) in pages"
-        :key="i"
+        :key="visibleRevision + ':' + i"
         :paper="paper"
         :chunks="pg"
         :template="template"
@@ -471,14 +512,14 @@ onMounted(() => measureStackH())
   </div>
   </div>
   <!-- 离屏测量纸（整卷单页，测各块真实高度） -->
-  <div ref="measureEl" class="offscreen" aria-hidden="true">
+  <div v-if="measureVisible" ref="measureEl" class="offscreen" aria-hidden="true" inert>
     <div class="pv-probe" style="height: 297mm; width: 210mm; position: absolute;"></div>
     <PaperPage
       :key="'m' + measureTick"
       :paper="paper"
       :chunks="allChunks"
       :template="template"
-      :style="style"
+      :style="styleForMeasure"
       :kid-on="kidOn"
       :show-answers="!!showAnswers"
       :editable="false"

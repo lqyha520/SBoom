@@ -21,11 +21,12 @@ test('concurrent images share a file until the last consumer releases it', async
   first.release()
   assert.deepEqual(disposed, [])
   second.release()
-  assert.deepEqual(disposed, ['temporary-image'])
+  assert.deepEqual(disposed, [])
   const next = files.acquire('image')
   await next.ready
-  assert.equal(downloads, 2)
-  next.release()
+  assert.equal(downloads, 1)
+  next.release(); files.trim()
+  assert.deepEqual(disposed, ['temporary-image'])
 })
 
 test('leaving during a download disposes its late file', async () => {
@@ -138,7 +139,8 @@ test('settled downloads are disposed without aborting their completed task', asy
   const handle = files.acquire('image')
   await handle.ready
   handle.release()
-  assert.equal(aborted, 0); assert.deepEqual(disposed, ['completed'])
+  assert.equal(aborted, 0); assert.deepEqual(disposed, [])
+  files.trim(); assert.deepEqual(disposed, ['completed'])
 })
 
 test('leaving before the download starts avoids all network work', async () => {
@@ -166,4 +168,18 @@ test('invalidating a pending file aborts it and permits retry', async () => {
   const retry = files.acquire('image')
   assert.equal(await retry.ready, 'retry'); assert.equal(aborted, 1)
   retry.release()
+})
+
+test('宽限期复用已释放文件，LRU 与内存清理不删除仍在显示的文件', async () => {
+  const disposed: string[] = []
+  const files = createFilePool(async key => key, file => disposed.push(file), { graceMs: 20, maxIdle: 1 })
+  const active = files.acquire('active'); await active.ready
+  const first = files.acquire('first'); await first.ready; first.release()
+  const reused = files.acquire('first'); assert.equal(await reused.ready, 'first'); reused.release()
+  const second = files.acquire('second'); await second.ready; second.release()
+  assert.deepEqual(disposed, ['first'])
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.deepEqual(disposed, ['first', 'second'])
+  files.trim(); assert.equal(await active.ready, 'active')
+  active.release(); files.clear(); assert.deepEqual(disposed, ['first', 'second', 'active'])
 })

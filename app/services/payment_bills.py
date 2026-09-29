@@ -7,15 +7,16 @@ import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
-from app.db import db
+from app.db import _PgConn, db
 from app.services.mini_errors import fail
 from app.services.wechat_pay import PaymentError, WeChatPay
 
 ZONE = timezone(timedelta(hours=8))
 
 
-def money(value):
+def money(value: str) -> int:
     try:
         number = Decimal(value.lstrip("`")) * 100
         if not number.is_finite() or number < 0 or number != number.to_integral_value():
@@ -25,7 +26,7 @@ def money(value):
         raise PaymentError("INVALID_BILL_AMOUNT") from None
 
 
-def parse_bill(content, record_kind=None):
+def parse_bill(content: str, record_kind: str | None = None) -> list[dict[str, Any]]:
     rows = csv.reader(io.StringIO(content), strict=True)
     header = None
     result: list[dict] = []
@@ -60,13 +61,17 @@ def parse_bill(content, record_kind=None):
     return result
 
 
-def compare(conn, rows, bill_date):
+def compare(conn: _PgConn, rows: list[dict[str, Any]], bill_date: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     start = int(datetime.combine(date.fromisoformat(bill_date), datetime.min.time(), ZONE).timestamp())
     end = start + 86400
     differences, seen_payments, seen_refunds = [], set(), set()
     paid_fen, refunded_fen = 0, 0
+    order_ids = list({row["order_id"] for row in rows})
+    refund_ids = list({row["refund_id"] for row in rows if row["refund_id"]})
+    orders = {row["id"]: row for row in conn.execute("SELECT * FROM mini_orders WHERE id = ANY(?)", (order_ids,)).fetchall()}
+    refunds = {row["id"]: row for row in conn.execute("SELECT * FROM mini_refunds WHERE id = ANY(?)", (refund_ids,)).fetchall()}
     for row in rows:
-        order = conn.execute("SELECT * FROM mini_orders WHERE id = ?", (row["order_id"],)).fetchone()
+        order = orders.get(row["order_id"])
         reason = ""
         if row["status"] == "SUCCESS":
             if row["order_id"] in seen_payments:
@@ -86,7 +91,9 @@ def compare(conn, rows, bill_date):
                 raise PaymentError("DUPLICATE_BILL_REFUND")
             seen_refunds.add(row["refund_id"])
             refunded_fen += row["refund_fen"]
-            refund = conn.execute("SELECT * FROM mini_refunds WHERE id = ? AND order_id = ?", (row["refund_id"], row["order_id"])).fetchone()
+            refund = refunds.get(row["refund_id"])
+            if refund and refund["order_id"] != row["order_id"]:
+                refund = None
             if not order or not refund:
                 reason = "微信退款未在本系统登记，请核对商户平台操作"
             elif row["refund_fen"] != order["amount_fen"] or row["amount_fen"] != order["amount_fen"]:
@@ -112,7 +119,7 @@ def compare(conn, rows, bill_date):
     return summary, differences
 
 
-def reconcile(admin_id, bill_date):
+def reconcile(admin_id: int | None, bill_date: str) -> dict[str, Any]:
     day = date.fromisoformat(bill_date)
     today = datetime.now(ZONE).date()
     if day >= today or day < today - timedelta(days=90):
@@ -133,7 +140,8 @@ def reconcile(admin_id, bill_date):
             except PaymentError as error:
                 if error.code != "NO_STATEMENT_EXIST":
                     raise
-        with db(serialized="accounts") as conn:
+        with db() as conn:
+            conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             summary, differences = compare(conn, rows, bill_date)
             conn.execute("UPDATE mini_reconciliations SET status = 'complete', summary_json = ?, differences_json = ?, updated_at = ? WHERE id = ?",
                          (json.dumps(summary), json.dumps(differences[:5000], ensure_ascii=False), int(time.time()), identifier))
@@ -147,7 +155,7 @@ def reconcile(admin_id, bill_date):
     return get(identifier)
 
 
-def get(identifier):
+def get(identifier: str) -> dict[str, Any]:
     with db() as conn:
         row = conn.execute("SELECT * FROM mini_reconciliations WHERE id = ?", (identifier,)).fetchone()
     if not row:
@@ -158,7 +166,7 @@ def get(identifier):
     return result
 
 
-def listing(limit=20, offset=0):
+def listing(limit: int = 20, offset: int = 0) -> dict[str, Any]:
     with db() as conn:
         total = conn.execute("SELECT COUNT(*) FROM mini_reconciliations").fetchone()[0]
         rows = conn.execute("SELECT id, bill_date, status, error, summary_json, created_at, updated_at FROM mini_reconciliations ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
@@ -170,7 +178,7 @@ def listing(limit=20, offset=0):
     return {"items": items, "total": total, "has_more": offset + len(items) < total}
 
 
-def export_orders(status="", q="", start_date="", end_date=""):
+def export_orders(status: str = "", q: str = "", start_date: str = "", end_date: str = "") -> str:
     from app.services.mini_orders import listing as orders
     page = orders(status=status, q=q, limit=5000, start_date=start_date, end_date=end_date)
     if page["total"] > 5000:
@@ -178,9 +186,9 @@ def export_orders(status="", q="", start_date="", end_date=""):
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["订单号", "账号", "套餐", "天数", "金额（元）", "状态", "微信交易号", "创建时间", "退款状态"])
-    def safe(value):
-        value = str(value or "")
-        return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n")) else value
+    def safe(value: Any) -> str:
+        text = str(value or "")
+        return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r", "\n")) else text
     for item in page["items"]:
         writer.writerow([safe(item["id"]), safe(item["username"]), safe(item["plan_name"]), item["plan_days"], f"{item['amount_fen'] / 100:.2f}",
                          item["status"], safe(item["transaction_id"]), datetime.fromtimestamp(item["created_at"], ZONE).isoformat(), item["refund"]["status"] if item["refund"] else ""])

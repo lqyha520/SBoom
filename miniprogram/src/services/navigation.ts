@@ -1,3 +1,4 @@
+import { navigatePage } from './page-navigation'
 import { reactive } from 'vue'
 import { routeFromPage, safeDestination } from './return-route'
 
@@ -12,7 +13,7 @@ export function openCatalog(filters: Partial<CatalogFilters> = {}) {
   uni.switchTab({ url: '/pages/library/index' })
 }
 export function openCatalogPaper(id: string) {
-  uni.navigateTo({ url: '/pages/paper/index?id=' + encodeURIComponent(id) + '&scope=catalog' })
+  navigatePage({ url: '/pages/paper/index?id=' + encodeURIComponent(id) + '&scope=catalog' })
 }
 
 /**
@@ -41,7 +42,7 @@ export function visitDestination(target: string, replace = false) {
   }
   if (['/pages/home/index', '/pages/library/index', '/pages/favorites/index', '/pages/account/index'].includes(path!)) uni.switchTab({ url: path! })
   else if (replace) { if (!backToPrevious(destination)) uni.redirectTo({ url: destination }) }
-  else uni.navigateTo({ url: destination })
+  else navigatePage({ url: destination })
 }
 
 export function confirmAction(title: string, content: string): Promise<boolean> {

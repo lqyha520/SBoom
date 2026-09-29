@@ -1,3 +1,4 @@
+import { navigatePage } from './page-navigation'
 import { reactive } from 'vue'
 import type { Authenticated, User } from '../types'
 import { authGeneration, configureSession, errorMessage, patchPassword, patchProfile, request, TOKEN_KEY, unauthorizedHandler, type ReadOptions } from './api'
@@ -12,7 +13,7 @@ export const session = reactive({ user: null as User | null, ready: false, error
 export function requireLogin(target?: string): boolean {
   if (session.user) return true
   const pages = getCurrentPages()
-  uni.navigateTo({ url: loginUrl(target || routeFromPage(pages[pages.length - 1])) })
+  navigatePage({ url: loginUrl(target || routeFromPage(pages[pages.length - 1])) })
   return false
 }
 let initializing: Promise<boolean> | null = null
@@ -37,9 +38,10 @@ export function clearSession() {
 unauthorizedHandler(clearSession)
 
 export function acceptSession(user: User, token = '') {
-  inboxState.unread = 0; inboxState.pending = 0
-  clearAssetCache()
-  configureSession(token, String(user.id))
+  if (configureSession(token, String(user.id))) {
+    inboxState.unread = 0; inboxState.pending = 0
+    clearAssetCache()
+  }
   session.user = user
   session.ready = true
   session.error = ''
@@ -74,16 +76,6 @@ export function ensureSession(): Promise<boolean> {
   return initializing
 }
 
-export async function loginWeb(username: string, password: string) {
-  const result = await request<Authenticated>('/api/v1/mini/login-password', 'POST', { username, password })
-  loginMini(result)
-}
-
-export async function registerWeb(username: string, password: string) {
-  const result = await request<Authenticated>('/api/v1/mini/register', 'POST', { username, password })
-  loginMini(result)
-}
-
 export function loginMini(result: Authenticated) { acceptSession(result.user, result.token) }
 
 export async function refreshMembership(options: ReadOptions = {}) {
@@ -115,6 +107,7 @@ export async function savePassword(current: string, next: string) {
 }
 
 export async function logout() {
-  await request<void>('/api/v1/mini/logout', 'POST')
+  const revoke = request<void>('/api/v1/mini/logout', 'POST')
   clearSession()
+  void revoke.catch(() => {})
 }

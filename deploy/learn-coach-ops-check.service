@@ -1,0 +1,20 @@
+[Unit]
+Description=Learn Coach readiness, backup, disk and TLS check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=learn-coach-monitor
+Group=learn-coach-monitor
+WorkingDirectory=/opt/learn-coach
+EnvironmentFile=/etc/learn-coach/monitor.env
+Environment=OPS_STATE_FILE=/var/lib/learn-coach-monitor/state.json
+ExecStart=/usr/bin/python3 /opt/learn-coach/scripts/ops_check.py
+StateDirectory=learn-coach-monitor
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+TimeoutStartSec=45

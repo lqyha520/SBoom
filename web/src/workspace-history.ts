@@ -1,7 +1,8 @@
 import type { WorkspaceSnapshot } from './persistence'
 import { deepClone } from './utils'
+import { markRaw, toRaw } from 'vue'
 
-export type EditSnapshot = Pick<WorkspaceSnapshot, 'sections' | 'papers' | 'title' | 'titleHtml' | 'style' | 'hiddenElements' | 'templateId' | 'customTemplate'>
+export type EditSnapshot = Pick<WorkspaceSnapshot, 'sections' | 'papers' | 'title' | 'titleHtml' | 'style' | 'hiddenElements' | 'templateId' | 'customTemplate' | 'grade' | 'subject' | 'keyword' | 'selectedTags' | 'difficulty' | 'view' | 'paperCount' | 'addDayLabel'>
 interface EditWorkspace extends EditSnapshot {
   generating: boolean
   accountChanged: boolean
@@ -15,14 +16,17 @@ interface EditWorkspace extends EditSnapshot {
 const editBursts = new WeakMap<object, { key: string; at: number }>()
 const snapshotEncoding = new WeakMap<object, string>()
 function encodeSnapshot(snapshot: object): string {
+  snapshot = toRaw(snapshot)
   let value = snapshotEncoding.get(snapshot)
   if (value === undefined) { value = JSON.stringify(snapshot); snapshotEncoding.set(snapshot, value) }
   return value
 }
 
 export function captureEdit(source: EditSnapshot): EditSnapshot {
-  return deepClone({ sections: source.sections, papers: source.papers, title: source.title, titleHtml: source.titleHtml,
-    style: source.style, hiddenElements: source.hiddenElements, templateId: source.templateId, customTemplate: source.customTemplate })
+  return markRaw(deepClone({ sections: toRaw(source.sections), papers: toRaw(source.papers), title: source.title, titleHtml: source.titleHtml,
+    style: toRaw(source.style), hiddenElements: toRaw(source.hiddenElements), templateId: source.templateId, customTemplate: toRaw(source.customTemplate),
+    grade: source.grade, subject: source.subject, keyword: source.keyword, selectedTags: toRaw(source.selectedTags),
+    difficulty: source.difficulty, view: source.view, paperCount: source.paperCount, addDayLabel: source.addDayLabel }))
 }
 
 export function recordEdit(source: EditWorkspace, key = '') {

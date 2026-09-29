@@ -1,177 +1,188 @@
-"""后台脱离会话启动服务（Windows / POSIX 通用）。
-
-为什么需要它：
-    直接 `python run.py &` 或工具里的后台任务，进程属于当前会话的进程组。
-    会话一结束，子进程会被连带回收 —— 表现为"服务莫名挂掉、日志尾部却全是 200"。
-    本脚本用 DETACHED_PROCESS（Windows）/ setsid（POSIX）把服务挂到独立进程组，
-    使其不受父会话生命周期影响。
-
-用法：
-    python scripts/serve_detached.py            # 启动，等待健康检查通过
-    python scripts/serve_detached.py --stop     # 按 server.pid 停止
-    python scripts/serve_detached.py --status   # 只做健康检查
-
-注意：Windows 上 WORKERS>1 存在端口绑定的竞态（4 worker 时出现过
-      OSError [WinError 10022]），多 worker 建议跑在 Linux 容器里。
-"""
+"""独立监督进程启动本地服务；launcher.log 单独轮转，停止通过随机令牌控制通道。"""
 from __future__ import annotations
 
 import argparse
+import json
+import logging
 import os
+import secrets
+import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
-import urllib.error
-import urllib.request
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import Any
+from urllib.request import ProxyHandler, build_opener
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PID_FILE = os.path.join(ROOT, "server.pid")
-LOG_FILE = os.path.join(ROOT, "server.log")
+ROOT = Path(__file__).resolve().parents[1]
+PID_FILE = ROOT / "server.pid"
+LOG_FILE = ROOT / "data" / "logs" / "launcher.log"
 IS_WIN = os.name == "nt"
 
 
-def _port() -> int:
-    return int(os.environ.get("PORT") or 8000)
+def endpoint() -> tuple[str, int]:
+    host = os.environ.get("HOST", "127.0.0.1")
+    return ("127.0.0.1" if host in {"0.0.0.0", "::"} else host, int(os.environ.get("PORT", "8000")))
 
 
-def _host() -> str:
-    return os.environ.get("HOST") or "127.0.0.1"
-
-
-def _no_proxy_open(url: str, timeout: float = 5.0):
-    """绕过 http_proxy：本地健康检查不该走代理。"""
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    return opener.open(url, timeout=timeout)
-
-
-def is_listening(host: str, port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(1.5)
-        try:
-            s.connect((host, port))
-            return True
-        except OSError:
-            return False
-
-
-def health(host: str, port: int) -> str:
+def health(host: str, port: int) -> bool:
     try:
-        with _no_proxy_open(f"http://{host}:{port}/health") as r:
-            return f"{r.status} {r.read().decode(errors='ignore')[:120]}"
-    except urllib.error.HTTPError as exc:
-        return f"HTTPError {exc.code}"
-    except Exception as exc:  # noqa: BLE001
-        return f"{type(exc).__name__}: {exc}"
+        with build_opener(ProxyHandler({})).open(f"http://{host}:{port}/readyz", timeout=2) as response:
+            return bool(response.status == 200)
+    except Exception:
+        return False
 
 
-def read_pid() -> int | None:
+def read_state() -> dict[str, Any] | None:
     try:
-        with open(PID_FILE, encoding="utf-8") as fh:
-            return int(fh.read().strip())
+        state = json.loads(PID_FILE.read_text(encoding="utf-8"))
+        if not isinstance(state, dict) or state.get("root") != str(ROOT) or not isinstance(state.get("token"), str):
+            return None
+        return state
     except (OSError, ValueError):
         return None
 
 
-def alive(pid: int) -> bool:
-    if IS_WIN:
-        out = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True, errors="ignore",
-        )
-        return str(pid) in (out.stdout or "")
+def control(command: str, state: dict[str, Any]) -> bool:
     try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
+        with socket.create_connection(("127.0.0.1", int(state["port"])), timeout=2) as connection:
+            connection.sendall(f"{command} {state['token']}\n".encode())
+            return connection.recv(16) == b"ok\n"
+    except (OSError, KeyError, ValueError):
         return False
 
 
 def stop() -> int:
-    pid = read_pid()
-    if not pid:
-        print("没有找到 server.pid，跳过停止。")
+    state = read_state()
+    if state is None or not control("stop", state):
+        print("无法验证本脚本启动的监督进程；未终止任何 PID。旧格式 server.pid 需人工核对。")
         return 1
-    if not alive(pid):
-        print(f"记录的 PID {pid} 已不在运行，清理 pid 文件。")
-        os.remove(PID_FILE)
-        return 0
-    subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)] if IS_WIN else ["kill", "-TERM", str(pid)],
-                   capture_output=True, text=True, errors="ignore")
-    for _ in range(20):
-        if not alive(pid):
-            break
-        time.sleep(0.5)
-    print(f"已停止 PID {pid}" + ("" if not alive(pid) else "（仍在运行，请手动确认）"))
-    if os.path.exists(PID_FILE):
-        os.remove(PID_FILE)
-    return 0
-
-
-def start(wait: float = 40.0) -> int:
-    host, port = _host(), _port()
-    if is_listening(host, port):
-        print(f"端口 {host}:{port} 已有服务在跑，无需重复启动。")
-        print("健康检查:", health(host, port))
-        return 0
-
-    log = open(LOG_FILE, "a", encoding="utf-8", errors="ignore")
-    log.write(f"\n===== serve_detached 启动 @ {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
-    log.flush()
-
-    kwargs: dict = {
-        "cwd": ROOT,
-        "stdout": log,
-        "stderr": subprocess.STDOUT,
-        "stdin": subprocess.DEVNULL,
-        "close_fds": True,
-    }
-    if IS_WIN:
-        DETACHED_PROCESS = 0x00000008
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
-
-    proc = subprocess.Popen([sys.executable, "run.py"], **kwargs)
-    with open(PID_FILE, "w", encoding="utf-8") as fh:
-        fh.write(str(proc.pid))
-    print(f"已拉起独立进程 PID {proc.pid}（日志 -> server.log，PID -> server.pid）")
-
-    deadline = time.time() + wait
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            print(f"✗ 进程提前退出，returncode={proc.returncode}，请查看 server.log 末尾。")
-            return 1
-        if is_listening(host, port):
-            print(f"✓ 端口 {host}:{port} 已就绪，健康检查: {health(host, port)}")
+    for _ in range(80):
+        if read_state() != state:
+            print("监督进程已关闭。")
             return 0
-        time.sleep(1.0)
-    print(f"✗ 等待 {wait:.0f}s 仍未监听，请查看 server.log。")
+        time.sleep(0.25)
+    print("已请求停止，仍在等待子进程退出。")
     return 1
 
 
-def status() -> int:
-    host, port = _host(), _port()
-    pid = read_pid()
-    print(f"记录 PID: {pid if pid else '(无)'}" + (f"  存活: {alive(pid)}" if pid else ""))
-    print(f"端口监听: {is_listening(host, port)}")
-    print("健康检查:", health(host, port))
-    return 0
+def supervise() -> int:
+    token = os.environ.pop("LC_LAUNCHER_TOKEN", "")
+    if len(token) < 32:
+        return 1
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024**2, backupCount=3, encoding="utf-8")
+    logger = logging.getLogger("launcher")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    stopped = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stopped.set())
+    signal.signal(signal.SIGINT, lambda *_: stopped.set())
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(2)
+        listener.settimeout(0.5)
+        state = {"pid": os.getpid(), "port": listener.getsockname()[1], "token": token, "root": str(ROOT)}
+        PID_FILE.write_text(json.dumps(state), encoding="utf-8")
+        if not IS_WIN:
+            PID_FILE.chmod(0o600)
+        child = subprocess.Popen([sys.executable, "run.py"], cwd=ROOT, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
+                                 encoding="utf-8", errors="replace", start_new_session=not IS_WIN,
+                                 creationflags=0x08000000 if IS_WIN else 0)
+
+        def forward() -> None:
+            stream = child.stdout
+            assert stream is not None
+            for line in iter(lambda: stream.readline(16384), ""):
+                logger.info("%s", line.rstrip())
+
+        reader = threading.Thread(target=forward, daemon=True)
+        reader.start()
+        logger.info("launcher started pid=%s child=%s", os.getpid(), child.pid)
+        try:
+            while child.poll() is None and not stopped.is_set():
+                try:
+                    connection, _ = listener.accept()
+                except TimeoutError:
+                    continue
+                with connection:
+                    connection.settimeout(1)
+                    try:
+                        command, supplied = connection.recv(256).decode().strip().split(" ", 1)
+                        if command in {"status", "stop"} and secrets.compare_digest(token, supplied):
+                            connection.sendall(b"ok\n")
+                            if command == "stop":
+                                stopped.set()
+                    except (OSError, ValueError, UnicodeError):
+                        pass
+        finally:
+            if child.poll() is None:
+                # child 仍是此监督进程持有的 Popen 对象，绝不使用过期 pid 文件杀进程。
+                if IS_WIN:
+                    subprocess.run(["taskkill", "/T", "/F", "/PID", str(child.pid)], capture_output=True, check=False,
+                                   creationflags=0x08000000)
+                else:
+                    os.killpg(child.pid, signal.SIGTERM)
+                try:
+                    child.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait(timeout=5)
+            reader.join(timeout=2)
+            if read_state() == state:
+                PID_FILE.unlink(missing_ok=True)
+            logger.info("launcher stopped child_exit=%s", child.returncode)
+            handler.close()
+    return int(child.returncode or 0)
+
+
+def start(wait: float = 40) -> int:
+    host, port = endpoint()
+    if health(host, port):
+        print(f"{host}:{port} readyz 已通过。")
+        return 0
+    state = read_state()
+    if state and control("status", state):
+        print("监督进程已运行，但 readyz 未通过；请查看 data/logs/launcher.log。")
+        return 1
+    token = secrets.token_urlsafe(32)
+    environment = dict(os.environ, LC_LAUNCHER_TOKEN=token, PYTHONUNBUFFERED="1")
+    proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--supervise"], cwd=ROOT, env=environment,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            close_fds=True, start_new_session=not IS_WIN,
+                            creationflags=0x00000008 | 0x00000200 if IS_WIN else 0)
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            break
+        if health(host, port):
+            print(f"readyz 已通过；监督进程 PID {proc.pid}，日志 data/logs/launcher.log。")
+            return 0
+        time.sleep(0.5)
+    print("readyz 未通过；请查看 data/logs/launcher.log，应用日志在 data/logs/application.log。")
+    return 1
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="脱离会话启动/停止本地服务")
-    g = ap.add_mutually_exclusive_group()
-    g.add_argument("--stop", action="store_true", help="停止 server.pid 记录的进程")
-    g.add_argument("--status", action="store_true", help="仅查看状态")
-    ap.add_argument("--wait", type=float, default=40.0, help="启动后等待就绪的秒数")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--stop", action="store_true")
+    modes.add_argument("--status", action="store_true")
+    modes.add_argument("--supervise", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--wait", type=float, default=40)
+    args = parser.parse_args()
     if args.stop:
         return stop()
     if args.status:
-        return status()
-    return start(args.wait)
+        state = read_state()
+        report = {"supervisor": bool(state and control("status", state)), "ready": health(*endpoint())}
+        print(json.dumps(report))
+        return 0 if report["ready"] else 1
+    return supervise() if args.supervise else start(args.wait)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ import { fetchTopics, type Topic } from '../../services/experience'
 import { readPreferences, rememberSearch, writePreferences } from '../../services/preferences'
 import type { CatalogSummary, PaperSummary, SiteCategory, SiteHome } from '../../types'
 import { refreshUnread } from '../../services/growth'
+import { categoryIcon } from '../../services/category-icons'
 import { shareCard } from '../../services/return-route'
 
 const items = ref<PaperSummary[]>([])
@@ -77,7 +78,7 @@ async function loadContent(force = false) {
   // not prevent the catalog, search or other home sections from being used.
   const results = await Promise.allSettled([
     fetchSiteHome({ scope: current, force }).then(home => { if (current()) site.value = home }),
-    fetchCatalogSummary({ scope: current }).then(counts => { if (current()) summary.value = counts }),
+    fetchCatalogSummary({ scope: current, force }).then(counts => { if (current()) summary.value = counts }),
     fetchTopics({ scope: current, force }).then(curated => { if (current()) collections.value = curated.items }),
     session.user ? fetchCatalog({ recent: true, limit: 1 }, { scope: current }).then(result => { if (current()) recentPaper.value = result.items[0] || null }).catch(() => {}) : Promise.resolve(),
   ])
@@ -88,9 +89,8 @@ async function loadContent(force = false) {
 }
 async function load(force = false) {
   if (!active || changing.value) { uni.stopPullDownRefresh(); return }
-  await Promise.allSettled([loadPapers(), loadContent(force)])
+  await Promise.allSettled([loadPapers(), loadContent(force), session.user ? refreshUnread({ force }).catch(() => {}) : Promise.resolve()])
   if (active) uni.stopPullDownRefresh()
-  if (active && session.user) void refreshUnread().catch(() => {})
 }
 async function favorite(paper: PaperSummary) {
   if (loading.value || changing.value) return
@@ -172,7 +172,7 @@ onShareAppMessage(() => shareCard('home'))
         <text class="feed-caption">{{ feedCaption }}</text>
         <view v-if="error" class="error-strip" role="status"><text class="grow">{{ error }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="section-link retry-papers" role="button" :disabled="loading" aria-label="重试加载习题" @click="loadPapers()">{{ loading ? '加载中' : '重试' }}</button></view>
         <EnhancedSkeleton v-if="loading && !items.length" :count="2" type="card" />
-        <transition-group v-else-if="cards.length" name="list" tag="view" class="home-cards">
+        <view v-else-if="cards.length" class="home-cards">
           <PaperCard :active="imagesActive"
             v-for="paper in cards" 
             :key="paper.id" 
@@ -180,12 +180,12 @@ onShareAppMessage(() => shareCard('home'))
             :busy="loading || !!changing" 
             @favorite="favorite(paper)" 
           />
-        </transition-group>
+        </view>
         <view v-else-if="!loading && !error" class="home-empty"><view class="empty-symbol"><wd-icon name="book" size="28px" /></view><text class="empty-title">{{ grade ? '这个年级的练习还在准备中' : '新的练习正在准备中' }}</text><text class="empty-caption">{{ grade ? '换个年级，看看其他练习吧' : '稍后再来，或去习题库逛逛' }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="empty-link" role="button" @click="grade ? clearGrade() : openCatalog()">{{ grade ? '查看全部年级' : '进入习题库' }}<wd-icon name="arrow-right" size="14px" /></button></view>
       </view>
       <view v-if="categories.length" class="content-width home-categories">
         <view class="section-heading"><text class="section-title">按需练习</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="section-link" role="button" @click="openCatalog({ grade })">全部习题<wd-icon name="arrow-right" size="14px" /></button></view>
-        <view class="category-grid"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="(category, index) in categories" :key="category.id" class="category-entry" role="button" @click="openCatalog({ category: category.id, grade })"><view class="category-symbol" :class="'category-tone-' + index"><wd-icon :name="category.icon || (index % 2 ? 'copy' : 'edit')" size="21px" /></view><view class="grow"><text class="category-title">{{ exerciseText(category.name) }}</text><text class="category-caption">{{ category.description || (category.paper_count ? category.paper_count + ' 份练习' : '打开看看') }}</text></view><wd-icon name="arrow-right" size="12px" color="#91a094" /></button></view>
+        <view class="category-grid"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="(category, index) in categories" :key="category.id" class="category-entry" role="button" @click="openCatalog({ category: category.id, grade })"><view class="category-symbol" :class="'category-tone-' + index"><wd-icon :name="categoryIcon(category.icon, index % 2 ? 'copy' : 'edit')" size="21px" /></view><view class="grow"><text class="category-title">{{ exerciseText(category.name) }}</text><text class="category-caption">{{ category.description || (category.paper_count ? category.paper_count + ' 份练习' : '打开看看') }}</text></view><wd-icon name="arrow-right" size="12px" color="#91a094" /></button></view>
       </view>
       <view v-if="collections.length" class="home-collections">
         <view class="content-width section-heading"><view><text class="section-title">专题合集</text><text class="section-caption">围绕一个主题，系统练一练</text></view><text v-if="collections.length > 1" class="swipe-hint">左右滑动</text></view>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
 import { useExamStore } from '../stores/exam'
 import PaperView from './PaperView.vue'
 import FormatBar from './FormatBar.vue'
@@ -25,6 +25,8 @@ const paperOptions = computed(() => store.papers.map((p, index) => ({ label: '�
 const questionCount = computed(() => paper.value?.sections.reduce((total, section) => total + section.data.questions.length, 0) || 0)
 const qualityWarnings = computed(() => paper.value?.sections.flatMap((section, index) => section.warn ? ['第 ' + (index + 1) + ' 大题：' + section.warn] : []) || [])
 const exporting = ref('')
+let exportController: AbortController | undefined
+onBeforeUnmount(() => exportController?.abort())
 const busy = computed(() => !!exporting.value || archiving.value)
 const exportError = ref('')
 watch(() => store.papers, () => { selected.value = 0; store.layoutMode = false })
@@ -33,23 +35,24 @@ function onTitleEdited(title: string, html: string) {
   store.titleHtml = html
   store.papers.forEach(p => { p.title = title; p.titleHtml = html })
 }
-async function run(label: string, job: () => Promise<void>) {
+async function run(label: string, job: (signal: AbortSignal) => Promise<void>) {
   if (busy.value) return
   exportError.value = ''
   exporting.value = label
-  try { await job() }
-  catch (e: unknown) { exportError.value = '导出失败：' + (e instanceof Error ? e.message : String(e)) }
-  finally { exporting.value = '' }
+  exportController = new AbortController()
+  try { await job(exportController.signal) }
+  catch (e: unknown) { exportError.value = e instanceof DOMException && e.name === 'AbortError' ? '导出已取消' : '导出失败：' + (e instanceof Error ? e.message : String(e)) }
+  finally { exporting.value = ''; exportController = undefined }
 }
 function exportPdf(mode: 'student' | 'withAnswers' | 'answersOnly') {
-  if (paper.value) run('正在导出 PDF', () => exporter.exportPDF(paper.value!, store.template, store.style, mode))
+  if (paper.value) run('正在导出 PDF', signal => exporter.exportPDF(paper.value!, store.template, store.style, mode, signal))
 }
 function exportPng() {
-  if (paper.value) run('正在导出 PNG', () => exporter.exportPNG(paper.value!, store.template, store.style))
+  if (paper.value) run('正在导出 PNG', signal => exporter.exportPNG(paper.value!, store.template, store.style, signal))
 }
 function exportBatch(mergeOnly: boolean) {
-  run(mergeOnly ? '正在合并 PDF' : '正在打包 ZIP', () => exporter.exportBatch(store.papers, store.template, store.style,
-    { addDay: store.addDayLabel, mergeOnly }, message => { exporting.value = message }))
+  run(mergeOnly ? '正在合并 PDF' : '正在打包 ZIP', signal => exporter.exportBatch(store.papers, store.template, store.style,
+    { addDay: store.addDayLabel, mergeOnly, signal }, message => { exporting.value = message }))
 }
 function printPaper() { if (stackEl.value) run('正在准备打印', async () => exporter.printStack(stackEl.value!)) }
 const pdfMenu = [
@@ -70,18 +73,28 @@ function toggleLayout() {
   else store.showAnswers = false
   store.layoutMode = !store.layoutMode
 }
+async function confirmRegenerate() {
+  if (store.generating || !window.confirm(`将按${store.grade}${store.subject}「${store.keyword}」重新生成 ${store.paperCount} 份试卷，产生新的模型调用费用（以服务商实际计费为准）。继续后先保存当前结果到本机历史，保存失败将停止。是否继续？`)) return
+  await store.regenerate()
+}
 function cancelLayout() { store.layoutMode = false; paperViewEl.value?.repaginate() }
 </script>
 
 <template>
-  <section v-if="paper" class="result-view" aria-label="生成的试卷">
+  <section class="result-view" aria-label="生成的试卷">
     <GenerationTasks />
-    <QuestionManager v-if="manageQuestions" :paper-index="selected" @close="manageQuestions = false" />
+    <QuestionManager v-if="paper && manageQuestions" :paper-index="selected" @close="manageQuestions = false" />
     <div v-if="store.generateWarn || store.generateError || exportError" class="result-notice no-print">
       <UAlert v-if="store.generateWarn" color="warning" variant="soft" :title="store.generateWarn" />
       <RecoveryActions />
       <UAlert v-if="store.generateError || exportError" color="error" variant="soft" :title="exportError || store.generateError" role="alert" />
     </div>
+    <div v-if="!paper" class="p-8" role="status">
+      <p>{{ store.generating ? (store.generateProgress || '正在生成试卷…') : '暂时没有可用试卷，请查看任务状态或修改条件。' }}</p>
+      <RecoveryActions />
+      <UButton label="返回搭建" variant="outline" @click="store.backToBuild()" />
+    </div>
+    <template v-if="paper">
     <div v-if="qualityWarnings.length" class="result-quality no-print"><UAlert color="warning" variant="soft" title="当前试卷待核对" :description="qualityWarnings.join('；')" /></div>
     <div class="result-toolbar no-print">
       <UTooltip text="返回搭建"><UButton icon="i-lucide-arrow-left" color="neutral" variant="ghost" aria-label="返回搭建" :disabled="busy" @click="store.backToBuild()" /></UTooltip>
@@ -89,7 +102,7 @@ function cancelLayout() { store.layoutMode = false; paperViewEl.value?.repaginat
       <span class="text-xs text-muted">共 {{ store.papers.length }} 份</span>
       <div class="flex-1"></div>
       <UButton label="管理题目" icon="i-lucide-list-checks" variant="outline" :disabled="busy || store.layoutMode || store.generating" @click="manageQuestions = true" />
-      <UButton icon="i-lucide-refresh-cw" label="重新生成" color="neutral" variant="outline" :loading="store.generating" :disabled="busy || store.layoutMode" @click="store.regenerate()" />
+      <UButton icon="i-lucide-refresh-cw" label="重新生成" color="neutral" variant="outline" :loading="store.generating" :disabled="busy || store.layoutMode" @click="confirmRegenerate" />
       <UButton icon="i-lucide-cloud-upload" label="保存到云端" color="neutral" variant="outline" :loading="archiving" :disabled="busy || store.layoutMode || store.generating || store.accountChanged" @click="showCloudSave = true" />
       <UButtonGroup>
         <UButton icon="i-lucide-download" label="下载 PDF" :loading="!!exporting" :disabled="busy || store.layoutMode || store.generating" @click="exportPdf('student')" />
@@ -104,12 +117,13 @@ function cancelLayout() { store.layoutMode = false; paperViewEl.value?.repaginat
         <template v-else><UButton label="取消" color="neutral" variant="ghost" size="xs" @click="cancelLayout" /><UButton icon="i-lucide-check" label="完成排版" size="xs" @click="toggleLayout" /></template>
       </div>
     </div>
-    <div v-if="exporting" class="px-5 py-2 text-xs text-primary bg-default no-print" role="status">{{ exporting }}</div>
+    <div v-if="exporting" class="px-5 py-2 text-xs text-primary bg-default no-print"><span role="status">{{ exporting }}</span><UButton label="取消导出" variant="ghost" size="xs" @click="exportController?.abort()" /></div>
     <div ref="stackEl" class="preview-scroll">
       <PaperView :key="selected" ref="paperViewEl" :paper="paper" :template="store.template" :style="store.style" :show-answers="store.showAnswers" :editable="!busy" :layout-mode="store.layoutMode" :add-day="store.addDayLabel" :zoom="zoom"
         @title-edited="onTitleEdited" @toggle-element="store.toggleHiddenElement($event)" @title-offset="value => store.setStyle({ titleOffsetY: value })" />
     </div>
     <div class="preview-footer no-print"><span>A4 <span class="mx-1 text-dimmed">/</span> {{ questionCount }} 道题目</span><ZoomControl :zoom="zoom" :manual="manual" @change="setManual" /></div>
     <CloudSaveDialog v-if="showCloudSave" :open="showCloudSave" :selected="selected" @close="showCloudSave = false" @busy="archiving = $event" @library="showCloudSave = false; emit('library')" />
+    </template>
   </section>
 </template>

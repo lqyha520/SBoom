@@ -101,6 +101,7 @@ export const draftActions = {
         this.applySnapshot(draft.snapshot)
         this.draftSavedAt = draft.updatedAt
       }
+      await persistence.pruneWorkspace(owner, session.current)
       await this.refreshHistory()
       this.draftState = 'saved'
     } catch (error) {

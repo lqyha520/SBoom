@@ -144,22 +144,18 @@ export const useExamStore = defineStore('exam', {
     async init() {
       // 草稿持久化失败（IndexedDB 被禁用、存储配额耗尽等）不能连坐：年级科目必须照常加载，
       // 否则工作台会整片空白，用户完全看不出问题出在本地存储上。
-      try {
-        await this.initPersistence()
-      } catch (error) {
-        this.persistenceReady = true
-        this.draftState = 'error'
-        this.storageError = error instanceof Error ? error.message : '本地草稿初始化失败'
-      }
       this.availableLoading = true
       this.availableError = ''
-      try {
-        this.available = await api.fetchAvailable()
-      } catch {
-        this.availableError = '年级加载失败，请刷新重试'
-      } finally {
-        this.availableLoading = false
-      }
+      await Promise.allSettled([
+        this.initPersistence().catch(error => {
+          this.persistenceReady = true
+          this.draftState = 'error'
+          this.storageError = error instanceof Error ? error.message : '本地草稿初始化失败'
+        }),
+        api.fetchAvailable().then(value => { this.available = value }).catch(() => {
+          this.availableError = '年级加载失败，请刷新重试'
+        }).finally(() => { this.availableLoading = false }),
+      ])
       if (this.grade && this.subject) void this.selectSubject(this.subject)
       void this.syncTemplatesFromServer()
       void this.refreshUsage()

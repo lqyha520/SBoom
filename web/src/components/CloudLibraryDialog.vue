@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { completeArchive, createArchiveFolder, deleteArchive, fetchArchive, fetchArchiveFolders, fetchArchives, patchArchive } from '../library'
+import { completeArchive, safeLibraryUrl, createArchiveFolder, deleteArchive, fetchArchive, fetchArchiveFolders, fetchArchives, patchArchive } from '../library'
 import type { ArchiveFolder, ArchiveSummary } from '../library'
 import { useExamStore } from '../stores/exam'
 defineProps<{ open: boolean }>()
@@ -55,7 +55,7 @@ async function download(row: ArchiveSummary) {
   try {
     const pdf = (await fetchArchive(row.id)).assets.find(asset => asset.kind === 'pdf')
     if (!pdf) throw new Error('PDF 尚未就绪')
-    const link = document.createElement('a'); link.href = pdf.url; link.download = row.title + '.pdf'; link.click()
+    const link = document.createElement('a'); link.href = safeLibraryUrl(pdf.url); link.download = row.title + '.pdf'; link.click()
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '下载失败' }
   finally { busy.value = '' }
 }

@@ -4,6 +4,7 @@ import json
 
 from app.db import db
 from app.models.image_generation import ImageModelConfig
+from app.provider_policy import require_new_key, validate_endpoint
 from app.security import decrypt_secret, encrypt_secret
 
 KEY = "image_generation"
@@ -29,9 +30,13 @@ def get_config(with_key=False):
 
 
 def save_config(value: ImageModelConfig):
+    endpoint = validate_endpoint(value.baseUrl, resolve=False)
     with db(serialized="accounts") as conn:
         current = _raw(conn)
+        if current.get("apiKeyEnc"):
+            require_new_key(current.get("baseUrl", ""), endpoint, value.apiKey)
         raw = value.model_dump(exclude={"apiKey"})
+        raw["baseUrl"] = endpoint
         raw["apiKeyEnc"] = encrypt_secret(value.apiKey) if value.apiKey else current.get("apiKeyEnc", "")
         conn.execute(
             "INSERT INTO app_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET "

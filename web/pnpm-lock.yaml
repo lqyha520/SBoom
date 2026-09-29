@@ -48,6 +48,9 @@ importers:
       '@playwright/test':
         specifier: ^1.63.0
         version: 1.63.0
+      '@types/node':
+        specifier: ^22.20.2
+        version: 22.20.2
       '@types/sortablejs':
         specifier: ^1.15.8
         version: 1.15.9

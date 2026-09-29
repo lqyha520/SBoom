@@ -6,7 +6,7 @@ OnFailure=learn-coach-backup-alert.service
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/learn-coach
-EnvironmentFile=/etc/learn-coach/backup.env
+EnvironmentFile=/etc/learn-coach/release.env
 UMask=0077
-ExecStart=/bin/sh -c 'exec /opt/learn-coach/.venv/bin/python scripts/backup_restore.py backup --destination "$BACKUP_ROOT/$(date -u +%%Y%%m%%dT%%H%%M%%SZ)" --files-root "$ARCHIVE_LOCAL_DIR" --env-file "$SERVICE_ENV_FILE" --secret-file "$SERVICE_SECRET_FILE"'
+ExecStart=/usr/bin/python3 scripts/release/ops.py backup
 TimeoutStartSec=1800

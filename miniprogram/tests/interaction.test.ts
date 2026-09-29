@@ -1,3 +1,5 @@
+import { usePageLifecycle } from '../src/services/page-lifecycle'
+import { reconcileRows } from '../src/services/catalog-rows'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
@@ -12,7 +14,7 @@ function fixture(file: string, modules: Record<string, unknown>, expose: string,
   const source = parse(readFileSync(new URL('../src/' + file, import.meta.url), 'utf8')).descriptor.scriptSetup!.content
   const exports: Record<string, any> = {}
   vm.runInNewContext(ts.transpileModule(source + '\n' + expose, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
-    exports, require: (id: string) => id === 'vue' ? { ...vue, onMounted() {}, onBeforeUnmount() {} } : modules[id] || {},
+    exports, require: (id: string) => id === 'vue' ? { ...vue, onMounted() {}, onBeforeUnmount() {} } : modules[id] || (id.endsWith('/page-lifecycle') ? { usePageLifecycle, captureScroll: (save: (top: number) => void) => save(600) } : id.endsWith('/catalog-rows') ? { reconcileRows } : id.endsWith('/page-navigation') ? { navigatePage: (options: unknown) => (globals.uni as any)?.navigateTo?.(options) } : {}),
     setTimeout, clearTimeout, defineExpose() {}, defineProps: () => ({}), withDefaults: (_props: unknown, defaults: unknown) => defaults, ...globals,
   })
   return exports
@@ -145,7 +147,7 @@ test('detail return retains metadata, cancels old reads, and withholds private c
   try {
     callbacks.onLoad!({ id: 'paper' }); await page.load()
     assert.equal(page.cover.value, '/thumb')
-    callbacks.onPageScroll!({ scrollTop: 600 }); callbacks.onHide!()
+    callbacks.onHide!()
     assert.equal(page.paper.value.title, detail.title)
     assert.equal(page.paper.value.snapshot, null)
     assert.equal(page.pages.value.length, 0)
@@ -249,6 +251,7 @@ test('网盘资料不依赖 PDF，获取后展示链接，复制失败可重试�
     '../../services/api': { errorMessage: String, fetchCatalogPaper: async () => ({ id: 'link', title: '资料', can_view: true, can_download: true, download_mode: 'external', assets: [] }),
       requestCatalogDownload: async () => ({ kind: 'external', url: 'https://pan.example.com/a', extraction_code: 'Ab12' }) },
     '../../services/session': { session: vue.reactive({ user: { id: 'reader' } }), ensureSession: async () => true, requireLogin: () => true },
+    '../../services/privacy': { copyWithPrivacy: (options: any) => { copied.push(options.data); if (copied.length === 1) options.fail(); else options.success(); options.complete() } },
     '../../services/latest-request': { createLatestRequest },
     '../../services/assets': { cancelPdfDownload() {}, clearAssetCache() {}, openPdf: async () => { pdfOpened = true } },
     '../../presentation': { exerciseText: (title: string) => title },

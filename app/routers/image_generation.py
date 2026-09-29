@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.blocking import run_sync
-from app.deps import require_admin, require_user
+from app.deps import require_admin, require_recent_admin, require_user
 from app.library_deps import no_store
 from app.models.image_generation import ImageModelConfig, ImageWorksheetRequest
 from app.services import image_config
@@ -19,13 +19,15 @@ def get_config(admin: CurrentUser = Depends(require_admin)):
 
 
 @router.put("/admin/image-config")
-def save_config(request: ImageModelConfig, admin: CurrentUser = Depends(require_admin)):
+def save_config(request: ImageModelConfig, admin: CurrentUser = Depends(require_recent_admin)):
+    from app.provider_policy import validate_endpoint
+    validate_endpoint(request.baseUrl)
     image_config.save_config(request)
     return image_config.get_config()
 
 
 @router.delete("/admin/image-config")
-def clear_config(admin: CurrentUser = Depends(require_admin)):
+def clear_config(admin: CurrentUser = Depends(require_recent_admin)):
     image_config.clear_config()
     return {"status": "ok"}
 

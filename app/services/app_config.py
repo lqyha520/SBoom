@@ -12,7 +12,9 @@ import logging
 import threading
 import time
 
+from app.config import get_settings
 from app.db import db
+from app.provider_policy import require_new_key, validate_endpoint
 from app.security import decrypt_secret, encrypt_secret
 
 logger = logging.getLogger(__name__)
@@ -20,7 +22,7 @@ logger = logging.getLogger(__name__)
 _LLM_KEY = "llm"
 _CACHE_TTL_SECONDS = 60.0
 
-_EMPTY = {"baseUrl": "", "model": "", "timeout": 120, "hasKey": False, "api_key": ""}
+_EMPTY = {"baseUrl": "", "model": "", "timeout": 120, "maxTokens": get_settings().llm_max_tokens, "hasKey": False, "api_key": ""}
 
 # ─── 缓存（进程内；管理员保存时失效，重启即空） ───
 #
@@ -111,14 +113,15 @@ def get_llm(with_key: bool = False) -> dict:
         "baseUrl": raw.get("baseUrl", ""),
         "model": raw.get("model", ""),
         "timeout": raw.get("timeout", 120),
+        "maxTokens": raw.get("maxTokens", get_settings().llm_max_tokens),
         "hasKey": bool(key_enc),
         "api_key": decrypt_secret(key_enc) if with_key else "",
     }
 
 
-def _save_llm_raw(conn, base_url: str, model: str, key_enc: str, timeout: int) -> None:
+def _save_llm_raw(conn, base_url: str, model: str, key_enc: str, timeout: int, max_tokens: int | None = None) -> None:
     payload = json.dumps(
-        {"baseUrl": base_url, "model": model, "apiKeyEnc": key_enc, "timeout": timeout},
+        {"baseUrl": base_url, "model": model, "apiKeyEnc": key_enc, "timeout": timeout, "maxTokens": max_tokens or get_settings().llm_max_tokens},
         ensure_ascii=False,
     )
     conn.execute(
@@ -132,12 +135,13 @@ def _save_llm_raw(conn, base_url: str, model: str, key_enc: str, timeout: int) -
     )
 
 
-def save_llm(base_url: str, model: str, api_key: str, timeout: int) -> None:
+def save_llm(base_url: str, model: str, api_key: str, timeout: int, max_tokens: int | None = None) -> None:
     """保存全局 LLM 配置。api_key 为空字符串表示保留已存密钥不变。
 
     写路径不再持有缓存锁（否则一次 DB 写会卡住所有读请求）；
     事务提交后再失效缓存，加载中的旧值由 _cache_gen 机制作废。
     """
+    base_url = validate_endpoint(base_url, resolve=False)
     with db(serialized="accounts") as conn:
         row = conn.execute("SELECT value FROM app_config WHERE key = ?", (_LLM_KEY,)).fetchone()
         try:
@@ -146,8 +150,10 @@ def save_llm(base_url: str, model: str, api_key: str, timeout: int) -> None:
             current = {}
         if not isinstance(current, dict):
             current = {}
+        if current.get("apiKeyEnc") or get_settings().llm_api_key:
+            require_new_key(current.get("baseUrl") or get_settings().llm_base_url, base_url, api_key)
         key_enc = encrypt_secret(api_key) if api_key else current.get("apiKeyEnc", "")
-        _save_llm_raw(conn, base_url, model, key_enc, timeout)
+        _save_llm_raw(conn, base_url, model, key_enc, timeout, max_tokens)
     _invalidate_cache()
 
 

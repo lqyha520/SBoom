@@ -4,16 +4,8 @@ import type { PaperSummary, User } from './types'
  * 年级/科目的展示顺序由后台「年级科目字典」决定：/catalog/summary 已按字典排好序，
  * 前端只做去重，不再按内置学制重排（否则运营在后台调的顺序会被前端覆盖）。
  */
-export function uniqueValues(values: string[]) {
-  return [...new Set(values)]
-}
-
 export function subjectTone(subject: string) {
   return subject === '语文' ? 'language' : subject === '数学' ? 'math' : subject === '英语' ? 'english' : 'general'
-}
-
-export function subjectTagType(subject: string) {
-  return subject === '语文' ? 'volcano' : subject === '数学' ? 'primary' : subject === '英语' ? 'success' : 'warning'
 }
 
 export function exerciseText(value: string | null | undefined) {
@@ -60,13 +52,6 @@ export function subjectOptions(subjects: string[]) {
     const rank = (value: string) => preferred.includes(value) ? preferred.indexOf(value) : preferred.length
     return rank(left) - rank(right)
   })
-}
-
-export function homeGroups(papers: PaperSummary[]) {
-  const selected = papers.filter(paper => paper.featured).slice(0, 3)
-  const featured = selected.length ? selected : papers.slice(0, 3)
-  const ids = new Set(featured.map(paper => paper.id))
-  return { featured, recommended: papers.filter(paper => !ids.has(paper.id)).slice(0, 6), curated: selected.length > 0 }
 }
 
 export function homeSelection(papers: PaperSummary[], offset: number) {

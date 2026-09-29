@@ -12,10 +12,14 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import httpx
+from fastapi import HTTPException
 
+from app.blocking import run_sync
 from app.config import get_settings
+from app.http_limits import limited_lines
 from app.metrics import observe_provider
-from app.services.generation_control import record_attempt, record_usage
+from app.services.generation_budget import reserve
+from app.services.generation_control import current_usage, record_attempt, record_usage
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,17 @@ CLIENT_LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10)
 def _should_retry(e: Exception) -> bool:
     """只有确定请求未到达服务端的错误才值得重试（不产生二次计费）。"""
     return isinstance(e, RETRYABLE)
+
+
+class OutputTruncated(HTTPException):
+    """保留原始残片供服务端校验；错误响应只公开已验证的大题。"""
+
+    def __init__(self, partial_text: str):
+        super().__init__(422, detail={
+            "code": "generation_truncated",
+            "error": "生成内容达到模型输出上限，请减少单次题量后重试；原请求不会自动重新计费",
+        })
+        self.partial_text = partial_text
 
 
 class LLMClient:
@@ -91,6 +106,7 @@ class LLMClient:
             },
             timeout=httpx.Timeout(self.DEFAULT_TIMEOUT, connect=CONNECT_TIMEOUT, pool=POOL_TIMEOUT),
             limits=CLIENT_LIMITS,
+            trust_env=False,
         )
         self._clients[cache_key] = client
         return client
@@ -143,10 +159,17 @@ class LLMClient:
             response: httpx.Response | None = None
             for attempt in range(1, self.MAX_ATTEMPTS + 1):
                 try:
+                    if current_usage.get() is not None:
+                        await run_sync(reserve, tokens=len(json.dumps(messages, ensure_ascii=False).encode()) + (max_tokens if max_tokens is not None else settings.llm_max_tokens) + 2048)
                     record_attempt()
-                    response = await client.post(
-                        "/chat/completions", json=payload, timeout=self._req_timeout(timeout))
-                    response.raise_for_status()
+                    async with client.stream("POST", "/chat/completions", json=payload, timeout=self._req_timeout(timeout)) as streamed:
+                        streamed.raise_for_status()
+                        raw = bytearray()
+                        async for chunk in streamed.aiter_bytes():
+                            raw.extend(chunk)
+                            if len(raw) > settings.provider_max_response_bytes:
+                                raise HTTPException(502, detail={"code": "provider_response_too_large", "error": "模型响应超过安全上限，请减少题量"})
+                        response = httpx.Response(streamed.status_code, content=bytes(raw), headers=streamed.headers)
                     break
                 except Exception as e:
                     if attempt == self.MAX_ATTEMPTS or not _should_retry(e):
@@ -163,6 +186,9 @@ class LLMClient:
             try:
                 data = response.json()
                 record_usage(data.get("usage"))
+                if data["choices"][0].get("finish_reason") == "length":
+                    content = data["choices"][0].get("message", {}).get("content")
+                    raise OutputTruncated(content if isinstance(content, str) else "")
                 return str(data["choices"][0]["message"]["content"])
             except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
                 # LLM 返回了非 JSON 错误页或结构异常——翻译成统一异常，由调用方按 502 处理
@@ -196,11 +222,13 @@ class LLMClient:
         }
 
         async with self._borrow_client(url, key) as client:
+            if current_usage.get() is not None:
+                await run_sync(reserve, tokens=len(json.dumps(messages, ensure_ascii=False).encode()) + (max_tokens if max_tokens is not None else settings.llm_max_tokens) + 2048)
             record_attempt()
             async with client.stream(
                 "POST", "/chat/completions", json=payload, timeout=self._req_timeout(timeout)) as response:
                 response.raise_for_status()
-                async for line in response.aiter_lines():
+                async for line in limited_lines(response, settings.provider_max_response_bytes):
                     if line.startswith("data: "):
                         data_str = line[6:].strip()
                         if data_str == "[DONE]":
@@ -208,7 +236,9 @@ class LLMClient:
                         try:
                             chunk = json.loads(data_str)
                             record_usage(chunk.get("usage"))
-                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            if chunk.get("choices") and chunk["choices"][0].get("finish_reason") == "length":
+                                raise HTTPException(422, detail={"code": "generation_truncated", "error": "生成内容达到输出上限，请减少题量后重试"})
+                            delta = (chunk.get("choices") or [{}])[0].get("delta", {})
                             content = delta.get("content", "")
                             if content:
                                 yield content

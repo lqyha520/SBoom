@@ -4,6 +4,7 @@ import io
 import re
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import BinaryIO
 
 from fastapi import HTTPException
 from PIL import Image, UnidentifiedImageError
@@ -31,28 +32,28 @@ class LocalStorage:
             raise ValueError("Private storage path escapes its root")
         return path
 
-    def put(self, key: str, data: bytes, mime: str):
+    def put(self, key: str, data: bytes, mime: str) -> None:
         path = self.path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         # Each upload has a fresh random prefix; a completed file is never replaced.
         with path.open("xb") as stream:
             stream.write(data)
 
-    def delete(self, key: str):
+    def delete(self, key: str) -> None:
         self.path(key).unlink(missing_ok=True)
 
 
-def storage_for(name: str | None = None):
+def storage_for(name: str | None = None) -> LocalStorage:
     """私有文件存储后端。已移除 COS 支持，仅保留本地磁盘存储。"""
     if name not in (None, "", "local"):
         raise ValueError(f"Unsupported storage backend: {name!r}")
     return LocalStorage()
 
 
-def unpack_bundle(data: bytes) -> list[tuple[str, int, str, bytes]]:
+def unpack_bundle(data: bytes | BinaryIO) -> list[tuple[str, int, str, bytes]]:
     """Validate in memory; never extract user-provided ZIP paths to the filesystem."""
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        with zipfile.ZipFile(io.BytesIO(data) if isinstance(data, bytes) else data) as archive:
             entries = archive.infolist()
             names = [entry.filename for entry in entries]
             if not 2 <= len(entries) <= MAX_PAGES + 1 or len(names) != len(set(names)):

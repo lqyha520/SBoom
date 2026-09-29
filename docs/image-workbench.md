@@ -25,7 +25,7 @@
 
 请求使用 `POST /images/generations`，发送 `model`、`prompt`、`n: 1`、`size`，按配置附加 `response_format`。多张采用逐张顺序请求，兼容只支持 `n: 1` 的服务商，并逐张展示进度。支持同步返回的 `data[0].b64_json` 或 `data[0].url`；不支持服务商另行定义的异步任务协议。
 
-URL 图片须为公开 HTTPS 地址。服务端逐次验证并固定公网 IP，不转发 API 密钥给图片下载地址。图片经格式、大小、像素限制及 PNG 转换后交给浏览器，保证下载不依赖远端链接的跨域配置或有效期。
+provider默认禁止内网地址（`PROVIDER_ALLOW_PRIVATE=false`），配置前须通过服务端地址校验。URL 图片须为公开 HTTPS 地址。服务端逐次验证并固定公网 IP，不转发 API 密钥给图片下载地址。图片经格式、大小、像素限制及 PNG 转换后交给浏览器，保证下载不依赖远端链接的跨域配置或有效期。
 
 ## 请求与结果
 
@@ -39,7 +39,7 @@ URL 图片须为公开 HTTPS 地址。服务端逐次验证并固定公网 IP，
 ## 验证
 
 ```powershell
-py -3.12 -m unittest discover -s tests -p test_backend_image_generation.py -v
+python scripts/dev.py test -- tests/test_backend_image_generation.py -v
 pnpm --dir web typecheck
 pnpm --dir web test
 pnpm --dir web build

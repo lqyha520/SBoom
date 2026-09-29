@@ -102,3 +102,13 @@ test('a late download from an old session is discarded before native preview', a
   await rejected
   assert.deepEqual(opened, []); assert.deepEqual(removed, ['/stale.pdf'])
 })
+
+test('32 MiB PDF 在弱网下有足够传输时间且保留原始资源 URL', async () => {
+  const { api, tasks } = fixture()
+  const pending = api.openPdf({ url: '/large.pdf', byte_size: 32 * 1024 * 1024 }, '大文件')
+  await Promise.resolve()
+  assert.equal(tasks[0]!.url, '/large.pdf')
+  assert.equal(tasks[0]!.timeout, 532000)
+  tasks[0]!.success({ statusCode: 200, tempFilePath: '/large.pdf' })
+  await pending; api.clearAssetCache()
+})

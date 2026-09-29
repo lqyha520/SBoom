@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useRevisionConflict } from '../revision-conflict'
 import { computed, onActivated, onDeactivated, ref } from 'vue'
 import type { UserInfo } from '../api'
 import { createNotice, deleteNotice, siteNotices, updateNotice, type Notice, type NoticeState } from '../site'
@@ -12,6 +13,7 @@ const busy = ref(false)
 const dialog = ref(false)
 const target = ref<Notice | null>(null)
 const formError = ref('')
+const recovery = useRevisionConflict(target, async id => { const value = (await siteNotices()).items.find(item => item.id === id); if (!value) throw new Error('该条目已删除，请复制修改后新建'); return value }, formError)
 const removing = ref<Notice | null>(null)
 const removeOpen = ref(false)
 let sequence = 0
@@ -85,7 +87,7 @@ async function save() {
     else await createNotice(props.user.id, payload())
     notice.value = target.value ? '公告已更新' : '公告已创建'
     dialog.value = false; await load()
-  } catch (cause) { formError.value = message(cause) }
+  } catch (cause) { recovery.capture(cause); formError.value = message(cause) }
   finally { busy.value = false }
 }
 async function toggleVisible(item: Notice) {
@@ -143,7 +145,7 @@ onDeactivated(() => { sequence++; loading.value = false; dialog.value = false; r
       <div class="grid-two"><UFormField label="开始时间" hint="留空立即生效"><UInput v-model="form.starts_at" type="datetime-local" :disabled="busy" class="w-full" /></UFormField><UFormField label="结束时间" hint="留空长期有效"><UInput v-model="form.ends_at" type="datetime-local" :disabled="busy" class="w-full" /></UFormField></div>
       <UAlert v-if="!windowValid" title="结束时间必须晚于开始时间。" color="warning" variant="soft" />
       <USwitch v-model="form.is_visible" label="启用该公告" :disabled="busy" />
-      <UAlert v-if="formError" :title="formError" color="error" variant="soft" />
+      <UButton v-if="recovery.conflict.value" label="载入最新并保留我的修改" :loading="recovery.recovering.value" @click="recovery.reload" /><UAlert v-if="formError" :title="formError" color="error" variant="soft" />
     </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="dialog = false" /><UButton type="submit" form="notice-form" :label="target ? '保存' : '创建'" icon="i-lucide-check" :loading="busy" :disabled="busy || !canSave" /></template></UModal>
 
     <UModal v-model:open="removeOpen" title="删除公告" :dismissible="!busy" :close="!busy"><template #body><div class="field-stack"><p>确认删除「{{ removing?.title }}」？</p></div></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="removeOpen = false" /><UButton label="确认删除" color="error" icon="i-lucide-trash-2" :loading="busy" :disabled="busy" @click="confirmRemove" /></template></UModal>

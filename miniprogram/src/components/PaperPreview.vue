@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
+import { onHide } from '@dcloudio/uni-app'
 import ChromeBack from './ChromeBack.vue'
 import PrivateImage from './PrivateImage.vue'
 import type { Asset } from '../types'
@@ -25,13 +26,16 @@ const bar = chromeBar()
 const navigationTop = ref(bar.inset)
 const navigationHeight = ref(bar.height)
 function close() { jumpOpen.value = false; emit('close') }
+let savedPage = -1
+function savePosition() { if (savedPage !== current.value) { savedPage = current.value; rememberPosition(owner, props.paperId, props.release, current.value) } }
+onHide(savePosition)
+onBeforeUnmount(savePosition)
 function select(index: number) {
   if (!Number.isInteger(index) || index < 0 || index >= props.pages.length) return
   // Native movable-view retains internal pan/zoom state. Reset only a page
   // that was zoomed, keeping ordinary adjacent images mounted during turns.
   if (zoomed.delete(current.value)) resetKeys.value[current.value] = (resetKeys.value[current.value] || 0) + 1
   current.value = index; scale.value = 1; zoomedCurrent.value = false; jumpOpen.value = false
-  rememberPosition(owner, props.paperId, props.release, index)
 }
 function change(event: { detail: { current: number } }) { select(event.detail.current) }
 // 缩放期间绝不给 movable-view 改属性（direction 固定为 all）：每帧 setData 会打断它的

@@ -4,7 +4,7 @@ import time
 from contextvars import ContextVar
 from functools import wraps
 
-from prometheus_client import Counter, Gauge, Histogram, Info
+from prometheus_client import Counter, Gauge, Histogram
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.metrics_exporter import start_metrics_server as start_metrics_server
@@ -20,7 +20,9 @@ db_pool_connections = Gauge("db_pool_connections", "Pool connections", ["state"]
 db_wait = Histogram("db_wait_seconds", "Database pool and lock wait", ["kind"])
 thread_wait = Histogram("thread_wait_seconds", "Wait before synchronous work starts")
 maintenance_failures = Counter("maintenance_failures_total", "Failed maintenance iterations")
-app_info = Info("app_info", "Application version")
+app_info = Gauge("app_build_info", "Application version", ["version", "name"], multiprocess_mode="livemax")
+database_busy_total = Counter("database_busy_total", "Database admission or pool timeouts")
+thread_capacity = Gauge("thread_capacity", "Thread limiter usage", ["kind", "state"], multiprocess_mode="livesum")
 provider_model: ContextVar[str] = ContextVar("provider_model", default="unknown")
 
 class RequestMetrics:
@@ -81,7 +83,7 @@ def observe_provider(function):
     return call
 
 def init_metrics(app_version: str) -> None:
-    app_info.info({"version": app_version, "name": "learning-coach"})
+    app_info.labels(app_version, "learning-coach").set(1)
 
 
 

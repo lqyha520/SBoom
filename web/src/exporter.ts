@@ -50,58 +50,38 @@ async function withProbeFix<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-/** 容器 → A4 页画布数组（在元素边界处断页）；按需关闭彩色装饰（省墨） */
-async function canvasesOf(holder: HTMLElement, style?: PaperStyle): Promise<HTMLCanvasElement[]> {
-  const { default: html2canvas } = await import('html2canvas')
-  if (style && !style.exportBg) {
-    holder.querySelectorAll('.paper').forEach(p => {
-      p.querySelectorAll('.paper-bg-layer').forEach(el => ((el as HTMLElement).style.display = 'none'))
-      p.querySelectorAll('.exam-head').forEach(el => el.setAttribute('data-plain', '1'))
-      p.setAttribute('data-seccolor', '0')
-      p.setAttribute('data-frame', 'none')
-      p.setAttribute('data-encourage', '0')
-      p.setAttribute('data-reward', '0')
-      p.querySelectorAll('.paper-frame-layer').forEach(el => ((el as HTMLElement).style.display = 'none'))
-    })
-  }
-  const pages: HTMLCanvasElement[] = []
-  for (const paper of Array.from(holder.querySelectorAll('.paper:not(.measure)'))) {
-    const canvas = await withProbeFix(() =>
-      html2canvas(paper as HTMLElement, { scale: 3, backgroundColor: '#ffffff' }))
-    const W = canvas.width
-    const pageH = Math.round(W * 297 / 210)
-
-    const scale = W / (paper as HTMLElement).offsetWidth
-    const breaks: number[] = []
-    ;(paper as HTMLElement).querySelectorAll('.exam > *').forEach(el => {
-      breaks.push(Math.round((el as HTMLElement).offsetTop * scale) + Math.round((el as HTMLElement).offsetHeight * scale))
-    })
-    breaks.sort((a, b) => a - b)
-
-    let y = 0
-    while (y < canvas.height - 2) {
-      let cut = y + pageH
-      if (cut < canvas.height) {
-        const ok = breaks.filter(b => b > y + pageH * 0.55 && b <= cut)
-        if (ok.length) cut = ok[ok.length - 1]
-      } else {
-        cut = canvas.height
-      }
-      const h = cut - y
-      const page = document.createElement('canvas')
-      page.width = W
-      page.height = pageH
-      const ctx = page.getContext('2d')!
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(0, 0, W, pageH)
-      ctx.drawImage(canvas, 0, y, W, h, 0, 0, W, h)
-      pages.push(page)
-      y = cut
+export function checkExportActive(signal?: AbortSignal, isActive = () => true) {
+  if (signal?.aborted || !isActive()) throw new DOMException('操作已取消，已完成的云端内容仍保留', 'AbortError')
+}
+export function validateExportPageCount(count: number) {
+  if (!count || count > 40) throw new Error('每份导出支持 1 至 40 页，请减少题目或答案页后重试')
+}
+export function exportScale(): number {
+  const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory
+  return !memory || memory <= 4 ? 2 : 3
+}
+type ExportControl = { signal?: AbortSignal; isActive?: () => boolean }
+type PageConsumer = (page: HTMLCanvasElement, index: number, total: number) => Promise<void> | void
+/** 每页截图、消费、释放后才处理下一页；页数在创建第一张画布前校验。 */
+async function renderPages(paper: PaperData, template: PaperTemplate, style: PaperStyle,
+  mode: 'student' | 'withAnswers' | 'answersOnly', addDay: boolean, consume: PageConsumer, control: ExportControl = {}) {
+  const prepared: Awaited<ReturnType<typeof preparePaper>>[] = []
+  const assertActive = () => checkExportActive(control.signal, control.isActive)
+  try {
+    assertActive()
+    if (mode !== 'answersOnly') prepared.push(await preparePaper(paper, template, style, addDay, assertActive))
+    if (mode !== 'student') prepared.push(await preparePaper(buildAnswerPaper(paper), template, style, false, assertActive))
+    const pages = prepared.flatMap(value => value.pages)
+    validateExportPageCount(pages.length)
+    const { default: html2canvas } = await import('html2canvas')
+    for (const [index, page] of pages.entries()) {
+      assertActive()
+      const canvas = await withProbeFix(() => html2canvas(page, { scale: exportScale(), backgroundColor: '#ffffff' }))
+      try { assertActive(); await consume(canvas, index, pages.length) }
+      finally { canvas.width = canvas.height = 0 }
     }
-    // 长图已切页，立即释放整卷大画布
-    canvas.width = canvas.height = 0
-  }
-  return pages
+    assertActive()
+  } finally { prepared.forEach(value => value.dispose()) }
 }
 
 /* ── 答案卷：与试卷同版式（同卷头/字体/分栏），题干位置换成 答案+解析 ── */
@@ -154,20 +134,6 @@ function makeHolder(): HTMLElement {
   return holder
 }
 
-async function answerCanvases(paper: PaperData, template: PaperTemplate, style: PaperStyle): Promise<HTMLCanvasElement[]> {
-  // 答案卷与学生卷同一渲染管线（同版式、块级分页不切断单条答案）
-  const ansPaper = buildAnswerPaper(paper)
-  return renderPaperCanvases(ansPaper, template, style, { addDay: false })
-}
-
-/* ── 画布 ↔ JPEG：立即转 dataURL 并释放画布（批量导出防内存峰值） ── */
-function canvasesToJpegs(pages: HTMLCanvasElement[], quality = 0.92): string[] {
-  const imgs = pages.map(pc => pc.toDataURL('image/jpeg', quality))
-  // 归零宽高可立刻释放 RGBA 缓冲（比等 GC 确定性高）
-  pages.forEach(pc => { pc.width = pc.height = 0 })
-  return imgs
-}
-
 /* ── JPEG dataURL → PDF（增量添加，画布侧已释放；jspdf 动态加载，模块缓存命中时零开销） ── */
 type jsPDF = import('jspdf').jsPDF
 async function imagesToPDF(images: string[], stampNumbers = true): Promise<jsPDF> {
@@ -203,172 +169,136 @@ function baseTitle(paper: PaperData, template: PaperTemplate): string {
   )
 }
 
-/** The same fixed page pixels feed both the PDF and its private mobile previews. */
-export async function createArchiveBundle(snapshot: ArchiveSnapshot, progress?: (message: string) => void): Promise<Blob> {
+/** 同一页像素用于归档 PDF 和预览图，不同时保留多页 RGBA 画布。 */
+export async function createArchiveBundle(snapshot: ArchiveSnapshot, progress?: (message: string) => void, control: ExportControl = {}): Promise<Blob> {
   const { paper, template, style, export_options: options } = snapshot
   const { default: JSZip } = await import('jszip')
   const zip = new JSZip()
-  const pages: HTMLCanvasElement[] = []
-  try {
-    if (options.mode !== 'answersOnly') pages.push(...await studentCanvases(paper, template, style, options.addDay))
-    if (options.mode !== 'student') pages.push(...await answerCanvases(paper, template, style))
-    if (!pages.length || pages.length > 40) throw new Error('每份归档支持 1 至 40 页，请减少题目或答案页后重试')
-    const images: string[] = []
-    for (let index = 0; index < pages.length; index++) {
-      progress?.(`正在处理第 ${index + 1}/${pages.length} 页`)
-      const page = pages[index]
-      const ctx = page.getContext('2d')!
-      const pixelsPerMm = page.width / 210
-      ctx.fillStyle = '#000000'
-      ctx.font = `${9 * 25.4 / 72 * pixelsPerMm}px Times New Roman`
-      ctx.textAlign = 'center'
-      ctx.fillText(`- ${index + 1} / ${pages.length} -`, page.width / 2, 292.5 * pixelsPerMm)
-      images.push(page.toDataURL('image/jpeg', 0.92))
-      const preview = document.createElement('canvas')
-      preview.width = Math.min(1040, page.width)
-      preview.height = Math.round(preview.width * 297 / 210)
-      try {
-        preview.getContext('2d')!.drawImage(page, 0, 0, preview.width, preview.height)
-        const blob = await new Promise<Blob>((resolve, reject) => preview.toBlob(value => value ? resolve(value) : reject(new Error('预览图生成失败')), 'image/jpeg', 0.85))
-        zip.file(`page-${index + 1}.jpg`, blob)
-      } finally { preview.width = preview.height = 0 }
-      page.width = page.height = 0
-    }
-    zip.file('paper.pdf', (await imagesToPDF(images, false)).output('arraybuffer'))
-    const bundle = await zip.generateAsync({ type: 'blob', compression: 'STORE' })
-    if (bundle.size > 40 * 1024 * 1024) throw new Error('文件包超过 40 MB，请减少页数后重试')
-    return bundle
-  } finally { pages.forEach(page => { page.width = page.height = 0 }) }
-}
-
-/* ── 单份导出 ── */
-export async function exportPDF(
-  paper: PaperData,
-  template: PaperTemplate,
-  style: PaperStyle,
-  mode: 'student' | 'withAnswers' | 'answersOnly',
-): Promise<void> {
   const images: string[] = []
-  if (mode !== 'answersOnly') images.push(...canvasesToJpegs(await studentCanvases(paper, template, style, true)))
-  if (mode !== 'student') images.push(...canvasesToJpegs(await answerCanvases(paper, template, style)))
-  const doc = await imagesToPDF(images)
+  await renderPages(paper, template, style, options.mode, options.addDay, async (page, index, total) => {
+    progress?.(`正在处理第 ${index + 1}/${total} 页`)
+    const ctx = page.getContext('2d')!
+    const pixelsPerMm = page.width / 210
+    ctx.fillStyle = '#000000'
+    ctx.font = `${9 * 25.4 / 72 * pixelsPerMm}px Times New Roman`
+    ctx.textAlign = 'center'
+    ctx.fillText(`- ${index + 1} / ${total} -`, page.width / 2, 292.5 * pixelsPerMm)
+    images.push(page.toDataURL('image/jpeg', 0.92))
+    const preview = document.createElement('canvas')
+    preview.width = Math.min(1040, page.width)
+    preview.height = Math.round(preview.width * 297 / 210)
+    try {
+      preview.getContext('2d')!.drawImage(page, 0, 0, preview.width, preview.height)
+      zip.file(`page-${index + 1}.jpg`, await canvasBlob(preview, 'image/jpeg', 0.85))
+    } finally { preview.width = preview.height = 0 }
+  }, control)
+  zip.file('paper.pdf', (await imagesToPDF(images, false)).output('arraybuffer'))
+  images.length = 0
+  const bundle = await zip.generateAsync({ type: 'blob', compression: 'STORE' }, () => checkExportActive(control.signal, control.isActive))
+  checkExportActive(control.signal, control.isActive)
+  if (bundle.size > 40 * 1024 * 1024) throw new Error('文件包超过 40 MB，请减少页数后重试')
+  return bundle
+}
+function canvasBlob(canvas: HTMLCanvasElement, type = 'image/png', quality?: number): Promise<Blob> {
+  return new Promise((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('图片生成失败')), type, quality))
+}
+async function paperImages(paper: PaperData, template: PaperTemplate, style: PaperStyle,
+  mode: 'student' | 'withAnswers' | 'answersOnly', addDay: boolean, signal?: AbortSignal) {
+  const images: string[] = []
+  await renderPages(paper, template, style, mode, addDay, page => { images.push(page.toDataURL('image/jpeg', 0.92)) }, { signal })
+  return images
+}
+export async function exportPDF(paper: PaperData, template: PaperTemplate, style: PaperStyle,
+  mode: 'student' | 'withAnswers' | 'answersOnly', signal?: AbortSignal): Promise<void> {
+  const doc = await imagesToPDF(await paperImages(paper, template, style, mode, true, signal))
+  checkExportActive(signal)
   const suffix = mode === 'answersOnly' ? '（答案）' : mode === 'withAnswers' ? '（含答案）' : ''
   doc.save(`${baseTitle(paper, template)}${suffix}.pdf`)
 }
-
-export async function exportPNG(
-  paper: PaperData,
-  template: PaperTemplate,
-  style: PaperStyle,
-): Promise<void> {
-  const pages = await studentCanvases(paper, template, style, true)
+export async function exportPNG(paper: PaperData, template: PaperTemplate, style: PaperStyle, signal?: AbortSignal): Promise<void> {
+  const { default: JSZip } = await import('jszip')
+  const zip = new JSZip()
   const title = baseTitle(paper, template)
-  pages.forEach((pc, i) => {
-    pc.toBlob(blob => blob && download(blob, `${title}_第${i + 1}页.png`))
-  })
+  let single: Blob | undefined, count = 0
+  await renderPages(paper, template, style, 'student', true, async (page, index, total) => {
+    const blob = await canvasBlob(page)
+    count = total
+    if (total === 1) single = blob
+    else zip.file(`${title}_第${index + 1}页.png`, blob)
+  }, { signal })
+  const blob = count === 1 ? single! : await zip.generateAsync({ type: 'blob' }, () => checkExportActive(signal))
+  checkExportActive(signal)
+  download(blob, `${title}.${count === 1 ? 'png' : 'zip'}`)
 }
-
-/* ── 批量导出（全部 ZIP / 仅合并 PDF） ── */
-export async function exportBatch(
-  papers: PaperData[],
-  template: PaperTemplate,
-  style: PaperStyle,
-  opts: { addDay: boolean; mergeOnly?: boolean },
-  onProgress?: (msg: string) => void,
-): Promise<void> {
+export async function exportBatch(papers: PaperData[], template: PaperTemplate, style: PaperStyle,
+  opts: { addDay: boolean; mergeOnly?: boolean; signal?: AbortSignal }, onProgress?: (msg: string) => void): Promise<void> {
+  if (!papers.length) throw new Error('试卷没有可导出的页面')
   const { default: JSZip } = await import('jszip')
   const zip = opts.mergeOnly ? null : new JSZip()
-  // 合并卷不再累积画布：逐份转 JPEG（每份处理完即释放 RGBA 内存）
-  const mergedImages: string[] = []
+  const { jsPDF: JsPDF } = await import('jspdf')
+  const merged = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
+  let mergedCount = 0
   const title = baseTitle(papers[0], template)
-
-  for (let k = 0; k < papers.length; k++) {
-    onProgress?.(`正在处理第 ${k + 1}/${papers.length} 份…`)
-    const paper = papers[k]
-    const stuImgs = canvasesToJpegs(await studentCanvases(paper, template, style, opts.addDay))
-    mergedImages.push(...stuImgs)
+  for (const [index, paper] of papers.entries()) {
+    checkExportActive(opts.signal)
+    onProgress?.(`正在处理第 ${index + 1}/${papers.length} 份…`)
+    const images = await paperImages(paper, template, style, 'student', opts.addDay, opts.signal)
+    for (const image of images) {
+      if (mergedCount++) merged.addPage()
+      merged.addImage(image, 'JPEG', 0, 0, 210, 297)
+    }
     if (zip) {
-      const suffix = opts.addDay && papers.length > 1 ? `-第${k + 1}天` : `-第${k + 1}份`
-      zip.file(`${title}${suffix}-学生卷.pdf`, (await imagesToPDF(stuImgs)).output('arraybuffer'))
-      onProgress?.(`正在生成第 ${k + 1} 份答案…`)
-      const ansImgs = canvasesToJpegs(await answerCanvases(paper, template, style))
-      zip.file(`${title}${suffix}-答案.pdf`, (await imagesToPDF(ansImgs)).output('arraybuffer'))
+      const suffix = opts.addDay ? `-第${index + 1}天` : `-第${index + 1}份`
+      zip.file(`${title}${suffix}-学生卷.pdf`, (await imagesToPDF(images)).output('arraybuffer'))
+      images.length = 0
+      onProgress?.(`正在生成第 ${index + 1} 份答案…`)
+      zip.file(`${title}${suffix}-答案.pdf`, (await imagesToPDF(await paperImages(paper, template, style, 'answersOnly', false, opts.signal))).output('arraybuffer'))
     }
   }
-
-  onProgress?.('正在合并 PDF…')
-  const merged = await imagesToPDF(mergedImages)
-  if (!zip) {
-    merged.save(`${title}-全部${papers.length}份合并.pdf`)
-    return
-  }
+  merged.setFont('times', 'normal'); merged.setFontSize(9)
+  for (let page = 1; page <= mergedCount; page++) { merged.setPage(page); merged.text(`- ${page} / ${mergedCount} -`, 105, 292.5, { align: 'center' }) }
+  checkExportActive(opts.signal)
+  if (!zip) { merged.save(`${title}-全部${papers.length}份合并.pdf`); return }
   zip.file(`${title}-全部${papers.length}份合并.pdf`, merged.output('arraybuffer'))
   onProgress?.('正在打包…')
-  const blob = await zip.generateAsync({ type: 'blob' })
+  const blob = await zip.generateAsync({ type: 'blob' }, () => checkExportActive(opts.signal))
+  checkExportActive(opts.signal)
   download(blob, `${title}-${papers.length}份.zip`)
 }
-
-/** 数据 → 离屏渲染一份学生卷并出画布（确定性等待渲染完成后再截图） */
-async function renderPaperCanvases(
-  paper: PaperData,
-  template: PaperTemplate,
-  style: PaperStyle,
-  opts: { addDay: boolean },
-): Promise<HTMLCanvasElement[]> {
+/** 只准备分页 DOM，先统计学生卷与答案总页数再开始截图。 */
+async function preparePaper(paper: PaperData, template: PaperTemplate, style: PaperStyle, addDay: boolean, assertActive: () => void) {
   const { default: PaperView } = await import('./components/PaperView.vue')
+  assertActive()
   const holder = makeHolder()
-  const mountPoint = holder.firstElementChild as HTMLElement
   document.body.appendChild(holder)
-
-  const app = createApp({
-    render: () =>
-      h(PaperView, {
-        paper,
-        template,
-        style,
-        editable: false,
-        addDay: opts.addDay,
-      }),
-  })
-  app.mount(mountPoint)
+  const app = createApp({ render: () => h(PaperView, { paper, template, style, editable: false, addDay }) })
+  const dispose = () => { app.unmount(); holder.remove() }
   try {
+    app.mount(holder.firstElementChild as HTMLElement)
     await document.fonts?.ready
-    const totalQ = paper.sections.reduce((s, x) => s + (x.data.questions?.length || 0), 0)
+    const totalQ = paper.sections.reduce((sum, section) => sum + (section.data.questions?.length || 0), 0)
     const deadline = Date.now() + 10000
-    let lastSig = ''
-    let stableFrames = 0
-    // 等待：纸页出现、题数齐全、连续 3 帧签名不变（分页/字体/布局全部稳定）
+    let lastSig = '', stableFrames = 0
     while (Date.now() < deadline) {
-      await new Promise(r => requestAnimationFrame(r))
-      const papers = holder.querySelectorAll('.paper-stack .paper')
-      const qs = holder.querySelectorAll('.paper-stack .q')
-      const sig = `${papers.length}|${qs.length}|${(holder.firstElementChild as HTMLElement).offsetHeight}`
-      if (papers.length > 0 && qs.length >= totalQ && sig === lastSig) {
-        stableFrames++
-        if (stableFrames >= 3) break
-      } else {
-        stableFrames = 0
-        lastSig = sig
-      }
+      assertActive()
+      await new Promise(resolve => requestAnimationFrame(resolve))
+      const pages = holder.querySelectorAll('.paper-stack .paper')
+      const questions = holder.querySelectorAll('.paper-stack .q')
+      const sig = `${pages.length}|${questions.length}|${(holder.firstElementChild as HTMLElement).offsetHeight}`
+      if (pages.length > 0 && questions.length >= totalQ && sig === lastSig) { if (++stableFrames >= 3) break }
+      else { stableFrames = 0; lastSig = sig }
     }
     if (stableFrames < 3) throw new Error('试卷分页尚未完成，请稍后重试导出')
     const overflow = holder.querySelector<HTMLElement>('[data-pagination-error]')?.dataset.paginationError
     if (overflow) throw new Error(overflow)
-    return await canvasesOf(holder, style)
-  } finally {
-    app.unmount()
-    document.body.removeChild(holder)
-  }
-}
-
-/** 学生卷从数据渲染导出（不再克隆预览 DOM，避开 zoom/克隆态问题） */
-async function studentCanvases(
-  paper: PaperData,
-  template: PaperTemplate,
-  style: PaperStyle,
-  addDay: boolean,
-): Promise<HTMLCanvasElement[]> {
-  return renderPaperCanvases(paper, template, style, { addDay })
+    const pages = Array.from(holder.querySelectorAll<HTMLElement>('.paper-stack .paper'))
+    if (!style.exportBg) for (const page of pages) {
+      page.querySelectorAll<HTMLElement>('.paper-bg-layer, .paper-frame-layer').forEach(el => { el.style.display = 'none' })
+      page.querySelectorAll('.exam-head').forEach(el => el.setAttribute('data-plain', '1'))
+      for (const [name, value] of Object.entries({ seccolor: '0', frame: 'none', encourage: '0', reward: '0' })) page.setAttribute('data-' + name, value)
+    }
+    return { pages, dispose }
+  } catch (error) { dispose(); throw error }
 }
 
 /** 打印预览栈（打印样式由 CSS @media print 控制；无需额外的 body 标记类） */

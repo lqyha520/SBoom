@@ -58,9 +58,9 @@ const profileDirty = computed(() => !!target.value
   && (profileName.value.trim() !== (target.value.nickname || target.value.username) || profileAvatarKey.value !== target.value.avatar))
 const initial = computed(() => (Array.from(profileName.value.trim())[0] || '?').toUpperCase())
 const valid = computed(() => {
-  if (action.value === 'create') return !registrationAccountError(username.value) && password.value.length >= 6
+  if (action.value === 'create') return !registrationAccountError(username.value) && password.value.length >= 8
   if (action.value === 'profile') return !nicknameError(profileName.value) && profileDirty.value
-  if (action.value === 'password') return password.value.length >= 6
+  if (action.value === 'password') return password.value.length >= 8
   if (action.value === 'delete') return deleteConfirmed.value
   return !!target.value && (level.value === 'regular' || lifetime.value || Number.isFinite(Date.parse(expires.value)))
 })
@@ -163,7 +163,7 @@ const routeState = useAdminListRoute('miniUsers', { q, membership, page }, () =>
     </tbody></table></div>
     <div class="table-footer"><span>共 {{ total }} 位小程序用户</span><UPagination v-if="total > 20" v-model:page="page" :total="total" :items-per-page="20" :sibling-count="1" size="sm" /></div>
     <UModal v-model:open="dialog" :title="title" :dismissible="!busy" :close="!busy"><template #body><form id="mini-user-form" class="field-stack" @submit.prevent="save">
-      <template v-if="action === 'create'"><UFormField label="登录账号" hint="2-32 位英文字母、数字、下划线或短横线，不能使用中文" required><UInput v-model="username" minlength="2" maxlength="32" autocomplete="off" :disabled="busy" required class="w-full" /></UFormField><UFormField label="初始密码" required><UInput v-model="password" type="password" minlength="6" maxlength="128" autocomplete="new-password" :disabled="busy" required class="w-full" /></UFormField></template>
+      <template v-if="action === 'create'"><UFormField label="登录账号" hint="2-32 位英文字母、数字、下划线或短横线，不能使用中文" required><UInput v-model="username" minlength="2" maxlength="32" autocomplete="off" :disabled="busy" required class="w-full" /></UFormField><UFormField label="初始密码" required><UInput v-model="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" :disabled="busy" required class="w-full" /></UFormField></template>
 
       <template v-else-if="target">
         <div class="member-account"><span class="mini-avatar"><img v-if="target.avatar_url" :src="target.avatar_url" alt="头像" class="avatar-photo" /><span v-else-if="avatarGlyph(target.avatar)" class="mini-avatar-glyph">{{ avatarGlyph(target.avatar) }}</span><span v-else>{{ (target.username || '?').slice(0, 1).toUpperCase() }}</span></span><strong>{{ target.username }}</strong><UBadge size="xs" color="neutral" variant="soft">{{ target.has_password ? '可账号密码登录' : '仅微信登录' }}</UBadge></div>
@@ -177,7 +177,7 @@ const routeState = useAdminListRoute('miniUsers', { q, membership, page }, () =>
           <UAlert v-if="!profileDirty" color="info" variant="soft" title="昵称和头像都没改动，换一个再保存。" />
         </template>
 
-        <template v-else-if="action === 'password'"><UFormField label="新密码" required><UInput v-model="password" type="password" minlength="6" maxlength="128" autocomplete="new-password" placeholder="至少 6 位" :disabled="busy" required class="w-full" /></UFormField><UAlert :color="target.has_password ? 'warning' : 'info'" variant="soft" :title="target.has_password ? '重置后该账号的全部登录会话立即失效，用户需用新密码重新登录。' : '该账号目前只能用微信登录，设置密码后即可用固定登录账号和密码在 H5 登录。'" /></template>
+        <template v-else-if="action === 'password'"><UFormField label="新密码" required><UInput v-model="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="至少 8 位" :disabled="busy" required class="w-full" /></UFormField><UAlert :color="target.has_password ? 'warning' : 'info'" variant="soft" :title="target.has_password ? '重置后该账号的全部登录会话立即失效，用户需用新密码重新登录。' : '该账号目前只能用微信登录，设置密码后即可用固定登录账号和密码在 H5 登录。'" /></template>
 
         <template v-else-if="action === 'membership'"><UFormField label="会员身份"><USelect v-model="level" :items="levels" :disabled="busy" class="w-full" /></UFormField><template v-if="level === 'vip'"><USwitch v-model="lifetime" label="长期有效" :disabled="busy" /><UFormField v-if="!lifetime" label="会员到期时间" required><UInput v-model="expires" type="datetime-local" :disabled="busy" required class="w-full" /></UFormField></template><USwitch v-model="active" label="账号启用" :disabled="busy" /><UAlert v-if="!active" title="禁用后，该用户的全部小程序会话将失效。" color="warning" variant="soft" /></template>
 

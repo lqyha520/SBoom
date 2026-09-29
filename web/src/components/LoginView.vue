@@ -10,6 +10,8 @@ const confirmation = ref('')
 const visible = ref(false)
 const busy = ref(false)
 const error = ref('')
+const sessionNotice = ref('')
+try { sessionNotice.value = sessionStorage.getItem('lc_session_notice') || ''; sessionStorage.removeItem('lc_session_notice') } catch { /* 登录仍可继续。 */ }
 const modes = [{ label: '登录', value: 'login' }, { label: '注册', value: 'register' }]
 watch(mode, () => { error.value = ''; confirmation.value = '' })
 async function submit() {
@@ -18,7 +20,7 @@ async function submit() {
   const name = username.value.trim()
   if (!name || !password.value) { error.value = '请输入用户名和密码'; return }
   if (mode.value === 'register') {
-    if (password.value.length < 6) { error.value = '密码至少需要 6 位'; return }
+    if (password.value.length < 8) { error.value = '密码至少需要 8 位'; return }
     if (password.value !== confirmation.value) { error.value = '两次输入的密码不一致'; return }
   }
   busy.value = true
@@ -42,6 +44,7 @@ async function submit() {
     </header>
     <main class="auth-main">
       <div class="auth-form">
+        <UAlert v-if="sessionNotice" :title="sessionNotice" color="info" variant="soft" role="status" />
         <div class="auth-emblem"><UIcon name="i-lucide-book-open-check" class="size-6" /></div>
         <h1>{{ mode === 'login' ? '欢迎回来' : '创建账号' }}</h1>
         <p>{{ mode === 'login' ? '登录你的教学工作空间' : '开启新的备课日常' }}</p>

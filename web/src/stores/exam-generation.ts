@@ -7,9 +7,17 @@ import {
   createGenerationRun,
   runGenerationJob,
   GenerationStopped,
+  RequestNotRecorded,
   type GenerationContext,
   type GenerationMode,
 } from '../generation'
+
+async function ensureRequestRecorded(store: ExamWorkspace) {
+  if (store.accountChanged) throw new RequestNotRecorded()
+  const owner = store.ownerId
+  if (!store.persistenceReady || !store.ownerId || !await store.flushDraft()) throw new RequestNotRecorded()
+  if (store.accountChanged || store.ownerId !== owner) throw new RequestNotRecorded()
+}
 
 function generationSections(sections: Section[]): GenerationContext['sections'] {
   return sections.map((section) => ({
@@ -50,8 +58,7 @@ export const generationActions = {
     try {
       const result = await runGenerationJob(run.context, run.jobs[0], existing ? 'retry' : 'send', async () => {
         if (this.accountChanged) throw new Error('账号已变化，未发送请求')
-        if (this.persistenceReady && this.ownerId && !(await this.flushDraft()))
-          throw new Error('请求记录保存失败，请先恢复本地存储')
+        await ensureRequestRecorded(this)
       })
       if (this.accountChanged) return
       const replacement = result.sections[0]?.data.questions[0]
@@ -128,7 +135,7 @@ export const generationActions = {
     try {
       const paper = await runGenerationJob(run.context, run.jobs[0], existing ? mode : 'send', async () => {
         if (this.accountChanged) throw new Error('账号已变化，未发送请求')
-        if (this.persistenceReady) await this.flushDraft()
+        await ensureRequestRecorded(this)
       })
       if (this.accountChanged) return
       section.data = deepClone(paper.sections[0].data)
@@ -192,6 +199,7 @@ export const generationActions = {
         job.context = perPaper
         job.chunks = createGenerationRun({ ...perPaper, count: 1 }).jobs[0].chunks
       })
+      this.view = 'result'
       this.papers = []
       this.failedCount = 0
     } finally {
@@ -218,7 +226,7 @@ export const generationActions = {
     this.generateProgress = prefix + ' 0/' + total + ' 份'
     try {
       await Promise.all(
-        Array.from({ length: Math.min(3, total) }, async () => {
+        Array.from({ length: Math.min(2, total) }, async () => {
           while (pending.length && !this.accountChanged && !this.stopRequested) {
             const job = pending.shift()!
             job.startedAt = Date.now()
@@ -228,7 +236,7 @@ export const generationActions = {
               const paper = await runGenerationJob(job.context || run.context, job, mode, async () => {
                 if (this.accountChanged) throw new Error('账号已变化，未发送新请求')
                 if (this.stopRequested) throw new GenerationStopped()
-                if (this.persistenceReady) await this.flushDraft()
+                await ensureRequestRecorded(this)
                 if (this.accountChanged) throw new Error('账号已变化，未发送新请求')
                 if (this.stopRequested) throw new GenerationStopped()
               })

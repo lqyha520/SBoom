@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { copyWithPrivacy } from '../../services/privacy'
 import { computed, nextTick, ref, watch } from 'vue'
-import { onHide, onLoad, onPullDownRefresh, onShow, onUnload, onShareAppMessage, onPageScroll } from '@dcloudio/uni-app'
+import { onHide, onLoad, onPullDownRefresh, onShow, onUnload, onShareAppMessage } from '@dcloudio/uni-app'
 import PageChrome from '../../components/PageChrome.vue'
 import PrivateImage from '../../components/PrivateImage.vue'
 import PaperPreview from '../../components/PaperPreview.vue'
@@ -14,6 +15,7 @@ import { fileSize, fileStatus, formatDate } from '../../content'
 import { difficultyLabel, exerciseText, exerciseTitle, downloadAccessHint, subjectTone } from '../../presentation'
 import { assignGroup, createGroup, fetchGroups, openSupport, recordEvent, recordView, type FavoriteGroup } from '../../services/experience'
 import type { ExternalDownload, PaperDetail, PrintEdition } from '../../types'
+import { captureScroll } from '../../services/page-lifecycle'
 import { shareCard } from '../../services/return-route'
 
 const id = ref('')
@@ -21,6 +23,8 @@ const edition = ref<PrintEdition['kind']>('original')
 const paper = ref<PaperDetail | null>(null)
 const verified = ref(false)
 let scrollTop = 0
+let viewedBy = ''
+const groupReads = createLatestRequest()
 const loading = ref(false)
 const error = ref('')
 const downloading = ref(false)
@@ -84,7 +88,10 @@ async function load() {
       verified.value = true
       if (restoring) { await nextTick(); if (current()) uni.pageScrollTo?.({ scrollTop, duration: 0 }) }
       if (!result.editions?.some(item => item.kind === edition.value)) edition.value = 'original'
-      if (current() && session.user) void recordView(result.id).catch(() => {})
+      if (current() && session.user && viewedBy !== session.user.id) {
+        const owner = session.user.id; viewedBy = owner
+        void recordView(result.id).catch(() => { if (viewedBy === owner) viewedBy = '' })
+      }
     }
   } catch (cause) {
     if (current()) {
@@ -136,7 +143,7 @@ function copyLink() {
   const revision = actionRevision
   const target = linkTarget.value
   copyingLink.value = true; linkError.value = ''
-  uni.setClipboardData({
+  copyWithPrivacy({
     data: target.url + (target.extraction_code ? '\n提取码：' + target.extraction_code : ''),
     success: () => { if (active && revision === actionRevision) uni.showToast({ title: '链接已复制', icon: 'success' }) },
     fail: () => { if (active && revision === actionRevision) linkError.value = '复制失败，请重试或长按上方链接手动复制' },
@@ -148,7 +155,7 @@ async function chooseGroup() {
   const revision = actionRevision
   groupBusy.value = true; groupError.value = ''; groupName.value = ''; groupOpen.value = true
   try {
-    const { items } = await fetchGroups()
+    const { items } = await fetchGroups({ scope: groupReads.begin() })
     if (!active || revision !== actionRevision) return
     groupItems.value = items; groupOpen.value = true
   } catch (cause) { if (active && revision === actionRevision) groupError.value = errorMessage(cause) }
@@ -193,7 +200,7 @@ function viewMembership() { if (requireLogin()) membershipOpen.value = true }
 function sharePaper() {
   if (!paper.value) return
   const card = shareCard('paper', paper.value.id, paper.value.title)
-  uni.setClipboardData({
+  copyWithPrivacy({
     data: window.location.origin + window.location.pathname + '#' + card.path,
     success: () => uni.showToast({ title: '资料链接已复制，可发送给好友', icon: 'none' }),
     fail: () => uni.showToast({ title: '复制失败，请重试', icon: 'none' }),
@@ -201,18 +208,17 @@ function sharePaper() {
 }
 // #endif
 onLoad(options => { id.value = typeof options?.id === 'string' ? options.id : '' })
-onPageScroll(event => { scrollTop = event.scrollTop })
 onShareAppMessage(() => shareCard('paper', id.value, paper.value?.title))
 onShow(async () => { active = true; await ensureSession(); if (active) void load() })
 function leave() {
-  active = false; actionRevision++; requests.invalidate(); loading.value = false; verified.value = false
+  active = false; groupReads.invalidate(); actionRevision++; requests.invalidate(); loading.value = false; verified.value = false
   if (paper.value) paper.value = { ...paper.value, assets: [], snapshot: null, thumbnail_url: null, editions: paper.value.editions?.map(({ url: _url, ...item }) => item) }
   cancelPdfDownload()
   previewOpen.value = false; membershipOpen.value = false; uni.stopPullDownRefresh()
   clearLink()
   groupOpen.value = false; groupBusy.value = false; groupError.value = ''; groupItems.value = []; groupName.value = ''
 }
-onHide(leave)
+onHide(() => { captureScroll(top => { scrollTop = top }); leave() })
 function reconnect() { if (active && !changing.value && !downloading.value) void load() }
 uni.$on?.('lc-network-restored', reconnect)
 onUnload(() => { leave(); paper.value = null; uni.$off?.('lc-network-restored', reconnect) })
@@ -221,8 +227,8 @@ onPullDownRefresh(() => { void load() })
 
 <template>
   <view class="detail-page" :class="{ 'has-editions': hasEditions }">
+    <view class="page-navigation-sticky"><PageChrome back fallback="/pages/library/index" /></view>
     <view class="detail-hero" :class="subjectTone(paper?.subject || '')">
-      <PageChrome back fallback="/pages/library/index" />
       <view v-if="paper" class="paper-stage">
         <view v-if="!verified" class="preview-sheet locked-sheet"><wd-loading v-if="loading" /><text>{{ loading ? '正在核验访问权限' : '请重试加载资料' }}</text></view>
         <view v-else-if="!paper.can_view" class="preview-sheet locked-sheet"><wd-icon name="lock" size="31px" /><text>VIP 专享习题</text></view>

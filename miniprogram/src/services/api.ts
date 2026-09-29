@@ -1,3 +1,4 @@
+import { ApiError as SharedApiError, parseErrorDetail, retryableIdempotent, backoff } from '../../../shared/http'
 import type { RequestScope } from './latest-request'
 import type { Asset, DownloadTarget, CatalogSummary, PaperDetail, PaperList, SiteDocument, SiteHome, User } from '../types'
 import { exerciseText } from '../presentation'
@@ -17,17 +18,17 @@ let owner = ''
 let generation = 0
 let onUnauthorized: () => void = () => {}
 
-export class ApiError extends Error {
-  constructor(message: string, public status = 0, public code = '') { super(message) }
-}
+export class ApiError extends SharedApiError {}
 
 export function configureSession(value: string, userId = '') {
+  if (value === token && (!owner || !userId || owner === userId)) { if (userId) owner = userId; return false }
   token = value
   owner = userId
   generation++
   invalidateMetadata()
   for (const cancel of activeReads) cancel()
   activeReads.clear()
+  return true
 }
 export function authGeneration() { return generation }
 export function unauthorizedHandler(handler: () => void) { onUnauthorized = handler }
@@ -62,7 +63,7 @@ export function apiUrl(path: string) {
   return base + path
 }
 
-function network<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: unknown, scope?: RequestScope): Promise<T> {
+function networkOnce<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: unknown, scope?: RequestScope): Promise<T> {
   const epoch = generation
   const loginRequest = path.startsWith('/api/v1/mini/login') || path === '/api/v1/mini/register'
   return new Promise((resolve, reject) => {
@@ -85,20 +86,33 @@ function network<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'G
         if (settled) return
         settled = true; cleanup()
         if (epoch !== generation) { reject(new ApiError('登录状态已变化', 409)); return }
-        if (response.statusCode >= 200 && response.statusCode < 300) { resolve(response.data as T); return }
-        const payload = response.data as { detail?: { error?: string; code?: string } | { msg?: string }[] | string }
-        const detail = payload?.detail
-        const code = detail && typeof detail === 'object' && !Array.isArray(detail) ? detail.code || '' : ''
-        const message = typeof detail === 'string' ? detail : Array.isArray(detail)
-          ? detail[0]?.msg?.replace(/^Value error, /, '') || '填写内容不符合要求，请检查后重试'
-          : detail?.error || `请求失败 (${response.statusCode})`
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          if (method !== 'GET' && path !== '/api/v1/catalog/window') invalidatePersonal()
+          resolve(response.data as T); return
+        }
+        const { message, code, requestId } = parseErrorDetail(response.data, `请求失败 (${response.statusCode})`)
         if (!loginRequest) handleAuthFailure(response.statusCode, code)
         if (response.statusCode >= 500) uni.$emit?.('lc-diagnostic', 'server')
-        reject(new ApiError(message, response.statusCode, code))
+        reject(new ApiError(message, response.statusCode, code, requestId || String(response.header?.['X-Correlation-ID'] || response.header?.['x-correlation-id'] || '')))
       },
       fail() { if (!settled) { settled = true; cleanup(); uni.$emit?.('lc-diagnostic', 'network'); reject(new ApiError('网络连接失败，请稍后重试')) } },
     })
   })
+}
+
+async function network<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: unknown, scope?: RequestScope): Promise<T> {
+  const epoch = generation
+  let cancelled = false
+  const unregister = scope?.onCancel(() => { cancelled = true })
+  try {
+    try { return await networkOnce<T>(path, method, data, scope) }
+    catch (error) {
+      if (!(error instanceof ApiError) || error.code === 'cancelled' || cancelled || epoch !== generation || !retryableIdempotent(method, error.status)) throw error
+      await backoff()
+      if (cancelled || epoch !== generation) throw new ApiError('请求已取消', 0, 'cancelled')
+      return await networkOnce<T>(path, method, data, scope)
+    }
+  } finally { unregister?.() }
 }
 
 const activeReads = new Set<() => void>()
@@ -106,11 +120,19 @@ export interface ReadOptions { scope?: RequestScope; force?: boolean }
 const metadata = new Map<string, { expires: number; value: unknown }>()
 const pending = new Map<string, { promise: Promise<unknown>; users: number; cancel: () => void }>()
 const publicPaths = new Set(['/api/v1/site/home', '/api/v1/site/topics', '/api/v1/site/catalog-tags'])
+const personalPaths = new Set(['/api/v1/mini/me', '/api/v1/catalog/summary', '/api/v1/mini/messages?unread=false&offset=0&limit=1'])
+function invalidatePersonal() {
+  for (const cached of [...metadata.keys(), ...pending.keys()]) if (personalPaths.has(cached.slice(cached.indexOf(':') + 1))) { metadata.delete(cached); pending.delete(cached) }
+}
 let metadataEpoch = 0
 export function invalidateMetadata() { metadataEpoch++; metadata.clear(); pending.clear() }
 export function request<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: unknown, options: ReadOptions = {}): Promise<T> {
-  // Summary contains personal counts and deliberately stays outside the cache.
-  if (method !== 'GET' || !publicPaths.has(path)) {
+  // 个人摘要只在同一登录代际内短暂缓存，写入前后立即失效。
+  if (method !== 'GET' || (!publicPaths.has(path) && !personalPaths.has(path))) {
+    if (method !== 'GET' && path !== '/api/v1/catalog/window') {
+      // 只让个人读取失效，公共运营配置继续命中缓存。
+      invalidatePersonal()
+    }
     // 个人写操作不会修改公共配置；公共摘要由过期、手动刷新和账号切换失效。
     return network<T>(path, method, data, options.scope)
   }
@@ -123,7 +145,7 @@ export function request<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELET
     let cancel = () => {}
     const epoch = generation, cacheEpoch = metadataEpoch
     const promise = network<T>(path, method, data, { onCancel(fn) { cancel = fn; return () => {} } }).then(value => {
-      if (epoch === generation && cacheEpoch === metadataEpoch && pending.get(key)?.promise === promise) metadata.set(key, { value, expires: Date.now() + 60_000 })
+      if (epoch === generation && cacheEpoch === metadataEpoch && pending.get(key)?.promise === promise) metadata.set(key, { value, expires: Date.now() + (personalPaths.has(path) ? 20_000 : 60_000) })
       return value
     })
     entry = { promise, users: 0, cancel: () => cancel() }
@@ -147,7 +169,7 @@ export function request<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELET
 }
 
 export function queryString(values: Record<string, string | number | boolean | null | undefined>) {
-  return Object.entries(values).filter(([, value]) => value !== '' && value != null && value !== false)
+  return Object.entries(values).filter(([, value]) => value !== '' && value != null)
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`).join('&')
 }
 export function errorMessage(error: unknown) { return error instanceof Error ? exerciseText(error.message) : '操作失败，请稍后重试' }

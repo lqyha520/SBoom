@@ -12,10 +12,14 @@ const copying = ref('')
 const copyName = ref('')
 const error = ref('')
 const templates = computed(() => store.myTemplates.filter(t => t.name.toLowerCase().includes(search.value.toLowerCase().trim())))
-function use(name: string) {
+async function use(name: string) {
   error.value = ''
-  if (store.loadMyTemplate(name)) { store.backToBuild(); emit('close') }
-  else error.value = '该模板没有可用的题目内容'
+  if (!window.confirm('用模板替换当前试卷？替换前会保存本机历史，也可以撤销恢复。')) return
+  busy.value = true
+  try {
+    if (await store.loadMyTemplate(name)) { store.backToBuild(); emit('close') }
+    else error.value = store.storageError || '该模板没有可用的题目内容'
+  } finally { busy.value = false }
 }
 async function remove() {
   if (!pendingDelete.value) return
@@ -50,7 +54,7 @@ async function copy() {
           <p v-if="template._syncState !== 'synced'" class="mt-1 text-xs text-warning break-words">{{ template._syncState === 'conflict' ? '版本冲突 · ' : '待同步 · ' }}{{ template._syncError || '本机版本已保留' }}</p>
         </div>
         <UTooltip v-if="template._syncState === 'conflict'" text="另存为新模板"><UButton icon="i-lucide-copy-plus" color="warning" variant="ghost" size="sm" :aria-label="'另存模板 ' + template.name" @click="copying = template.name; copyName = template.name + ' 副本'" /></UTooltip>
-        <UButton label="使用" color="neutral" variant="outline" size="sm" :disabled="store.generating" @click="use(template.name)" />
+        <UButton label="替换当前试卷" color="neutral" variant="outline" size="sm" :disabled="store.generating || busy" @click="use(template.name)" />
         <UTooltip text="删除模板"><UButton icon="i-lucide-trash-2" color="neutral" variant="ghost" size="sm" :aria-label="'删除模板' + template.name" @click="pendingDelete = template.name" /></UTooltip>
       </div>
     </template>

@@ -1,8 +1,10 @@
 """Database-backed request deduplication, admission limits, and reported LLM usage."""
 
 import asyncio
+import contextlib
 import hashlib
 import json
+import logging
 import re
 import time
 import uuid
@@ -27,6 +29,44 @@ class Usage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     repairs: int = 0
+
+
+_INSTANCE = uuid.uuid4().hex
+logger = logging.getLogger(__name__)
+_finishes: set[asyncio.Task] = set()
+
+
+async def finish(*args):
+    task = asyncio.create_task(run_sync(_finish, *args))
+    _finishes.add(task)
+    task.add_done_callback(_finishes.discard)
+    await asyncio.shield(task)
+
+
+async def shutdown_generation():
+    if _finishes:
+        await asyncio.gather(*list(_finishes), return_exceptions=True)
+
+
+def _renew(user_id, request_id):
+    with db() as conn:
+        conn.execute("UPDATE generation_requests SET lease_expires_at = ? WHERE user_id = ? AND request_id = ? AND status = 'running' AND instance_id = ?",
+                     (int(time.time()) + get_settings().generation_heartbeat_seconds, user_id, request_id, _INSTANCE))
+
+
+async def heartbeat(user_id, request_id):
+    while True:
+        await asyncio.sleep(get_settings().generation_heartbeat_seconds / 3)
+        try:
+            await run_sync(_renew, user_id, request_id)
+        except Exception:
+            # 暂时数据库不可用时继续尝试；过期记录不会永久占满准入。
+            logger.warning("生成任务续租失败，将在下个心跳重试", exc_info=False)
+
+
+def reclaim_expired():
+    with db() as conn:
+        conn.execute("UPDATE generation_requests SET status = 'unknown', finished_at = ? WHERE status = 'running' AND lease_expires_at > 0 AND lease_expires_at < ?", (int(time.time()), int(time.time())))
 
 
 current_usage: ContextVar[Usage | None] = ContextVar("generation_usage", default=None)
@@ -76,6 +116,8 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
     now = int(time.time())
     # One short transaction serializes admission across workers, including PostgreSQL.
     with db(serialized="generation") as conn:
+        if conn.execute("SELECT 1 FROM generation_tombstones WHERE user_id = ? AND request_id = ?", (user_id, request_id)).fetchone():
+            raise HTTPException(410, detail={"error": "该请求已归档，不会再次调用模型"})
         row = conn.execute(
             "SELECT * FROM generation_requests WHERE user_id = ? AND request_id = ?",
             (user_id, request_id),
@@ -94,9 +136,9 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
                 "error": "该请求仍在处理或结果尚不确定，不会重复调用模型",
                 "code": "generation_pending", "request_id": request_id,
             })
-        total = conn.execute("SELECT COUNT(*) FROM generation_requests WHERE status = 'running' AND created_at >= ?", (now - settings.generation_lease_seconds,)).fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) FROM generation_requests WHERE status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) >= ?", (now,)).fetchone()[0]
         active = conn.execute(
-            "SELECT COUNT(*) FROM generation_requests WHERE user_id = ? AND status = 'running' AND created_at >= ?", (user_id, now - settings.generation_lease_seconds),
+            "SELECT COUNT(*) FROM generation_requests WHERE user_id = ? AND status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) >= ?", (user_id, now),
         ).fetchone()[0]
         used = conn.execute(
             "SELECT COUNT(*) FROM generation_requests WHERE user_id = ? AND created_at >= ?",
@@ -110,8 +152,8 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
             from app.services.image_assets import admit
             admit(conn, user_id)
         conn.execute(
-            "INSERT INTO generation_requests (user_id, request_id, kind, payload_hash, status, created_at) "
-            "VALUES (?, ?, ?, ?, 'running', ?)", (user_id, request_id, kind, fingerprint, now),
+            "INSERT INTO generation_requests (user_id, request_id, kind, payload_hash, status, created_at, lease_expires_at, instance_id) "
+            "VALUES (?, ?, ?, ?, 'running', ?, ?, ?)", (user_id, request_id, kind, fingerprint, now, now + settings.generation_heartbeat_seconds, _INSTANCE),
         )
     return None
 
@@ -119,14 +161,16 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
 def _finish(user_id: int, request_id: str, usage: Usage, status: str, result=None, error=None) -> None:
     error_status, detail = error if error else (0, {})
     with db() as conn:
-        conn.execute(
+        completed = conn.execute(
             "UPDATE generation_requests SET status = ?, finished_at = ?, result_json = ?, "
             "error_json = ?, error_status = ?, model_calls = ?, reported_calls = ?, "
-            "prompt_tokens = ?, completion_tokens = ? WHERE user_id = ? AND request_id = ?",
+            "prompt_tokens = ?, completion_tokens = ? WHERE user_id = ? AND request_id = ? AND status = 'running' RETURNING kind",
             (status, int(time.time()), json.dumps(result, ensure_ascii=False) if result is not None else "",
              json.dumps(detail, ensure_ascii=False), error_status, usage.model_calls, usage.reported_calls,
              usage.prompt_tokens, usage.completion_tokens, user_id, request_id),
-        )
+        ).fetchone()
+    if completed:
+        generation_requests_total.labels(completed["kind"], status).inc()
 
 
 def metered(kind: str):
@@ -142,12 +186,13 @@ def metered(kind: str):
                 cached = await run_sync(_begin, user.id, request_id, kind, request.model_dump(mode="json"))
             except HTTPException as exc:
                 detail = exc.detail if isinstance(exc.detail, dict) else {"error": exc.detail}
-                raise HTTPException(exc.status_code, {**detail, "request_id": request_id}, headers=exc.headers) from exc
+                raise HTTPException(exc.status_code, {**detail, "request_id": request_id}, headers=dict(exc.headers) if exc.headers else None) from exc
             if cached is not None:
                 generation_requests_total.labels(kind, "replayed").inc()
                 return cached
             usage = Usage()
             token = current_usage.set(usage)
+            lease_task = asyncio.create_task(heartbeat(user.id, request_id))
             deadline = asyncio.get_running_loop().time() + get_settings().generation_lease_seconds - 5
             try:
                 async with asyncio.timeout_at(deadline):
@@ -157,6 +202,7 @@ def metered(kind: str):
 
                     async def tracked_stream():
                         stream_token = current_usage.set(usage)
+                        stream_lease = asyncio.create_task(heartbeat(user.id, request_id))
                         outcome = "unknown"
                         try:
                             async with asyncio.timeout_at(deadline):
@@ -170,9 +216,11 @@ def metered(kind: str):
                                             outcome = "failed"
                                     yield chunk
                         finally:
-                            generation_requests_total.labels(kind, outcome).inc()
                             current_usage.reset(stream_token)
-                            await asyncio.shield(run_sync(_finish, user.id, request_id, usage, outcome))
+                            stream_lease.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await stream_lease
+                            await finish(user.id, request_id, usage, outcome)
 
                     result.body_iterator = tracked_stream()
                     result.headers["X-Request-ID"] = request_id
@@ -182,50 +230,48 @@ def metered(kind: str):
                     from app.services.image_assets import persist
                     data = await run_sync(persist, user.id, request_id, data)
                 data["request_id"] = request_id
-                await run_sync(_finish, user.id, request_id, usage, "succeeded", data)
-                generation_requests_total.labels(kind, "succeeded").inc()
+                await finish(user.id, request_id, usage, "succeeded", data)
                 return data
             except (Exception, asyncio.CancelledError) as exc:
-                generation_requests_total.labels(kind, "failed").inc()
                 status_code = exc.status_code if isinstance(exc, HTTPException) else 503
                 # 不复用上面 except 分支的 detail：那里的 detail 已被收窄为 dict，而这里可能是 str
                 failure_detail = exc.detail if isinstance(exc, HTTPException) else {"error": "生成中断，结果尚不确定，请先查询请求状态"}
                 if isinstance(failure_detail, dict):
                     failure_detail = {**failure_detail, "request_id": request_id}
-                await asyncio.shield(run_sync(
-                    _finish, user.id, request_id, usage,
+                await finish( user.id, request_id, usage,
                     "unknown" if status_code >= 500 else "failed", None, (status_code, failure_detail),
-                ))
+                )
                 if isinstance(exc, asyncio.CancelledError):
                     raise
                 raise HTTPException(status_code, detail=failure_detail,
-                                    headers=exc.headers if isinstance(exc, HTTPException) else None) from exc
+                                    headers=dict(exc.headers) if isinstance(exc, HTTPException) and exc.headers else None) from exc
             except BaseException:
                 # KeyboardInterrupt / SystemExit 等进程级信号：只把请求标记为结果未知，原样上抛，
                 # 不能翻译成 503——那会把 Ctrl+C 吞成一次普通失败
-                generation_requests_total.labels(kind, "failed").inc()
-                await asyncio.shield(run_sync(
-                    _finish, user.id, request_id, usage, "unknown", None,
+                await finish( user.id, request_id, usage, "unknown", None,
                     (503, {"error": "服务中断，结果尚不确定，请先查询请求状态", "request_id": request_id}),
-                ))
+                )
                 raise
             finally:
                 current_usage.reset(token)
+                lease_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await lease_task
         return wrapped
     return decorate
 
 
 def usage_summary(user_id: int | None = None) -> dict:
     since = int(time.time()) - 86400
-    lease_cutoff = int(time.time()) - get_settings().generation_lease_seconds
+    lease_cutoff = int(time.time())
     where = "created_at >= ?" + (" AND user_id = ?" if user_id is not None else "")
     params = (since, user_id) if user_id is not None else (since,)
     with db() as conn:
         row = conn.execute(
             "SELECT COUNT(*) AS requests, "
             "COALESCE(SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END), 0) AS succeeded, "
-            "COALESCE(SUM(CASE WHEN status = 'running' AND created_at >= ? THEN 1 ELSE 0 END), 0) AS running, "
-            "COALESCE(SUM(CASE WHEN status = 'unknown' OR (status = 'running' AND created_at < ?) THEN 1 ELSE 0 END), 0) AS unknown, "
+            "COALESCE(SUM(CASE WHEN status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) >= ? THEN 1 ELSE 0 END), 0) AS running, "
+            "COALESCE(SUM(CASE WHEN status = 'unknown' OR (status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) < ?) THEN 1 ELSE 0 END), 0) AS unknown, "
             "COALESCE(SUM(model_calls), 0) AS model_calls, COALESCE(SUM(reported_calls), 0) AS reported_calls, "
             "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, COALESCE(SUM(completion_tokens), 0) AS completion_tokens "
             "FROM generation_requests WHERE " + where, (lease_cutoff, lease_cutoff, *params),
@@ -236,7 +282,7 @@ def usage_summary(user_id: int | None = None) -> dict:
 def request_status(user_id: int, request_id: str) -> dict:
     with db() as conn:
         row = conn.execute(
-            "SELECT request_id, kind, status, created_at, finished_at, result_json, error_json, error_status "
+            "SELECT request_id, kind, status, created_at, lease_expires_at, finished_at, result_json, error_json, error_status "
             "FROM generation_requests "
             "WHERE user_id = ? AND request_id = ?", (user_id, request_id),
         ).fetchone()
@@ -244,7 +290,7 @@ def request_status(user_id: int, request_id: str) -> dict:
         raise HTTPException(404, detail={"error": "请求不存在"})
     now, settings = int(time.time()), get_settings()
     status = row["status"]
-    if status == "running" and row["created_at"] < now - settings.generation_lease_seconds:
+    if status == "running" and (row["lease_expires_at"] or row["created_at"] + settings.generation_heartbeat_seconds) < now:
         status = "unknown"
     expired = bool(row["finished_at"] and row["finished_at"] < now - settings.generation_result_days * 86400)
     return {"request_id": row["request_id"], "kind": row["kind"], "status": status,

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.blocking import run_sync
 from app.db import db
 from app.deps import require_admin
+from app.http_limits import limited_body
 from app.library_deps import bearer_token, no_store, require_mini_user
 from app.models.mini import (
     MAX_AVATAR_BASE64,
@@ -21,7 +22,7 @@ from app.models.mini import (
 )
 from app.services import mini_auth, mini_avatars, mini_messages
 from app.services.mini_auth import MiniUser
-from app.services.rate_limit import allow
+from app.services.rate_limit import allow, client_key
 from app.services.user_store import CurrentUser
 
 router = APIRouter(prefix="/api/v1", tags=["小程序账号"], dependencies=[Depends(no_store)])
@@ -33,7 +34,7 @@ class CodeInput(BaseModel):
 
 
 def _limit(request: Request, name: str, count=30, seconds=300):
-    ip = request.client.host if request.client else "unknown"
+    ip = client_key(request.client.host) if request.client else "unknown"
     if not allow(f"mini:{name}:{ip}", count, seconds):
         mini_auth._error("操作过于频繁，请稍后再试", 429)
 
@@ -79,11 +80,7 @@ def update_me(body: MiniProfileUpdate, request: Request, user: MiniUser = Depend
 @router.post("/mini/me/avatar")
 async def upload_avatar(request: Request, user: MiniUser = Depends(require_mini_user)):
     _limit(request, "avatar:" + user.id, 20, 300)
-    raw = bytearray()
-    async for chunk in request.stream():
-        raw.extend(chunk)
-        if len(raw) > MAX_AVATAR_BASE64 + 2048:
-            raise HTTPException(413, detail={"error": "头像不能超过 2 MB，请选择较小的图片"})
+    raw = await limited_body(request, MAX_AVATAR_BASE64 + 2048, error="头像不能超过 2 MB，请选择较小的图片")
     try:
         body = MiniAvatarUpdate.model_validate_json(raw)
     except ValidationError as exc:

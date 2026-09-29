@@ -8,7 +8,7 @@ from app.deps import SESSION_COOKIE, require_user
 from app.services.mini_auth import resolve_session
 
 
-def no_store(response: Response):
+async def no_store(response: Response):
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
 

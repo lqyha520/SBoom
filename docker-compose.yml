@@ -23,7 +23,7 @@ x-logging: &default-logging
 services:
   db:
     # 与 deploy/ 两个 compose 及 CI 的 postgres 服务保持同一 tag
-    image: postgres:16-alpine
+    image: postgres:16-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67
     container_name: learncoach-db
     logging: *default-logging
     shm_size: 256m
@@ -42,6 +42,30 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  test-db:
+    profiles: [tests]
+    image: postgres:16-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67
+    init: true
+    stop_grace_period: 60s
+    pids_limit: 256
+    cpus: 2.0
+    mem_limit: 2g
+    shm_size: 256m
+    security_opt: [no-new-privileges:true]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports: ["127.0.0.1:55432:5432"]
+    # 模板库克隆会产生 WAL；自动并发限制为 4，给临时数据与检查点留足空间。
+    tmpfs: [/var/lib/postgresql/data:size=1g]
+    command: [postgres, -c, max_wal_size=256MB, -c, min_wal_size=80MB, -c, checkpoint_timeout=1min]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres -d postgres]
+      interval: 2s
+      timeout: 3s
+      retries: 20
 
 volumes:
   pgdata:

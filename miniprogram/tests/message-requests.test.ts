@@ -1,3 +1,5 @@
+import * as sharedHttp from '../../shared/http'
+import { usePageLifecycle } from '../src/services/page-lifecycle'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
@@ -25,7 +27,7 @@ function runtime() {
     const exports = {}
     vm.runInNewContext(ts.transpileModule(source + '\n' + expose, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
       exports, uni, defineOptions() {}, require: (name: string) => name === 'vue' ? vue : name === '@dcloudio/uni-app'
-        ? Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onReachBottom'].map(hook => [hook, (fn: () => unknown) => { hooks[hook] = fn }])) : imports[name] || {},
+        ? Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onReachBottom'].map(hook => [hook, (fn: () => unknown) => { hooks[hook] = fn }])) : imports[name] || (name.endsWith('/shared/http') ? sharedHttp : name === './page-lifecycle' ? { usePageLifecycle } : name === './checkout' ? { resumeCheckouts: async () => {} } : {}),
     })
     return exports as T
   }
@@ -40,19 +42,19 @@ function runtime() {
 
 test('全部已读后，写入前和写入期间发起的迟到未读查询都不能恢复旧角标', async () => {
   const { growth, reply } = runtime()
-  const before = growth.refreshUnread()
+  const before = growth.refreshUnread({ force: true })
   const write = growth.readMessages()
-  const during = growth.refreshUnread()
+  const during = growth.refreshUnread({ force: true })
   reply(1, { unread: 0 }); await write
   reply(0, { unread: 5 }); reply(2, { unread: 4 }); await Promise.all([before, during])
   assert.equal(growth.inboxState.unread, 0)
-  const fresh = growth.refreshUnread(); reply(3, { unread: 1 }); await fresh
+  const fresh = growth.refreshUnread({ force: true }); reply(3, { unread: 1 }); await fresh
   assert.equal(growth.inboxState.unread, 1, '后续新消息仍可增加角标')
 })
 
 test('并发查询按发起顺序生效，切换账号后旧结果不能修改角标', async () => {
   const { api, growth, reply } = runtime()
-  const first = growth.refreshUnread(), second = growth.refreshUnread()
+  const first = growth.refreshUnread({ force: true }), second = growth.refreshUnread({ force: true })
   reply(1, { unread: 2 }); await second; reply(0, { unread: 5 }); await first
   assert.equal(growth.inboxState.unread, 2)
   const write = growth.readMessages()
@@ -68,7 +70,7 @@ test('回执失败保留乐观已读，后续查询与重试不会重复扣减',
   reads.markMessageRead({ id: 'm1', read_at: null } as import('../src/services/growth').Message)
   await settle(); calls[0].fail(); await reads.syncMessageReads()
   assert.equal(growth.inboxState.unread, 2)
-  const query = growth.refreshUnread(); reply(1, { unread: 3 }); await query
+  const query = growth.refreshUnread({ force: true }); reply(1, { unread: 3 }); await query
   assert.equal(growth.inboxState.unread, 2)
   const retry = reads.syncMessageReads(); await settle(); reply(2, { unread: 2 }); await retry
   assert.equal(growth.inboxState.unread, 2); assert.equal(growth.inboxState.pending, 0)
@@ -88,7 +90,7 @@ test('消息列表不等待回执，旧列表不会恢复已读标记，未读�
   const env = runtime(), { growth, reads, calls, reply } = env
   const scope = vue.effectScope()
   type State = { load(valid: ConsumerTicket, append?: boolean): Promise<void>; items: vue.Ref<import('../src/services/growth').Message[]>; unreadOnly: vue.Ref<boolean> }
-  const component = scope.run(() => env.module<{ state: State }>('pages/messages/index.vue', {
+  const component = scope.run(() => env.module<{ state: State }>('subpages/messages/index.vue', {
     '../../services/growth': growth, '../../services/message-reads': reads,
     '../../services/consumer-page': { useConsumerPage: () => ({}) },
   }, 'exports.state = { load, items, unreadOnly };'))!.state
@@ -152,7 +154,7 @@ test('离页不会中断已提交的写操作，也不会发出其过期的后�
 for (const route of ['orders', 'requests', 'messages', 'membership', 'closure']) test(`${route} 实际页面将生命周期传入读取接口`, async () => {
   const env = runtime(), scope = vue.effectScope()
   try {
-    scope.run(() => env.module(`pages/${route}/index.vue`, {
+    scope.run(() => env.module(`subpages/${route}/index.vue`, {
       '../../services/consumer-page': env.consumer, '../../services/growth': env.growth,
       '../../services/message-reads': env.reads,
       '../../services/session': { session: env.session, refreshMembership: (options: import('../src/services/api').ReadOptions) => env.api.request('/api/v1/mini/me', 'GET', undefined, options) },

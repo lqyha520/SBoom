@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAdminRefresh } from '../admin-page'
 import { computed, onMounted, ref, watch } from 'vue'
 import { fetchAdminFeedbacks, type AdminFeedback } from '../api'
 
@@ -22,7 +23,7 @@ async function load() {
   } finally { if (id === request) loading.value = false }
 }
 watch(onlyOob, load)
-onMounted(load)
+useAdminRefresh(load, () => { request++; loading.value = false })
 </script>
 
 <template>

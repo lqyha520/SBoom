@@ -16,6 +16,7 @@ from hashlib import sha256
 logger = logging.getLogger(__name__)
 
 from app.config import get_settings  # noqa: E402
+from app.constants import LOCK_IDS as _LOCK_IDS  # noqa: E402
 
 
 def _database_url() -> str:
@@ -236,6 +237,7 @@ def _get_pg_pool():
                     min_size=min_size,
                     max_size=settings.db_pool_max,
                     timeout=settings.db_pool_timeout,  # 池耗尽时最多等多久
+                    check=ConnectionPool.check_connection,
                     open=False,
                     kwargs={
                         "row_factory": _pg_row_factory,
@@ -309,7 +311,6 @@ def close_pg_pool() -> None:
 
 # Keep related transactions in one domain. Mixed operations acquire all required
 # domains in this fixed order; never acquire another domain in a nested db().
-_LOCK_IDS = {"content": 70634191, "accounts": 70634192, "generation": 70634193, "schema": 70634194}
 
 
 @contextmanager
@@ -321,16 +322,19 @@ def db(serialized: bool | str | tuple[str, ...] = False, *, content_user: str | 
     ddl=True 仅供启动建表：解除本事务的 statement/lock 超时——大表补索引可能远超 30s，
     多 worker 同时启动时排队等 schema 锁也不该被 lock_timeout 打断。
     """
+    from app.db_admission import admission
     from app.metrics import db_wait
+    scopes = ("content",) if serialized is True else (serialized,) if isinstance(serialized, str) else serialized or ()
+    timeout = 30.0 if ddl else max(0.1, get_settings().db_lock_timeout_ms / 1000)
     pool = _get_pg_pool()
     started = time.perf_counter()
-    with pool.connection() as conn:
+    with admission(tuple(scopes), content_user, timeout), pool.connection() as conn:
         db_wait.labels("pool").observe(time.perf_counter() - started)
         _sample_pool_metrics(pool)
         started = time.perf_counter()
         if ddl:
             conn.execute("SET LOCAL statement_timeout = 0")
-            conn.execute("SET LOCAL lock_timeout = 0")
+            conn.execute("SET LOCAL lock_timeout = '30s'")
         scopes = ("content",) if serialized is True else (serialized,) if isinstance(serialized, str) else serialized or ()
         locks = {_LOCK_IDS[scope]: False for scope in scopes}
         if content_user is not None:
@@ -347,6 +351,9 @@ def db(serialized: bool | str | tuple[str, ...] = False, *, content_user: str | 
             conn.commit()
         finally:
             _sample_pool_metrics(pool, returning=True)
+    if scopes or content_user is not None:
+        from app.public_cache import invalidate
+        invalidate()
 
 
 def database_ready() -> bool:
@@ -402,6 +409,12 @@ def _init_reliability_schema(conn) -> None:
             completion_tokens BIGINT NOT NULL DEFAULT 0,
             PRIMARY KEY (user_id, request_id)
         );
+        ALTER TABLE generation_requests ADD COLUMN IF NOT EXISTS lease_expires_at BIGINT NOT NULL DEFAULT 0;
+        ALTER TABLE generation_requests ADD COLUMN IF NOT EXISTS instance_id TEXT NOT NULL DEFAULT '';
+        CREATE TABLE IF NOT EXISTS generation_budget (
+            id TEXT PRIMARY KEY, created_at BIGINT NOT NULL, tokens BIGINT NOT NULL, images INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_generation_budget_time ON generation_budget(created_at);
         CREATE INDEX IF NOT EXISTS idx_generation_created ON generation_requests(created_at);
         CREATE INDEX IF NOT EXISTS idx_generation_status ON generation_requests(status, created_at);
         CREATE INDEX IF NOT EXISTS idx_generation_user_created ON generation_requests(user_id, created_at);
@@ -439,7 +452,10 @@ def _verify_schema(conn) -> tuple[list, int]:
     return [t for t in _CORE_TABLES if t not in present], len(present)
 
 
-def init_db() -> None:
+SCHEMA_VERSION = 2026092802
+
+
+def init_db(*, migrate: bool | None = None) -> None:
     from app.commerce_schema import init_commerce_schema
     from app.db_indexes import add_optimization_indexes, add_search_indexes
     from app.engagement_schema import init_engagement_schema
@@ -448,8 +464,21 @@ def init_db() -> None:
     from app.maintenance_schema import init_maintenance_schema
     from app.site_schema import init_site_schema
 
-    # Multiple workers can start together; serialize additive DDL across them.
+    migrate = get_settings().db_auto_migrate if migrate is None else migrate
+    with db() as conn:
+        exists = conn.execute("SELECT to_regclass('schema_migrations')").fetchone()[0]
+        current = conn.execute("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").fetchone()[0] if exists else 0
+    if current == SCHEMA_VERSION:
+        return
+    if current > SCHEMA_VERSION:
+        raise RuntimeError("数据库版本高于应用；请使用兼容版本回滚")
+    if not migrate:
+        raise RuntimeError("数据库版本未就绪；请先运行 python -m app.migrations")
+    # 只有迁移进程运行 DDL；其他 worker 获取锁后再次校验版本。
     with db(serialized=tuple(_LOCK_IDS), ddl=True) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version BIGINT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())")
+        if conn.execute("SELECT 1 FROM schema_migrations WHERE version = ?", (SCHEMA_VERSION,)).fetchone():
+            return
         conn.executescript(_SCHEMA)
         _migrate_pg(conn)
         _init_reliability_schema(conn)
@@ -461,6 +490,11 @@ def init_db() -> None:
         add_optimization_indexes(conn)
         add_search_indexes(conn)
         init_maintenance_schema(conn)
+        from app.archive_metadata import migrate as archive_metadata
+        archive_metadata(conn)
+        from app.services.workspace_sessions import migrate as session_schema
+        session_schema(conn)
+        conn.execute("INSERT INTO schema_migrations(version) VALUES (?)", (SCHEMA_VERSION,))
     # 事务已提交，另起一个连接读真实落库结果（不是"没抛异常"就算成功）
     with db() as conn:
         missing, total = _verify_schema(conn)

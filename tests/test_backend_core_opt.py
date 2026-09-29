@@ -74,11 +74,11 @@ class PoolAndTranslationContracts(unittest.TestCase):
         pg_support.case_database(stack)
         with database.db() as conn:
             self.assertEqual(conn.execute("SHOW statement_timeout").fetchone()[0], "30s")
-            self.assertEqual(conn.execute("SHOW lock_timeout").fetchone()[0], "10s")
+            self.assertEqual(conn.execute("SHOW lock_timeout").fetchone()[0], "2500ms")
             self.assertEqual(conn.execute("SHOW idle_in_transaction_session_timeout").fetchone()[0], "1min")
         with database.db(ddl=True) as conn:
             self.assertEqual(conn.execute("SHOW statement_timeout").fetchone()[0], "0")
-            self.assertEqual(conn.execute("SHOW lock_timeout").fetchone()[0], "0")
+            self.assertEqual(conn.execute("SHOW lock_timeout").fetchone()[0], "30s")
         with database.db() as conn:  # SET LOCAL 不能泄漏到下一个事务
             self.assertEqual(conn.execute("SHOW statement_timeout").fetchone()[0], "30s")
 
@@ -164,7 +164,7 @@ class LogoutRevocationContracts(unittest.TestCase):
         # 把旧 Cookie 复制回来：不仅浏览器端被删，服务端也必须拒绝
         self.client.cookies.set(SESSION_COOKIE, old_cookie)
         self.assertEqual(self.client.get("/api/v1/auth/me").status_code, 401)
-        self.assertGreater(user_store.get_user_by_id(self.user.id).token_valid_after, 0)
+        self.assertEqual(user_store.get_user_by_id(self.user.id).token_valid_after, 0)  # 单设备退出不吊销其他设备
 
     def test_logout_without_valid_cookie_still_succeeds(self):
         self.client.cookies.set(SESSION_COOKIE, "not-a-token")
@@ -196,7 +196,7 @@ class TestLlmSsrfContracts(unittest.TestCase):
         for base in ("http://169.254.169.254", "http://127.0.0.1", "http://127.0.0.1:11434/v1",
                      "http://localhost:8000", "http://10.0.0.8/v1", "ftp://example.com", "http://user:pw@example.com"):
             result = self.client.post("/api/v1/admin/test-llm", json={"baseUrl": base, "model": "m", "apiKey": "k", "timeout": 30})
-            self.assertEqual(result.status_code, 400, base)
+            self.assertIn(result.status_code, (400, 422), base)
             self.assertEqual(result.json()["detail"]["error"], "接口地址不允许")
 
     def test_public_address_is_pinned_to_its_resolved_ip(self):

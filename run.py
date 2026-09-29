@@ -21,6 +21,7 @@ def start_server() -> None:
         "app.main:app", host=settings.host, port=settings.port, reload=settings.debug,
         workers=settings.workers if not settings.debug and settings.workers > 1 else None,
         timeout_graceful_shutdown=30, timeout_keep_alive=15,
+        log_config=None, access_log=False,
     )
 
 
@@ -58,7 +59,8 @@ def forwarded_ips_warning() -> str | None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    from app.logging_config import configure_logging
+    configure_logging()
     ensure_port_available(settings.host, settings.port)
     warning = forwarded_ips_warning()
     if warning:

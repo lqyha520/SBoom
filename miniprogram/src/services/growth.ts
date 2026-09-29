@@ -1,3 +1,4 @@
+import { navigatePage } from './page-navigation'
 import { reactive } from 'vue'
 import { authGeneration, queryString, request, type ReadOptions } from './api'
 import { createUnreadTracker } from './unread-tracker'
@@ -29,7 +30,7 @@ export async function readMessages(id = '', remainingPending: () => number = () 
 export function messageDestination(message: Pick<Message, 'target_type' | 'target_id'>) {
   const pages: Record<string, string> = { paper: 'paper', feedback: 'support', membership: 'membership', request: 'requests', closure: 'closure', order: 'orders' }
   const page = pages[message.target_type]
-  return safeDestination(page ? '/pages/' + page + '/index' + (message.target_id ? '?id=' + encodeURIComponent(message.target_id) : '') : '/pages/messages/index')
+  return safeDestination(page ? '/pages/' + page + '/index' + (message.target_id ? '?id=' + encodeURIComponent(message.target_id) : '') : '/subpages/messages/index')
 }
 export const subscriptionConfig = (options: ReadOptions = {}) => request<{ available: boolean; template_id: string }>('/api/v1/mini/message-subscription', 'GET', undefined, options)
 export const grantSubscription = (template_id: string, request_id: string) => request('/api/v1/mini/message-subscription', 'POST', { template_id, request_id })
@@ -48,8 +49,7 @@ export interface Plan { id: string; name: string; description: string; days: num
 export interface Refund { id: string; reason: string; reply: string; status: 'requested' | 'processing' | 'success' | 'closed' | 'abnormal' | 'rejected'; revision: number; created_at: number; updated_at: number; completed_at: number | null }
 export interface Order { id: string; plan_id: string; plan_name: string; plan_days: number; amount_fen: number; currency: string; status: 'created' | 'pending' | 'paid' | 'closed' | 'refunded'; created_at: number; expires_at: number; paid_at: number | null; revision: number; refund: Refund | null }
 export interface PaymentParameters { timeStamp: string; nonceStr: string; package: string; signType: 'RSA'; paySign: string }
-export const orderStatus = { created: '待付款', pending: '待确认付款', paid: '已付款', closed: '已关闭', refunded: '已退款' }
-export const refundStatus = { requested: '退款待审核', processing: '退款处理中', success: '退款成功', closed: '退款已关闭', abnormal: '退款需人工处理', rejected: '退款未通过' }
+export { orderLabels as orderStatus, refundLabels as refundStatus } from '../../../shared/commerce'
 export const yuan = (fen: number) => '¥' + (fen / 100).toFixed(2)
 export const fetchPlans = (options: ReadOptions = {}) => request<{ items: Plan[]; checkout_enabled: boolean; ios_enabled: boolean }>('/api/v1/mini/membership/plans', 'GET', undefined, options)
 export const redeemMembershipCard = (code: string) => request<{ user: import('../types').User; days: number; vip_expires_at: number | null }>('/api/v1/mini/membership/redeem', 'POST', { code })
@@ -62,7 +62,7 @@ export const cancelOrder = (id: string) => request<Order>('/api/v1/mini/orders/'
 export const requestRefund = (id: string, reason: string) => request<Order>('/api/v1/mini/orders/' + encodeURIComponent(id) + '/refund', 'POST', { reason })
 export const syncRefund = (id: string) => request<Order>('/api/v1/mini/refunds/' + encodeURIComponent(id) + '/sync', 'POST')
 export function openRequests(filters: { q?: string; grade?: string; subject?: string } = {}) {
-  uni.navigateTo({ url: '/pages/requests/index?' + queryString({ title: filters.q, grade: filters.grade, subject: filters.subject }) })
+  navigatePage({ url: '/subpages/requests/index?' + queryString({ title: filters.q, grade: filters.grade, subject: filters.subject }) })
 }
-export function openOrder(id: string) { uni.navigateTo({ url: '/pages/orders/index?id=' + encodeURIComponent(id) }) }
-export function openTopic(id: string) { uni.navigateTo({ url: '/pages/topic/index?id=' + encodeURIComponent(id) }) }
+export function openOrder(id: string) { navigatePage({ url: '/subpages/orders/index?id=' + encodeURIComponent(id) }) }
+export function openTopic(id: string) { navigatePage({ url: '/pages/topic/index?id=' + encodeURIComponent(id) }) }

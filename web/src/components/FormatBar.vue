@@ -77,6 +77,7 @@ function applyFontSize(v: number) {
   const s = document.getSelection()
   const host = restoreSelection()
   if (host && s) {
+    store.recordEdit('rich-text')
     host.focus({ preventScroll: true })
     document.execCommand('fontSize', false, String(v))
     host.dispatchEvent(new FocusEvent('blur'))
@@ -89,6 +90,7 @@ function applyColor(c: string) {
   const s = document.getSelection()
   const host = restoreSelection()
   if (host && s) {
+    store.recordEdit('rich-text')
     host.focus({ preventScroll: true })
     document.execCommand('foreColor', false, c)
     host.dispatchEvent(new FocusEvent('blur'))
@@ -101,6 +103,7 @@ function applyBold() {
   const s = document.getSelection()
   const host = restoreSelection()
   if (host && s) {
+    store.recordEdit('rich-text')
     host.focus({ preventScroll: true })
     document.execCommand('bold', false, undefined)
     host.dispatchEvent(new FocusEvent('blur'))

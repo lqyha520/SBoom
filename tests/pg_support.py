@@ -46,6 +46,10 @@ def _guard(dsn: str, *, dbname_prefix: str | None = None) -> str:
     config = conninfo_to_dict(dsn)
     if config.get("host", "") not in _LOCAL_HOSTS:
         raise RuntimeError(f"PG 测试只允许本地实例，拒绝连接: {config.get('host')!r}")
+    if config.get("hostaddr") not in (None, "127.0.0.1") or config.get("service") or config.get("servicefile"):
+        raise RuntimeError("测试 DSN 不允许远程 hostaddr 或连接服务覆盖")
+    if config.get("port", "5432") not in ("5432", "55432"):
+        raise RuntimeError("测试数据库端口须为本机 5432 或独立测试端口 55432")
     dbname = config.get("dbname", "")
     if dbname_prefix and not dbname.startswith(dbname_prefix):
         raise RuntimeError(f"只允许操作 {dbname_prefix}* 前缀的一次性库，拒绝: {dbname!r}")
@@ -199,3 +203,14 @@ def case_database(stack, *, fresh: bool = False) -> str:
     database.close_pg_pool()
     stack.enter_context(patch.object(get_settings(), "database_url", dsn))
     return dsn
+
+
+def drain_after_file_grace() -> None:
+    """仅测试使用：推进六小时，验证文件物理回收的宽限期。"""
+    import time
+    from unittest.mock import patch
+
+    from app.services import file_retention
+    future = time.time() + 6 * 3600 + 1
+    with patch.object(file_retention.time, "time", return_value=future):
+        file_retention.drain()

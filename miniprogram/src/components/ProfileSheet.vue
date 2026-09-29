@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { showPrivacyError } from '../services/privacy'
 import { computed, ref, watch } from 'vue'
 import { errorMessage } from '../services/api'
 import { saveAvatar, saveProfile, session } from '../services/session'
@@ -112,7 +113,7 @@ async function save() {
       </view>
       <view class="avatar-actions">
         <!-- #ifdef MP-WEIXIN -->
-        <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="choose-avatar" role="button" aria-label="使用微信头像" open-type="chooseAvatar" :disabled="busy" @chooseavatar="chooseWechatAvatar"><wd-icon name="camera" size="18px" /><text>使用微信头像</text></button>
+        <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="choose-avatar" role="button" aria-label="使用微信头像" open-type="chooseAvatar" :disabled="busy" @chooseavatar="chooseWechatAvatar" @error="showPrivacyError"><wd-icon name="camera" size="18px" /><text>使用微信头像</text></button>
         <!-- #endif -->
         <!-- #ifdef H5 -->
         <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="choose-avatar" role="button" aria-label="选择头像图片" :disabled="busy" @click="choosePhoto"><wd-icon name="camera" size="18px" /><text>选择头像图片</text></button>

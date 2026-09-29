@@ -44,7 +44,12 @@ export function useImageBatch(storageKey: string, current: () => boolean, onImag
     const url = URL.createObjectURL(blob)
     if (page.url) URL.revokeObjectURL(page.url)
     page.image = stored; page.url = url; page.state = 'ready'; page.error = ''
-    await imageCache().then(async db => { await db.put('images', stored, storageKey + ':' + page.id); db.close() }).catch(() => { if (active()) storageError.value = '图片未能保存到本机，请及时下载。' })
+    await imageCache().then(async db => {
+      try {
+        const owner = storageKey.match(/^lc_u([^_]+)_/)?.[1]
+        if (active() && (!owner || !localStorage.getItem('lc_purge:' + owner))) await db.put('images', stored, storageKey + ':' + page.id)
+      } finally { db.close() }
+    }).catch(() => { if (active()) storageError.value = '图片未能保存到本机，请及时下载。' })
     if (active()) onImage(index)
   }
   function release() { state.pages.forEach(page => { if (page.url) URL.revokeObjectURL(page.url) }) }

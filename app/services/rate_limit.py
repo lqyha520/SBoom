@@ -9,6 +9,7 @@ import threading
 import time
 from collections import deque
 from heapq import heappop, heappush
+from ipaddress import ip_address, ip_network
 from math import isfinite
 
 _lock = threading.Lock()
@@ -21,11 +22,25 @@ _hits: dict[_Policy, deque[float]] = {}
 _expirations: list[tuple[float, _Policy]] = []
 
 
+def client_key(host: str) -> str:
+    """IPv6 临时地址按 /64 聚合，IPv4 映射地址与 IPv4 共用计数。"""
+    try:
+        address = ip_address(host)
+        if address.version == 6:
+            mapped = getattr(address, "ipv4_mapped", None)
+            return str(mapped or ip_network(f"{address}/64", strict=False))
+        return str(address)
+    except ValueError:
+        return host
+
+
 def _cleanup(now: float) -> None:
     for _ in range(_CLEANUP_BATCH):
         if not _expirations or _expirations[0][0] > now:
             break
         _, policy = heappop(_expirations)
+        if policy not in _hits:
+            continue
         expires = _hits[policy][-1] + policy[2]
         if expires <= now:
             del _hits[policy]
@@ -38,7 +53,7 @@ def allow(key: str, max_events: int, per_seconds: float) -> bool:
 
     窗口左边界不计入；拒绝请求不会延长窗口。
     每次最多清理 64 个到期条目，最多保留 10,000 个 key/策略组合。
-    容量耗尽时拒绝新组合，保留已有计数；后续请求逐批回收过期容量。
+    满时淘汰最早调度的条目，避免阻断全站新用户。
     """
     if max_events < 1 or not isfinite(per_seconds) or per_seconds <= 0:
         raise ValueError("Rate limit count and window must be positive and finite")
@@ -49,7 +64,9 @@ def allow(key: str, max_events: int, per_seconds: float) -> bool:
         q = _hits.get(policy)
         if q is None:
             if len(_hits) >= _MAX_KEYS:
-                return False
+                # 每个键只有一个到期索引；O(log N) 淘汰最早调度的键。
+                _, victim = heappop(_expirations)
+                del _hits[victim]
             q = deque()
             _hits[policy] = q
             heappush(_expirations, (now + per_seconds, policy))

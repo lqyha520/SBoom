@@ -29,6 +29,18 @@ describe('request identity', () => {
     expect(fetch).toHaveBeenCalledOnce()
   })
 
+  it('passes validated partial sections through a truncation error without retrying', async () => {
+    const sections = [{ section_id: 'one', game_type: 'fill_blank', questions: [{ stem: '1+1=__', answer: '2' }] }]
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: {
+      error: '达到输出上限', code: 'generation_truncated', partial_sections: sections,
+    } }), { status: 422 }))
+    vi.stubGlobal('fetch', fetch)
+    await expect(api.generateBatch(params, 'partial')).rejects.toMatchObject({
+      status: 422, code: 'generation_truncated', requestId: 'partial', partialSections: sections,
+    })
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
   it('distinguishes a template conflict from an ordinary network error', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: { error: 'Conflict', code: 'template_conflict' } }), { status: 409 })))
     await expect(api.deleteTemplateOnServer('Template', 2)).rejects.toMatchObject({ status: 409, code: 'template_conflict' })

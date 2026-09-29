@@ -14,8 +14,10 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from app.db import db
 from app.models.mini import MAX_AVATAR_BYTES, MiniAvatarUpdate
 from app.services import mini_auth
+from app.services.resource_admission import bounded_media
 
 
+@bounded_media
 def normalize_image(encoded: str) -> str:
     try:
         raw = base64.b64decode(encoded, validate=True)
@@ -29,10 +31,12 @@ def normalize_image(encoded: str) -> str:
             with Image.open(io.BytesIO(raw)) as image:
                 if image.format not in {"JPEG", "PNG", "WEBP"} or getattr(image, "n_frames", 1) != 1:
                     raise HTTPException(415, detail={"error": "请选择 JPG、PNG 或 WebP 静态图片"})
-                if max(image.size) > 4096 or image.width * image.height > 16_000_000:
+                if max(image.size) > 4096 or image.width * image.height > 4_000_000:
                     raise HTTPException(413, detail={"error": "头像尺寸过大，请选择较小的图片"})
-                image.load()
-                square = ImageOps.fit(ImageOps.exif_transpose(image).convert("RGBA"), (256, 256), Image.Resampling.LANCZOS)
+                image.draft("RGB", (512, 512))
+                image.thumbnail((512, 512), Image.Resampling.LANCZOS)
+                ImageOps.exif_transpose(image, in_place=True)
+                square = ImageOps.fit(image.convert("RGBA"), (256, 256), Image.Resampling.LANCZOS)
                 # A fresh RGB canvas also drops location, EXIF and other source metadata.
                 photo = Image.new("RGB", (256, 256), "white")
                 photo.paste(square, mask=square.getchannel("A"))
@@ -46,13 +50,13 @@ def normalize_image(encoded: str) -> str:
 def save(user_id: str, body: MiniAvatarUpdate):
     content = normalize_image(body.image)
     version, now = uuid.uuid4().hex[:24], int(time.time())
-    with db(serialized="accounts") as conn:
-        user = mini_auth._user(conn, user_id)
+    with db() as conn:
+        mini_auth._user(conn, user_id)
         conn.execute("INSERT INTO mini_user_avatars(user_id, version, content_base64, updated_at) VALUES (?, ?, ?, ?) "
                      "ON CONFLICT(user_id) DO UPDATE SET version = excluded.version, content_base64 = excluded.content_base64, updated_at = excluded.updated_at",
                      (user_id, version, content, now))
-        conn.execute("UPDATE mini_users SET avatar = ?, nickname = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
-                     ("photo:" + version, body.nickname if body.nickname is not None else user.nickname, now, user_id))
+        conn.execute("UPDATE mini_users SET avatar = ?, nickname = COALESCE(?, nickname), revision = revision + 1, updated_at = ? WHERE id = ?",
+                     ("photo:" + version, body.nickname, now, user_id))
         return mini_auth._user(conn, user_id).public()
 
 

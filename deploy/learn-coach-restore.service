@@ -1,0 +1,10 @@
+[Unit]
+Description=Monthly isolated Learning Coach restore verification
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/learn-coach
+EnvironmentFile=/etc/learn-coach/release.env
+ExecStart=/usr/bin/python3 scripts/release/ops.py restore-check
+TimeoutStartSec=3600

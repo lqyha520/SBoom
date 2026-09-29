@@ -62,10 +62,10 @@ test('runtime reconnects once, updates only with confirmation, and diagnostics n
   let saved: unknown, applied = 0, modal: any, initialNetwork: any
   const exports: any = {}
   vm.runInNewContext(compile(readFileSync(new URL('../src/services/runtime.ts', import.meta.url), 'utf8')), {
-    exports,
+    exports, setTimeout, clearTimeout,
     uni: {
       getStorageSync: () => [{ kind: 'runtime', minute: 1, count: 1, token: 'SECRET' }],
-      setStorageSync: (_key: string, value: unknown) => { saved = value },
+      setStorage: ({ data }: { data: unknown }) => { saved = data },
       $on: (name: string, fn: Function) => { handlers[name] = fn },
       $emit: (name: string) => emitted.push(name),
       onNetworkStatusChange: (fn: Function) => { handlers.network = fn },
@@ -87,6 +87,7 @@ test('runtime reconnects once, updates only with confirmation, and diagnostics n
   for (let i = 0; i < 2000; i++) exports.recordDiagnostic('network')
   exports.recordDiagnostic('https://secret.example/?token=SECRET')
   assert.ok(!exports.diagnosticSummary().includes('SECRET'))
+  exports.flushDiagnostics()
   assert.ok(!JSON.stringify(saved).includes('SECRET'))
   const diagnostic = JSON.parse(exports.diagnosticSummary())
   assert.ok(diagnostic.events.length <= 40)

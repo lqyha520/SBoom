@@ -1,17 +1,20 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from 'vue'
+import { lazyComponent } from '../../shared/async-component'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useExamStore } from './stores/exam'
 import { UID_KEY, useAuthStore } from './stores/auth'
 import { AUTH_CHANGED_EVENT } from './api'
-const LeftPanel = defineAsyncComponent(() => import('./components/LeftPanel.vue'))
-const MiddleColumn = defineAsyncComponent(() => import('./components/MiddleColumn.vue'))
-const PreviewPane = defineAsyncComponent(() => import('./components/PreviewPane.vue'))
-const ImageWorkbench = defineAsyncComponent(() => import('./components/ImageWorkbench.vue'))
-const StepResult = defineAsyncComponent(() => import('./components/StepResult.vue'))
-const AdvancedDrawer = defineAsyncComponent(() => import('./components/AdvancedDrawer.vue'))
-const MyTemplatesDialog = defineAsyncComponent(() => import('./components/MyTemplatesDialog.vue'))
-const HistoryDialog = defineAsyncComponent(() => import('./components/HistoryDialog.vue'))
-const CloudLibraryDialog = defineAsyncComponent(() => import('./components/CloudLibraryDialog.vue'))
+import { loadLeftPanel, loadMiddleColumn, loadPreviewPane } from './workspace-loaders'
+import { storageUsage, type StorageUsage } from './local-storage'
+const LeftPanel = lazyComponent(loadLeftPanel)
+const MiddleColumn = lazyComponent(loadMiddleColumn)
+const PreviewPane = lazyComponent(loadPreviewPane)
+const ImageWorkbench = lazyComponent(() => import('./components/ImageWorkbench.vue'))
+const StepResult = lazyComponent(() => import('./components/StepResult.vue'))
+const AdvancedDrawer = lazyComponent(() => import('./components/AdvancedDrawer.vue'))
+const MyTemplatesDialog = lazyComponent(() => import('./components/MyTemplatesDialog.vue'))
+const HistoryDialog = lazyComponent(() => import('./components/HistoryDialog.vue'))
+const CloudLibraryDialog = lazyComponent(() => import('./components/CloudLibraryDialog.vue'))
 
 const store = useExamStore()
 const auth = useAuthStore()
@@ -21,6 +24,8 @@ const showHistory = ref(false)
 const showCloud = ref(false)
 const imageMode = ref(false)
 const imageOpened = ref(false)
+const localUsage = ref<StorageUsage | null>(null)
+const storageLabel = computed(() => localUsage.value ? `本机已用 ${(localUsage.value.usage / 1048576).toFixed(1)} MB / ${(localUsage.value.quota / 1048576).toFixed(0)} MB${localUsage.value.persisted ? ' · 持久保存' : ' · 请定期导出备份'}` : '本机保留最近 10 份闲置草稿、100 份历史（30 天）')
 function openImages() { imageOpened.value = true; imageMode.value = true }
 const accountError = ref('')
 const suggestedKeyword = ref((new URLSearchParams(location.search).get('keyword') || '').slice(0, 100))
@@ -34,6 +39,7 @@ const workspaceTabs = [
   { label: '卷面预览', value: 'preview', icon: 'i-lucide-file-text' },
 ]
 const userMenu = computed(() => [
+  [{ label: storageLabel.value, disabled: true }],
   [{ label: '云端试卷', icon: 'i-lucide-cloud', onSelect: () => { showCloud.value = true } }],
   ...(auth.user?.role === 'admin' ? [[{ label: '后台管理', icon: 'i-lucide-shield-check', href: '/admin/' }]] : []),
   [{ label: '退出登录', icon: 'i-lucide-log-out', onSelect: async () => {
@@ -43,26 +49,35 @@ const userMenu = computed(() => [
     }
     try { await auth.logout() }
     catch { accountError.value = '退出登录失败，请检查网络后重试' }
-  } }],
+  } }, { label: '退出并清除本机数据', icon: 'i-lucide-trash-2', onSelect: logoutAndClear }],
 ])
-async function accountChanged() {
+async function logoutAndClear() {
+  if (store.generating || !window.confirm('退出并清除本账号在此浏览器的草稿、历史、模板和生图结果？云端内容会保留。')) return
+  try { await store.suspendForAccountChange(); await auth.logout(true) }
+  catch (error) { accountError.value = error instanceof Error ? error.message : '退出或清理失败，请重试' }
+}
+async function accountChanged(event?: Event) {
   if (accountReloading.value) return
   accountReloading.value = true
   try {
-    if (await store.suspendForAccountChange()) location.reload()
+    if (await store.suspendForAccountChange()) {
+      if ((event as CustomEvent | undefined)?.detail?.expired) sessionStorage.setItem('lc_session_notice', '登录已过期，草稿已保存。重新登录后可继续编辑。')
+      location.reload()
+    }
     else accountError.value = '账号已变化，草稿尚未保存；当前页面已保留，暂未刷新'
   } finally {
     accountReloading.value = false
   }
 }
 function storageChanged(event: StorageEvent) {
+  if (event.key === 'lc_purge:' + store.ownerId && event.newValue) { store.accountChanged = true; store.disposePersistence(); location.reload(); return }
   if (event.key === UID_KEY && event.newValue !== store.ownerId) void accountChanged()
 }
 function saveOnHide() { if (document.visibilityState === 'hidden') void store.flushDraft() }
 function saveOnExit() { void store.flushDraft() }
-function captureEdit(event: FocusEvent) {
+function captureEdit(event: Event) {
   const target = event.target as HTMLElement
-  if (target.isContentEditable || target.closest('[contenteditable="true"]')) store.recordEdit()
+  if (target.isContentEditable || target.closest('[contenteditable="true"]')) store.recordEdit('rich-text')
 }
 function editShortcut(event: KeyboardEvent) {
   const target = event.target as HTMLElement
@@ -79,6 +94,7 @@ function warnUnsaved(event: BeforeUnloadEvent) {
 function syncOnReconnect() { void store.syncTemplatesFromServer() }
 onMounted(() => {
   if (auth.user) void store.init()
+  void storageUsage(true).then(value => { localUsage.value = value })
   window.addEventListener(AUTH_CHANGED_EVENT, accountChanged)
   window.addEventListener('storage', storageChanged)
   window.addEventListener('online', syncOnReconnect)
@@ -142,7 +158,7 @@ onBeforeUnmount(() => {
           <UBadge v-if="store.grade && !imageMode" color="neutral" variant="subtle" size="sm">{{ store.grade }}{{ store.subject ? ' / ' + store.subject : '' }}</UBadge>
         </div>
         <div v-if="!imageMode" class="workspace-meta">
-          <span class="draft-state" :class="{ 'text-error': store.draftState === 'error' }" role="status" :title="store.draftSavedAt ? '本机保存于 ' + new Date(store.draftSavedAt).toLocaleString() : ''"><UIcon :name="store.draftState === 'saving' ? 'i-lucide-loader-circle' : store.draftState === 'error' ? 'i-lucide-cloud-off' : 'i-lucide-hard-drive'" class="size-3.5" :class="{ 'animate-spin': store.draftState === 'saving' }" />{{ draftLabel }}</span>
+          <span class="draft-state" :class="{ 'text-error': store.draftState === 'error' }" :title="storageLabel"><UIcon :name="store.draftState === 'saving' ? 'i-lucide-loader-circle' : store.draftState === 'error' ? 'i-lucide-cloud-off' : 'i-lucide-hard-drive'" class="size-3.5" :class="{ 'animate-spin': store.draftState === 'saving' }" />{{ draftLabel }}</span><span class="sr-only">{{ storageLabel }}</span>
           <span v-if="store.generating" role="status" class="generation-state"><UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />{{ store.generateProgress || '正在生成' }}</span>
           <template v-else><span class="status-dot"></span><span>{{ store.sections.length }} 个大题</span><span class="meta-divider">/</span><span>{{ store.totalQuestions }} 道题目</span></template>
         </div>
@@ -155,14 +171,12 @@ onBeforeUnmount(() => {
       <UAlert v-if="suggestedKeyword && store.persistenceReady" title="从运营统计带入的出题需求" :description="suggestedKeyword" class="workspace-alert no-print"><template #actions><UButton label="应用知识点" :disabled="store.generating" @click="applySuggestedKeyword" /><UButton label="忽略" variant="ghost" @click="suggestedKeyword = ''" /></template></UAlert>
       <UTabs v-if="!imageMode && store.view === 'build'" v-model="mobilePanel" :items="workspaceTabs" :content="false" class="workspace-tabs no-print" :ui="{ list: 'w-full', trigger: 'flex-1' }" />
       <div v-if="!store.persistenceReady" class="loading-screen" role="status">正在恢复草稿</div>
-      <main v-else class="workbench" :class="{ 'result-only': imageMode || store.view === 'result' }" :data-panel="imageMode ? 'image' : mobilePanel" @focusin="captureEdit">
+      <main v-else class="workbench" :class="{ 'result-only': imageMode || store.view === 'result' }" :data-panel="imageMode ? 'image' : mobilePanel" @beforeinput.capture="captureEdit">
         <ImageWorkbench v-if="imageOpened" v-show="imageMode" />
-        <template v-if="!imageMode && store.view === 'build'">
-          <LeftPanel />
-          <MiddleColumn @open-templates="showTpl = true" @preview="mobilePanel = 'preview'" />
-          <PreviewPane @open-settings="showAdv = true" />
-        </template>
-        <StepResult v-else-if="!imageMode" @library="showCloud = true" />
+          <LeftPanel v-show="!imageMode && store.view === 'build'" />
+          <MiddleColumn v-show="!imageMode && store.view === 'build'" @open-templates="showTpl = true" @preview="mobilePanel = 'preview'" />
+          <KeepAlive><PreviewPane v-if="!imageMode && store.view === 'build'" @open-settings="showAdv = true" /></KeepAlive>
+        <KeepAlive><StepResult v-if="!imageMode && store.view === 'result'" @library="showCloud = true" /></KeepAlive>
       </main>
       <AdvancedDrawer v-if="showAdv" :open="showAdv" @close="showAdv = false" />
       <MyTemplatesDialog v-if="showTpl" :open="showTpl" @close="showTpl = false" />

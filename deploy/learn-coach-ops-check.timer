@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Learn Coach every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=20s
+Persistent=true
+Unit=learn-coach-ops-check.service
+
+[Install]
+WantedBy=timers.target

@@ -106,7 +106,7 @@ def groups(user_id):
 
 
 def save_group(user_id, body, identifier=None):
-    with db(serialized=True) as conn:
+    with db(content_user=str(user_id)) as conn:
         existing = conn.execute("SELECT id FROM mini_favorite_groups WHERE user_id = ? AND name = ?", (user_id, body.name)).fetchone()
         if existing and existing[0] != identifier:
             fail("已有同名收藏分组")
@@ -127,7 +127,7 @@ def save_group(user_id, body, identifier=None):
 
 
 def delete_group(user_id, identifier, revision):
-    with db(serialized=True) as conn:
+    with db(content_user=str(user_id)) as conn:
         row = conn.execute("SELECT revision FROM mini_favorite_groups WHERE id = ? AND user_id = ?", (identifier, user_id)).fetchone()
         if not row:
             fail("收藏分组不存在", 404)
@@ -137,7 +137,7 @@ def delete_group(user_id, identifier, revision):
 
 
 def assign_group(user_id, catalog_id, group_id):
-    with db(serialized=True) as conn:
+    with db(content_user=str(user_id)) as conn:
         catalog._visible(conn, catalog_id)
         if not conn.execute("SELECT 1 FROM mini_catalog_favorites WHERE user_id = ? AND catalog_id = ?", (user_id, catalog_id)).fetchone():
             fail("请先收藏这份资料", 422)

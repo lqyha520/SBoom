@@ -2,11 +2,17 @@
 
 import time
 import uuid
+from typing import Any
 
+from app.db import _PgConn
 from app.services.mini_errors import fail
 
 
-def append(conn, user, days, order_id=None):
+def append(conn: _PgConn, user: Any, days: int, order_id: str | None = None) -> int:
+    # 所有权益变更共用用户行锁，重新读取避免排队期间沿用旧到期时间。
+    user = conn.execute("SELECT * FROM mini_users WHERE id = ? FOR UPDATE", (user["id"],)).fetchone()
+    if not user:
+        fail("账号不存在", 404)
     now = int(time.time())
     if user["membership"] == "vip" and user["vip_expires_at"] is None:
         return 0
@@ -20,13 +26,13 @@ def append(conn, user, days, order_id=None):
     return end
 
 
-def revoke(conn, order_id):
+def revoke(conn: _PgConn, order_id: str) -> int:
     grant = conn.execute("SELECT * FROM mini_membership_grants WHERE order_id = ?", (order_id,)).fetchone()
     if not grant or grant["revoked_at"] is not None:
         return 0
     now = int(time.time())
     conn.execute("UPDATE mini_membership_grants SET revoked_at = ? WHERE id = ?", (now, grant["id"]))
-    user = conn.execute("SELECT * FROM mini_users WHERE id = ?", (grant["user_id"],)).fetchone()
+    user = conn.execute("SELECT * FROM mini_users WHERE id = ? FOR UPDATE", (grant["user_id"],)).fetchone()
     if not user or user["entitlement_epoch"] != grant["epoch"] or user["membership"] != "vip" or user["vip_expires_at"] is None:
         return 0
     unused = max(0, grant["ends_at"] - max(now, grant["starts_at"]))
@@ -37,4 +43,4 @@ def revoke(conn, order_id):
                      "WHERE user_id = ? AND epoch = ? AND revoked_at IS NULL AND starts_at >= ?",
                      (unused, unused, user["id"], grant["epoch"], grant["ends_at"]))
         conn.execute("UPDATE mini_users SET vip_expires_at = vip_expires_at - ?, revision = revision + 1, updated_at = ? WHERE id = ?", (unused, now, user["id"]))
-    return unused
+    return int(unused)

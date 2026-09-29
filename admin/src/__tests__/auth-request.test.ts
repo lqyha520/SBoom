@@ -4,6 +4,15 @@ import { ACCOUNT_CHANGED_EVENT, ACCOUNT_KEY, accountChanged, bindAdminAccount, l
 beforeEach(() => { localStorage.clear(); bindAdminAccount(1) })
 afterEach(() => { vi.unstubAllGlobals(); bindAdminAccount(null) })
 
+it('wrong login credentials show the server message without expiring the active session', async () => {
+  const dispatch = vi.spyOn(window, 'dispatchEvent')
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: { error: '用户名或密码错误' } }), { status: 401 })))
+  try {
+    await expect(login('wrong', 'password')).rejects.toThrow('用户名或密码错误')
+    expect(dispatch).not.toHaveBeenCalled()
+  } finally { dispatch.mockRestore() }
+})
+
 it('退出失败会向界面返回错误，保留账号信息供重试', async () => {
   localStorage.setItem(ACCOUNT_KEY, '1')
   const fetchMock = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(new Response('{}'))
@@ -57,4 +66,21 @@ it('登录不携带旧账号校验，成功后绑定新的账号', async () => {
   await request('/api/v1/admin/users')
   expect(new Headers(fetchMock.mock.calls[1][1].headers).get('X-Workspace-User')).toBe('2')
   expect(localStorage.getItem(ACCOUNT_KEY)).toBe('2')
+})
+
+
+it('422 保留字段校验详情，409 保留业务码和关联 ID', async () => {
+  vi.stubGlobal('fetch', vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ detail: [{ loc: ['body', 'phone'], msg: '不符合电话格式' }] }), { status: 422 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ detail: { error: '版本已变化', code: 'revision_conflict' } }), { status: 409, headers: { 'X-Correlation-ID': 'trace-1' } })))
+  await expect(request('/api/v1/admin/example', { method: 'PUT' })).rejects.toMatchObject({ status: 422, message: 'phone：不符合电话格式' })
+  await expect(request('/api/v1/admin/example', { method: 'PUT' })).rejects.toMatchObject({ status: 409, code: 'revision_conflict', requestId: 'trace-1' })
+})
+
+it('网关错误仅重试 GET，写入请求保留供用户显式重试', async () => {
+  const fetcher = vi.fn().mockResolvedValueOnce(new Response('{}', { status: 502 })).mockResolvedValueOnce(new Response('{"ok":true}')).mockResolvedValueOnce(new Response('{}', { status: 502 }))
+  vi.stubGlobal('fetch', fetcher)
+  await expect(request('/api/v1/admin/example')).resolves.toEqual({ ok: true })
+  await expect(request('/api/v1/admin/example', { method: 'POST' })).rejects.toMatchObject({ status: 502 })
+  expect(fetcher).toHaveBeenCalledTimes(3)
 })

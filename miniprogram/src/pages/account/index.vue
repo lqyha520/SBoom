@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { navigatePage } from '../../services/page-navigation'
+
+import { copyWithPrivacy } from '../../services/privacy'
 import { ref, watch } from 'vue'
 import { onHide, onShow, onUnload } from '@dcloudio/uni-app'
 import AuthGate from '../../components/AuthGate.vue'
@@ -9,7 +12,8 @@ import ProfileSheet from '../../components/ProfileSheet.vue'
 import ProfileAvatar from '../../components/ProfileAvatar.vue'
 import { errorMessage, fetchCatalogSummary } from '../../services/api'
 import { ensureSession, logout, refreshMembership, session } from '../../services/session'
-import { createLatestRequest } from '../../services/latest-request'
+import { usePageLifecycle } from '../../services/page-lifecycle'
+import { version as appVersion } from '../../../package.json'
 import { useTabBarOverlay } from '../../services/tabbar-overlay'
 import { membershipExpiry } from '../../presentation'
 import { openSupport } from '../../services/experience'
@@ -24,7 +28,8 @@ const logoutOpen = ref(false)
 const profileOpen = ref(false)
 const passwordOpen = ref(false)
 useTabBarOverlay(() => settingsOpen.value || logoutOpen.value)
-const requests = createLatestRequest()
+const requests = usePageLifecycle(() => session.user?.id)
+requests.show()
 let active = true
 watch(() => session.user?.id, () => {
   requests.invalidate(); summary.value = null; error.value = ''
@@ -39,9 +44,7 @@ async function load() {
   if (!active || !await ensureSession() || !active) return
   const current = requests.begin()
   try {
-    await refreshMembership()
-    if (!current()) return
-    const [result] = await Promise.all([fetchCatalogSummary(), refreshUnread()])
+    const [result] = await Promise.all([fetchCatalogSummary({ scope: current }), refreshUnread({ scope: current }), refreshMembership({ scope: current })])
     if (current()) summary.value = result
   } catch (cause) { if (current()) error.value = errorMessage(cause) }
 }
@@ -53,23 +56,23 @@ async function signOut() {
   } catch (cause) { if (active) error.value = errorMessage(cause) }
   finally { busy.value = false }
 }
-function privacy() { uni.navigateTo({ url: '/pages/privacy/index' }) }
+function privacy() { navigatePage({ url: '/subpages/privacy/index' }) }
 function favorites() { uni.switchTab({ url: '/pages/favorites/index' }) }
-function recent() { uni.navigateTo({ url: '/pages/recent/index' }) }
-function downloads() { uni.navigateTo({ url: '/pages/downloads/index' }) }
-function messages() { uni.navigateTo({ url: '/pages/messages/index' }) }
-function orders() { uni.navigateTo({ url: '/pages/orders/index' }) }
-function membership() { uni.navigateTo({ url: '/pages/membership/index' }) }
+function recent() { navigatePage({ url: '/pages/recent/index' }) }
+function downloads() { navigatePage({ url: '/pages/downloads/index' }) }
+function messages() { navigatePage({ url: '/subpages/messages/index' }) }
+function orders() { navigatePage({ url: '/subpages/orders/index' }) }
+function membership() { navigatePage({ url: '/subpages/membership/index' }) }
 function copyAccount() {
   if (!session.user) return
-  uni.setClipboardData({ data: session.user.username, success: () => uni.showToast({ title: '账号已复制', icon: 'none' }) })
+  copyWithPrivacy({ data: session.user.username, success: () => uni.showToast({ title: '账号已复制', icon: 'none' }) })
 }
-function closure() { settingsOpen.value = false; uni.navigateTo({ url: '/pages/closure/index' }) }
+function closure() { settingsOpen.value = false; navigatePage({ url: '/subpages/closure/index' }) }
 function profileSaved() { profileOpen.value = false; void load(); uni.showToast({ title: '资料已更新', icon: 'none' }) }
 function passwordSaved() { passwordOpen.value = false; uni.showToast({ title: session.user?.has_password ? '密码已保存' : '密码已设置', icon: 'none' }) }
-onShow(() => { active = true; if (!profileOpen.value) void load() })
+onShow(() => { active = true; requests.show(); if (!profileOpen.value) void load() })
 function suspend() {
-  active = false; requests.invalidate()
+  active = false; requests.leave()
   settingsOpen.value = false; logoutOpen.value = false
   passwordOpen.value = false
 }
@@ -141,7 +144,7 @@ onUnload(() => { suspend(); profileOpen.value = false })
           <wd-cell title="编辑资料" :label="session.user?.nickname || session.user?.username" is-link role="button" aria-label="编辑头像与昵称" @click="openProfile"><template #prefix><view class="menu-symbol profile-symbol"><wd-icon name="user" size="21px" /></view></template></wd-cell>
           <wd-cell :title="session.user?.has_password ? '修改密码' : '设置密码'" :label="session.user?.has_password ? '定期更换更安全' : '设置后可使用固定账号登录'" is-link role="button" aria-label="密码设置" @click="openPassword"><template #prefix><view class="menu-symbol lock-symbol"><wd-icon name="lock" size="21px" /></view></template></wd-cell>
         </wd-cell-group>
-        <wd-cell title="登录账号" :value="session.user?.username" /><wd-cell title="应用版本" value="0.1.0" />
+        <wd-cell title="登录账号" :value="session.user?.username" /><wd-cell title="应用版本" :value="appVersion" />
         <wd-cell title="注销账号" label="申请、查看审核进度或撤回" is-link role="button" @click="closure" />
         <view v-if="error" class="error-strip">{{ error }}</view>
         <view class="settings-logout"><wd-button type="info" variant="plain" block icon="poweroff" role="button" :disabled="busy" @click="error = ''; logoutOpen = true">退出登录</wd-button></view>

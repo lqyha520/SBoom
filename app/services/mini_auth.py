@@ -20,7 +20,9 @@ from app.models.mini import (
     MiniPasswordUpdate,
     MiniProfileUpdate,
 )
-from app.security import encrypt_secret, hash_password, verify_password
+from app.security import encrypt_secret, hash_password, password_needs_upgrade, verify_password
+from app.services.provider_http import borrow_client
+from app.sql_utils import escape_like
 
 
 class _RedactWeChatURL(logging.Filter):
@@ -86,14 +88,19 @@ def get_user(user_id):
         return _user(conn, user_id)
 
 
-def _session(conn, user_id):
+def _session(conn, user_id, *, expected_hash=None):
     """签发一个新会话。
 
     全表的过期会话清理不再放在登录路径上（每次登录都全表扫一遍 expires_at），
     改由 mini_jobs.tick 定期分批调用 sweep_expired_sessions；这里只保留按
     user_id 索引的「每账号最多 10 个会话」裁剪，代价很小。
     """
-    user = _user(conn, user_id)
+    row = conn.execute("SELECT * FROM mini_users WHERE id = ? FOR UPDATE", (user_id,)).fetchone()
+    if not row or expected_hash is not None and row["password_hash"] != expected_hash:
+        _error("账号凭证已更新，请重新登录", code="credentials_changed")
+    if not row["is_active"]:
+        _error("账号已被禁用，请联系管理员", 403, "account_disabled")
+    user = _row_user(row)
     token, now = "lc_reader_" + secrets.token_urlsafe(32), int(time.time())
     expires = now + get_settings().mini_session_days * 86400
     conn.execute("INSERT INTO mini_user_sessions(token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
@@ -119,8 +126,11 @@ def resolve_session(token: str) -> MiniUser:
         _error()
     # 会话与账号一次 JOIN 取回：每个带登录态的请求都会走这里，省掉一次往返。
     with db() as conn:
-        row = conn.execute("SELECT u.* FROM mini_user_sessions s JOIN mini_users u ON u.id = s.user_id "
+        row = conn.execute("SELECT u.*, s.expires_at AS session_expires_at FROM mini_user_sessions s JOIN mini_users u ON u.id = s.user_id "
                            "WHERE s.token_hash = ? AND s.expires_at > ?", (digest(token), int(time.time()))).fetchone()
+        if row and row["is_active"] and row["session_expires_at"] < int(time.time()) + 2 * 86400:
+            conn.execute("UPDATE mini_user_sessions SET expires_at = ? WHERE token_hash = ? AND expires_at > ?",
+                         (int(time.time()) + get_settings().mini_session_days * 86400, digest(token), int(time.time())))
     if not row:
         _error()
     if not row["is_active"]:
@@ -169,9 +179,16 @@ def login_password(username: str, password: str):
     matched = verify_password(password, row["password_hash"] if usable else _dummy_hash())
     if not usable or not matched:
         _error("小程序用户名或密码错误")
+    expected_hash = row["password_hash"]
+    upgraded = hash_password(password) if password_needs_upgrade(expected_hash) else None
     # 签发会话只写本账号的行，无需 accounts 全局锁
     with db() as conn:
-        return _session(conn, row["id"])
+        if upgraded:
+            updated = conn.execute("UPDATE mini_users SET password_hash = ? WHERE id = ? AND password_hash = ?", (upgraded, row["id"], expected_hash))
+            if not updated.rowcount:
+                _error("账号凭证已更新，请重新登录", code="credentials_changed")
+            expected_hash = upgraded
+        return _session(conn, row["id"], expected_hash=expected_hash)
 
 
 async def exchange_code(code: str, *, with_openid=False):
@@ -179,7 +196,7 @@ async def exchange_code(code: str, *, with_openid=False):
     if not settings.wechat_app_id or not settings.wechat_app_secret:
         _error("微信登录尚未配置，请联系管理员", 503)
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+        async with borrow_client("wechat-login", 10) as client:
             response = await client.get("https://api.weixin.qq.com/sns/jscode2session", params={
                 "appid": settings.wechat_app_id, "secret": settings.wechat_app_secret,
                 "js_code": code, "grant_type": "authorization_code",
@@ -319,10 +336,11 @@ def _record_event(conn, admin_id, user_id, before, after):
 
 
 def list_users(q="", membership="", limit=20, offset=0):
-    clauses, args = [], []
+    clauses: list[str] = []
+    args: list = []
     if q.strip():
         clauses.append("(LOWER(username) LIKE ? ESCAPE '\\' OR LOWER(nickname) LIKE ? ESCAPE '\\')")
-        args.extend(["%" + q.strip().lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"] * 2)
+        args.extend(["%" + escape_like(q.strip().lower()) + "%"] * 2)
     active_vip = "membership = 'vip' AND (vip_expires_at IS NULL OR vip_expires_at > ?)"
     if membership == "vip":
         clauses.append("(" + active_vip + ")")
@@ -356,7 +374,7 @@ def update_membership(admin_id, user_id, body: MembershipUpdate):
     # 保留 accounts 锁：会员字段与支付回调 / 续期（membership_ledger.append）共享同一状态机，
     # 那些路径在锁内先读后写，这里若不串行化会让它们基于过期快照覆盖会员到期时间。
     with db(serialized="accounts") as conn:
-        row = conn.execute("SELECT * FROM mini_users WHERE id = ?", (user_id,)).fetchone()
+        row = conn.execute("SELECT * FROM mini_users WHERE id = ? FOR UPDATE", (user_id,)).fetchone()
         if not row:
             _error("小程序用户不存在", 404)
         if row["revision"] != body.revision:

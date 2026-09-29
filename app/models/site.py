@@ -112,7 +112,7 @@ class DictionaryLinksUpdate(BaseModel):
 class DictionaryUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: int = Field(ge=0)
-    value: str = Field(min_length=1, max_length=80)
+    value: str = Field(min_length=1, max_length=120)
     label: str = Field("", max_length=80)
     sort_order: int = Field(0, ge=0, le=100000)
     is_visible: bool = True
@@ -121,6 +121,19 @@ class DictionaryUpdate(BaseModel):
 class ReorderInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ids: list[str] = Field(min_length=1, max_length=500)
+
+
+class DictionaryOrderItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=64)
+    revision: int = Field(ge=0)
+
+
+class DictionaryReorder(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["grade", "subject", "knowledge_point"]
+    parent: str = Field("", max_length=80)
+    items: list[DictionaryOrderItem] = Field(min_length=1, max_length=500)
 
 
 class DictionaryAdopt(BaseModel):

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAdminRefresh } from '../admin-page'
 import { useAdminListRoute } from '../navigation'
 import { onMounted, ref, watch } from 'vue'
 import { fetchAdminLogs } from '../api'
@@ -21,7 +22,7 @@ async function load() {
   } finally { if (id === request) loading.value = false }
 }
 watch(lines, load)
-onMounted(load)
+useAdminRefresh(load, () => { request++; loading.value = false })
 const routeState = useAdminListRoute('logs', { lines }, () => { void load() })
 </script>
 

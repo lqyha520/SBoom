@@ -20,6 +20,8 @@ from app.models.image_generation import ImageWorksheetRequest
 from app.services.generation_control import record_attempt, record_usage
 from app.services.knowledge_scope import knowledge_scope_service
 from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
+from app.services.provider_http import borrow_client
+from app.services.resource_admission import bounded_media
 
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_RESPONSE_BYTES = 18 * 1024 * 1024
@@ -93,7 +95,7 @@ async def _read_limited(response: httpx.Response, limit: int) -> bytes:
 async def _public_image(url: str) -> bytes:
     # Provider URLs never receive the provider API key. Resolve and pin each hop
     # to a public IP, including redirects, so DNS rebinding cannot reach local services.
-    async with httpx.AsyncClient(timeout=30, trust_env=False, follow_redirects=False) as client:
+    async with borrow_client("public-image", 30) as client:
         for _ in range(4):
             parts = urlsplit(url)
             if (parts.scheme != "https" or not parts.hostname or parts.username or parts.password
@@ -115,13 +117,14 @@ async def _public_image(url: str) -> bytes:
     raise ValueError("图片下载地址重定向次数过多")
 
 
+@bounded_media
 def normalize_image(raw: bytes) -> dict:
     if not raw or len(raw) > MAX_IMAGE_BYTES:
         raise ValueError("图片为空或超过大小限制")
     with warnings.catch_warnings():
         warnings.simplefilter("error", Image.DecompressionBombWarning)
         with Image.open(io.BytesIO(raw)) as source:
-            if source.format not in ("PNG", "JPEG", "WEBP") or source.width * source.height > 16_000_000:
+            if source.format not in ("PNG", "JPEG", "WEBP") or source.width * source.height > 4_000_000:
                 raise ValueError("图片格式或尺寸不受支持")
             source.load()
             result = io.BytesIO()
@@ -134,6 +137,7 @@ def normalize_image(raw: bytes) -> dict:
 
 
 @observe_provider
+@bounded_media
 async def generate_image(config: dict, prompt: str) -> dict:
     body = {"model": config["model"], "prompt": prompt, "n": 1, "size": config["size"]}
     if config["responseFormat"] != "auto":
@@ -141,8 +145,10 @@ async def generate_image(config: dict, prompt: str) -> dict:
     try:
         # Total timeout also bounds a provider trickling bytes indefinitely.
         async with asyncio.timeout(config["timeout"]):
-            async with httpx.AsyncClient(timeout=config["timeout"], follow_redirects=False) as client:
+            async with borrow_client("image-generation", config["timeout"]) as client:
                 record_attempt()
+                from app.services.generation_budget import reserve
+                await run_sync(reserve, images=1)
                 async with client.stream("POST", generation_url(config["baseUrl"]), json=body,
                                          headers={"Authorization": "Bearer " + config["api_key"]}) as response:
                     response.raise_for_status()

@@ -1,21 +1,26 @@
 """FastAPI 主入口"""
 
+import asyncio
 import logging
-import logging.handlers
 import os
-import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from psycopg.errors import LockNotAvailable
+from psycopg_pool import PoolTimeout, TooManyRequests
 
 from app.body_limit import BodySizeLimit
+from app.cache_policy import CachePolicy
 from app.config import APP_VERSION, get_settings
 from app.db import close_pg_pool, init_db
+from app.db_admission import DatabaseBusy
+from app.logging_config import configure_logging
 from app.metrics import RequestMetrics
+from app.request_context import RequestContext
 from app.routers.admin import router as admin_router
 from app.routers.auth import router as auth_router
 from app.routers.catalog import admin_router as catalog_admin_router
@@ -38,43 +43,9 @@ from app.services.llm_client import llm_client
 settings = get_settings()
 
 
-_LOG_FILE = Path(__file__).resolve().parent.parent / "server.log"
-_log_handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
-if settings.log_to_file:
-    if settings.workers > 1:
-        raise RuntimeError("LOG_TO_FILE requires WORKERS=1; use container logs for multiple workers")
-    _log_handlers.append(logging.handlers.RotatingFileHandler(
-        _LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"))
 
-# 配置日志格式：LOG_FORMAT=json/text 显式指定；auto 沿用旧行为——
-# 生产环境（FORCE_HTTPS=true）使用 JSON 格式，开发环境使用文本格式
-use_json_logging = settings.log_format == "json" or (settings.log_format == "auto" and settings.force_https)
-formatter: logging.Formatter
-if use_json_logging:
-    try:
-        from pythonjsonlogger import jsonlogger
-        formatter = jsonlogger.JsonFormatter(
-            '%(asctime)s %(name)s %(levelname)s %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-    except ImportError:
-        formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
-else:
-    formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
-
-for handler in _log_handlers:
-    handler.setFormatter(formatter)
-
-logging.basicConfig(
-    level=logging.INFO,
-    handlers=_log_handlers,
-)
-# httpx/httpcore 的 INFO 日志会把完整请求 URL 打出来（微信接口的 access_token 挂在 query 上），
-# 一律压到 WARNING，避免密钥进日志
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
+configure_logging()
 logger = logging.getLogger(__name__)
-
 
 # 保留导出，方便现有测试和外部集成使用同一中间件。
 
@@ -101,13 +72,16 @@ async def lifespan(app: FastAPI):
     exporter = None
     maintenance_stop = None
     maintenance_task = None
+    sampler_task = None
     try:
-        init_db()  # 用户库建表 + 迁移（幂等）
+        init_db()
+        from app.services.generation_control import reclaim_expired
+        reclaim_expired()  # 用户库建表 + 迁移（幂等）
         for warning in security_warnings():
             logger.warning("Security configuration: %s", warning)
         # 环境变量种子管理员（可选）：确保存在并对齐角色/状态/密码
         if settings.admin_username and settings.admin_password:
-            user_store.ensure_admin(settings.admin_username, settings.admin_password)
+            user_store.ensure_admin(settings.admin_username, settings.admin_password, reset=settings.admin_reset_on_start)
             logger.info(f"已确保种子管理员账号存在: {settings.admin_username}")
         # 模型配置收归后台：老部署里用户自配的 LLM 一次性迁移为全局配置
         from app.services.app_config import seed_llm_from_user_configs
@@ -120,8 +94,14 @@ async def lifespan(app: FastAPI):
             if settings.workers > 1:
                 raise RuntimeError("Multi-worker metrics require the run.py launcher")
             exporter = start_metrics_server(settings.metrics_port, settings.metrics_host)
+        from app.blocking import sample_limiters
+        sampler_task = asyncio.create_task(sample_limiters())
         yield
     finally:
+        if sampler_task:
+            sampler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await sampler_task
         if maintenance_stop:
             maintenance_stop.set()
         try:
@@ -135,7 +115,11 @@ async def lifespan(app: FastAPI):
             if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
                 from prometheus_client import multiprocess
                 multiprocess.mark_process_dead(os.getpid())
+            from app.services.generation_control import shutdown_generation
+            await shutdown_generation()
             await llm_client.close()
+            from app.services.provider_http import close_clients
+            await close_clients()
             close_pg_pool()
 
 
@@ -145,6 +129,9 @@ app = FastAPI(
     description="AI+教育 课堂互动系统 —— 趣味题目/知识游戏生成服务（多用户 + 后台管理）",
     version=APP_VERSION,
     lifespan=lifespan,
+    docs_url="/docs" if (settings.api_docs_enabled if settings.api_docs_enabled is not None else not settings.force_https) else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if (settings.api_docs_enabled if settings.api_docs_enabled is not None else not settings.force_https) else None,
 )
 
 # 请求体上限最先注册（最内层）：CORS/指标中间件在外层，413 响应同样带 CORS 头并计入指标
@@ -172,6 +159,27 @@ if settings.cors_origins.strip():
 # Metrics cover the complete ASGI response, including streams.
 
 app.add_middleware(RequestMetrics)
+app.add_middleware(CachePolicy)
+app.add_middleware(RequestContext)
+
+
+async def database_busy(request, exc):
+    from app.metrics import database_busy_total
+    database_busy_total.inc()
+    return JSONResponse({"detail": {"error": "服务繁忙，请稍后重试", "code": "database_busy"}}, status_code=503,
+                        headers={"Retry-After": "2", "Cache-Control": "no-store"})
+
+
+
+for busy_error in (DatabaseBusy, PoolTimeout, TooManyRequests, LockNotAvailable):
+    app.add_exception_handler(busy_error, database_busy)
+
+
+@app.exception_handler(Exception)
+async def unhandled_error(request, exc):
+    # ServerErrorMiddleware 位于用户中间件之外，500 也必须声明缓存边界。
+    return JSONResponse({"error": "服务暂时不可用，请稍后重试"}, status_code=500,
+                        headers={"Cache-Control": "no-store", "Vary": "Cookie, Authorization"})
 
 
 # ─── 前端目录 ───

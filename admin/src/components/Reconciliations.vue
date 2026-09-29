@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useAdminListRoute } from '../navigation'
-import { ref, watch } from 'vue'
+import { onDeactivated, ref, watch } from 'vue'
 import type { UserInfo } from '../api'
 import { useAdminPage } from '../admin-page'
 import { getPlans, getReconciliations, getReconciliation, reconcile, yuan, dateTime, type Reconciliation } from '../growth'
@@ -9,7 +9,10 @@ const items = ref<Reconciliation[]>([]), selected = ref<Reconciliation | null>(n
 const day = ref(new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10))
 const maxDate = day.value, minDate = new Date(Date.now() + 8 * 3600000 - 90 * 86400000).toISOString().slice(0, 10)
 const labels = { running: '核对中', complete: '已完成', error: '未完成' }
-const page = useAdminPage(async valid => { const [result, plans] = await Promise.all([getReconciliations((pageNumber.value - 1) * 20), getPlans()]); if (valid()) { items.value = result.items; total.value = result.total; online.value = plans.checkout_enabled } }, () => { dialog.value = false })
+let plansPromise: ReturnType<typeof getPlans> | undefined
+onDeactivated(() => { plansPromise = undefined })
+function checkoutPlans() { return plansPromise ||= getPlans().catch(cause => { plansPromise = undefined; throw cause }) }
+const page = useAdminPage(async valid => { const [result, plans] = await Promise.all([getReconciliations((pageNumber.value - 1) * 20), checkoutPlans()]); if (valid()) { items.value = result.items; total.value = result.total; online.value = plans.checkout_enabled } }, () => { dialog.value = false })
 const { error, notice, loading, busy } = page
 const routeState = useAdminListRoute('reconciliations', { page: pageNumber }, () => { void page.load() })
 watch(pageNumber, page.load)

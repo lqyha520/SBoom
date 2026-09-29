@@ -4,6 +4,7 @@ const routes: Record<string, readonly string[]> = {
   paper: ['id'], topic: ['id'], messages: [], membership: [], orders: ['id'], closure: [],
   requests: ['id', 'title', 'grade', 'subject'], support: ['id', 'kind', 'paper'], privacy: ['kind'],
 }
+const servicePages = new Set(["membership", "support", "orders", "privacy", "requests", "messages", "closure"])
 const ids = new Set(['id', 'paper', 'category', 'topic'])
 const escaped = /%[0-9A-Fa-f]{2}/
 export const HOME = '/pages/home/index'
@@ -19,8 +20,8 @@ export function decodeParam(value: unknown): string {
 export function safeDestination(input: unknown): string {
   if (typeof input !== 'string' || input.length > 1400 || /[\\\r\n#]/.test(input)) return HOME
   // 平台差异：小程序原样带未解码的参数，H5 已解码。只有不像页面路径时才尝试解一次，解码结果仍走完整校验。
-  const target = input.startsWith('/pages/') ? input : decodeParam(input)
-  const match = /^\/pages\/([a-z]+)\/index(?:\?([^#]*))?$/.exec(target)
+  const target = (input.startsWith('/pages/') || input.startsWith('/subpages/')) ? input : decodeParam(input)
+  const match = /^\/(?:pages|subpages)\/([a-z]+)\/index(?:\?([^#]*))?$/.exec(target)
   if (!match || !routes[match[1]!]) return HOME
   const values = new Map<string, string>()
   try {
@@ -37,7 +38,7 @@ export function safeDestination(input: unknown): string {
   } catch { return HOME }
   if (['paper', 'topic'].includes(match[1]!) && !values.has('id')) return HOME
   const query = [...values].map(([key, value]) => key + '=' + encodeURIComponent(value)).join('&')
-  return '/pages/' + match[1] + '/index' + (query ? '?' + query : '')
+  return (servicePages.has(match[1]!) ? '/subpages/' : '/pages/') + match[1] + '/index' + (query ? '?' + query : '')
 }
 export function routeFromPage(page: { route?: string; options?: Record<string, unknown>; $page?: { options?: Record<string, unknown> } } | undefined) {
   if (!page?.route) return HOME

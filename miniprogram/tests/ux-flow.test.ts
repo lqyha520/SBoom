@@ -1,3 +1,5 @@
+import { usePageLifecycle } from '../src/services/page-lifecycle'
+import { reconcileRows } from '../src/services/catalog-rows'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
@@ -16,7 +18,7 @@ function component(file: string, modules: Record<string, unknown>, expose: strin
   const state = vue.reactive(props)
   scope.run(() => vm.runInNewContext(ts.transpileModule(source + '\nexports.page = {' + expose + '}', { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
     exports, require: (id: string) => id === 'vue' ? { ...vue, getCurrentInstance: () => ({ proxy: {} }),
-      onMounted: (fn: () => void) => { lifecycle.mount = fn }, onUnmounted: (fn: () => void) => { lifecycle.unmount = fn }, onBeforeUnmount() {} } : modules[id] || {},
+      onMounted: (fn: () => void) => { lifecycle.mount = fn }, onUnmounted: (fn: () => void) => { lifecycle.unmount = fn }, onBeforeUnmount() {} } : modules[id] || (id.endsWith('/page-lifecycle') ? { usePageLifecycle, captureScroll: (save: (top: number) => void) => save(600) } : id.endsWith('/catalog-rows') ? { reconcileRows } : id.endsWith('/page-navigation') ? { navigatePage: (options: unknown) => (globals.uni as any)?.navigateTo?.(options) } : {}),
     defineProps: () => state, withDefaults: (_value: unknown, defaults: object) => Object.assign(state, { ...defaults, ...props }),
     defineEmits: () => (...args: unknown[]) => events.push(args), defineExpose() {}, setTimeout, clearTimeout, ...globals,
   }))
@@ -75,8 +77,10 @@ test('typing is debounced, enter is immediate, filters are batched and leaving c
     assert.equal(app.calls.length, 1); assert.equal(app.scheduled.size, 1)
     app.runTimers(); await settle()
     assert.deepEqual(app.calls.map(call => call.q), ['', '数学'])
+    assert.equal(app.calls.at(-1)!.record, false)
     app.page.search('口算'); await settle()
     assert.deepEqual(app.calls.map(call => call.q), ['', '数学', '口算'])
+    assert.equal(app.calls.at(-1)!.record, true)
     assert.equal(app.scheduled.size, 0)
     app.page.applyFilters({ grade: '二年级', category: 'daily', tags: { textbook: 'book', unit: 'unit' } }); await settle()
     assert.equal(app.calls.length, 4); assert.equal(app.calls[3]!.grade, '二年级'); assert.equal(app.calls[3]!.unit, 'unit')

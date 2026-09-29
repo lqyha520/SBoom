@@ -6,7 +6,7 @@ import ts from 'typescript'
 import * as vue from 'vue'
 import { parse } from 'vue/compiler-sfc'
 
-async function fixture(options: { native?: boolean; enabled?: boolean; hasWechat?: boolean; lifetime?: boolean; confirm?: boolean; supportFails?: boolean; plansFail?: boolean } = {}) {
+async function fixture(options: { ios?: boolean; native?: boolean; enabled?: boolean; hasWechat?: boolean; lifetime?: boolean; confirm?: boolean; supportFails?: boolean; plansFail?: boolean } = {}) {
   const session = vue.reactive({ user: { id: 'reader', username: 'wx1234567890', has_wechat: options.hasWechat ?? true, is_vip: !!options.lifetime, vip_expires_at: null as number | null } })
   const plans = [{ id: 'month', revision: 1, name: '月度会员', days: 30, price_fen: 1990 }, { id: 'quarter', revision: 2, name: '季度会员', days: 90, price_fen: 4990 }]
   const orders: { id: string; key: string }[] = [], confirmations: string[] = [], native: string[] = []
@@ -31,11 +31,11 @@ async function fixture(options: { native?: boolean; enabled?: boolean; hasWechat
       async fetchSupport() { if (options.supportFails) throw new Error('support unavailable'); return { wechat: 'support_demo', phone: '4000000000' } },
       openSupport: (kind: string) => native.push('feedback:' + kind),
     },
-    '../../services/checkout': { checkoutSupport: () => options.native ?? true },
+    '../../services/checkout': { iosRestricted: () => !!options.ios, checkoutSupport: () => !options.ios && (options.native ?? true) },
     '../../services/navigation': { async confirmAction(_title: string, message: string) { confirmations.push(message); return options.confirm ?? true } },
   }
   const exports: Record<string, any> = {}
-  const source = parse(readFileSync(new URL('../src/pages/membership/index.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content
+  const source = parse(readFileSync(new URL('../src/subpages/membership/index.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content
   vm.runInNewContext(ts.transpileModule(source + '\nexports.controls = { load, plans, contact, contactError, selectedId, contactOpen, selectPlan, primary, purchase, cardCode, redeem, redeemedDays, callContact, leaveMessage }', {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText, { exports, require: (id: string) => modules[id] || {}, uni: { switchTab: (value: { url: string }) => native.push(value.url), makePhoneCall: (value: { phoneNumber: string }) => native.push('call:' + value.phoneNumber), showToast() {} } })
@@ -55,6 +55,16 @@ test('plan selection is separate from order creation and repeated confirmation i
   assert.equal(app.confirmations.length, 1)
   assert.match(app.confirmations[0]!, /90 天，¥49.90/)
   assert.deepEqual(app.native, ['order:created-order'])
+})
+
+test('restricted iOS cannot create orders, open purchase contact, or redeem cards', async () => {
+  const app = await fixture({ ios: true })
+  app.controls.cardCode.value = 'LC-VALID-CARD'
+  app.controls.primary(); app.controls.purchase(app.plans[0]); app.controls.redeem()
+  await app.finish()
+  assert.equal(app.orders.length, 0)
+  assert.equal(app.redemptions(), 0)
+  assert.equal(app.controls.contactOpen.value, false)
 })
 
 test('unsupported checkout, cancellation and leaving the page cannot create an order', async () => {

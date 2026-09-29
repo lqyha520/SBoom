@@ -16,6 +16,9 @@ vi.mock('../api', async importOriginal => ({
 
 function readyStore() {
   const store = useExamStore()
+  store.ownerId = "1"; store.persistenceReady = true
+  vi.spyOn(store, "flushDraft").mockResolvedValue(true)
+  vi.spyOn(store, "saveHistory").mockResolvedValue(true)
   store.grade = '小学三年级'
   store.subject = '数学'
   store.keyword = '加减法'
@@ -28,6 +31,9 @@ afterEach(() => { vi.runOnlyPendingTimers(); vi.useRealTimers() })
 describe('generation controls', () => {
   it('requires complete conditions and at least one section', async () => {
     const store = useExamStore()
+  store.ownerId = "1"; store.persistenceReady = true
+  vi.spyOn(store, "flushDraft").mockResolvedValue(true)
+  vi.spyOn(store, "saveHistory").mockResolvedValue(true)
     expect(store.canGenerate).toBe(false)
     store.addSection('fill_blank')
     await store.generate()
@@ -128,11 +134,33 @@ describe('template round trips', () => {
     store.sections[0].layout.qCols = 2
     expect(await store.saveMyTemplate('Saved')).toEqual({ local: true, synced: true })
     store.sections[0].data!.questions[0]._stemHtml = 'Different'
-    expect(store.loadMyTemplate('Saved')).toBe(true)
+    expect(await store.loadMyTemplate('Saved')).toBe(true)
     expect(store.sections[0].data!.questions[0]._stemHtml).toBe('<b>Edited</b>')
     expect(store.sections[0].layout.qCols).toBe(2)
     expect(store.keyword).toBe('加减法')
     expect(api.upsertTemplate).toHaveBeenCalledOnce()
+  })
+  it('替换前保存历史，撤销完整恢复条件和生成结果', async () => {
+    const store = readyStore()
+    await store.saveMyTemplate('Saved')
+    store.title = '原试卷'; store.grade = '小学六年级'; store.subject = '语文'; store.keyword = '古诗'; store.selectedTags = ['古诗']
+    store.difficulty = 'hard'; store.view = 'result'
+    store.papers = [{ grade: store.grade, subject: store.subject, keyword: store.keyword, difficulty: 'hard', title: '原试卷', sections: [] }]
+    store.undoStack = []
+    const original = store.editSnapshot()
+    expect(await store.loadMyTemplate('Saved')).toBe(true)
+    expect(store.saveHistory).toHaveBeenCalledWith('before-restore')
+    expect(store.view).toBe('build'); expect(store.papers).toEqual([])
+    store.undo()
+    expect(store.editSnapshot()).toEqual(original)
+  })
+  it('恢复版本保存失败时不会覆盖当前试卷', async () => {
+    const store = readyStore()
+    await store.saveMyTemplate('Saved')
+    store.title = '必须保留'
+    vi.mocked(store.saveHistory).mockResolvedValue(false)
+    expect(await store.loadMyTemplate('Saved')).toBe(false)
+    expect(store.title).toBe('必须保留')
   })
   it('overwrites by name instead of duplicating templates', async () => {
     const store = readyStore()
@@ -146,7 +174,7 @@ describe('template round trips', () => {
     const store = readyStore()
     vi.mocked(api.upsertTemplate).mockRejectedValueOnce(new Error('offline'))
     expect(await store.saveMyTemplate('Offline')).toEqual({ local: true, synced: false })
-    expect(store.loadMyTemplate('Offline')).toBe(true)
+    expect(await store.loadMyTemplate('Offline')).toBe(true)
   })
   it('updates custom template configuration reactively', () => {
     const store = readyStore()

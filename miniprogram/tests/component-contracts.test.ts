@@ -41,7 +41,8 @@ test('Wot v2 empty states keep their actions in supported named slots', () => {
 test('consumer routes and UI do not expose workbench accounts or private spaces', () => {
   const root = new URL('../src/', import.meta.url)
   const pages = JSON.parse(readFileSync(new URL('pages.json', root), 'utf8'))
-  for (const path of ['topic', 'messages', 'requests', 'closure', 'membership', 'orders']) assert.ok(pages.pages.some((page: { path: string }) => page.path === `pages/${path}/index`), path)
+  const allPaths = [...pages.pages.map((page: { path: string }) => page.path), ...pages.subPackages.flatMap((pkg: { root: string; pages: { path: string }[] }) => pkg.pages.map(page => pkg.root + '/' + page.path))]
+  for (const name of ['topic', 'messages', 'requests', 'closure', 'membership', 'orders']) assert.ok(allPaths.some((path: string) => path.endsWith('/' + name + '/index')), name)
   assert.ok(!pages.pages.some((page: { path: string }) => /pages\/(private|folders)\//.test(page.path)))
   for (const file of ['pages/account/index.vue', 'pages/login/index.vue', 'pages/paper/index.vue', 'services/api.ts', 'services/session.ts']) {
     const source = readFileSync(new URL(file, root), 'utf8')
@@ -61,7 +62,8 @@ test('detail content and downloads are gated by server-provided permissions', ()
 test('catalog rows remain renderable without an intersection observer callback', () => {
   const source = readFileSync(new URL('../src/components/CatalogList.vue', import.meta.url), 'utf8')
   const template = parse(source).descriptor.template!.content
-  assert.ok(template.includes('<PaperRow v-for="paper in items"'))
+  assert.match(template, /<view[\s\S]*v-for="paper in items"/)
+  assert.match(template, /<PaperRow[\s\S]*:paper="paper"/)
   assert.ok(!template.includes('WindowSection'))
   assert.ok(!template.includes('pageVisible'))
 })
@@ -74,7 +76,7 @@ test('custom page chrome is enabled on WeChat as well as H5', () => {
   assert.ok(tabbar.includes('uni.switchTab'))
   assert.ok(tabbar.includes('tabBarObscured'))
   const login = readFileSync(new URL('../src/pages/login/index.vue', import.meta.url), 'utf8')
-  assert.ok(login.includes('const agreed = ref(false)'))
+  assert.ok(login.includes('const agreed = ref(hasConsent())'))
   assert.ok(login.includes("provider: 'weixin'"))
   assert.ok(login.includes("request<Authenticated>('/api/v1/mini/login'"))
 })

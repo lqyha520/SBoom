@@ -1,3 +1,4 @@
+import * as sharedHttp from '../../shared/http'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
@@ -14,7 +15,7 @@ function fixture() {
   const source = readFileSync(new URL('../src/services/api.ts', import.meta.url), 'utf8').replace(/import\.meta\.env/g, "({ VITE_API_BASE_URL: 'https://api.example', DEV: false })")
   const exports: any = {}
   vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
-    exports, Date: Clock, require: () => ({ exerciseText: (value: string) => value }),
+    exports, Date: Clock, require: (name: string) => name.endsWith('/shared/http') ? sharedHttp : ({ exerciseText: (value: string) => value }),
     uni: { request(options: any) { const call = { ...options, aborted: false }; calls.push(call); return { abort() { call.aborted = true; options.fail() } } } },
   })
   const reply = (index: number, value: unknown) => calls[index].success({ statusCode: 200, data: value })
@@ -71,7 +72,7 @@ test('真实教学标签接口合并请求、缓存独立副本，强制刷新�
   assert.equal((await growth.fetchTags()).items.length, 0)
 })
 
-test('浏览和已读等个人写操作保留公共缓存，私人统计始终重新读取', async () => {
+test('浏览和已读等个人写操作保留公共缓存，私人统计短暂合并缓存', async () => {
   const { api, growth, calls, reply } = fixture()
   const home = api.fetchSiteHome(); reply(0, { title: 'home' }); await home
   for (const path of ['/api/v1/mini/events', '/api/v1/mini/history/paper', '/api/v1/mini/messages/read-all']) {
@@ -80,8 +81,8 @@ test('浏览和已读等个人写操作保留公共缓存，私人统计始终�
   }
   assert.equal(calls.filter(call => call.url.endsWith('/site/home')).length, 1)
   const first = api.fetchCatalogSummary(), second = api.fetchCatalogSummary()
-  assert.equal(calls.filter(call => call.url.endsWith('/catalog/summary')).length, 2)
-  reply(calls.length - 2, {}); reply(calls.length - 1, {}); await Promise.all([first, second])
+  assert.equal(calls.filter(call => call.url.endsWith('/catalog/summary')).length, 1)
+  reply(calls.length - 1, {}); await Promise.all([first, second])
   const tags = growth.fetchTags(); reply(calls.length - 1, { items: [] }); await tags
   api.configureSession('new', '2')
   const fresh = api.fetchSiteHome(); reply(calls.length - 1, { title: 'new account' }); await fresh
@@ -104,4 +105,29 @@ test('公共缓存到期后重新读取，失效的旧响应不能回填缓存',
   reply(1, { title: 'old' }); await old
   assert.equal((await api.fetchSiteHome()).title, 'fresh')
   assert.equal(calls.length, 3)
+})
+
+
+test('相同 token 补齐账号不会取消冷启动读取，个人缓存到期后刷新', async () => {
+  const { api, calls, reply, advance } = fixture()
+  api.configureSession('token')
+  const reading = api.request('/api/v1/mini/me')
+  const epoch = api.authGeneration()
+  api.configureSession('token', 'reader')
+  assert.equal(api.authGeneration(), epoch); assert.equal(calls[0].aborted, false)
+  reply(0, { id: 'reader' }); await reading
+  await api.request('/api/v1/mini/me'); assert.equal(calls.length, 1)
+  advance(20_001)
+  const fresh = api.request('/api/v1/mini/me'); assert.equal(calls.length, 2)
+  reply(1, { id: 'reader' }); await fresh
+})
+
+test('401 使用共享错误类型保留关联 ID，并清除认证状态', async () => {
+  const { api, calls } = fixture()
+  let cleared = 0
+  api.unauthorizedHandler(() => { cleared++ })
+  const reading = api.fetchCatalog()
+  calls[0].success({ statusCode: 401, header: { 'X-Correlation-ID': 'trace-123' }, data: { detail: { error: '登录过期', code: 'expired' } } })
+  await assert.rejects(reading, (error: any) => error instanceof sharedHttp.ApiError && error.requestId === 'trace-123')
+  assert.equal(cleared, 1)
 })

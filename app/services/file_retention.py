@@ -3,6 +3,7 @@ import itertools
 import logging
 import time
 
+from app.constants import UPLOAD_LEASE
 from app.db import db
 from app.services.paper_storage import storage_for
 from app.storage_registry import MANAGED_KEY, REFERENCES
@@ -12,7 +13,8 @@ _scan = None
 _scan_root = None
 
 def enqueue(conn, files):
-    conn.executemany("INSERT INTO file_deletions(storage, storage_key) VALUES (?, ?) ON CONFLICT DO NOTHING", files)
+    conn.executemany("INSERT INTO file_deletions(storage, storage_key, next_attempt) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+                     [(storage, key, int(time.time()) + 6 * 3600) for storage, key in files])
 
 def referenced(conn, storage, key):
     # 任一登记表（app/storage_registry.py）引用即视为在用；空后端名与 local 都指本地磁盘
@@ -58,7 +60,7 @@ def scan_orphans(limit=500):
                 if not referenced(conn, "local", key):
                     # Active uploads may be writing into an older directory.
                     parts = key.split("/")
-                    if len(parts) > 2 and conn.execute("SELECT 1 FROM paper_archives WHERE id = ? AND upload_token = ? AND file_status = 'uploading' AND upload_started_at > ?", (parts[0], parts[1], int(time.time()) - 180)).fetchone():
+                    if len(parts) > 2 and conn.execute("SELECT 1 FROM paper_archives WHERE id = ? AND upload_token = ? AND file_status = 'uploading' AND upload_started_at > ?", (parts[0], parts[1], int(time.time()) - UPLOAD_LEASE)).fetchone():
                         continue
                     enqueue(conn, [("local", key)])
             except FileNotFoundError:

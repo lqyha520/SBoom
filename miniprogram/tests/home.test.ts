@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { homeGroups, homeSelection, membershipExpiry, subjectTone, uniqueValues } from '../src/presentation'
+import { homeSelection, membershipExpiry, subjectTone } from '../src/presentation'
 import { catalogFilters } from '../src/services/navigation'
 import type { PaperSummary, User } from '../src/types'
 
@@ -10,30 +10,6 @@ function paper(id: string, featured = false): PaperSummary {
     keyword: '', question_count: 10, folder_id: null, folder_name: null, group_id: '', group_name: '', favorite: false,
     file_status: 'ready', file_error: '', page_count: 2, created_at: 1, updated_at: 1, thumbnail_id: null, thumbnail_url: null }
 }
-
-test('the home page respects editorial selections without duplicating recommended papers', () => {
-  const papers = [paper('first', true), paper('second'), paper('third', true), paper('fourth')]
-  const result = homeGroups(papers)
-  assert.equal(result.curated, true)
-  assert.deepEqual(result.featured.map(item => item.id), ['first', 'third'])
-  assert.deepEqual(result.recommended.map(item => item.id), ['second', 'fourth'])
-  assert.deepEqual(papers.map(item => item.id), ['first', 'second', 'third', 'fourth'])
-})
-
-test('an uncurated library uses real papers without claiming they are editorial picks', () => {
-  const result = homeGroups([paper('a'), paper('b'), paper('c'), paper('d')])
-  assert.equal(result.curated, false)
-  assert.equal(result.featured.length, 3)
-  assert.deepEqual(result.recommended.map(item => item.id), ['d'])
-})
-
-test('home sections stay bounded and have no placeholder content for an empty library', () => {
-  assert.deepEqual(homeGroups([]), { featured: [], recommended: [], curated: false })
-  const result = homeGroups(Array.from({ length: 20 }, (_, index) => paper(String(index), true)))
-  assert.equal(result.featured.length, 3)
-  assert.equal(result.recommended.length, 6)
-  assert.equal(new Set([...result.featured, ...result.recommended].map(item => item.id)).size, 9)
-})
 
 test('home pairs wrap through actual results without duplicates or mutating the feed', () => {
   const papers = [paper('a'), paper('b'), paper('c')]
@@ -73,10 +49,4 @@ test('subject colors have a neutral fallback for new subjects', () => {
   assert.equal(subjectTone('数学'), 'math')
   assert.equal(subjectTone('英语'), 'english')
   assert.equal(subjectTone('科学'), 'general')
-})
-
-test('grade options keep the backend dictionary order and only drop duplicates', () => {
-  const grades = ['初中二年级', '小学一年级', '小学一年级', '自定义甲']
-  assert.deepEqual(uniqueValues(grades), ['初中二年级', '小学一年级', '自定义甲'])
-  assert.equal(grades.length, 4)
 })

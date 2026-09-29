@@ -63,7 +63,9 @@ function onTitleBlur(e: FocusEvent) {
 }
 function onFooterBlur(e: FocusEvent) {
   if (!props.editable) return
-  props.paper.footerOverride = (e.target as HTMLElement).innerText.trim()
+  const clone = (e.target as HTMLElement).cloneNode(true) as HTMLElement
+  clone.querySelectorAll('.el-del').forEach(node => node.remove())
+  props.paper.footerOverride = clone.textContent?.trim() || ''
 }
 
 /* ── 卷头/卷尾元素单独删除（排版能力，随 paper 数据持久化） ── */
@@ -79,8 +81,8 @@ function toggleHidden(key: string) {
   const i = list.indexOf(key)
   if (i >= 0) list.splice(i, 1)
   else list.push(key)
-  props.paper.hiddenElements = list
   emit('toggle-element', key)
+  props.paper.hiddenElements = list
 }
 
 /* ── 标题垂直拖拽：editable 状态下按住标题（避开 ✕ 按钮）上下拖 ──
@@ -115,7 +117,7 @@ function onTitleDragStart(e: MouseEvent) {
     }
     ev.preventDefault()
     const dyMm = Math.round((dragState.value.startOffset + dyPx / MM) * 10) / 10
-    const clamped = Math.max(-20, Math.min(30, dyMm))
+    const clamped = Math.max(-10, Math.min(30, dyMm))
     emit('title-offset', clamped)
   }
   const up = () => {
@@ -159,29 +161,32 @@ const titleHtmlSafe = computed(() => sanitizeRich(props.paper.titleHtml))
       <!-- 卷头（标题偏移随拖拽变化） -->
       <div class="pv-head" :style="headStyle">
         <div v-if="!isHidden('banner')" class="exam-head" :data-plain="style.banner ? '0' : '1'">
-          <span v-if="editable" class="el-del" title="删除整个卷头" @click="toggleHidden('banner')">✕</span>
+          <button v-if="editable" type="button" contenteditable="false" class="el-del" title="删除整个卷头" aria-label="删除整个卷头" @click="toggleHidden('banner')">✕</button>
           <h1
             v-if="!isHidden('title')"
             class="can-edit paper-title"
             :contenteditable="editable"
             spellcheck="false"
-            :title="editable ? '上下拖动=移动位置；横向划选文字后可用工具条改色/字号' : undefined"
+            :title="editable ? '上下拖动或 Alt+方向键移动；横向划选文字后可用工具条改色/字号' : undefined"
             @blur="onTitleBlur"
             @mousedown="onTitleDragStart"
+            @keydown.alt.up.prevent="emit('title-offset', Math.max(-10, (style.titleOffsetY || 0) - 1))"
+            @keydown.alt.down.prevent="emit('title-offset', Math.min(30, (style.titleOffsetY || 0) + 1))"
+            :aria-keyshortcuts="editable ? 'Alt+ArrowUp Alt+ArrowDown' : undefined"
             :style="{ position: 'relative', fontSize: `calc(${kidOn ? '26pt' : '22pt'} * ${style.titleScale ?? 1})` }"
           >
-            <span v-if="editable" class="el-del" title="删除标题" @click.stop="toggleHidden('title')">✕</span>
+            <button v-if="editable" type="button" contenteditable="false" class="el-del" title="删除标题" aria-label="删除标题" @click.stop="toggleHidden('title')">✕</button>
             <!-- eslint-disable-next-line vue/no-v-html -->
             <span v-if="paper.titleHtml" v-html="titleHtmlSafe"></span>
             <template v-else>{{ paperTitle }}</template>
             <template v-if="paper.day && addDay">（第{{ paper.day }}天）</template>
           </h1>
           <div v-if="!isHidden('subline')" class="sub-line can-edit" :contenteditable="editable" spellcheck="false" style="position: relative;">
-            <span v-if="editable" class="el-del" title="删除副标题行" @click="toggleHidden('subline')">✕</span>
+            <button v-if="editable" type="button" contenteditable="false" class="el-del" title="删除副标题行" aria-label="删除副标题行" @click="toggleHidden('subline')">✕</button>
             {{ subParts.join(' ｜ ') }}
           </div>
           <div v-if="template.showInfoRow && !isHidden('inforow')" class="info-row can-edit" :contenteditable="editable" spellcheck="false" style="position: relative;">
-            <span v-if="editable" class="el-del" title="删除姓名班级栏" @click="toggleHidden('inforow')">✕</span>
+            <button v-if="editable" type="button" contenteditable="false" class="el-del" title="删除姓名班级栏" aria-label="删除姓名班级栏" @click="toggleHidden('inforow')">✕</button>
             <div>姓名：<span>&nbsp;</span></div>
             <div>班级：<span>&nbsp;</span></div>
             <div>学号：<span>&nbsp;</span></div>
@@ -189,7 +194,7 @@ const titleHtmlSafe = computed(() => sanitizeRich(props.paper.titleHtml))
           </div>
         </div>
         <div v-if="template.showNotice && !isHidden('notice')" class="notice can-edit" :contenteditable="editable" spellcheck="false" style="position: relative;">
-          <span v-if="editable" class="el-del" title="删除注意事项" @click="toggleHidden('notice')">✕</span>
+          <button v-if="editable" type="button" contenteditable="false" class="el-del" title="删除注意事项" aria-label="删除注意事项" @click="toggleHidden('notice')">✕</button>
           <b>注意事项：</b>① 答题前请将姓名、班级填写清楚；② 选择题答案填入答题卡；③ 保持卷面整洁，字迹工整。
         </div>
       </div>
@@ -213,13 +218,13 @@ const titleHtmlSafe = computed(() => sanitizeRich(props.paper.titleHtml))
       <!-- 卷尾 -->
       <div v-if="isLast" class="pv-tail">
         <div v-if="style.reward && !isHidden('reward')" class="reward-box" style="position: relative;">
-          <span v-if="editable" class="el-del" title="删除奖励区" @click="toggleHidden('reward')">✕</span>
+          <button v-if="editable" type="button" contenteditable="false" class="el-del" title="删除奖励区" aria-label="删除奖励区" @click="toggleHidden('reward')">✕</button>
           <span class="reward-title">今天的表现：</span>
           <span class="reward-stars">☆ ☆ ☆</span>
           <span class="reward-msg">老师给你涂星星～</span>
         </div>
         <div v-if="!isHidden('footer')" class="footer-note can-edit" :contenteditable="editable" spellcheck="false" @blur="onFooterBlur" style="position: relative;">
-          <span v-if="editable" class="el-del" title="删除页脚" @click="toggleHidden('footer')">✕</span>
+          <button v-if="editable" type="button" contenteditable="false" class="el-del" title="删除页脚" aria-label="删除页脚" @click="toggleHidden('footer')">✕</button>
           {{ paper.footerOverride ?? template.footer }}
         </div>
       </div>
@@ -250,5 +255,7 @@ const titleHtmlSafe = computed(() => sanitizeRich(props.paper.titleHtml))
   user-select: none;
 }
 .can-edit:hover .el-del, .exam-head:hover > .el-del, .reward-box:hover .el-del, .el-del:hover { opacity: 1; }
+.el-del:focus-visible { opacity: 1; outline: 2px solid var(--primary); }
+.can-edit:focus-within .el-del, .exam-head:focus-within > .el-del { opacity: 1; }
 .el-del:hover { color: var(--red); background: var(--red-light); }
 </style>

@@ -83,7 +83,8 @@ class ImageGenerationContracts(unittest.TestCase):
         with database.db() as conn:
             raw = conn.execute("SELECT value FROM app_config WHERE key = ?", (image_config.KEY,)).fetchone()[0]
         self.assertNotIn("secret-image-test", raw)
-        response = self.client.put("/api/v1/admin/image-config", json={**self.config, "apiKey": "", "model": "new-image-model"})
+        with patch("app.provider_policy.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("8.8.8.8", 443))]):
+            response = self.client.put("/api/v1/admin/image-config", json={**self.config, "apiKey": "", "model": "new-image-model"})
         self.assertTrue(response.json()["hasKey"])
         self.assertEqual(image_config.get_config(with_key=True)["api_key"], "secret-image-test")
         self.assertEqual(self.client.delete("/api/v1/admin/image-config").status_code, 200)
@@ -243,7 +244,7 @@ class ImageGenerationContracts(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         with database.db() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM image_assets").fetchone()[0], 0)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM generation_requests").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM generation_tombstones").fetchone()[0], 1)
 
     def test_image_quota_rejects_before_paid_provider_call(self):
         from app.config import get_settings

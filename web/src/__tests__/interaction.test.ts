@@ -9,6 +9,9 @@ vi.mock('../api', async original => ({ ...await original<typeof import('../api')
 beforeEach(() => { localStorage.clear(); setActivePinia(createPinia()); vi.clearAllMocks() })
 function ready(count = 3) {
   const store = useExamStore()
+  store.ownerId = "1"; store.persistenceReady = true
+  vi.spyOn(store, "flushDraft").mockResolvedValue(true)
+  vi.spyOn(store, "saveHistory").mockResolvedValue(true)
   store.grade = '小学三年级'; store.subject = '数学'; store.keyword = '加减法'
   store.addSection('fill_blank', count)
   store.questionSection(store.sections[0].id)
@@ -104,19 +107,19 @@ describe('锁定和停止生成', () => {
     expect(run.jobs[0].chunks).toEqual([])
     expect(assemblePaper(context, run.jobs[0]).sections[0].data.questions).toEqual([question])
   })
-  it('停止后不派发排队任务，已经发出的三份继续完成', async () => {
+  it('停止后不派发排队任务，已经发出的两份继续完成', async () => {
     const store = ready(1); store.paperCount = 5
     const releases: (() => void)[] = []
     vi.mocked(api.generateBatch).mockImplementation(params => new Promise(resolve => { releases.push(() => resolve(response(params.items))) }))
     const running = store.generate()
-    await vi.waitFor(() => expect(releases).toHaveLength(3))
+    await vi.waitFor(() => expect(releases).toHaveLength(2))
     store.stopRequested = true
     releases.forEach(release => release())
     await running
-    expect(api.generateBatch).toHaveBeenCalledTimes(3)
-    expect(store.papers).toHaveLength(3)
-    expect(store.pendingRun?.jobs).toHaveLength(2)
+    expect(api.generateBatch).toHaveBeenCalledTimes(2)
+    expect(store.papers).toHaveLength(2)
+    expect(store.pendingRun?.jobs).toHaveLength(3)
     expect(store.pendingRun?.jobs.every(job => job.chunks.every(chunk => chunk.state === 'new'))).toBe(true)
-    expect(store.generationJobs.filter(job => job.finishedAt)).toHaveLength(3)
+    expect(store.generationJobs.filter(job => job.finishedAt)).toHaveLength(2)
   })
 })

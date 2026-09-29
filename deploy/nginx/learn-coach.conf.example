@@ -1,0 +1,16 @@
+# 放在已有 HTTPS server 内；TLS 证书与域名由站点管理。
+# 宝塔可能全局开启 proxy_cache。这里必须关闭，缓存键不能混用不同账号的 Cookie。
+location / {
+    proxy_pass http://127.0.0.1:33403;
+    proxy_cache off;
+    proxy_no_cache 1;
+    proxy_cache_bypass 1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 650s;
+    proxy_send_timeout 650s;
+    proxy_buffering off;
+    client_max_body_size 64m;
+}

@@ -8,7 +8,8 @@ from functools import lru_cache
 from typing import Any
 
 from app.db import db
-from app.security import hash_password, verify_password
+from app.security import hash_password, password_needs_upgrade, verify_password
+from app.sql_utils import escape_like
 
 
 @dataclass
@@ -67,6 +68,14 @@ def authenticate(username: str, password: str) -> Any | None:
         return None
     if not verify_password(password, row["password_hash"]):
         return None
+    if password_needs_upgrade(row["password_hash"]):
+        upgraded = hash_password(password)
+        with db() as conn:
+            updated = conn.execute("UPDATE users SET password_hash = ? WHERE id = ? AND password_hash = ?",
+                                   (upgraded, row["id"], row["password_hash"]))
+            if not updated.rowcount:
+                return None
+        row = {**dict(row), "password_hash": upgraded}
     return row
 
 
@@ -82,6 +91,7 @@ def revoke_sessions(user_id: int, not_before: int | None = None) -> None:
             "UPDATE users SET token_valid_after = ? WHERE id = ? AND token_valid_after < ?",
             (cutoff, user_id, cutoff),
         )
+        conn.execute("DELETE FROM workspace_sessions WHERE user_id = ?", (user_id,))
 
 
 # ─── 管理员 ───
@@ -92,15 +102,17 @@ def count_admins() -> int:
         return int(row[0])
 
 
-def ensure_admin(username: str, password: str) -> None:
-    """确保存在指定管理员（env 种子）：不存在则创建，存在则对齐角色/状态/密码。"""
-    with db() as conn:
+def ensure_admin(username: str, password: str, *, reset: bool = False) -> None:
+    """首次创建种子账号；只有显式应急重置才修改已有账号并吊销旧会话。"""
+    with db(serialized="accounts") as conn:
         row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         if row:
-            conn.execute(
-                "UPDATE users SET role = 'admin', is_active = 1, password_hash = ? WHERE id = ?",
-                (hash_password(password), row["id"]),
-            )
+            if reset:
+                conn.execute(
+                    "UPDATE users SET role = 'admin', is_active = 1, password_hash = ?, token_valid_after = ? WHERE id = ?",
+                    (hash_password(password), int(time.time()) + 1, row["id"]),
+                )
+                conn.execute("DELETE FROM workspace_sessions WHERE user_id = ?", (row["id"],))
         else:
             conn.execute(
                 "INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')",
@@ -114,7 +126,7 @@ def list_users(query: str = "", role: str = "", limit: int = 20, offset: int = 0
     role 为空时匹配所有角色；始终只返回请求的一页。
     """
     with db() as conn:
-        safe_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        safe_query = escape_like(query)
         clauses = ["u.username LIKE ? ESCAPE '\\'"]
         args: list = [f"%{safe_query}%"]
         if role:
@@ -149,8 +161,9 @@ def update_user(
             # 重置密码即吊销该用户所有旧会话（早于此刻签发的令牌全部失效）
             conn.execute(
                 "UPDATE users SET password_hash = ?, token_valid_after = ? WHERE id = ?",
-                (hash_password(password), int(time.time()), user_id),
+                (hash_password(password), int(time.time()) + 1, user_id),
             )
+            conn.execute("DELETE FROM workspace_sessions WHERE user_id = ?", (user_id,))
         if role is not None:
             conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
         if is_active is not None:

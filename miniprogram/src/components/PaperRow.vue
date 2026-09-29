@@ -4,13 +4,12 @@ import type { PaperSummary } from '../types'
 import { fileStatus, formatDate } from '../content'
 import PrivateImage from './PrivateImage.vue'
 import SwipeAction from './SwipeAction.vue'
-import PaperAccessBadge from './PaperAccessBadge.vue'
-import { exerciseText, exerciseTitle, subjectTone, paperExtent } from '../presentation'
+import { exerciseText, exerciseTitle, subjectTone, paperExtent, paperAccess } from '../presentation'
 import { openCatalogPaper } from '../services/navigation'
 
 const props = withDefaults(defineProps<{ paper: PaperSummary; busy?: boolean; expanded?: boolean; active?: boolean }>(), { active: true })
 const swipe = ref<InstanceType<typeof SwipeAction> | null>(null)
-const emit = defineEmits<{ favorite: []; download: []; share: []; expand: [open: boolean] }>()
+const emit = defineEmits<{ favorite: []; download: []; share: []; open: []; expand: [open: boolean] }>()
 
 let shareLabel = '复制链接'
 let shareType: 'share' | undefined
@@ -28,7 +27,7 @@ function handleSwipeAction(key: string) {
   else if (key === 'download') emit('download')
   else if (key === 'share') emit('share')
 }
-function openPaper() { if (!swipe.value?.blocksClick(true)) openCatalogPaper(props.paper.id) }
+function openPaper() { if (!swipe.value?.blocksClick(true)) { emit('open'); openCatalogPaper(props.paper.id) } }
 function favorite() { if (!swipe.value?.blocksClick()) emit('favorite') }
 </script>
 
@@ -36,16 +35,16 @@ function favorite() { if (!swipe.value?.blocksClick()) emit('favorite') }
   <SwipeAction ref="swipe" :actions="swipeActions" :open="expanded" :disabled="busy" :share-id="paper.id" :share-title="exerciseText(paper.title)" @update:open="emit('expand', $event)" @action="handleSwipeAction">
     <view class="paper-row" :class="subjectTone(paper.subject)">
       <button class="paper-main" role="button" :aria-label="'打开习题：' + exerciseText(paper.title)" hover-class="control-pressed" @click="openPaper">
-        <view class="paper-thumb"><view v-if="!paper.can_view" class="row-vip-cover"><wd-icon name="lock" size="20px" /></view><view v-else-if="paper.download_mode === 'external' && !paper.thumbnail_url" class="row-vip-cover"><wd-icon name="folder" size="23px" /></view><view v-else class="paper-thumb-sheet"><PrivateImage :src="paper.thumbnail_url" :active="active" lazy /></view></view>
-        <view class="grow"><view class="paper-labels"><text>{{ paper.grade }}</text><text>·</text><text>{{ paper.subject }}</text></view><text class="paper-name">{{ exerciseTitle(paper) }}</text><view class="paper-meta"><text>{{ paperExtent(paper) }}</text><PaperAccessBadge :paper="paper" /><text v-if="paper.file_status !== 'ready' && paper.download_mode !== 'external'" class="file-pending">{{ fileStatus(paper.file_status) }}</text></view><text v-if="paper.activity_at" class="paper-topic">{{ formatDate(paper.activity_at) }}</text></view>
+        <view class="paper-thumb"><view v-if="!paper.can_view" class="row-vip-cover"><wd-icon name="lock" size="20px" /></view><view v-else-if="paper.download_mode === 'external' && !paper.thumbnail_url" class="row-vip-cover"><wd-icon name="folder" size="23px" /></view><view v-else class="paper-thumb-sheet"><PrivateImage :src="paper.thumbnail_url" :active="active" /></view></view>
+        <view class="grow"><view class="paper-labels"><text>{{ paper.grade }}</text><text>·</text><text>{{ paper.subject }}</text></view><text class="paper-name">{{ exerciseTitle(paper) }}</text><view class="paper-meta"><text>{{ paperExtent(paper) }}</text><view class="access-badge" :class="{ 'is-free': paper.required_view !== 'vip' && paper.required_download !== 'vip' }"><text>{{ paperAccess(paper) }}</text></view><text v-if="paper.file_status !== 'ready' && paper.download_mode !== 'external'" class="file-pending">{{ fileStatus(paper.file_status) }}</text></view><text v-if="paper.activity_at" class="paper-topic">{{ formatDate(paper.activity_at) }}</text></view>
       </button>
-      <view class="row-controls"><wd-button :icon="paper.favorite ? 'heart-fill' : 'heart'" type="info" variant="text" :disabled="busy" role="button" :aria-label="paper.favorite ? '取消收藏' : '收藏习题'" :title="paper.favorite ? '取消收藏' : '收藏习题'" :custom-class="'favorite-control' + (paper.favorite ? ' is-favorite' : '')" @click="favorite" /><button role="button" class="bare-icon row-more" :disabled="busy" :aria-expanded="expanded" aria-label="更多资料操作" hover-class="control-pressed" @click="emit('expand', !expanded)"><wd-icon name="more" size="20px" /></button></view>
+      <view class="row-controls"><button class="favorite-control bare-icon" :class="{ 'is-favorite': paper.favorite }" hover-class="control-pressed" :disabled="busy" role="button" :aria-label="paper.favorite ? '取消收藏' : '收藏习题'" :title="paper.favorite ? '取消收藏' : '收藏习题'" @click="favorite"><text aria-hidden="true" class="row-heart">{{ paper.favorite ? '♥' : '♡' }}</text></button><button role="button" class="bare-icon row-more" :disabled="busy" :aria-expanded="expanded" aria-label="更多资料操作" hover-class="control-pressed" @click="emit('expand', !expanded)"><wd-icon name="more" size="20px" /></button></view>
     </view>
   </SwipeAction>
 </template>
 
 <style scoped>
 .row-controls { display:flex;flex-direction:column;align-items:center;flex:none; }
-.row-more { height:44px; }
+.row-more { height:44px; }.row-heart { font-size:26px;line-height:1; }.is-favorite { color:var(--lc-coral); }
 .row-vip-cover { display: flex; align-items: center; justify-content: center; width: 100%; color: var(--subject-color); }
 </style>

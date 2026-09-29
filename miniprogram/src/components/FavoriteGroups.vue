@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { createGroup, deleteGroup, fetchGroups, renameGroup, type FavoriteGroup } from '../services/experience'
 import { errorMessage } from '../services/api'
 import { session } from '../services/session'
+import { onHide } from '@dcloudio/uni-app'
+import { createLatestRequest } from '../services/latest-request'
 import { confirmAction } from '../services/navigation'
 const props = defineProps<{ selected: string }>()
 const emit = defineEmits<{ select: [id: string] }>()
@@ -11,9 +13,13 @@ const managing = ref(false)
 const busy = ref(false)
 const error = ref('')
 let generation = 0
+const reads = createLatestRequest()
+function leave() { generation++; reads.invalidate(); managing.value = false }
+onHide(leave); onBeforeUnmount(leave)
 async function load() {
   const current = ++generation
-  try { const data = await fetchGroups(); if (current === generation) { groups.value = data.items; if (props.selected && !data.items.some(item => item.id === props.selected)) emit('select', '') } }
+  const scope = reads.begin()
+  try { const data = await fetchGroups({ scope }); if (current === generation) { groups.value = data.items; if (props.selected && !data.items.some(item => item.id === props.selected)) emit('select', '') } }
   catch (cause) { if (current === generation) error.value = errorMessage(cause) }
 }
 watch(() => session.user?.id, id => { generation++; groups.value = []; error.value = ''; managing.value = false; if (id) void load() }, { immediate: true })

@@ -5,13 +5,13 @@
 - `web/`：出题工作台（Vue 3 + Vite），`admin/`：管理后台（独立 Vite 项目，`admin/node_modules` 是指向 `web/node_modules` 的符号链接）。
 - `miniprogram/`：uni-app 小程序（H5 + 微信）。`shared/`、`ui/`：三个前端共用的类型/主题配置（Docker 构建阶段会一起拷贝）。
 - `tests/`：后端测试（`test_backend_*.py`）与 UI 契约/fixture 脚本；`scripts/`：正式维护脚本（备份、压测、演示数据导入、后台自检）。
-- `deploy/`：生产 compose（Caddy 版 `docker-compose.yml`、加密回源版 `docker-compose.server.yml`）、systemd 备份单元；根 `docker-compose.yml` 只起本机 PG。
+- `deploy/`：生产 compose（Caddy 版 `docker-compose.yml`、加密回源版 `docker-compose.server.yml`）、systemd 备份单元；根 `docker-compose.yml` 提供日常 db 与 tests profile 的独立 test-db。
 - `docs/`：设计与验收记录；`artifacts/`：截图/压测/临时脚本归档，整个目录不入库。
 
 ## 环境准备
 ```bash
-pip install -r requirements-dev.txt        # 运行时依赖 + pytest/pytest-xdist/mypy/pip-audit/ruff
-cp -n .env.example .env                    # 至少配 DATABASE_URL；本机 PG 用根目录 docker compose up -d
+python -m pip install --require-hashes -r requirements-dev.lock  # Python 3.12；含开发工具的哈希锁文件
+cp -n .env.example .env                    # 至少配 DATABASE_URL；日常 PG 用根目录 docker compose up -d db；测试用 python scripts/dev.py up
 pnpm --dir web install --frozen-lockfile   # admin 复用 web/node_modules（符号链接），不要单独 install 覆盖它
 pnpm --dir miniprogram install --frozen-lockfile
 ```
@@ -20,15 +20,15 @@ pnpm --dir miniprogram install --frozen-lockfile
 | 组件 | 命令 |
 | --- | --- |
 | 后端 | `ruff check app tests run.py scripts`、`mypy app run.py scripts`、`python -m pytest -n auto`（需本机可达的 PostgreSQL，见下） |
-| web / admin | `pnpm --dir <web|admin> typecheck`、`pnpm --dir <web|admin> test`、`pnpm --dir <web|admin> build`（有 lint 脚本时再 `pnpm --dir <x> run lint`） |
-| miniprogram | `pnpm --dir miniprogram typecheck`、`test`、`build:mp-weixin`、`check:mp`、`build:h5` |
+| web / admin | `pnpm --dir <web|admin> typecheck`、`pnpm --dir <web|admin> test`、`pnpm --dir <web|admin> build`、`pnpm --dir <x> run lint` |
+| miniprogram | `pnpm --dir miniprogram typecheck`、`lint`、`test`、`check:overrides`、`build:mp-weixin`、`check:mp`、`build:h5` |
 | 全栈契约 | `python tests/run_ui_contracts.py`（需先 build web/admin） |
 | 镜像 | `docker build --target runtime -t learncoach .`（BuildKit；国内可加 `--build-arg PIP_INDEX_URL=...`） |
 
 CI（`.github/workflows/ci.yml`）跑的就是这些，另加 `pip-audit`、`pnpm audit` 与镜像构建冒烟。
 
 ## 测试数据库红线
-- 测试只允许连本机实例，并且只创建/删除 `lc_test_*` 前缀的一次性库；管理连接由 `LC_TEST_PG_ADMIN` 指定（默认 `postgresql://learncoach:learncoach@127.0.0.1:5432/postgres`），护栏在 `tests/pg_support.py`。
+- 测试只允许连本机实例，并且只创建/删除 `lc_test_*` 前缀的一次性库；管理连接由 `LC_TEST_PG_ADMIN` 指定（推荐通过 `scripts/dev.py` 固定为 `postgresql://postgres:postgres@127.0.0.1:55432/postgres`；直接pytest保留历史本机5432兼容），护栏在 `tests/pg_support.py`。
 - 绝不把 `DATABASE_URL` / `LC_TEST_PG_ADMIN` 指向业务库、生产库或 `deploy-db-1` 这类容器；不要写"临时"脚本直接改业务库状态（如把 paper 置为 published）。
 - 本机 WSL 里跑着 `deploy-app-1` / `deploy-db-1` / `learncoach-db` 等类生产容器，只读查看，不要 stop/rm/down。
 
@@ -39,11 +39,17 @@ CI（`.github/workflows/ci.yml`）跑的就是这些，另加 `pip-audit`、`pnp
 
 ## 换行与编码
 - `.gitattributes`：全部文本 LF 入库并 LF 检出（`*.cmd/*.bat/*.ps1` 例外为 CRLF），`.editorconfig` 同步（py 4 空格，ts/vue/json/yaml 2 空格）。
-- 修改已有文件时保持它当前的换行风格；历史 CRLF 文件的统一规范化（`git add --renormalize .`）留给一次专门的提交，见 CONTRIBUTING.md。
+- 新建和修改文本一律使用 LF（上述 Windows 脚本例外）；不要把历史 CRLF/混合换行继续带入新增行。全仓规范化仍单独安排，不对未涉及文件批量重写，见 CONTRIBUTING.md。
+
+## 分支与审查
+- 新工作使用 `codex/` 前缀分支，通过PR和必需检查后合并；分支保护需仓库管理员在托管平台启用，不能因本地有配置而视作已经生效。
+- 提交前运行 `git diff --check`，仓库提供pre-commit hooks检查ruff、行尾、大文件和私钥；不要通过跳过检查掩盖失败。
 
 ## 部署与运维注意
+- 生产 `DB_AUTO_MIGRATE=false`，首次安装和升级均先运行 `python -m app.migrations`；密钥环、扩展/收缩迁移、PG升级见 `docs/operations.md`。
+- 监控、备份与通知只有完成实际配置和验收才算启用，不能把模板落库当作上线完成。
 - 镜像以非 root（uid 10001）运行，`/app/data` 归该用户；升级旧卷、固定网段、`FORWARDED_ALLOW_IPS` 的取值见 `docs/deploy.md`。
-- PostgreSQL 统一 `postgres:16-alpine`（根/deploy 两个 compose 与 CI 一致）；不要在 glibc 与 alpine 变体之间切换已有 pgdata 卷。
+- 新安装和 CI 使用 `postgres:16-bookworm`；生产通过 prod 覆盖文件固定已核实的镜像 digest。现有本地 Alpine 数据卷继续使用原镜像，切换发行版必须 dump/restore 到新卷，绝不可直接替换镜像。
 
 ## 历史记录
 - 2026-09-21 优化交付：`docs/optimization-2026-09-21.md`、`docs/project-audit-2026-09-21.md`、`docs/miniprogram-optimization-2026-09-21.md`、`docs/local-wsl-deployment-2026-09-21.md`。
