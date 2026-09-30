@@ -35,12 +35,23 @@ let settingsSequence = 0;
 const settingsBaseline = ref("");
 const contactConflict = ref(false);
 const feedbackConflict = ref(false);
-const dirty = computed(
+const latestFeedback = ref<Feedback | null>(null);
+const settingsDirty = computed(
   () =>
     !!settings.value &&
     JSON.stringify(settings.value) !== settingsBaseline.value,
 );
+const feedbackBaseline = ref("");
+const feedbackValue = () => selected.value ? JSON.stringify([selected.value.status, selected.value.reply, selected.value.internal_note]) : "";
+const feedbackDirty = computed(() => feedbackValue() !== feedbackBaseline.value);
+const dirty = computed(() => settingsDirty.value || feedbackDirty.value);
 useBeforeUnload(dirty);
+function closeFeedback() {
+  if (busy.value || (feedbackDirty.value && !window.confirm("放弃尚未保存的反馈回复？"))) return;
+  selected.value = null;
+  feedbackBaseline.value = "";
+  dialog.value = false;
+}
 async function loadSettings(preserve = false) {
   const id = ++settingsSequence;
   try {
@@ -50,22 +61,26 @@ async function loadSettings(preserve = false) {
       settings.value.revision = latest.revision;
       contactConflict.value = false;
       notice.value = '已载入最新版本，您的修改已保留，请核对后保存';
-    } else if (!dirty.value) settings.value = latest;
+    } else if (!settingsDirty.value) settings.value = latest;
     settingsBaseline.value = JSON.stringify(latest);
   } catch (cause) {
     error.value = message(cause);
   }
 }
 async function reloadFeedback() {
-  if (!selected.value) return;
+  if (!selected.value || busy.value) return;
+  busy.value = true;
+  const selectedId = selected.value.id;
   try {
     // 反馈可能已被其他管理员移到另一状态，逐页查找最新版本。
     for (let offset = 0; ; offset += 20) {
       const result = await getFeedback("", offset);
       const latest = result.items.find(
-        (item) => item.id === selected.value?.id,
+        (item) => item.id === selectedId,
       );
       if (latest) {
+        latestFeedback.value = latest;
+        if (selected.value?.id !== selectedId) return;
         selected.value.revision = latest.revision;
         feedbackConflict.value = false;
         formError.value = "已载入最新版本，您的修改已保留，请核对后保存";
@@ -76,6 +91,8 @@ async function reloadFeedback() {
     }
   } catch (cause) {
     formError.value = message(cause);
+  } finally {
+    busy.value = false;
   }
 }
 const message = (cause: unknown) =>
@@ -119,9 +136,15 @@ watch(status, () => {
   else page.value = 1;
 });
 function edit(item: Feedback) {
+  if (feedbackDirty.value) {
+    if (selected.value?.id === item.id) { dialog.value = true; return; }
+    if (!window.confirm("放弃尚未保存的反馈回复？")) return;
+  }
   selected.value = { ...item };
+  feedbackBaseline.value = feedbackValue();
   formError.value = "";
   feedbackConflict.value = false;
+  latestFeedback.value = null;
   dialog.value = true;
 }
 async function save() {
@@ -137,10 +160,12 @@ async function save() {
   formError.value = "";
   try {
     await saveFeedback(props.user.id, selected.value);
+    feedbackBaseline.value = feedbackValue();
     dialog.value = false;
     notice.value = "处理结果已保存，用户可在小程序查看回复";
     await load();
   } catch (cause) {
+    feedbackConflict.value = cause instanceof ApiError && cause.status === 409;
     formError.value = message(cause);
   } finally {
     busy.value = false;
@@ -216,7 +241,7 @@ async function inspect() {
         />
       </div>
       <div class="data-scroll">
-        <table class="data-table">
+        <table class="data-table action-table">
           <thead>
             <tr>
               <th>用户</th>
@@ -311,7 +336,8 @@ async function inspect() {
       <UButton type="submit" label="保存服务信息" :loading="busy" />
     </form>
     <UModal
-      v-model:open="dialog"
+      :open="dialog"
+      @update:open="value => { if (!value) closeFeedback() }"
       title="处理小程序反馈"
       :dismissible="!busy"
       :close="!busy"
@@ -356,7 +382,12 @@ async function inspect() {
               :rows="3"
               class="w-full"
               placeholder="仅后台可见" /></UFormField
-          ><UButton
+          ><div v-if="latestFeedback" class="feedback-original">
+            <strong>服务器最新回复</strong>
+            <p>{{ statusOptions.find(value => value.value === latestFeedback?.status)?.label }}</p>
+            <p>{{ latestFeedback.reply || '尚无回复' }}</p>
+            <p>{{ latestFeedback.internal_note || '无内部备注' }}</p>
+          </div><UButton
             v-if="feedbackConflict"
             label="载入最新并保留我的修改"
             @click="reloadFeedback"
@@ -370,7 +401,7 @@ async function inspect() {
           label="取消"
           color="neutral"
           :disabled="busy"
-          @click="dialog = false" /><UButton
+          @click="closeFeedback" /><UButton
           type="submit"
           form="feedback-reply"
           label="保存处理结果"

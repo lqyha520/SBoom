@@ -5,6 +5,7 @@
 """
 
 import io
+import json
 import time
 import uuid
 
@@ -20,6 +21,7 @@ from app.models.site import (
     DictionaryInput,
     DictionaryUpdate,
     DocumentUpdate,
+    HomeSettings,
     NoticeInput,
     NoticeUpdate,
 )
@@ -145,6 +147,23 @@ def reorder_categories(ids: list[str]) -> dict:
 
 
 # ─── 首页 Banner ───
+
+def home_settings() -> dict:
+    with db() as conn:
+        row = conn.execute("SELECT value FROM app_config WHERE key = 'home_settings'").fetchone()
+    return HomeSettings.model_validate_json(row[0]).model_dump() if row else HomeSettings().model_dump()
+
+
+def save_home_settings(body: HomeSettings) -> dict:
+    with db(serialized=True) as conn:
+        row = conn.execute("SELECT value FROM app_config WHERE key = 'home_settings'").fetchone()
+        previous = json.loads(row[0]) if row else {"revision": 0}
+        if previous["revision"] != body.revision:
+            raise _conflict("首页模式已更新，请刷新后重试")
+        value = {**body.model_dump(), "revision": body.revision + 1}
+        conn.execute("INSERT INTO app_config(key, value) VALUES ('home_settings', ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(value),))
+    return value
 
 def _banner_row(row) -> dict:
     item = dict(row)

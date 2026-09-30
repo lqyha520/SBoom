@@ -18,6 +18,7 @@ from app.blocking import run_sync
 from app.config import get_settings
 from app.http_limits import limited_lines
 from app.metrics import observe_provider
+from app.provider_policy import pin_provider_request
 from app.services.generation_budget import reserve
 from app.services.generation_control import current_usage, record_attempt, record_usage
 
@@ -107,6 +108,7 @@ class LLMClient:
             timeout=httpx.Timeout(self.DEFAULT_TIMEOUT, connect=CONNECT_TIMEOUT, pool=POOL_TIMEOUT),
             limits=CLIENT_LIMITS,
             trust_env=False,
+            event_hooks={"request": [pin_provider_request]},
         )
         self._clients[cache_key] = client
         return client

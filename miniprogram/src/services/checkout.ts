@@ -4,8 +4,11 @@ import type { ReadOptions } from './api'
 import { authGeneration } from './api'
 import { reactive } from 'vue'
 
-export const checkoutState = reactive(new Map<string, { epoch: number; phase: 'native' | 'confirming'; attempts: number }>())
+export const checkoutState = reactive(new Map<string, { epoch: number; phase: 'native' | 'confirming' | 'waiting'; attempts: number }>())
 const confirming = new Map<string, Promise<Order | null>>()
+export function settleCheckout(order: Order) {
+  if (!['created', 'pending'].includes(order.status)) checkoutState.delete(order.id)
+}
 export function confirmCheckout(id: string): Promise<Order | null> {
   const existing = confirming.get(id)
   if (existing) return existing
@@ -13,17 +16,27 @@ export function confirmCheckout(id: string): Promise<Order | null> {
   if (!state || state.phase === 'native' || state.epoch !== authGeneration()) { if (state?.epoch !== authGeneration()) checkoutState.delete(id); return Promise.resolve(null) }
   const promise = (async () => {
     let confirmed: Order | null = null
-    while (state.attempts < 3 && state.epoch === authGeneration()) {
+    state.attempts = 0
+    state.phase = 'confirming'
+    while (state.attempts < 3 && state.epoch === authGeneration() && checkoutState.get(id) === state) {
+      if (state.attempts) await new Promise(resolve => setTimeout(resolve, state.attempts * 1000))
+      if (state.epoch !== authGeneration() || checkoutState.get(id) !== state) return null
       state.attempts++
       confirmed = await syncOrder(id)
       if (state.epoch !== authGeneration()) return null
       if (!['created', 'pending'].includes(confirmed.status)) break
     }
     if (state.epoch !== authGeneration()) return null
+    if (confirmed) settleCheckout(confirmed)
     await refreshMembership({ force: true })
-    if (confirmed && !['created', 'pending'].includes(confirmed.status)) checkoutState.delete(id)
     return confirmed
-  })().finally(() => { confirming.delete(id) })
+  })().finally(() => {
+    if (checkoutState.get(id) === state) {
+      if (state.epoch !== authGeneration()) checkoutState.delete(id)
+      else state.phase = 'waiting'
+    }
+    confirming.delete(id)
+  })
   confirming.set(id, promise)
   return promise
 }

@@ -83,7 +83,9 @@ python3 scripts/release/ops.py restore-check
 
 `BACKUP_HEARTBEAT_URL` 配置为 Healthchecks 等服务的独立每日检查地址（成功请求本地址、失败请求 `/fail`），在服务端设置 24 小时周期和合理宽限，并配置通知联系人及飞书等通知集成；Docker/宿主完全不可用时也能通过漏心跳报警。直接机器人通知依赖运维容器能启动，不能替代漏跑监控。恢复演练使用单独的 `RESTORE_HEARTBEAT_URL`（月周期），避免掩盖每日备份漏跑。尚未填入告警地址时不能把备份运维视为已完成。
 
-在 `release.env` 配置仓库外 `OPS_STATUS_DIR`（例如 `/var/lib/learn-coach/ops-status`），创建目录并授权uid10001写、监控组读。backup在restic上传及check成功后原子写入 `backup.json`，字段包含completed_at、verified和offsite，供[只读监控](../deploy/monitoring/README.md)判断备份时效。回执失败同样算备份流程失败，不可只看远端有文件。
+在 `release.env` 配置仓库外 `OPS_STATUS_DIR`（例如 `/var/lib/learn-coach/ops-status`）及独立的 `OPS_STATUS_GID`（示例10002，先确认宿主未占用）。目录属主10001、属组为该监控组、权限2750；setgid保证每次原子替换的新文件继承监控组。backup补充组使用同一GID，回执权限0640，不包含凭据。不要把监控账号加入应用/密钥组10001。创建账号与目录、替换后的读取验收见[只读监控](../deploy/monitoring/README.md)。
+
+backup在restic上传及check成功后原子写入 `backup.json`，字段包含completed_at、verified和offsite，供监控判断备份时效。回执失败同样算备份流程失败，不可只看远端有文件。只存在文件或手动修改过旧回执权限不算验收。
 
 先手动完成备份与恢复，再在服务器启用定时器：
 

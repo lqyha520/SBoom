@@ -1,7 +1,7 @@
 """Disposable local server for the account, avatar and membership UI checks.
 
 Build miniprogram H5, then run: py -3.12 tests/profile_ui_fixture.py --port 8349
-Uses temporary SQLite only, with all provider traffic disabled by ui_fixture.
+Uses disposable lc_test_* PostgreSQL only; provider traffic is disabled by ui_fixture.
 """
 
 import argparse

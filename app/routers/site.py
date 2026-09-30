@@ -19,6 +19,7 @@ from app.models.site import (
     DictionaryReorder,
     DictionaryUpdate,
     DocumentUpdate,
+    HomeSettings,
     NoticeInput,
     NoticeUpdate,
     ReorderInput,
@@ -45,7 +46,7 @@ async def _image_body(request: Request) -> tuple[str, bytes]:
 @router.get("/home")
 def home(user: MiniUser | None = Depends(optional_mini_user)):
     """首页一次性拿全：Banner、公告、分类、年级科目字典。"""
-    return site.home_payload()
+    return {**site.home_payload(), "banner_mode": site.home_settings()["banner_mode"]}
 
 
 @router.get("/banners/{banner_id}/image")
@@ -92,6 +93,15 @@ def delete_category(category_id: str, revision: int = Query(ge=1), user: Current
 
 
 # ─── 后台 · Banner ───
+
+@admin_router.get("/home-settings", response_model=HomeSettings)
+def home_settings(user: CurrentUser = Depends(require_admin)):
+    return site.home_settings()
+
+
+@admin_router.put("/home-settings", response_model=HomeSettings)
+def save_home_settings(body: HomeSettings, user: CurrentUser = Depends(require_admin)):
+    return site.save_home_settings(body)
 
 @admin_router.get("/banners")
 def banners(user: CurrentUser = Depends(require_admin)):

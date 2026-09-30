@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { request } from '../api'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -12,7 +13,17 @@ const busy = ref(false)
 const error = ref('')
 const sessionNotice = ref('')
 try { sessionNotice.value = sessionStorage.getItem('lc_session_notice') || ''; sessionStorage.removeItem('lc_session_notice') } catch { /* 登录仍可继续。 */ }
-const modes = [{ label: '登录', value: 'login' }, { label: '注册', value: 'register' }]
+const registrationEnabled = ref(false)
+const capabilitiesError = ref(false)
+const modes = computed(() => [{ label: '登录', value: 'login' }, ...(registrationEnabled.value ? [{ label: '注册', value: 'register' }] : [])])
+async function loadCapabilities() {
+  try {
+    registrationEnabled.value = (await request<{ registration_enabled: boolean }>('/api/v1/auth/capabilities')).registration_enabled
+    capabilitiesError.value = false
+    if (!registrationEnabled.value) mode.value = 'login'
+  } catch { capabilitiesError.value = true }
+}
+onMounted(loadCapabilities)
 watch(mode, () => { error.value = ''; confirmation.value = '' })
 async function submit() {
   if (busy.value) return
@@ -29,7 +40,7 @@ async function submit() {
     else await auth.register(name, password.value)
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : '登录失败，请重试'
-    if (mode.value === 'login' && error.value.includes('用户名或密码错误')) {
+    if (registrationEnabled.value && mode.value === 'login' && error.value.includes('用户名或密码错误')) {
       error.value += '；还没有账号？切换到上方「注册」'
     }
   } finally { busy.value = false }
@@ -48,7 +59,9 @@ async function submit() {
         <div class="auth-emblem"><UIcon name="i-lucide-book-open-check" class="size-6" /></div>
         <h1>{{ mode === 'login' ? '欢迎回来' : '创建账号' }}</h1>
         <p>{{ mode === 'login' ? '登录你的教学工作空间' : '开启新的备课日常' }}</p>
-        <UTabs v-model="mode" :items="modes" :content="false" :ui="{ list: 'w-full', trigger: 'flex-1' }" />
+        <UTabs v-if="registrationEnabled" v-model="mode" :items="modes" :content="false" :ui="{ list: 'w-full', trigger: 'flex-1' }" />
+        <UButton v-if="capabilitiesError" label="重新获取注册状态" icon="i-lucide-refresh-cw" variant="link" @click="loadCapabilities" />
+        <p v-else-if="!registrationEnabled" class="text-sm text-muted">账号由管理员开通</p>
         <form @submit.prevent="submit">
           <UFormField label="用户名" name="username" required><UInput v-model="username" autocomplete="username" placeholder="输入用户名" maxlength="32" size="lg" icon="i-lucide-user-round" :disabled="busy" /></UFormField>
           <UFormField label="密码" name="password" required>

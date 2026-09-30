@@ -1,5 +1,6 @@
 """Build both frontends first; this runner starts and always stops a disposable API."""
 
+import argparse
 import os
 import socket
 import subprocess
@@ -13,16 +14,17 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run_fixture(browser_only=False):
+def run_fixture(suite="http"):
     with socket.socket() as socket_:
         socket_.bind(("127.0.0.1", 0))
         port = socket_.getsockname()[1]
     base = f"http://127.0.0.1:{port}"
-    env = {**os.environ, "LC_TEST_BASE": base, "PYTHONIOENCODING": "utf-8", "HOME_UI_BASE": base, "NODE_PATH": str(ROOT / "web" / "node_modules")}
-    if browser_only:
+    env = {**os.environ, "LC_TEST_BASE": base, "PYTHONIOENCODING": "utf-8", "HOME_UI_BASE": base, "PROFILE_UI_BASE": base, "NODE_PATH": str(ROOT / "web" / "node_modules")}
+    if suite != "http":
         env.update(LC_WEB_DIST=str(ROOT / "miniprogram" / "dist" / "build" / "h5"), LC_SEED_MINI_FIXTURE="1")
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as log:
-        process = subprocess.Popen([sys.executable, "tests/ui_fixture.py", "--port", str(port)],
+        fixture = "tests/profile_ui_fixture.py" if suite == "profile" else "tests/ui_fixture.py"
+        process = subprocess.Popen([sys.executable, fixture, "--port", str(port)],
                                    cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
         try:
             deadline = time.monotonic() + 30
@@ -37,8 +39,9 @@ def run_fixture(browser_only=False):
                 time.sleep(0.2)
             else:
                 raise TimeoutError("Disposable service did not become healthy")
-            if browser_only:
-                subprocess.run(["node", "tests/home-banner-ui.cjs"], cwd=ROOT, env=env, check=True)
+            if suite != "http":
+                script = "tests/profile-membership-ui.cjs" if suite == "profile" else "tests/home-banner-ui.cjs"
+                subprocess.run(["node", script], cwd=ROOT, env=env, check=True)
             else:
                 subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_ui_contracts.py", "-v"], cwd=ROOT, env=env, check=True)
                 subprocess.run([sys.executable, "scripts/admin_console_check.py"], cwd=ROOT, env=env, check=True)
@@ -56,6 +59,9 @@ def run_fixture(browser_only=False):
 
 
 if __name__ == "__main__":
-    run_fixture()
-    if "--browser" in sys.argv:
-        run_fixture(browser_only=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--suite", choices=("http", "home", "profile", "all"), default="http")
+    parser.add_argument("--browser", action="store_true", help="Run all suites (legacy alias)")
+    args = parser.parse_args()
+    for suite in ("http", "home", "profile") if args.browser or args.suite == "all" else (args.suite,):
+        run_fixture(suite)

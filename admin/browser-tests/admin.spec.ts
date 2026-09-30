@@ -7,6 +7,7 @@ async function api(context: BrowserContext) {
   await context.route('**/api/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname
     if (path === '/api/v1/auth/me' || path === '/api/v1/auth/login') { await route.fulfill({ json: { id: owner, username: 'admin', role: 'admin' } }); return }
+    if (path === '/api/v1/auth/logout') { await route.fulfill({ json: {} }); return }
     if (path === '/api/v1/admin/site/documents' && request.method() === 'GET') { await route.fulfill({ json: { items: documents } }); return }
     if (path.startsWith('/api/v1/admin/site/documents/') && request.method() === 'PUT') {
       const body = request.postDataJSON(); writes.push(body)
@@ -31,10 +32,11 @@ test('文档草稿在文档切换和401同账号重认证后仍可保存', async
   server.status(401)
   await page.getByRole('button', { name: '保存', exact: true }).click()
   await expect(page.getByRole('heading', { name: '重新验证管理员身份' })).toBeVisible()
-  await page.getByPlaceholder('输入用户名').fill('admin')
+  await expect(page.getByPlaceholder('输入用户名')).toHaveValue('admin')
+  await expect(page.getByPlaceholder('输入用户名')).toHaveAttribute('readonly', '')
   await page.getByPlaceholder('输入密码').fill('password123')
   server.status(200)
-  await page.getByRole('button', { name: '登录管理后台' }).click()
+  await page.getByRole('button', { name: '验证并继续' }).click()
   await expect(page.getByRole('heading', { name: '重新验证管理员身份' })).toBeHidden()
   await expect(page.locator('#doc-body')).toHaveValue('保留的协议草稿')
   expect(server.writes).toHaveLength(1)
@@ -43,17 +45,18 @@ test('文档草稿在文档切换和401同账号重认证后仍可保存', async
   expect(server.writes).toHaveLength(2)
 })
 
-test('重认证使用另一账号会销毁旧账号工作区', async ({ context, page }) => {
+test('重认证不会接受不同账号，也不会丢弃原草稿', async ({ context, page }) => {
   const server = await api(context)
   await page.goto('/admin/#documents')
   await page.locator('#doc-body').fill('不能传给其他账号的草稿')
   server.status(401)
   await page.getByRole('button', { name: '保存', exact: true }).click()
-  await page.getByPlaceholder('输入用户名').fill('other-admin')
+  await expect(page.getByPlaceholder('输入用户名')).toHaveValue('admin')
   await page.getByPlaceholder('输入密码').fill('password123')
   server.owner(2); server.status(200)
-  await page.getByRole('button', { name: '登录管理后台' }).click()
-  await expect(page.locator('#doc-body')).toHaveValue('原正文')
+  await page.getByRole('button', { name: '验证并继续' }).click()
+  await expect(page.getByText('请使用原管理员账号验证，当前编辑尚未保存')).toBeVisible()
+  await expect(page.locator('#doc-body')).toHaveValue('不能传给其他账号的草稿')
 })
 
 test('403 统一显示权限不足并停止后台操作', async ({ context, page }) => {
@@ -73,4 +76,56 @@ test('手机导航展示全部页面选择，活动页面无需横向寻找', as
   await expect(select).toBeVisible(); await expect(select).toHaveValue('documents')
   expect(await select.locator('option').count()).toBe(25)
   await expect(page.getByRole('navigation', { name: '管理后台导航' })).toBeHidden()
+})
+
+test('窄屏重验证表单紧凑且键盘焦点留在弹窗内', async ({ context, page }, info) => {
+  const server = await api(context)
+  await page.setViewportSize({ width: 320, height: 640 })
+  await page.goto('/admin/#documents')
+  await page.locator('#doc-body').fill('手机草稿')
+  server.status(401)
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '重新验证管理员身份' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.locator('.auth-page')).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: '验证并继续' })).toBeInViewport()
+  for (let i = 0; i < 8; i++) {
+    await page.keyboard.press('Tab')
+    expect(await dialog.evaluate(element => element.contains(document.activeElement))).toBe(true)
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: info.outputPath('reauth-320.png') })
+})
+
+test('反馈409可核对最新回复且不丢本地草稿', async ({ context, page }) => {
+  await api(context)
+  const item = { id: 'feedback', revision: 1, status: 'pending', kind: 'other', body: '请求协助', reply: '', internal_note: '', username: 'reader', updated_at: 1 }
+  let conflict = true
+  const writes: Record<string, unknown>[] = []
+  await page.route('**/api/v1/admin/experience/**', async route => {
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith('/support')) { await route.fulfill({ json: { revision: 0, wechat: '', phone: '', email: '', hours: '', benefits: '', qr_url: '' } }); return }
+    if (route.request().method() === 'PUT') {
+      writes.push(route.request().postDataJSON())
+      if (conflict) {
+        Object.assign(item, { revision: 2, reply: '另一位管理员的回复', internal_note: '已电话联系' })
+        await route.fulfill({ status: 409, json: { detail: { error: '记录已更新' } } })
+      } else await route.fulfill({ json: { ...item, ...route.request().postDataJSON(), revision: 3 } })
+    } else await route.fulfill({ json: { items: [item], total: 1 } })
+  })
+  await page.goto('/admin/#supportCenter')
+  await page.getByRole('button', { name: '处理与回复', exact: true }).click()
+  await page.getByRole('textbox', { name: '回复用户', exact: true }).fill('我的未保存回复')
+  page.once('dialog', dialog => dialog.dismiss())
+  await page.getByRole('dialog', { name: '处理小程序反馈' }).getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '回复用户', exact: true })).toHaveValue('我的未保存回复')
+  await page.getByRole('button', { name: '保存处理结果' }).click()
+  await page.getByRole('button', { name: '载入最新并保留我的修改' }).click()
+  await expect(page.getByText('另一位管理员的回复', { exact: true })).toBeVisible()
+  await expect(page.getByText('已电话联系', { exact: true })).toBeVisible()
+  await expect(page.getByRole('textbox', { name: '回复用户', exact: true })).toHaveValue('我的未保存回复')
+  conflict = false
+  await page.getByRole('button', { name: '保存处理结果' }).click()
+  await expect(page.getByRole('dialog', { name: '处理小程序反馈' })).toBeHidden()
+  expect(writes.at(-1)).toMatchObject({ revision: 2, reply: '我的未保存回复' })
 })

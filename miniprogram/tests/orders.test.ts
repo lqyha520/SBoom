@@ -16,7 +16,7 @@ test('订单详情校验退款原因，提交后展示后端状态，并同步�
     '@dcloudio/uni-app': { onLoad() {}, onReachBottom() {} },
     '../../services/consumer-page': { useConsumerPage: () => ({ error: vue.ref(''), busy: vue.ref(false), loading: vue.ref(false), act: (work: (valid: () => boolean) => Promise<void>) => jobs.push(work(() => true)) }) },
     '../../services/session': { session: { user: { has_wechat: true } }, refreshMembership: async () => { calls.push('membership') } },
-    '../../services/checkout': { checkoutState: new Map(), checkoutSupport: () => true },
+    '../../services/checkout': { checkoutState: new Map(), checkoutSupport: () => true, settleCheckout: () => {} },
     '../../services/growth': {
       fetchOrder: async () => order,
       fetchPlans: async () => ({ checkout_enabled: true, ios_enabled: true }),

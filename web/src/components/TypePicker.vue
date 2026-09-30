@@ -45,5 +45,5 @@ function add(type: string | CustomType) {
 .type-plus { color: #a7b2b9; flex: none; }
 .type-option:hover:not(:disabled) { border-color: #a2ceb9; background: #f4faf7; color: #087f5b; }
 .type-option:disabled { opacity: .5; }
-@media (min-width: 620px) and (max-width: 1023px) { .type-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 620px) and (max-width: 899px) { .type-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 </style>

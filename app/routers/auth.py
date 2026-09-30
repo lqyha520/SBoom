@@ -41,6 +41,15 @@ class Credentials(BaseModel):
 class Registration(Credentials):
     password: str = Field(min_length=8, max_length=128)
 
+class AuthCapabilities(BaseModel):
+    registration_enabled: bool
+
+
+@router.get("/capabilities", response_model=AuthCapabilities)
+def capabilities(response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    return AuthCapabilities(registration_enabled=settings.registration_enabled)
+
 
 def _set_session_cookie(response: Response, user_id: int, issued_after: int = 0, expected_hash: str | None = None) -> str:
     from app.services.workspace_sessions import create

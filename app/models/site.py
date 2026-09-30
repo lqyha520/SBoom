@@ -51,6 +51,11 @@ class BannerInput(BaseModel):
 class BannerUpdate(BannerInput):
     revision: int = Field(ge=0)
 
+class HomeSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(0, ge=0)
+    banner_mode: Literal["welcome", "operations"] = "welcome"
+
 
 class NoticeInput(BaseModel):
     model_config = ConfigDict(extra="forbid")

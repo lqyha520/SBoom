@@ -9,11 +9,32 @@ interface EditWorkspace extends EditSnapshot {
   hasPendingEdits: boolean
   canUndo: boolean
   canRedo: boolean
+  layoutMode: boolean
   undoStack: EditSnapshot[]
   redoStack: EditSnapshot[]
 }
 
 const editBursts = new WeakMap<object, { key: string; at: number }>()
+const layouts = new WeakMap<object, { snapshot: EditSnapshot; undo: EditSnapshot[]; redo: EditSnapshot[] }>()
+
+export function beginLayout(source: EditWorkspace) {
+  if (source.layoutMode || source.generating || source.accountChanged || source.hasPendingEdits) return
+  layouts.set(source, { snapshot: captureEdit(source), undo: [...source.undoStack], redo: [...source.redoStack] })
+  recordEdit(source)
+  source.layoutMode = true
+}
+
+export function finishLayout(source: EditWorkspace, cancel = false) {
+  const previous = layouts.get(source)
+  layouts.delete(source)
+  editBursts.delete(source)
+  if (cancel && previous) {
+    Object.assign(source, deepClone(previous.snapshot))
+    source.undoStack = previous.undo
+    source.redoStack = previous.redo
+  }
+  source.layoutMode = false
+}
 const snapshotEncoding = new WeakMap<object, string>()
 function encodeSnapshot(snapshot: object): string {
   snapshot = toRaw(snapshot)
@@ -30,7 +51,7 @@ export function captureEdit(source: EditSnapshot): EditSnapshot {
 }
 
 export function recordEdit(source: EditWorkspace, key = '') {
-  if (source.generating || source.accountChanged || source.hasPendingEdits) return
+  if (source.generating || source.accountChanged || source.hasPendingEdits || source.layoutMode) return
   const previous = editBursts.get(source), at = Date.now()
   editBursts.set(source, { key, at })
   if (key && previous?.key === key && at - previous.at < 500) return

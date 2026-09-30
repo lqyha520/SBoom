@@ -8,6 +8,7 @@ services:
       target: ops
     env_file: ${OPS_ENV_FILE:-./ops.env}
     command: [backup]
+    group_add: ["${OPS_STATUS_GID:-10002}"]
     init: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useExamStore } from '../stores/exam'
 import * as api from '../api'
@@ -7,6 +7,7 @@ import { createGenerationRun, assemblePaper } from '../generation'
 vi.mock('../api', async original => ({ ...await original<typeof import('../api')>(),
   generateBatch: vi.fn(), fetchGenerationStatus: vi.fn(), fetchGenerationUsage: vi.fn().mockResolvedValue(null) }))
 beforeEach(() => { localStorage.clear(); setActivePinia(createPinia()); vi.clearAllMocks() })
+afterEach(() => vi.unstubAllGlobals())
 function ready(count = 3) {
   const store = useExamStore()
   store.ownerId = "1"; store.persistenceReady = true
@@ -23,6 +24,40 @@ function response(items: api.BatchItemReq[]) {
 }
 
 describe('编辑恢复与单题替换', () => {
+  it('排版取消恢复样式、题目和历史，完成可一步撤销', () => {
+    const store = ready()
+    const original = store.editSnapshot()
+    const undo = [...store.undoStack]
+    store.beginLayout()
+    store.setStyle({ titleOffsetY: 9 })
+    store.sections[0].layout.qCols = 1
+    store.sections[0].data!.questions.pop()
+    store.finishLayout(true)
+    expect(store.editSnapshot()).toEqual(original)
+    expect(store.undoStack).toEqual(undo)
+    store.beginLayout()
+    store.setStyle({ titleOffsetY: 3 })
+    store.finishLayout()
+    store.undo()
+    expect(store.style.titleOffsetY).toBe(original.style.titleOffsetY)
+    store.redo()
+    expect(store.style.titleOffsetY).toBe(3)
+  })
+  it('已有结果的所有新生成入口都先确认，取消不产生调用', async () => {
+    const store = ready()
+    const generate = vi.spyOn(store, 'generate').mockResolvedValue()
+    await store.requestGeneration()
+    expect(generate).toHaveBeenCalledOnce()
+    store.pendingRun = createGenerationRun({ grade: store.grade, subject: store.subject, keyword: store.keyword, title: '', difficulty: store.difficulty, hiddenElements: [], count: 1, sections: [] })
+    const confirm = vi.fn(() => false)
+    vi.stubGlobal('confirm', confirm)
+    await store.requestGeneration()
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(generate).toHaveBeenCalledOnce()
+    confirm.mockReturnValue(true)
+    await store.requestGeneration()
+    expect(generate).toHaveBeenCalledTimes(2)
+  })
   it('连续标题输入合并为一步撤销，排版期间暂停撤销', () => {
     const store = ready()
     store.undoStack = []

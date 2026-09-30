@@ -157,7 +157,7 @@ onShareAppMessage(() => shareCard('home'))
   <view class="home-page has-tabbar">
     <PageChrome />
     <view class="content-width home-search-row"><SearchGradeBar v-model="q" :grade="grade" placeholder="搜知识点、习题" :disabled="loading || !!changing" @search="search" @select-grade="gradePicker = true" /></view>
-    <HomeBanner :banners="banners" :grade="grade" :recent="recentPaper" :loading="contentLoading" :active="imagesActive" />
+    <HomeBanner :banners="banners" :mode="site?.banner_mode || 'welcome'" :grade="grade" :recent="recentPaper" :loading="contentLoading" :active="imagesActive" />
     <view class="content-width home-subjects">
       <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="item in subjects" :key="item.label" class="subject-entry" role="button" :aria-label="item.subject ? item.label + '习题' : '全部习题'" @click="openCatalog({ subject: item.subject, grade })"><view class="subject-symbol" :class="item.tone"><wd-icon :name="item.icon" size="24px" /></view><text>{{ item.label }}</text></button>
     </view>

@@ -33,11 +33,20 @@ function applySuggestedKeyword() { store.keyword = suggestedKeyword.value; store
 const accountReloading = ref(false)
 const draftLabel = computed(() => ({ loading: '读取草稿', saving: '正在保存', saved: store.draftSavedAt ? '草稿已保存' : '本机草稿', error: '保存失败' })[store.draftState])
 const mobilePanel = ref('conditions')
-const workspaceTabs = [
+const sidePanel = ref('conditions')
+const workspaceTools = computed(() => [
+  [{ label: '撤销编辑', icon: 'i-lucide-undo-2', disabled: !store.canUndo, onSelect: () => store.undo() },
+    { label: '重做编辑', icon: 'i-lucide-redo-2', disabled: !store.canRedo, onSelect: () => store.redo() }],
+  [{ label: '云端试卷', icon: 'i-lucide-cloud', onSelect: () => { showCloud.value = true } },
+    { label: '本机历史', icon: 'i-lucide-history', onSelect: () => { showHistory.value = true } },
+    { label: '我的模板', icon: 'i-lucide-folder-open', onSelect: () => { showTpl.value = true } },
+    { label: '卷面设置', icon: 'i-lucide-settings-2', onSelect: () => { showAdv.value = true } }],
+])
+const workspaceTabs = computed(() => [
   { label: '出题条件', value: 'conditions', icon: 'i-lucide-sliders-horizontal' },
   { label: '试卷结构', value: 'structure', icon: 'i-lucide-list-tree' },
   { label: '卷面预览', value: 'preview', icon: 'i-lucide-file-text' },
-]
+].map(item => ({ ...item, disabled: store.layoutMode })))
 const userMenu = computed(() => [
   [{ label: storageLabel.value, disabled: true }],
   [{ label: '云端试卷', icon: 'i-lucide-cloud', onSelect: () => { showCloud.value = true } }],
@@ -123,28 +132,31 @@ onBeforeUnmount(() => {
           <div><div class="brand-name">出题工作台</div><div class="brand-caption">Learning Coach</div></div>
         </div>
         <nav class="top-nav" aria-label="工作台导航">
-          <button :class="{ active: !imageMode && store.view === 'build' }" :aria-current="!imageMode && store.view === 'build' ? 'page' : undefined" @click="imageMode = false; store.backToBuild()">
+          <button :disabled="store.layoutMode" :class="{ active: !imageMode && store.view === 'build' }" :aria-current="!imageMode && store.view === 'build' ? 'page' : undefined" @click="imageMode = false; store.backToBuild()">
             <UIcon name="i-lucide-panels-top-left" class="size-4" /><span>试卷搭建</span>
           </button>
-          <button :class="{ active: !imageMode && store.view === 'result' }" :disabled="!store.papers.length" :aria-current="!imageMode && store.view === 'result' ? 'page' : undefined" @click="imageMode = false; store.view = 'result'">
+          <button :class="{ active: !imageMode && store.view === 'result' }" :disabled="!store.papers.length || store.layoutMode" :aria-current="!imageMode && store.view === 'result' ? 'page' : undefined" @click="imageMode = false; store.view = 'result'">
             <UIcon name="i-lucide-files" class="size-4" /><span>生成结果</span><span v-if="store.papers.length" class="nav-count">{{ store.papers.length }}</span>
           </button>
-          <button :class="{ active: imageMode }" :aria-current="imageMode ? 'page' : undefined" @click="openImages"><UIcon name="i-lucide-image" class="size-4" /><span>图片出题</span></button>
+          <button :disabled="store.layoutMode" :class="{ active: imageMode }" :aria-current="imageMode ? 'page' : undefined" @click="openImages"><UIcon name="i-lucide-image" class="size-4" /><span>图片出题</span></button>
         </nav>
         <div class="topbar-actions">
           <template v-if="!imageMode">
+          <div class="desktop-tools actions-row">
           <UTooltip text="撤销（Ctrl+Z）"><UButton icon="i-lucide-undo-2" aria-label="撤销编辑" variant="ghost" :disabled="!store.canUndo" @click="store.undo()" /></UTooltip>
           <UTooltip text="重做（Ctrl+Shift+Z）"><UButton icon="i-lucide-redo-2" aria-label="重做编辑" variant="ghost" :disabled="!store.canRedo" @click="store.redo()" /></UTooltip>
-          <UTooltip text="云端试卷"><UButton icon="i-lucide-cloud" color="neutral" variant="ghost" aria-label="云端试卷" class="icon-tool" @click="showCloud = true" /></UTooltip>
-          <UTooltip text="本机历史"><UButton icon="i-lucide-history" color="neutral" variant="ghost" aria-label="本机历史" class="icon-tool" @click="showHistory = true" /></UTooltip>
-          <UButton icon="i-lucide-folder-open" label="我的模板" aria-label="我的模板" color="neutral" variant="ghost" class="templates-button" @click="showTpl = true" />
+          <UTooltip text="云端试卷"><UButton icon="i-lucide-cloud" color="neutral" variant="ghost" aria-label="云端试卷" class="icon-tool" :disabled="store.layoutMode" @click="showCloud = true" /></UTooltip>
+          <UTooltip text="本机历史"><UButton icon="i-lucide-history" color="neutral" variant="ghost" aria-label="本机历史" class="icon-tool" :disabled="store.layoutMode" @click="showHistory = true" /></UTooltip>
+          <UButton icon="i-lucide-folder-open" label="我的模板" aria-label="我的模板" color="neutral" variant="ghost" class="templates-button" :disabled="store.layoutMode" @click="showTpl = true" />
           <UTooltip text="卷面设置">
-            <UButton icon="i-lucide-settings-2" color="neutral" variant="ghost" aria-label="卷面设置" class="icon-tool" @click="showAdv = true" />
+            <UButton icon="i-lucide-settings-2" color="neutral" variant="ghost" aria-label="卷面设置" class="icon-tool" :disabled="store.layoutMode" @click="showAdv = true" />
           </UTooltip>
           <div class="header-divider"></div>
+          </div>
+          <UDropdownMenu :items="workspaceTools"><UButton class="mobile-tools" icon="i-lucide-ellipsis" aria-label="工作台工具" variant="ghost" color="neutral" :disabled="store.layoutMode" /></UDropdownMenu>
           </template>
           <UDropdownMenu :items="userMenu">
-            <UButton color="neutral" variant="ghost" :aria-label="'账号菜单：' + auth.user.username" class="account-button">
+            <UButton color="neutral" variant="ghost" :aria-label="'账号菜单：' + auth.user.username" class="account-button" :disabled="store.layoutMode">
               <span class="user-avatar">{{ auth.user.username.slice(0, 1).toUpperCase() }}</span>
               <span class="account-name">{{ auth.user.username }}</span>
               <UIcon name="i-lucide-chevron-down" class="size-3 text-muted" />
@@ -170,11 +182,12 @@ onBeforeUnmount(() => {
       </UAlert>
       <UAlert v-if="suggestedKeyword && store.persistenceReady" title="从运营统计带入的出题需求" :description="suggestedKeyword" class="workspace-alert no-print"><template #actions><UButton label="应用知识点" :disabled="store.generating" @click="applySuggestedKeyword" /><UButton label="忽略" variant="ghost" @click="suggestedKeyword = ''" /></template></UAlert>
       <UTabs v-if="!imageMode && store.view === 'build'" v-model="mobilePanel" :items="workspaceTabs" :content="false" class="workspace-tabs no-print" :ui="{ list: 'w-full', trigger: 'flex-1' }" />
+      <UTabs v-if="!imageMode && store.view === 'build'" v-model="sidePanel" :items="workspaceTabs.slice(0, 2)" :content="false" class="workspace-side-tabs no-print" :ui="{ list: 'w-full', trigger: 'flex-1' }" />
       <div v-if="!store.persistenceReady" class="loading-screen" role="status">正在恢复草稿</div>
-      <main v-else class="workbench" :class="{ 'result-only': imageMode || store.view === 'result' }" :data-panel="imageMode ? 'image' : mobilePanel" @beforeinput.capture="captureEdit">
+      <main v-else class="workbench" :class="{ 'result-only': imageMode || store.view === 'result' }" :data-side-panel="sidePanel" :data-panel="imageMode ? 'image' : mobilePanel" @beforeinput.capture="captureEdit">
         <ImageWorkbench v-if="imageOpened" v-show="imageMode" />
-          <LeftPanel v-show="!imageMode && store.view === 'build'" />
-          <MiddleColumn v-show="!imageMode && store.view === 'build'" @open-templates="showTpl = true" @preview="mobilePanel = 'preview'" />
+          <LeftPanel v-show="!imageMode && store.view === 'build'" :inert="store.layoutMode || undefined" />
+          <MiddleColumn v-show="!imageMode && store.view === 'build'" :inert="store.layoutMode || undefined" @open-templates="showTpl = true" @preview="mobilePanel = 'preview'" />
           <KeepAlive><PreviewPane v-if="!imageMode && store.view === 'build'" @open-settings="showAdv = true" /></KeepAlive>
         <KeepAlive><StepResult v-if="!imageMode && store.view === 'result'" @library="showCloud = true" /></KeepAlive>
       </main>

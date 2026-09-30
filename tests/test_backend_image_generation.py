@@ -60,6 +60,7 @@ class ImageGenerationContracts(unittest.TestCase):
             return self.handler(req)
         original_client = httpx.AsyncClient
         self.stack.enter_context(patch.object(service.httpx, "AsyncClient", side_effect=lambda **kw: original_client(**kw, transport=httpx.MockTransport(handle))))
+        self.stack.enter_context(patch("app.provider_policy.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 443))]))
 
     def login(self, user):
         self.client.cookies.set(SESSION_COOKIE, security.create_token(user.id))
@@ -108,7 +109,9 @@ class ImageGenerationContracts(unittest.TestCase):
             self.assertEqual(decoded.format, "PNG")
         call = self.calls[0]
         body = json.loads(call.content)
-        self.assertEqual(str(call.url), "https://provider.invalid/v1/images/generations")
+        self.assertEqual(str(call.url), "https://93.184.216.34/v1/images/generations")
+        self.assertEqual(call.headers["host"], "provider.invalid")
+        self.assertEqual(call.extensions["sni_hostname"], "provider.invalid")
         self.assertEqual(body["model"], "custom-image-model")
         self.assertEqual(body["n"], 1)
         self.assertNotIn("response_format", body)
@@ -203,7 +206,9 @@ class ImageGenerationContracts(unittest.TestCase):
 
     def test_private_image_urls_and_redirects_cannot_reach_internal_services(self):
         self.handler = lambda req: httpx.Response(200, json={"data": [{"url": "https://internal.invalid/a.png"}]})
-        with patch.object(socket, "getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))]):
+        def resolve(host, *args, **kwargs):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1" if host == "internal.invalid" else "93.184.216.34", 443))]
+        with patch.object(socket, "getaddrinfo", side_effect=resolve):
             self.assertEqual(self.send().status_code, 502)
         self.assertEqual(len(self.calls), 1)
         def handler(req):
@@ -218,7 +223,7 @@ class ImageGenerationContracts(unittest.TestCase):
     def test_configured_response_format_and_complete_endpoint_are_preserved(self):
         image_config.save_config(ImageModelConfig(**{**self.config, "baseUrl": "https://provider.invalid/custom/v1/images/generations", "responseFormat": "b64_json", "size": "1024x1792"}))
         self.assertEqual(self.send().status_code, 200)
-        self.assertEqual(str(self.calls[0].url), "https://provider.invalid/custom/v1/images/generations")
+        self.assertEqual(str(self.calls[0].url), "https://93.184.216.34/custom/v1/images/generations")
         body = json.loads(self.calls[0].content)
         self.assertEqual(body["response_format"], "b64_json")
         self.assertEqual(body["size"], "1024x1792")

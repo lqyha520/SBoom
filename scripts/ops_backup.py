@@ -91,7 +91,9 @@ def execute(action):
                 repository = os.environ.get('RESTIC_REPOSITORY', '')
                 remote = repository.startswith(('s3:', 'b2:', 'azure:', 'gs:', 'rclone:', 'rest:https://', 'sftp:'))
                 temporary.write_text(json.dumps({'completed_at': int(time.time()), 'verified': True, 'offsite': remote}), encoding='utf-8')
-                temporary.chmod(0o600)
+                # The setgid receipt directory assigns the dedicated monitoring
+                # group; no credentials are included in this status document.
+                temporary.chmod(0o640)
                 temporary.replace(target)
         else:
             # 只能在独立 restore-db 容器里运行；backup_restore 二次验证 localhost 和库名前缀。

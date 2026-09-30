@@ -7,7 +7,7 @@
 `scripts/ops_check.py` 检查 `/readyz`、剩余磁盘（至少5 GiB且15%）、备份成功回执（27小时内）、TLS证书（至少14天）和维护失败增量。输出一个JSON对象，全部通过返回0，否则返回1；不发送消息。第一次采集已有非零失败计数也返回1，之后保存基线，进程重启后重新出现的失败仍会报告。直接执行不设 `OPS_STATE_FILE` 则不写任何文件，每次报告当前总数。
 
 1. 建立无登录账号 `learn-coach-monitor`，授予脚本读权限、磁盘统计权限和备份回执目录读权限；不要授予数据库和密钥读取权。
-2. 将 `monitor.env.example` 复制到 `/etc/learn-coach/monitor.env`，填域名和路径。`OPS_BACKUP_STATUS` 指向 `release.env` 的 `OPS_STATUS_DIR` 下的 `backup.json`。备份容器以uid10001写回执，目录应允许该uid写入，并允许监控组读取。回执仅在restic上传和校验成功后原子替换；手动伪造文件不能作为备份证据。
+2. 将 `monitor.env.example` 复制到 `/etc/learn-coach/monitor.env`，填域名和路径。`OPS_BACKUP_STATUS` 指向 `release.env` 的 `OPS_STATUS_DIR` 下的 `backup.json`。回执使用独立组，按下述步骤设置。回执仅在restic上传和校验成功后原子替换；手动伪造文件不能作为备份证据。
 3. app的9090仅在Compose网络内部开放。Prometheus加入该网络后抓取 `app:9090`；宿主检查需要额外的仅loopback可达转发/代理，或在同一网络内执行脚本。配置前先验证目标，不能把9090直接公开。
 4. 以监控账号先手动运行 `python3 /opt/learn-coach/scripts/ops_check.py`，确认JSON中五项结果有效，然后安装service/timer。
 
@@ -20,6 +20,27 @@ journalctl -u learn-coach-ops-check.service --since today
 ```
 
 脚本只使用Python标准库（项目统一Python3.12）。StateDirectory保存计数基线，检查失败会显示为systemd失败状态；接入现有日志/告警平台时可消费JSON和退出码。
+
+### 回执最小权限
+
+先确认GID10002未被其他服务占用，已有同名组则核对并使用其实际GID，同步修改 `release.env` 的 `OPS_STATUS_GID`。以下命令仅适用于明确选定的新目录，不要对业务数据目录递归改权限：
+
+```bash
+getent group 10002
+sudo groupadd --gid 10002 learn-coach-receipts
+sudo usermod -a -G learn-coach-receipts learn-coach-monitor
+sudo install -d -o 10001 -g learn-coach-receipts -m 2750 /var/lib/learn-coach/ops-status
+```
+
+完成一轮真实备份后，以实际监控账号读取新回执；再次备份并原子替换后重复检查。应为 `10001:10002 640`，目录应为2750。重启监控服务使补充组生效。不能授予监控用户 `service.env`、`restic-password` 或数据库访问权限。
+
+```bash
+stat -c '%u:%g %a %n' /var/lib/learn-coach/ops-status/backup.json
+sudo -u learn-coach-monitor cat /var/lib/learn-coach/ops-status/backup.json
+sudo systemctl restart learn-coach-ops-check.service
+```
+
+用隔离测试配置验证正常、过期和缺失回执，后两者必须失败；不要改写真实回执时间。共享组验收与异地仓库恢复验收分别登记。
 
 ## 外部拨测与采集
 

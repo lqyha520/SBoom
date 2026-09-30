@@ -67,7 +67,7 @@ function pickTemplate(id: string) {
       <GenerationTasks />
       <p v-if="store.usage" class="mb-2 text-xs text-muted numeric">24 小时请求 {{ store.usage.requests }} / {{ store.usage.daily_limit }}</p>
       <div class="flex gap-2">
-        <UButton icon="i-lucide-sparkles" :label="store.generating ? store.generateProgress || '正在生成试卷' : '生成试卷'" :loading="store.generating" :disabled="!store.canGenerate" block class="min-h-10 whitespace-normal" @click="store.generate()" />
+        <UButton icon="i-lucide-sparkles" :label="store.generating ? store.generateProgress || '正在生成试卷' : '生成试卷'" :loading="store.generating" :disabled="!store.canGenerate || store.layoutMode" block class="min-h-10 whitespace-normal" @click="store.requestGeneration()" />
         <UButton class="mobile-preview" icon="i-lucide-eye" color="neutral" variant="outline" aria-label="卷面预览" @click="emit('preview')" />
       </div>
     </div>
@@ -84,5 +84,5 @@ function pickTemplate(id: string) {
 .section-total { font-weight: 500; font-size: 11px; color: var(--ui-text-muted); margin-left: 4px; }
 .generation-footer { flex: none; padding: 16px 20px; border-top: 1px solid var(--ui-border); background: linear-gradient(to bottom, #fcfdfd, #f8f9fa); }
 .mobile-preview { display: none; }
-@media (max-width: 1023px) { .mobile-preview { display: inline-flex; } }
+@media (max-width: 899px) { .mobile-preview { display: inline-flex; } }
 </style>

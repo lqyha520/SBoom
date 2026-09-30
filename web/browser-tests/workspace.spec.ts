@@ -1,6 +1,6 @@
 import JSZip from 'jszip'
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { DEFAULT_LAYOUT, TEMPLATES } from '../src/constants'
 import type { WorkspaceSnapshot } from '../src/persistence'
 
@@ -11,6 +11,7 @@ async function api(context: BrowserContext) {
     const path = new URL(route.request().url()).pathname
     let data: unknown
     if (path === '/api/v1/auth/me') data = { id: owner, username: `teacher-${owner}`, role: 'user' }
+    else if (path === '/api/v1/auth/capabilities') data = { registration_enabled: false }
     else if (path === '/api/v1/scope/available') data = { available: { 小学三年级: ['数学'] } }
     else if (path === '/api/v1/scope') data = { allowed: ['加减法'] }
     else if (path === '/api/v1/me/templates') data = { templates: [] }
@@ -139,6 +140,8 @@ test('取消排版恢复删除、顺序和尺寸，导出预览也保持原题�
   const original = await questions.allTextContents()
   page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: '排版模式', exact: true }).click()
+  await page.locator('.result-view .paper-title').first().press('Alt+ArrowDown')
+  await expect(page.locator('.result-view .pv-head').first()).toHaveCSS('margin-top', '3.77953px')
   await questions.first().locator('.q-tools .del').click()
   await expect(questions).toHaveCount(5)
   await questions.first().evaluate(element => {
@@ -150,6 +153,7 @@ test('取消排版恢复删除、顺序和尺寸，导出预览也保持原题�
   await expect(questions).toHaveCount(6)
   await expect.poll(() => questions.allTextContents()).toEqual(original)
   expect(await questions.first().evaluate(element => (element as HTMLElement).style.width)).toBe('')
+  await expect(page.locator('.result-view .pv-head').first()).toHaveCSS('margin-top', '0px')
   await expectContentsFit(page)
 })
 
@@ -370,4 +374,136 @@ test('会话过期保存草稿后在登录页明确提示', async ({ page, conte
   await page.route('**/api/v1/library/**', route => route.fulfill({ status: 401, json: { detail: 'expired' } }))
   await page.getByRole('button', { name: '云端试卷', exact: true }).click()
   await expect(page.locator('.auth-form')).toContainText('登录已过期，草稿已保存')
+})
+
+test('注册关闭时不显示注册页签，开启后才可注册', async ({ page, context }) => {
+  await api(context)
+  await page.route('**/api/v1/auth/me', route => route.fulfill({ status: 401, json: {} }))
+  await page.goto('/')
+  await expect(page.getByText('账号由管理员开通', { exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '注册', exact: true })).toHaveCount(0)
+  await page.route('**/api/v1/auth/capabilities', route => route.fulfill({ json: { registration_enabled: true } }))
+  await page.reload()
+  await expect(page.getByRole('tab', { name: '注册', exact: true })).toBeVisible()
+})
+
+test('结果页在各宽度自动适宽，中屏搭建为侧栏与预览双栏', async ({ page, context }, info) => {
+  await api(context)
+  await seed(page, worksheet(2))
+  for (const width of [320, 390, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 900 })
+    await expect.poll(() => page.locator('.result-view .paper').first().evaluate(element => {
+      const paper = element.getBoundingClientRect(), viewport = document.querySelector('.preview-scroll')!.getBoundingClientRect()
+      return paper.width <= viewport.width && paper.left >= viewport.left - 1
+    })).toBe(true)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`result-${width}.png`) })
+  }
+  await page.setViewportSize({ width: 1024, height: 900 })
+  await page.getByRole('button', { name: '返回搭建', exact: true }).click()
+  await expect(page.locator('.workspace-side-tabs')).toBeVisible()
+  await expect(page.locator('.preview-panel')).toBeVisible()
+  await page.locator('.workspace-side-tabs').getByRole('tab', { name: '试卷结构', exact: true }).click()
+  await expect(page.locator('.structure-panel')).toBeVisible()
+  await page.screenshot({ path: info.outputPath('build-1024.png') })
+})
+
+test('生成等待后首次结果自动适宽，两个重生成入口取消均不产生新调用', async ({ page, context }) => {
+  await api(context)
+  const snapshot = worksheet(2)
+  snapshot.sections = snapshot.papers[0].sections.map(section => ({
+    ...section, id: section._sid!, count: section.data.questions.length, status: 'ready',
+  }))
+  await seed(page, snapshot)
+  let calls = 0, release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/v1/generate-batch', async route => {
+    calls++
+    await pending
+    const body = route.request().postDataJSON()
+    await route.fulfill({ json: { sections: body.items.map((item: { game_type: string; section_id: string }) => ({
+      game_type: item.game_type, section_id: item.section_id, questions: snapshot.papers[0].sections[0].data.questions,
+    })) } })
+  })
+  page.once('dialog', dialog => dialog.dismiss())
+  await page.getByRole('button', { name: '重新生成', exact: true }).click()
+  expect(calls).toBe(0)
+  await page.getByRole('button', { name: '返回搭建', exact: true }).click()
+  page.once('dialog', dialog => dialog.dismiss())
+  await page.getByRole('button', { name: '生成试卷', exact: true }).click()
+  expect(calls).toBe(0)
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: '生成试卷', exact: true }).click()
+  await expect.poll(() => calls).toBe(1)
+  await expect(page.locator('.result-view .preview-scroll')).toHaveCount(0)
+  await page.setViewportSize({ width: 390, height: 844 })
+  release()
+  await expect(page.locator('.result-view .paper')).toHaveCount(1)
+  await expect.poll(() => page.locator('.result-view .paper').evaluate(element =>
+    element.getBoundingClientRect().width < 390)).toBe(true)
+  expect(calls).toBe(1)
+})
+
+test('长卷PDF导出记录耗时和浏览器堆内存，页数完整', async ({ page, context }, info) => {
+  test.setTimeout(120_000)
+  await api(context)
+  const snapshot = worksheet(25)
+  snapshot.papers = Array.from({ length: 10 }, (_, index) => ({ ...structuredClone(snapshot.papers[0]), day: index + 1 }))
+  snapshot.paperCount = 10
+  await seed(page, snapshot)
+  const pages = (await page.locator('.result-view .paper-stack .paper').count()) * snapshot.papers.length
+  expect(pages).toBeGreaterThanOrEqual(50)
+  const cdp = await context.newCDPSession(page)
+  await cdp.send('Performance.enable')
+  const heap = async () => (await cdp.send('Performance.getMetrics')).metrics.find(metric => metric.name === 'JSHeapUsedSize')!.value
+  const before = await heap()
+  let peak = before, active = true
+  const sampling = (async () => {
+    while (active) {
+      peak = Math.max(peak, await heap())
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  })()
+  const started = Date.now()
+  try {
+    const pending = page.waitForEvent('download')
+    await page.getByRole('button', { name: '更多导出方式', exact: true }).click()
+    await page.getByRole('menuitem', { name: '合并全部 PDF', exact: true }).click()
+    const download = await pending
+    const file = info.outputPath('long-worksheet.pdf')
+    await download.saveAs(file)
+    const content = await readFile(file)
+    expect(content.toString('latin1').match(/\/Type\s*\/Page\b/g)).toHaveLength(pages)
+    await writeFile(info.outputPath('performance.json'), JSON.stringify({
+      pages, durationMs: Date.now() - started, pdfBytes: content.length, beforeHeapBytes: before, sampledPeakHeapBytes: peak,
+      note: 'Local Chromium JS heap sampling; not process RSS or a production capacity claim.',
+    }, null, 2))
+  } finally { active = false; await sampling; await cdp.detach() }
+})
+
+test('慢网络冷启动记录首屏且不提前下载重型导出依赖', async ({ page, context }, info) => {
+  test.setTimeout(60_000)
+  await api(context)
+  const cdp = await context.newCDPSession(page)
+  await cdp.send('Network.enable')
+  await cdp.send('Network.setCacheDisabled', { cacheDisabled: true })
+  await cdp.send('Network.emulateNetworkConditions', {
+    offline: false, latency: 150, downloadThroughput: 200_000, uploadThroughput: 93_750,
+  })
+  const requested: string[] = []
+  page.on('request', request => requested.push(request.url()))
+  const started = Date.now()
+  await page.goto('/')
+  await expect(page.getByRole('button', { name: '小学三年级', exact: true })).toBeVisible({ timeout: 45_000 })
+  const readyMs = Date.now() - started
+  expect(requested.some(url => /\/(jspdf|html2canvas|jszip)[^/]*\.js/.test(url))).toBe(false)
+  const timing = await page.evaluate(() => ({
+    paints: performance.getEntriesByType('paint').map(entry => ({ name: entry.name, startTime: entry.startTime })),
+    transferredBytes: performance.getEntriesByType('resource').reduce((size, entry) => size + (entry as PerformanceResourceTiming).transferSize, 0),
+  }))
+  await writeFile(info.outputPath('cold-start.json'), JSON.stringify({
+    readyMs, ...timing, network: { latencyMs: 150, downloadBytesPerSecond: 200_000 },
+    note: 'Mocked API, real production JS/CSS, local Chromium. Not an end-user Core Web Vitals claim.',
+  }, null, 2))
+  await cdp.detach()
 })

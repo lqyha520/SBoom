@@ -38,7 +38,7 @@ test('真实编译的图片组件默认显示，显式隐藏后释放，再次�
 })
 
 test('首页隐藏时释放 Banner 图片，重新显示时重新获取，卸载不重复释放', async () => {
-  const props = vue.reactive({ active: true, banners: [{ id: 'one', image_url: '/one' }, { id: 'two', image_url: '/two' }] })
+  const props = vue.reactive({ active: true, mode: 'welcome', banners: [{ id: 'one', image_url: '/one' }, { id: 'two', image_url: '/two' }] })
   let acquired = 0, released = 0, dispose!: () => void
   const scope = vue.effectScope()
   const source = parse(readFileSync(new URL('../src/components/HomeBanner.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content
@@ -49,10 +49,12 @@ test('首页隐藏时释放 Banner 图片，重新显示时重新获取，卸载
       : id === '../services/assets' ? { acquireAsset: () => { acquired++; return { ready: Promise.resolve('/temporary'), release: () => { released++ } } } } : {},
   }))
   try {
-    await settle(); assert.equal(acquired, 2)
+    await settle(); assert.equal(acquired, 0, '欢迎模式不下载运营图')
+    props.mode = 'operations'; await settle(); assert.equal(acquired, 2)
     props.active = false; await settle(); assert.equal(released, 2)
     props.banners = [{ id: 'new', image_url: '/new' }]; await settle(); assert.equal(acquired, 2)
     props.active = true; await settle(); assert.equal(acquired, 3)
+    props.mode = 'welcome'; await settle(); assert.equal(released, 3)
     dispose(); assert.equal(released, 3)
   } finally { scope.stop() }
 })

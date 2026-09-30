@@ -264,7 +264,7 @@ const routeState = useAdminListRoute(
       @update:open="notice = ''"
     />
     <div class="data-scroll" :aria-busy="loading">
-      <table class="data-table">
+      <table class="data-table action-table">
         <thead>
           <tr>
             <th scope="col">用户</th>

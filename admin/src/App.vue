@@ -85,6 +85,6 @@ onUnmounted(() => {
       <UButton icon="i-lucide-refresh-cw" label="重试" @click="boot" />
     </div>
     <LoginPage v-else @logined="logined" />
-    <ReauthDialog v-if="reauth" @logined="logined" />
+    <ReauthDialog v-if="reauth && user" :user="user" @logined="logined" />
   </UApp>
 </template>

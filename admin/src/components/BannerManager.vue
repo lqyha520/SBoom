@@ -5,6 +5,7 @@ import type { UserInfo } from '../api'
 import BannerPreview from './BannerPreview.vue'
 import PublishedPaperPicker from './PublishedPaperPicker.vue'
 import {
+  getHomeSettings, saveHomeSettings, type HomeSettings,
   bannerImageUrl, clearBannerImage, createBanner, deleteBanner, siteBanners, siteCategories, siteDictionary,
   updateBanner, uploadBannerImage, type Banner, type BannerTarget, type Category, type DictionaryItem,
 } from '../site'
@@ -16,6 +17,16 @@ const subjects = ref<DictionaryItem[]>([])
 const loading = ref(false)
 const error = ref('')
 const notice = ref('')
+const homeSettings = ref<HomeSettings | null>(null)
+async function changeMode(enabled: boolean) {
+  if (busy.value || !homeSettings.value) return
+  busy.value = true; error.value = ''
+  try {
+    homeSettings.value = await saveHomeSettings(props.user.id, { ...homeSettings.value, banner_mode: enabled ? 'operations' : 'welcome' })
+    notice.value = enabled ? '运营 Banner 已启用' : '首页已切换为欢迎卡'
+  } catch (cause) { error.value = message(cause) }
+  finally { busy.value = false }
+}
 const busy = ref(false)
 const checking = ref(false)
 const dialog = ref(false)
@@ -66,9 +77,10 @@ async function load() {
   const current = ++sequence
   loading.value = true; error.value = ''
   try {
-    const [banners, cats, dict] = await Promise.all([siteBanners(), siteCategories(), siteDictionary('subject')])
+    const [banners, cats, dict, settings] = await Promise.all([siteBanners(), siteCategories(), siteDictionary('subject'), getHomeSettings()])
     if (current !== sequence) return
     items.value = banners.items; categories.value = cats.items; subjects.value = dict.items
+    homeSettings.value = settings
   } catch (cause) { if (current === sequence) error.value = message(cause) }
   finally { if (current === sequence) loading.value = false }
 }
@@ -185,13 +197,13 @@ onBeforeUnmount(() => { sequence++; imageSequence++; resetImage() })
 
 <template>
   <section class="admin-section" aria-label="首页 Banner 管理">
-    <div class="section-toolbar banner-toolbar"><div><div class="banner-summary"><strong>首页轮播</strong><UBadge color="success" variant="soft">{{ shown }} 张展示中</UBadge></div><p class="section-hint">上传图片、搭配文案，再选择点击去向。图片与文案分区展示，换图也能保持整齐。</p></div><div class="actions-row"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="刷新 Banner" :loading="loading" :disabled="busy" @click="load" /><UButton icon="i-lucide-image-plus" label="新建 Banner" :disabled="busy" @click="create" /></div></div>
+    <div class="section-toolbar banner-toolbar"><div class="banner-summary"><strong>首页轮播</strong><UBadge :color="homeSettings?.banner_mode === 'operations' ? 'success' : 'neutral'" variant="soft">{{ homeSettings?.banner_mode === 'operations' ? shown + ' 张已启用' : '欢迎卡模式' }}</UBadge></div><div class="actions-row"><USwitch :model-value="homeSettings?.banner_mode === 'operations'" label="启用运营 Banner" :disabled="busy || loading || !homeSettings" @update:model-value="changeMode" /><UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="刷新 Banner" :loading="loading" :disabled="busy" @click="load" /><UButton icon="i-lucide-image-plus" label="新建 Banner" :disabled="busy" @click="create" /></div></div>
     <div class="banner-guide"><UIcon name="i-lucide-info" class="size-4" /><span>推荐图片 <strong>1200 × 500</strong>（12:5），支持 JPG / PNG / WebP，最大 2 MB。上传前可查看手机效果，选择完整展示或居中裁切。</span></div>
     <UAlert v-if="error" :title="error" color="error" variant="soft" class="notice" />
     <UAlert v-if="notice" :title="notice" color="success" variant="soft" close class="notice" @update:open="notice = ''" />
     <div v-if="items.length" class="banner-gallery" :aria-busy="loading">
       <article v-for="item in items" :key="item.id" class="banner-item" :aria-label="item.title">
-        <div class="banner-item-head"><UBadge :color="item.is_visible ? 'success' : 'neutral'" variant="soft">{{ item.is_visible ? '展示中' : '已下线' }}</UBadge><span>顺序 {{ item.sort_order }}</span></div>
+        <div class="banner-item-head"><UBadge :color="item.is_visible && homeSettings?.banner_mode === 'operations' ? 'success' : 'neutral'" variant="soft">{{ !item.is_visible ? '已下线' : homeSettings?.banner_mode === 'operations' ? '展示中' : '待启用运营模式' }}</UBadge><span>顺序 {{ item.sort_order }}</span></div>
         <BannerPreview :content="item" :image-url="item.image_url ? bannerImageUrl(item.id, item.revision) : ''" />
         <div class="banner-item-info"><span>{{ targetText(item) }}</span><span>{{ item.image_url ? (item.image_fit === 'cover' ? '居中裁切' : '完整展示') : '文字卡片' }}</span></div>
         <div class="banner-item-actions"><UButton icon="i-lucide-pencil" label="编辑 / 换图" color="neutral" variant="outline" :aria-label="'编辑 ' + item.title" :disabled="busy" @click="edit(item)" /><div class="actions-row"><UButton :icon="item.is_visible ? 'i-lucide-eye-off' : 'i-lucide-eye'" :label="item.is_visible ? '下线' : '上线'" color="neutral" variant="ghost" :aria-label="(item.is_visible ? '下线 ' : '上线 ') + item.title" :disabled="busy" @click="toggleVisible(item)" /><UButton icon="i-lucide-trash-2" color="error" variant="ghost" :aria-label="'删除 ' + item.title" :disabled="busy" @click="askRemove(item)" /></div></div>

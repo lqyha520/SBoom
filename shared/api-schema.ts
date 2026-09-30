@@ -5,6 +5,7 @@ export interface ApiSchemas {
   "AdminProfileUpdate": { "avatar"?: (string | null); "new_password"?: (string | null); "nickname"?: (string | null); "revision": number; "username"?: (string | null) }
   "AdminUpdateUser": { "is_active"?: (boolean | null); "password"?: (string | null); "role"?: (string | null) }
   "ArchiveUpdate": { "favorite"?: (boolean | null); "folder_id"?: (string | null); "title"?: (string | null) }
+  "AuthCapabilities": { "registration_enabled": boolean }
   "BannerInput": { "action_label"?: string; "image_fit"?: "contain" | "cover"; "is_visible"?: boolean; "kicker"?: string; "sort_order"?: number; "subtitle"?: string; "target_type"?: "none" | "keyword" | "category" | "subject" | "paper"; "target_value"?: string; "title": string }
   "BannerUpdate": { "action_label"?: string; "image_fit"?: "contain" | "cover"; "is_visible"?: boolean; "kicker"?: string; "revision": number; "sort_order"?: number; "subtitle"?: string; "target_type"?: "none" | "keyword" | "category" | "subject" | "paper"; "target_value"?: string; "title": string }
   "BatchGenerateRequest": { "difficulty"?: ApiSchemas["Difficulty"]; "grade": string; "items": Array<ApiSchemas["BatchItem"]>; "keyword": string; "subject": string }
@@ -47,6 +48,7 @@ export interface ApiSchemas {
   "GroupAssignment": { "group_id"?: (string | null) }
   "GroupInput": { "name": string; "revision"?: number }
   "HTTPValidationError": { "detail"?: Array<ApiSchemas["ValidationError"]> }
+  "HomeSettings": { "banner_mode"?: "welcome" | "operations"; "revision"?: number }
   "ImageModelConfig": { "apiKey"?: string; "baseUrl": string; "model": string; "responseFormat"?: "auto" | "b64_json" | "url"; "size"?: string; "timeout"?: number }
   "ImageWorksheetItem": { "game_type": ApiSchemas["GameType"]; "question_count"?: number }
   "ImageWorksheetRequest": { "difficulty"?: ApiSchemas["Difficulty"]; "grade": string; "image_count"?: number; "image_index"?: number; "items": Array<ApiSchemas["ImageWorksheetItem"]>; "keyword": string; "requirements"?: string; "style"?: "playful" | "clean" | "black_white"; "subject": string }
@@ -174,6 +176,8 @@ export interface ApiOperations {
   "PUT /api/v1/admin/site/dictionary/{item_id}": { body: ApiSchemas["DictionaryUpdate"] }
   "GET /api/v1/admin/site/documents": { body: unknown }
   "PUT /api/v1/admin/site/documents/{key}": { body: ApiSchemas["DocumentUpdate"] }
+  "GET /api/v1/admin/site/home-settings": { body: unknown }
+  "PUT /api/v1/admin/site/home-settings": { body: ApiSchemas["HomeSettings"] }
   "GET /api/v1/admin/site/notices": { body: unknown }
   "POST /api/v1/admin/site/notices": { body: ApiSchemas["NoticeInput"] }
   "DELETE /api/v1/admin/site/notices/{notice_id}": { body: unknown }
@@ -186,6 +190,7 @@ export interface ApiOperations {
   "PUT /api/v1/admin/users/{user_id}": { body: ApiSchemas["AdminUpdateUser"] }
   "GET /api/v1/admin/users/{user_id}/templates": { body: unknown }
   "GET /api/v1/admin/users/{user_id}/templates/{tpl_id}": { body: unknown }
+  "GET /api/v1/auth/capabilities": { body: unknown }
   "POST /api/v1/auth/login": { body: ApiSchemas["Credentials"] }
   "POST /api/v1/auth/logout": { body: unknown }
   "GET /api/v1/auth/me": { body: unknown }

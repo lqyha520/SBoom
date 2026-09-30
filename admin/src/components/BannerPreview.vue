@@ -18,10 +18,10 @@ watch(() => props.imageUrl, () => { failed.value = false })
 
 <style scoped>
 .banner-preview { position: relative; overflow: hidden; border: 1px solid #e6ede8; border-radius: 18px; background: #fff; color: #28372f; font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; }
-.preview-media { width: 100%; aspect-ratio: 12 / 5; background: #f0f3f1; overflow: hidden; }
+.preview-media { width: 100%; height: 150px; background: #f0f3f1; overflow: hidden; }
 .preview-media img { display: block; width: 100%; height: 100%; }
 .preview-unavailable { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; height: 100%; color: #719781; font-size: 12px; }
-.preview-body { display: flex; align-items: center; gap: 12px; height: 92px; padding: 12px 15px; }
+.preview-body { display: flex; align-items: center; gap: 12px; height: 96px; padding: 12px 15px; }
 .preview-copy { flex: 1; min-width: 0; }
 .preview-kicker { display: block; color: #527461; font-size: 10px; line-height: 1.6; margin-bottom: 2px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .preview-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 17px; line-height: 1.4; font-weight: 650; overflow-wrap: anywhere; }

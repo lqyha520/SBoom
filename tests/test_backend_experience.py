@@ -26,6 +26,18 @@ class ExperienceContracts(unittest.TestCase):
         for router in (experience.router, site.router, site.admin_router, engagement.router):
             self.client.app.include_router(router)
 
+    def test_home_mode_defaults_to_welcome_and_rejects_stale_updates(self):
+        path = '/api/v1/admin/site/home-settings'
+        self.assertEqual(self.client.get(path).json(), {'revision': 0, 'banner_mode': 'welcome'})
+        response = self.client.put(path, json={'revision': 0, 'banner_mode': 'operations'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.client.get('/api/v1/site/home').json()['banner_mode'], 'operations')
+        self.assertEqual(self.client.put(path, json={'revision': 0, 'banner_mode': 'welcome'}).status_code, 409)
+        self.assertEqual(self.client.put(path, json={'revision': 1, 'banner_mode': 'invalid'}).status_code, 422)
+        self.client.cookies.clear()
+        self.assertEqual(self.client.get('/api/v1/site/home').json()['banner_mode'], 'operations')
+        self.assertEqual(self.client.get(path).status_code, 401)
+
     def test_current_documents_are_readable_before_login(self):
         docs = self.client.get('/api/v1/admin/site/documents').json()['items']
         document = next(item for item in docs if item['key'] == 'privacy')

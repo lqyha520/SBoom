@@ -12,7 +12,7 @@ import {
 import * as api from '../api'
 import type { CustomType, GameData, PaperTemplate, PaperStyle, SecLayout, Section, PaperSection } from '../types'
 import { ensureQids, gradeNumOf, mockQuestions, uid } from '../utils'
-import { captureEdit, recordEdit, undoEdit, redoEdit, type EditSnapshot } from '../workspace-history'
+import { beginLayout, finishLayout, captureEdit, recordEdit, undoEdit, redoEdit, type EditSnapshot } from '../workspace-history'
 import { K, safeSet, styleSaveTimers } from './exam-local'
 import { createExamState } from './exam-state'
 import { draftActions } from './exam-draft'
@@ -112,6 +112,21 @@ export const useExamStore = defineStore('exam', {
 
     recordEdit(key = '') {
       recordEdit(this, key)
+    },
+
+    beginLayout() { beginLayout(this) },
+
+    finishLayout(cancel = false) {
+      finishLayout(this, cancel)
+      clearTimeout(styleSaveTimers.get(this))
+      safeSet(K(this.ownerId, LS.paperStyle), JSON.stringify(this.style))
+    },
+
+    async requestGeneration() {
+      if (!this.canGenerate || this.layoutMode) return
+      if ((this.papers.length || this.pendingRun || this.hasPendingEdits) &&
+        !window.confirm(`将按${this.grade}${this.subject}「${this.keyword}」生成 ${this.paperCount} 份新试卷，产生新的模型调用费用（以服务商实际计费为准）。当前结果会先保存到本机历史，保存失败将停止。是否继续？`)) return
+      await this.generate()
     },
 
     undo() {

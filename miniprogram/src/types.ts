@@ -70,6 +70,7 @@ export interface SiteBanner {
 export interface SiteNotice { id: string; title: string; body: string; placement: 'popup' | 'banner'; level: 'info' | 'warning' }
 export interface SiteHome {
   banners: SiteBanner[]
+  banner_mode?: 'welcome' | 'operations'
   notices: { popup: SiteNotice[]; banner: SiteNotice[] }
   categories: SiteCategory[]
   dictionaries: { grades: string[]; subjects: string[] }

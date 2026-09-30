@@ -4,7 +4,7 @@ const { mkdir, writeFile, stat } = require('node:fs/promises')
 const path = require('node:path')
 const { randomBytes } = require('node:crypto')
 const { createRequire } = require('node:module')
-const { chromium, request } = require('playwright')
+const { chromium, request } = createRequire(path.resolve(__dirname, '../web/package.json'))('@playwright/test')
 const sharp = createRequire(path.resolve(__dirname, '../miniprogram/package.json'))('sharp')
 
 const base = process.env.PROFILE_UI_BASE || 'http://127.0.0.1:8349'
@@ -48,8 +48,13 @@ async function main() {
   const accounts = await (await api.get('/api/v1/admin/mini-users', { params: { q: 'ui_reader' } })).json()
   const reader = accounts.items.find(item => item.id === login.user.id)
   assert.equal((await api.put('/api/v1/admin/mini-users/' + reader.id, { data: { revision: reader.revision, membership: 'regular', vip_expires_at: null, is_active: true } })).status(), 200)
-  const browser = await chromium.launch({ headless: true, channel: 'chrome' })
+  const browser = await chromium.launch({ headless: true })
   const context = await browser.newContext({ viewport: { width: 375, height: 812 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true, permissions: ['clipboard-read', 'clipboard-write'] })
+  await context.route('**/*', route => {
+    const url = new URL(route.request().url())
+    return ['data:', 'blob:'].includes(url.protocol) || url.origin === new URL(base).origin ? route.continue() : route.abort()
+  })
+  await context.tracing.start({ screenshots: true, snapshots: true })
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
@@ -162,13 +167,13 @@ async function main() {
     await page.reload(); await settle(page)
     await page.getByRole('button', { name: '联系客服咨询会员', exact: true }).click()
     await page.getByRole('button', { name: '留言咨询', exact: true }).click()
-    await page.waitForURL('**/#/pages/support/index?kind=membership')
+    await page.waitForURL('**/#/subpages/support/index?kind=membership')
     check('Missing contact channels fall back to membership feedback, with no dead button')
     await page.unroute('**/api/v1/site/support', noSupport)
 
     const brokenSupport = route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: { error: '暂时不可用' } }) })
     await page.route('**/api/v1/site/support', brokenSupport)
-    await page.goto(base + '/#/pages/membership/index'); await settle(page)
+    await page.goto(base + '/#/subpages/membership/index'); await settle(page)
     await page.locator('.plan-card').nth(2).waitFor()
     check('A contact load failure does not hide membership plans', await page.locator('.plan-card').count() === 3)
     await page.getByRole('button', { name: '联系客服', exact: true }).click()
@@ -192,6 +197,9 @@ async function main() {
     await screenshot(page, 'failure')
     await writeFile(path.join(output, 'failure.txt'), await page.locator('body').innerText())
     throw error
-  } finally { await context.close(); await browser.close(); await api.dispose() }
+  } finally {
+    await context.tracing.stop({ path: path.join(output, 'trace.zip') })
+    await context.close(); await browser.close(); await api.dispose()
+  }
 }
 main().catch(error => { console.error(error); process.exitCode = 1 })

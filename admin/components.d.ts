@@ -29,6 +29,7 @@ declare module 'vue' {
     FeedbackPage: typeof import('./src/components/FeedbackPage.vue')['default']
     ImageModelSettings: typeof import('./src/components/ImageModelSettings.vue')['default']
     ImagePdfComposer: typeof import('./src/components/ImagePdfComposer.vue')['default']
+    LoginForm: typeof import('./src/components/LoginForm.vue')['default']
     LoginPage: typeof import('./src/components/LoginPage.vue')['default']
     LogsPage: typeof import('./src/components/LogsPage.vue')['default']
     MembershipCards: typeof import('./src/components/MembershipCards.vue')['default']

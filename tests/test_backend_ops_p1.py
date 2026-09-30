@@ -24,6 +24,27 @@ with patch.dict(sys.modules, {"ops": ops}):
 
 
 class OpsContracts(unittest.TestCase):
+    def test_backup_replacement_keeps_receipt_readable_by_its_group(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "backup.json"
+            chmod = Path.chmod
+            modes = []
+            def record_mode(path, mode, **kwargs):
+                modes.append(mode)
+                return chmod(path, mode, **kwargs)
+            with patch.dict(os.environ, {"BACKUP_STATUS_FILE": str(target), "RESTIC_REPOSITORY": "s3:fixture/bucket"}, clear=True), \
+                    patch.object(backup.backup_restore, "backup"), patch.object(backup, "run"), \
+                    patch.object(Path, "chmod", record_mode):
+                for timestamp in (100, 200):
+                    with patch.object(backup.time, "time", return_value=timestamp):
+                        backup.execute("backup")
+                    self.assertEqual(json.loads(target.read_text()), {"completed_at": timestamp, "verified": True, "offsite": True})
+                    if os.name == "posix":
+                        self.assertEqual(target.stat().st_mode & 0o777, 0o640)
+                        self.assertEqual(target.stat().st_gid, target.parent.stat().st_gid)
+            self.assertEqual(modes, [0o640, 0o640])
+            self.assertFalse(target.with_suffix(".tmp").exists())
+
     def test_feishu_signed_restore_alert(self):
         response = MagicMock()
         response.__enter__.return_value.read.return_value = b'{"code":0}'

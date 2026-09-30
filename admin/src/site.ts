@@ -50,6 +50,10 @@ export interface Analytics {
 }
 
 const base = '/api/v1/admin/site'
+export interface HomeSettings { revision: number; banner_mode: 'welcome' | 'operations' }
+export const getHomeSettings = () => request<HomeSettings>(base + '/home-settings')
+export const saveHomeSettings = (adminId: number, body: HomeSettings) =>
+  request<HomeSettings>(base + '/home-settings', mutation('PUT', adminId, body))
 
 function mutation(method: string, adminId: number, body?: unknown): RequestInit {
   return {

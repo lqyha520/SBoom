@@ -21,7 +21,7 @@ from app.services.generation_control import record_attempt, record_usage
 from app.services.knowledge_scope import knowledge_scope_service
 from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
 from app.services.provider_http import borrow_client
-from app.services.resource_admission import bounded_media
+from app.services.resource_admission import bounded_image_request, bounded_media
 
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_RESPONSE_BYTES = 18 * 1024 * 1024
@@ -137,7 +137,7 @@ def normalize_image(raw: bytes) -> dict:
 
 
 @observe_provider
-@bounded_media
+@bounded_image_request
 async def generate_image(config: dict, prompt: str) -> dict:
     body = {"model": config["model"], "prompt": prompt, "n": 1, "size": config["size"]}
     if config["responseFormat"] != "auto":

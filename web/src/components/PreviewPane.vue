@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
 import { useExamStore } from '../stores/exam'
 import type { PaperData } from '../types'
 import PaperView from './PaperView.vue'
@@ -19,17 +19,19 @@ const previewBox = ref<HTMLElement | null>(null)
 const paperViewEl = ref<InstanceType<typeof PaperView> | null>(null)
 const { zoom, manual, setManual } = useFitZoom(previewBox)
 const layoutMode = computed({ get: () => store.layoutMode, set: value => { store.layoutMode = value } })
-onBeforeUnmount(() => { store.layoutMode = false })
+function leaveLayout() { if (store.layoutMode) store.finishLayout(true) }
+onBeforeUnmount(leaveLayout)
+onDeactivated(leaveLayout)
 function toggleLayout() {
-  if (!layoutMode.value) store.recordEdit()
+  if (!layoutMode.value) { store.beginLayout(); return }
   if (layoutMode.value) {
     const sections = paperViewEl.value?.applyLayout()
     if (sections) store.syncSections(sections)
   }
-  layoutMode.value = !layoutMode.value
+  store.finishLayout()
 }
 function cancelLayout() {
-  layoutMode.value = false
+  store.finishLayout(true)
   paperViewEl.value?.repaginate()
 }
 const saveOpen = ref(false)
@@ -75,7 +77,7 @@ function onTitleEdited(title: string, html: string) { store.title = title; store
       <h2 id="preview-title"><UIcon name="i-lucide-file-text" class="size-4" />卷面预览</h2>
       <div class="actions-row">
         <UBadge color="neutral" variant="soft" size="xs">草稿</UBadge>
-        <UTooltip text="卷面设置"><UButton icon="i-lucide-settings-2" color="neutral" variant="ghost" size="xs" aria-label="预览卷面设置" @click="$emit('open-settings')" /></UTooltip>
+        <UTooltip text="卷面设置"><UButton icon="i-lucide-settings-2" color="neutral" variant="ghost" size="xs" aria-label="预览卷面设置" :disabled="store.layoutMode" @click="$emit('open-settings')" /></UTooltip>
       </div>
     </div>
     <div class="preview-toolbar no-print">

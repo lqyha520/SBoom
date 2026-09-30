@@ -69,12 +69,14 @@ jobs:
       - name: Workspace browser regression
         if: matrix.project != 'miniprogram'
         run: pnpm --dir ${{ matrix.project }} test:browser
-      - name: Browser failure evidence
-        if: failure() && matrix.project != 'miniprogram'
+      - name: Browser regression evidence
+        if: always() && matrix.project != 'miniprogram'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ matrix.project }}-browser-failures
-          path: artifacts/browser-tests
+          name: ${{ matrix.project }}-browser-evidence
+          path: |
+            artifacts/browser-tests
+            artifacts/admin-browser-tests
           retention-days: 7
       - if: matrix.project == 'miniprogram'
         run: |
@@ -185,12 +187,18 @@ jobs:
             cmp /tmp/source/content /tmp/restored/tmp/source/content
             restic check
           '
+      - name: Receipt permissions across isolated writer and monitor roles
+        run: docker run --rm --network none --read-only --tmpfs /tmp --user 0 -v "$PWD:/verify:ro" --entrypoint python learn-coach-ops:ci /verify/tests/verify_receipt_permissions.py
 
   ui-contracts:
     needs: [frontend, backend]
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [http, home, profile]
     services:
       postgres:
         image: postgres:16-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67
@@ -233,4 +241,13 @@ jobs:
           pnpm --dir miniprogram install --frozen-lockfile
           VITE_API_BASE_URL=/ pnpm --dir miniprogram build:h5
           pnpm --dir web exec playwright install --with-deps chromium
-      - run: python tests/run_ui_contracts.py --browser
+      - run: python tests/run_ui_contracts.py --suite ${{ matrix.suite }}
+      - name: UI contract evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ui-contracts-${{ matrix.suite }}
+          path: |
+            artifacts/home-redesign
+            artifacts/profile-membership
+          retention-days: 7

@@ -81,6 +81,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true })
   const adminContext = await browser.newContext({ viewport: { width: 1365, height: 950 }, storageState: await api.storageState() })
   const readerContext = await browser.newContext({ viewport: { width: 375, height: 812 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true })
+  await readerContext.tracing.start({ screenshots: true, snapshots: true })
   // 真实浏览器验收只允许访问当前一次性服务，防止本机构建的生产地址误发请求。
   for (const context of [adminContext, readerContext]) await context.route('**/*', route => {
     const url = new URL(route.request().url())
@@ -135,17 +136,24 @@ async function main() {
     check('Save publishes the chosen file, copy, fit and destination', (await home())[0].image_url === banner.image_url)
     await shot(admin, '02-admin-gallery')
 
-    await reader.goto(base + '/#/pages/home/index'); await reader.locator('.paper-card').nth(1).waitFor(); await bannerLoaded(reader, 1200)
+    const imageRequests = []
+    reader.on('request', request => { if (/\/site\/banners\/.*\/image/.test(request.url())) imageRequests.push(request.url()) })
+    await reader.goto(base + '/#/pages/home/index'); await reader.locator('.paper-card').nth(1).waitFor(); await settle(reader)
+    check('Welcome mode retains published banners without downloading hidden artwork', await reader.locator('.home-welcome').isVisible() && imageRequests.length === 0)
+    check('The admin identifies published banners awaiting operations mode', await admin.getByText('待启用运营模式', { exact: true }).isVisible())
+    await shot(reader, '00-home-welcome-375')
+    await admin.getByRole('switch', { name: '启用运营 Banner', exact: true }).click()
+    await expectMode()
+    await goHome(); await bannerLoaded(reader, 1200)
     check('Visitors see the uploaded banner and real recommended papers', await reader.locator('.paper-card').count() === 2)
     const bounds = await reader.evaluate(() => {
       const image = document.querySelector('.banner-media').getBoundingClientRect(), copy = document.querySelector('.banner-body').getBoundingClientRect(), slide = document.querySelector('.banner-slide').getBoundingClientRect()
-      return { imageLeft: image.left, imageRight: image.right, imageWidth: image.width, imageHeight: image.height, copyLeft: copy.left, copyRight: copy.right, copyBottom: copy.bottom, slideLeft: slide.left, slideRight: slide.right, slideBottom: slide.bottom, slideWidth: slide.width, slideHeight: slide.height }
+      return { imageBottom: image.bottom, imageWidth: image.width, imageHeight: image.height, copyTop: copy.top, copyLeft: copy.left, copyRight: copy.right, copyBottom: copy.bottom, slideLeft: slide.left, slideRight: slide.right, slideBottom: slide.bottom, slideWidth: slide.width }
     })
-    check('The current split banner keeps artwork on the right and copy within its left column',
-      Math.abs(bounds.imageWidth / bounds.slideWidth - .43) < .02 &&
-      bounds.imageHeight >= bounds.slideHeight - 3 && bounds.imageRight <= bounds.slideRight &&
-      bounds.imageLeft > bounds.slideLeft + bounds.slideWidth * .5 &&
-      bounds.copyLeft >= bounds.slideLeft && bounds.copyRight <= bounds.slideLeft + bounds.slideWidth * .64 && bounds.copyBottom <= bounds.slideBottom)
+    check('Artwork fills its own row and readable copy stays below without overlap',
+      Math.abs(bounds.imageWidth - bounds.slideWidth) < 2 && bounds.imageHeight === 150 &&
+      bounds.copyTop >= bounds.imageBottom &&
+      bounds.copyLeft >= bounds.slideLeft && bounds.copyRight <= bounds.slideRight && bounds.copyBottom <= bounds.slideBottom)
     await noOverflow(reader); await shot(reader, '03-home-photo-375')
     await reader.setViewportSize({ width: 320, height: 640 }); await noOverflow(reader); await shot(reader, '04-home-photo-320')
     await reader.setViewportSize({ width: 375, height: 812 })
@@ -243,7 +251,7 @@ async function main() {
     check('Cancel discards a selected replacement without uploading it', (await list())[0].revision === banner.revision)
 
     const originalCopy = banner
-    banner = await updateBanner(banner, { title: '长标题'.repeat(13), kicker: '上方小字'.repeat(10), subtitle: '副标题说明'.repeat(12), target_type: 'keyword', target_value: '数学', action_label: '去看看'.repeat(6) })
+    banner = await updateBanner(banner, { title: '长标题'.repeat(13), kicker: '上方小字'.repeat(6), subtitle: '副标题说明'.repeat(12), target_type: 'keyword', target_value: '数学', action_label: '去看看'.repeat(4) })
     await goHome(); await bannerLoaded(reader, 900); await reader.setViewportSize({ width: 320, height: 640 })
     const copyBounds = await reader.locator('.banner-body').evaluate(element => ({ content: element.scrollHeight, frame: element.clientHeight }))
     check('Maximum-length copy stays inside the banner at 320 px', copyBounds.content <= copyBounds.frame + 1)
@@ -306,7 +314,12 @@ async function main() {
     throw error
   } finally {
     await writeFile(path.join(output, 'checks.json'), JSON.stringify({ checks, errors, screenshots }, null, 2))
+    await readerContext.tracing.stop({ path: path.join(output, 'trace.zip') })
     await browser.close(); await api.dispose()
+  }
+  async function expectMode() {
+    await admin.getByText('运营 Banner 已启用', { exact: true }).waitFor()
+    assert.equal((await (await api.get('/api/v1/site/home')).json()).banner_mode, 'operations')
   }
 }
 main().catch(error => { console.error(error); process.exitCode = 1 })
