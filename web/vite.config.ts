@@ -7,9 +7,10 @@ import { uiConfig } from '../ui/config.mts'
 // 后端 FastAPI 默认端口
 const BACKEND = process.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000'
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   cacheDir: 'node_modules/.vite-web',
-  plugins: [vue(), ui({ router: false, colorMode: false, ui: uiConfig, experimental: { componentDetection: true }, icon: { clientBundle: { scan: true } } })],
+  // Production builds consume tracked declarations without racing to rewrite them.
+  plugins: [vue(), ui({ dts: command === 'serve', router: false, colorMode: false, ui: uiConfig, experimental: { componentDetection: true }, icon: { clientBundle: { scan: true } } })],
   resolve: {
     dedupe: ['vue'],
     alias: {
@@ -39,4 +40,4 @@ export default defineConfig({
     },
     // 导出库已改动态 import，主包回归正常体积；不再调高告警阈值掩盖问题
   },
-})
+}))

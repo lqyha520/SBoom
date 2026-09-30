@@ -60,13 +60,32 @@ class ImageGenerationContracts(unittest.TestCase):
             return self.handler(req)
         original_client = httpx.AsyncClient
         self.stack.enter_context(patch.object(service.httpx, "AsyncClient", side_effect=lambda **kw: original_client(**kw, transport=httpx.MockTransport(handle))))
-        self.stack.enter_context(patch("app.provider_policy.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 443))]))
+        self.system_resolver = socket.getaddrinfo
+        self.provider_addresses = dict.fromkeys(
+            ("provider.invalid", "images.invalid", "public.invalid"), "93.184.216.34",
+        )
+        self.provider_addresses["internal.invalid"] = "127.0.0.1"
+
+        def resolve(host, *args, **kwargs):
+            name = host.decode("ascii") if isinstance(host, bytes) else host
+            if name in self.provider_addresses:
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (self.provider_addresses[name], 443))]
+            # socket is shared with psycopg: database DNS must remain real.
+            return self.system_resolver(host, *args, **kwargs)
+
+        self.stack.enter_context(patch("app.provider_policy.socket.getaddrinfo", side_effect=resolve))
 
     def login(self, user):
         self.client.cookies.set(SESSION_COOKIE, security.create_token(user.id))
 
     def send(self, request_id="image-one", body=None):
         return self.client.post("/api/v1/generate-image", json=body or self.body, headers={"X-Request-ID": request_id, "X-Workspace-User": str(self.user.id)})
+
+    def test_provider_dns_fixture_preserves_localhost_resolution(self):
+        self.assertEqual(
+            socket.getaddrinfo("localhost", 5432, type=socket.SOCK_STREAM),
+            self.system_resolver("localhost", 5432, type=socket.SOCK_STREAM),
+        )
 
     def test_prompt_uses_all_conditions_without_a_model_call(self):
         response = self.client.post("/api/v1/image-generation/prompt", json=self.body)
@@ -84,8 +103,7 @@ class ImageGenerationContracts(unittest.TestCase):
         with database.db() as conn:
             raw = conn.execute("SELECT value FROM app_config WHERE key = ?", (image_config.KEY,)).fetchone()[0]
         self.assertNotIn("secret-image-test", raw)
-        with patch("app.provider_policy.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("8.8.8.8", 443))]):
-            response = self.client.put("/api/v1/admin/image-config", json={**self.config, "apiKey": "", "model": "new-image-model"})
+        response = self.client.put("/api/v1/admin/image-config", json={**self.config, "apiKey": "", "model": "new-image-model"})
         self.assertTrue(response.json()["hasKey"])
         self.assertEqual(image_config.get_config(with_key=True)["api_key"], "secret-image-test")
         self.assertEqual(self.client.delete("/api/v1/admin/image-config").status_code, 200)
@@ -200,24 +218,19 @@ class ImageGenerationContracts(unittest.TestCase):
             self.assertNotIn("authorization", req.headers)
             return httpx.Response(200, content=png())
         self.handler = handler
-        with patch.object(socket, "getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]):
-            self.assertEqual(self.send().status_code, 200)
+        self.assertEqual(self.send().status_code, 200)
         self.assertEqual(len(self.calls), 2)
 
     def test_private_image_urls_and_redirects_cannot_reach_internal_services(self):
         self.handler = lambda req: httpx.Response(200, json={"data": [{"url": "https://internal.invalid/a.png"}]})
-        def resolve(host, *args, **kwargs):
-            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1" if host == "internal.invalid" else "93.184.216.34", 443))]
-        with patch.object(socket, "getaddrinfo", side_effect=resolve):
-            self.assertEqual(self.send().status_code, 502)
+        self.assertEqual(self.send().status_code, 502)
         self.assertEqual(len(self.calls), 1)
         def handler(req):
             if req.method == "POST":
                 return httpx.Response(200, json={"data": [{"url": "https://public.invalid/a.png"}]})
             return httpx.Response(302, headers={"location": "http://127.0.0.1/private"})
         self.handler = handler
-        with patch.object(socket, "getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]):
-            self.assertEqual(self.send("redirect").status_code, 502)
+        self.assertEqual(self.send("redirect").status_code, 502)
         self.assertEqual(len(self.calls), 3)
 
     def test_configured_response_format_and_complete_endpoint_are_preserved(self):
