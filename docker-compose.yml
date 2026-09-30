@@ -23,7 +23,7 @@ x-logging: &default-logging
 services:
   db:
     # 与 deploy/ 两个 compose 及 CI 的 postgres 服务保持同一 tag
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: learncoach-db
     logging: *default-logging
     shm_size: 256m
