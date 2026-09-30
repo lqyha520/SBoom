@@ -18,7 +18,7 @@ services:
     # 与根目录 docker-compose.yml、deploy/docker-compose.yml、CI 统一用 16-alpine（宿主机现有的
     # deploy-db-1 / learncoach-db 也是这个镜像）。不要在 postgres:16（glibc）与 16-alpine（musl）之间
     # 切换已有的 pgdata 卷：两者文本排序规则不同，换镜像后需要 REINDEX，见 docs/deploy.md。
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     restart: unless-stopped
     logging: *default-logging
     shm_size: 256m

@@ -24,7 +24,7 @@ services:
     # 与根目录 docker-compose.yml、docker-compose.server.yml、CI 统一用 16-alpine。
     # 不要在 postgres:16（glibc）与 16-alpine（musl）之间切换已有的 pgdata 卷：两者文本排序规则不同，
     # 换镜像后需要 REINDEX，见 docs/deploy.md。
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     restart: unless-stopped
     logging: *default-logging
     # PostgreSQL 并行查询/大排序走共享内存；Docker 默认 64m 容易触发 "could not resize shared memory segment"
