@@ -2,7 +2,7 @@ import { openDB } from 'idb'
 import { computed, reactive, shallowRef } from 'vue'
 import { ApiError } from './api'
 import { randomId } from '../../shared/webcrypto'
-import { fetchImageStatus, generateWorksheetImage, loadImageBlob, type ImageWorksheetParams, type WorksheetImage } from './image-generation'
+import { fetchImageStatus, generateWorksheetImage, imageWorksheetTitle, loadImageBlob, type ImageWorksheetParams, type WorksheetImage } from './image-generation'
 
 export const MAX_WORKSHEET_IMAGES = 10
 type PageState = 'queued' | 'running' | 'unknown' | 'failed' | 'ready' | 'expired'
@@ -131,7 +131,7 @@ export function useImageBatch(storageKey: string, current: () => boolean, onImag
     const snapshot = JSON.stringify({ version: 1, input: input.value, pages: state.pages.map(({ id, state }) => ({ id, state })) })
     const existing = history.findIndex(item => item.id === id)
     if (existing >= 0) history.splice(existing, 1)
-    history.unshift({ id, title: input.value.keyword, savedAt: Date.now(), snapshot })
+    history.unshift({ id, title: input.value.keyword || imageWorksheetTitle(input.value), savedAt: Date.now(), snapshot })
     const removed = history.splice(10)
     const retained = new Set([...state.pages.map(page => page.id), ...history.flatMap(item => JSON.parse(item.snapshot).pages.map((page: { id: string }) => page.id))])
     void imageCache().then(async db => {

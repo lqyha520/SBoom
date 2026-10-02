@@ -94,6 +94,110 @@ class ImageGenerationContracts(unittest.TestCase):
         for value in ["小学三年级", "数学", "两位数加减法", "填空题 4 道", "选择题 2 道", "黑白打印", "小动物"]:
             self.assertIn(value, prompt)
         self.assertIn("不使用工作台的试卷模板", prompt)
+        self.assertIn("每种题量都必须准确落实", prompt)
+        self.assertNotIn("题量自动安排", prompt)
+        self.assertEqual(self.calls, [])
+
+    def test_prompt_accepts_omitted_null_and_mixed_quantities(self):
+        for items in [
+            [{"game_type": "fill_blank"}, {"game_type": "quiz", "question_count": None}],
+            [{"game_type": "fill_blank"}, {"game_type": "quiz", "question_count": 6}],
+        ]:
+            with self.subTest(items=items):
+                response = self.client.post("/api/v1/image-generation/prompt", json={**self.body, "items": items})
+                self.assertEqual(response.status_code, 200, response.text)
+                prompt = response.json()["prompt"]
+                self.assertIn("填空题（题量自动安排）", prompt)
+                self.assertIn("未指定题量的题型", prompt)
+                self.assertIn("整张合计不超过 24 道", prompt)
+                self.assertNotIn("填空题 4 道", prompt)
+                self.assertNotIn("None", prompt)
+                if items[1]["question_count"] is not None:
+                    self.assertIn("选择题 6 道", prompt)
+                else:
+                    self.assertIn("选择题（题量自动安排）", prompt)
+        self.assertEqual(self.calls, [])
+
+    def test_grade_and_subject_only_use_their_curriculum_and_age_appropriate_types(self):
+        body = {"grade": "小学一年级", "subject": "数学"}
+        response = self.client.post("/api/v1/image-generation/prompt", json=body)
+        self.assertEqual(response.status_code, 200, response.text)
+        prompt = response.json()["prompt"]
+        scope = service.knowledge_scope_service.get_scope(body["grade"], body["subject"])
+        self.assertIn("知识点：自动安排", prompt)
+        self.assertIn("题型及题量：自动安排", prompt)
+        self.assertIn("、".join(scope.allowed), prompt)
+        self.assertIn("、".join(scope.forbidden), prompt)
+        types_line = next(line for line in prompt.splitlines() if line.startswith("题型及题量："))
+        self.assertIn("1 至 5 种", types_line)
+        self.assertNotIn("简便计算", types_line)
+        self.assertNotIn("脱式计算", types_line)
+        self.assertIn("整张合计不超过 24 道", prompt)
+        self.assertEqual(self.calls, [])
+
+    def test_automatic_topics_respect_dictionary_overrides_and_reject_unknown_scopes(self):
+        body = {"grade": "小学一年级", "subject": "数学"}
+        with patch.object(service.knowledge_scope_service, "_dictionary_points", return_value=["自定课程知识点"]) as points:
+            response = self.client.post("/api/v1/image-generation/prompt", json=body)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIn("允许的知识范围：自定课程知识点", response.json()["prompt"])
+            points.assert_called_once_with(body["grade"], body["subject"])
+        for index, change in enumerate([{"grade": "未知年级"}, {"subject": "未知科目"}]):
+            self.assertEqual(self.send(f"unknown-auto-{index}", {**body, **change}).status_code, 400)
+        scope = service.knowledge_scope_service.get_scope(body["grade"], body["subject"])
+        with patch.object(service.knowledge_scope_service, "get_scope", return_value=scope.model_copy(update={"allowed": []})):
+            self.assertEqual(self.send("no-auto-content", body).status_code, 400)
+        self.assertEqual(self.calls, [])
+
+    def test_automatic_requests_keep_manual_topics_or_types_and_replay_without_duplicates(self):
+        body = {"grade": "小学一年级", "subject": "数学"}
+        first = self.send("automatic-worksheet", body)
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(self.send("automatic-worksheet", {**body, "keyword": "  ", "items": []}).json(), first.json())
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.send("automatic-worksheet", {**body, "keyword": "加法"}).status_code, 409)
+        for change, required, automatic in [
+            ({"keyword": "20以内加法"}, "知识点：20以内加法", "题型及题量：自动安排"),
+            ({"items": [{"game_type": "fill_blank", "question_count": 6}]}, "填空题 6 道", "知识点：自动安排"),
+        ]:
+            response = self.client.post("/api/v1/image-generation/prompt", json={**body, **change})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIn(required, response.json()["prompt"])
+            self.assertIn(automatic, response.json()["prompt"])
+
+    def test_grade_and_subject_remain_required(self):
+        for body in [{"grade": "小学一年级"}, {"subject": "数学"}, {"grade": "小学一年级", "subject": ""},
+                     {"grade": "小学一年级", "subject": "  "}, {"grade": "", "subject": "数学"}]:
+            with self.subTest(body=body):
+                self.assertEqual(self.send(body=body).status_code, 422)
+        self.assertEqual(self.calls, [])
+
+    def test_optional_quantity_generation_replay_normalizes_omitted_and_null(self):
+        body = {**self.body, "items": [{"game_type": "quiz"}, {"game_type": "fill_blank", "question_count": 3}]}
+        first = self.send("auto-count", body)
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertIn("选择题（题量自动安排）", json.loads(self.calls[0].content)["prompt"])
+        self.assertIn("填空题 3 道", json.loads(self.calls[0].content)["prompt"])
+        body["items"][0]["question_count"] = None
+        replay = self.send("auto-count", body)
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(replay.json(), first.json())
+        body["items"][0]["question_count"] = 4
+        self.assertEqual(self.send("auto-count", body).status_code, 409)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_quantity_validation_reserves_capacity_for_automatic_types(self):
+        for count in [0, -1, 21, 1.5, True, "4"]:
+            with self.subTest(count=count):
+                response = self.send(body={**self.body, "items": [{"game_type": "quiz", "question_count": count}]})
+                self.assertEqual(response.status_code, 422, response.text)
+        for count, expected in [(3, 200), (4, 422)]:
+            response = self.client.post("/api/v1/image-generation/prompt", json={**self.body, "items": [
+                {"game_type": "quiz", "question_count": 20},
+                {"game_type": "fill_blank", "question_count": count},
+                {"game_type": "true_false"},
+            ]})
+            self.assertEqual(response.status_code, expected, response.text)
         self.assertEqual(self.calls, [])
 
     def test_config_is_admin_only_encrypted_and_independent(self):
@@ -177,7 +281,7 @@ class ImageGenerationContracts(unittest.TestCase):
         self.login(self.other)
         self.assertEqual(self.send().status_code, 409)
         self.login(self.user)
-        for change in [{"keyword": "   "}, {"items": []}, {"items": [{"game_type": "bogus", "question_count": 4}]}, {"layout": {}}, {"api_key": "client-key"}, {"items": self.body["items"] * 2}, {"items": [{"game_type": "quiz", "question_count": 20}, {"game_type": "fill_blank", "question_count": 20}]}]:
+        for change in [{"keyword": None}, {"items": None}, {"items": [{"game_type": "bogus", "question_count": 4}]}, {"layout": {}}, {"api_key": "client-key"}, {"items": self.body["items"] * 2}, {"items": [{"game_type": "quiz", "question_count": 20}, {"game_type": "fill_blank", "question_count": 20}]}]:
             self.assertEqual(self.send(body={**self.body, **change}).status_code, 422)
         self.assertEqual(self.send("unsupported", {**self.body, "grade": "大学一年级"}).status_code, 400)
         self.assertEqual(self.send("too-young", {**self.body, "grade": "小学一年级", "items": [{"game_type": "smart_calc", "question_count": 2}]}).status_code, 400)

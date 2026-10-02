@@ -1,11 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { bindWorkspaceOwner } from '../api'
-import { fetchImageStatus, generateWorksheetImage, imageBlob, previewImagePrompt, type ImageWorksheetParams, type WorksheetImage } from '../image-generation'
+import { fetchImageStatus, generateWorksheetImage, imageBlob, plannedImageQuestionCount, previewImagePrompt, type ImageWorksheetParams, type WorksheetImage } from '../image-generation'
 
 const params: ImageWorksheetParams = { grade: '小学三年级', subject: '数学', keyword: '两位数加减法', difficulty: 'medium', items: [{ game_type: 'fill_blank', question_count: 4 }], style: 'black_white', requirements: '预留书写空间' }
 afterEach(() => { bindWorkspaceOwner(''); vi.unstubAllGlobals() })
 
 describe('image worksheets', () => {
+  it('only reports a planned total when every selected type has an explicit quantity', () => {
+    expect(plannedImageQuestionCount([])).toBeUndefined()
+    expect(plannedImageQuestionCount([{ game_type: 'quiz' }])).toBeUndefined()
+    expect(plannedImageQuestionCount([{ game_type: 'quiz', question_count: null }])).toBeUndefined()
+    expect(plannedImageQuestionCount([{ game_type: 'quiz', question_count: 4 }, { game_type: 'fill_blank' }])).toBeUndefined()
+    expect(plannedImageQuestionCount([{ game_type: 'quiz', question_count: 4 }, { game_type: 'fill_blank', question_count: 6 }])).toBe(10)
+  })
+  it('sends automatic quantities without substituting a default count', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('{}'))
+    vi.stubGlobal('fetch', fetch)
+    const automatic = { ...params, items: [{ game_type: 'quiz', question_count: null }, { game_type: 'fill_blank' }] }
+    await generateWorksheetImage(automatic, 'automatic')
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual(automatic)
+  })
   it('sends the selected content with request and account identity, without paper layout', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ request_id: 'image-1' })))
     vi.stubGlobal('fetch', fetch); bindWorkspaceOwner('17')

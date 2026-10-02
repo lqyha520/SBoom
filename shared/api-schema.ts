@@ -50,8 +50,8 @@ export interface ApiSchemas {
   "HTTPValidationError": { "detail"?: Array<ApiSchemas["ValidationError"]> }
   "HomeSettings": { "banner_mode"?: "welcome" | "operations"; "revision"?: number }
   "ImageModelConfig": { "apiKey"?: string; "baseUrl": string; "model": string; "responseFormat"?: "auto" | "b64_json" | "url"; "size"?: string; "timeout"?: number }
-  "ImageWorksheetItem": { "game_type": ApiSchemas["GameType"]; "question_count"?: number }
-  "ImageWorksheetRequest": { "difficulty"?: ApiSchemas["Difficulty"]; "grade": string; "image_count"?: number; "image_index"?: number; "items": Array<ApiSchemas["ImageWorksheetItem"]>; "keyword": string; "requirements"?: string; "style"?: "playful" | "clean" | "black_white"; "subject": string }
+  "ImageWorksheetItem": { "game_type": ApiSchemas["GameType"]; "question_count"?: (number | null) }
+  "ImageWorksheetRequest": { "difficulty"?: ApiSchemas["Difficulty"]; "grade": string; "image_count"?: number; "image_index"?: number; "items"?: Array<ApiSchemas["ImageWorksheetItem"]>; "keyword"?: string; "requirements"?: string; "style"?: "playful" | "clean" | "black_white"; "subject": string }
   "KnowledgeScope": { "allowed": Array<string>; "forbidden": Array<string>; "grade": string; "semesters"?: ({ [key: string]: Array<string> } | null); "subject": string }
   "MembershipUpdate": { "is_active": boolean; "membership": "regular" | "vip"; "revision": number; "vip_expires_at"?: (number | null) }
   "MiniCredentials": { "password": string; "username": string }

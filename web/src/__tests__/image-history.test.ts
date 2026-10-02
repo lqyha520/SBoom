@@ -40,3 +40,16 @@ it('does not expose another account history and bounds history to ten batches', 
   expect(other.completed).toBe(0)
   batch.dispose(); other.dispose()
 })
+
+it('names automatic batches by grade and subject and preserves their empty selections', async () => {
+  const automatic = { ...params, keyword: '', items: [] }
+  const batch = useImageBatch('automatic-history', () => true, () => {})
+  await batch.start(automatic, 1)
+  await batch.start(params, 1)
+  expect(batch.history[0].title).toBe('小学三年级数学·年级知识练习')
+  await batch.selectHistory(batch.history[0].id)
+  expect(batch.parameters()).toEqual(automatic)
+  expect(batch.completed).toBe(1)
+  expect(generateWorksheetImage).toHaveBeenCalledTimes(2)
+  batch.dispose()
+})

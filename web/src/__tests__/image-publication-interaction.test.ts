@@ -25,6 +25,7 @@ const stubs = {
   UModal: defineComponent({ props: ['open'], setup: (props, { slots }) => () => props.open ? h('div', { role: 'dialog' }, [slots.body?.(), slots.footer?.()]) : null }),
   UButton: defineComponent({ props: ['label', 'disabled', 'loading'], setup: (props, { slots }) => () => h('button', { disabled: props.disabled || props.loading }, props.label || slots.default?.()) }),
   UInput: input, UTextarea: input, UInputNumber: input,
+  UCheckbox: defineComponent({ props: ['modelValue', 'label'], emits: ['update:modelValue'], setup: (props, { emit }) => () => h('input', { type: 'checkbox', checked: props.modelValue, onChange: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).checked) }) }),
   USelect: defineComponent({ props: ['modelValue', 'items'], emits: ['update:modelValue'], setup: (props, { emit }) => () => h('select', { value: props.modelValue, onChange: (event: Event) => emit('update:modelValue', (event.target as HTMLSelectElement).value) }, props.items.map((item: { value: string; label: string }) => h('option', { value: item.value }, item.label))) }),
   UFormField: defineComponent({ setup: (_, { slots }) => () => h('div', slots.default?.()) }),
   UAlert: defineComponent({ props: ['title', 'description'], setup: (props, { slots }) => () => h('div', [props.title, props.description, slots.actions?.()]) }), UIcon: true,
@@ -42,8 +43,8 @@ beforeEach(() => {
   vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }))
 })
 afterEach(() => { wrapper?.unmount(); bindWorkspaceOwner(''); vi.unstubAllGlobals() })
-async function dialog() {
-  wrapper = mount(ImagePublicationDialog, { props: { open: true, images, params }, global: { stubs } })
+async function dialog(inputParams = params) {
+  wrapper = mount(ImagePublicationDialog, { props: { open: true, images, params: inputParams }, global: { stubs } })
   await flushPromises()
 }
 async function chooseCategory() { await wrapper.get('[aria-label="习题分类"]').setValue('visible') }
@@ -54,11 +55,33 @@ it('requires a visible category, uploads all pages once, and replaces save with 
   await wrapper.get('form').trigger('submit'); expect(addImagePublication).not.toHaveBeenCalled()
   await chooseCategory(); await wrapper.get('form').trigger('submit'); await flushPromises()
   expect(buildWorksheetPdf).toHaveBeenCalledWith(images, expect.any(Function), expect.any(Function))
-  expect(addImagePublication).toHaveBeenCalledWith(pdf, { title: '小学三年级数学·加减法', grade: params.grade, subject: params.subject, category_id: 'visible', description: '', keyword: params.keyword, question_types: params.items.map(item => item.game_type).join(','), question_count: params.items.reduce((sum, item) => sum + item.question_count, 0) * images.length })
+  expect(addImagePublication).toHaveBeenCalledWith(pdf, { title: '小学三年级数学·加减法', grade: params.grade, subject: params.subject, category_id: 'visible', description: '', keyword: params.keyword, question_types: params.items.map(item => item.game_type).join(','), question_count: 8 })
   expect(wrapper.text()).toContain('已添加为后台习题草稿')
   expect(wrapper.get('[href="/admin/#papers?paper=saved-paper"]').text()).toBe('前往后台查看')
   expect(wrapper.find('form').exists()).toBe(false)
   expect(wrapper.emitted('saved')).toEqual([[paper]])
+})
+
+it.each([
+  [{ game_type: 'quiz' }],
+  [{ game_type: 'quiz', question_count: null }],
+  [{ game_type: 'quiz', question_count: 4 }, { game_type: 'fill_blank', question_count: null }],
+])('omits the publication count when any quantity is automatic: %j', async (...items) => {
+  await dialog({ ...params, items })
+  await chooseCategory(); await wrapper.get('form').trigger('submit'); await flushPromises()
+  expect(addImagePublication).toHaveBeenCalledOnce()
+  const metadata = vi.mocked(addImagePublication).mock.calls[0]![1]
+  expect(metadata).not.toHaveProperty('question_count')
+  expect(metadata.question_types).toBe(items.map(item => item.game_type).join(','))
+})
+
+it('publishes automatic worksheets without inventing topics, types or a count', async () => {
+  await dialog({ ...params, keyword: '', items: [] })
+  await chooseCategory(); await wrapper.get('form').trigger('submit'); await flushPromises()
+  expect(addImagePublication).toHaveBeenCalledWith(pdf, {
+    title: '小学三年级数学·年级知识练习', grade: params.grade, subject: params.subject,
+    category_id: 'visible', description: '', keyword: '', question_types: '',
+  })
 })
 
 it('retains form data and the exact PDF for a manual retry after an unknown upload result', async () => {
@@ -175,8 +198,10 @@ it('clears knowledge search on subject change and clamps counts to remaining cap
   wrapper = mount(ImageWorkbench, { global: { stubs } }); await flushPromises()
   await wrapper.findAll('.image-type-grid button')[0]!.trigger('click')
   await wrapper.findAll('.image-type-grid button')[1]!.trigger('click')
-  await wrapper.findAll('.image-count-row input')[0]!.setValue('20')
-  await wrapper.findAll('.image-count-row input')[1]!.setValue('20')
+  await wrapper.get('[aria-label="填空题指定题量"]').setValue(true)
+  await wrapper.get('[aria-label="填空题题量"]').setValue('20')
+  await wrapper.get('[aria-label="判断题指定题量"]').setValue(true)
+  await wrapper.get('[aria-label="判断题题量"]').setValue('20')
   expect(wrapper.get('.image-order-summary').text()).toContain('24 题')
   expect(wrapper.findAll('.image-type-grid button').slice(2).every(button => button.attributes('disabled') !== undefined)).toBe(true)
   await wrapper.get('[aria-label="搜索知识点"]').setValue('数学')
@@ -203,10 +228,12 @@ it('applies a quick arrangement without generating and allows custom counts afte
   store.available = { '小学三年级': ['数学'] }; store.grade = '小学三年级'; store.subject = '数学'; store.keyword = '加法'
   wrapper = mount(ImageWorkbench, { global: { stubs } }); await flushPromises()
   await wrapper.findAll('.image-arrangements button')[0]!.trigger('click')
-  expect(wrapper.get('.image-order-summary').text()).toBe('1 张 × 8 题')
+  expect(wrapper.get('.image-order-summary').text()).toBe('1 张 · 题量自动安排')
   expect(wrapper.findAll('.image-paper-exercise')).toHaveLength(2)
-  await wrapper.findAll('.image-count-row input')[0]!.setValue('6')
-  expect(wrapper.get('.image-order-summary').text()).toBe('1 张 × 10 题')
+  expect(wrapper.findAll('.image-count-value')).toHaveLength(0)
+  await wrapper.get('[aria-label="选择题指定题量"]').setValue(true)
+  await wrapper.get('[aria-label="选择题题量"]').setValue('6')
+  expect(wrapper.get('.image-order-summary').text()).toBe('1 张 · 已指定 6 题，其余自动')
   expect(wrapper.findAll('.image-arrangements button').every(button => button.attributes('aria-pressed') === 'false')).toBe(true)
   expect(generateWorksheetImage).not.toHaveBeenCalled()
 })
@@ -221,8 +248,70 @@ it('uses subject-appropriate types in the comprehensive arrangement', async () =
   await wrapper.findAll('.image-arrangements button')[1]!.trigger('click')
   expect(wrapper.get('.image-custom summary').text()).toContain('连线配对')
   expect(wrapper.get('.image-custom summary').text()).not.toContain('判断题')
-  expect(wrapper.get('.image-order-summary').text()).toContain('12 题')
+  expect(wrapper.get('.image-order-summary').text()).toContain('题量自动安排')
   expect(generateWorksheetImage).not.toHaveBeenCalled()
+})
+
+it('defaults each newly selected type to automatic and persists optional quantities', async () => {
+  const store = useExamStore()
+  store.available = { '小学三年级': ['数学'] }; store.grade = '小学三年级'; store.subject = '数学'; store.keyword = '加法'
+  wrapper = mount(ImageWorkbench, { global: { stubs } }); await flushPromises()
+  const selectType = () => wrapper.findAll('.image-type-grid button').find(button => button.text() === '选择题')!
+  await selectType().trigger('click')
+  expect(wrapper.find('[aria-label="选择题题量"]').exists()).toBe(false)
+  expect(wrapper.get('.image-paper-exercise small').text()).toBe('自动安排')
+  expect(JSON.parse(localStorage.getItem('lc_u17_image_request_draft')!).items).toEqual([{ game_type: 'quiz', question_count: null }])
+  await wrapper.get('[aria-label="选择题指定题量"]').setValue(true)
+  await wrapper.get('[aria-label="选择题题量"]').setValue('6')
+  expect(wrapper.get('.image-order-summary').text()).toBe('1 张 × 6 题')
+  await wrapper.get('[aria-label="选择题指定题量"]').setValue(false)
+  expect(wrapper.find('[aria-label="选择题题量"]').exists()).toBe(false)
+  await wrapper.get('[aria-label="选择题指定题量"]').setValue(true)
+  await wrapper.get('[aria-label="选择题题量"]').setValue('')
+  expect(wrapper.get('.image-order-summary').text()).toContain('题量自动安排')
+  await wrapper.get('[aria-label="选择题指定题量"]').setValue(true)
+  await selectType().trigger('click'); await selectType().trigger('click')
+  expect(wrapper.find('[aria-label="选择题题量"]').exists()).toBe(false)
+  wrapper.unmount(); wrapper = mount(ImageWorkbench, { global: { stubs } }); await flushPromises()
+  expect(wrapper.get('.image-order-summary').text()).toBe('1 张 · 题量自动安排')
+  expect(wrapper.get('.image-paper-exercise small').text()).toBe('自动安排')
+})
+
+it('requires grade and subject but generates with empty topics and types, restoring automatic drafts', async () => {
+  const store = useExamStore()
+  store.available = { '小学一年级': ['数学'] }
+  wrapper = mount(ImageWorkbench, { global: { stubs } }); await flushPromises()
+  await wrapper.get('form').trigger('submit')
+  expect(generateWorksheetImage).not.toHaveBeenCalled()
+  await wrapper.get('[aria-label="图片年级"]').setValue('小学一年级')
+  await wrapper.get('form').trigger('submit')
+  expect(generateWorksheetImage).not.toHaveBeenCalled()
+  await wrapper.get('[aria-label="图片科目"]').setValue('数学')
+  expect(wrapper.get('.image-order-summary').text()).toBe('1 张 · 题型、题量自动安排')
+  await wrapper.findAll('.image-type-grid button')[0]!.trigger('click')
+  await wrapper.findAll('button').find(button => button.text() === '恢复自动题型')!.trigger('click')
+  expect(wrapper.findAll('.image-paper-exercise')).toHaveLength(0)
+  wrapper.unmount(); wrapper = mount(ImageWorkbench, { global: { stubs } }); await flushPromises()
+  expect((wrapper.get('[aria-label="图片科目"]').element as HTMLSelectElement).value).toBe('数学')
+  expect(wrapper.get('.image-order-summary').text()).toContain('题型、题量自动安排')
+  vi.mocked(generateWorksheetImage).mockResolvedValue(images[0]!)
+  await wrapper.get('form').trigger('submit'); await flushPromises()
+  expect(generateWorksheetImage).toHaveBeenCalledWith(expect.objectContaining({
+    grade: '小学一年级', subject: '数学', keyword: '', items: [],
+  }), expect.any(String))
+  expect(wrapper.get('.image-batch-title h3').text()).toBe('小学一年级数学·年级知识练习')
+})
+
+it.each([undefined, null, 7])('restores old and optional quantity drafts without changing their intent: %s', async count => {
+  localStorage.setItem('lc_u17_image_request_draft', JSON.stringify({ ...params, items: [{ game_type: 'quiz', question_count: count }] }))
+  wrapper = mount(ImageWorkbench, { global: { stubs } }); await flushPromises()
+  if (count == null) {
+    expect(wrapper.find('[aria-label="选择题题量"]').exists()).toBe(false)
+    expect(wrapper.get('.image-order-summary').text()).toBe('1 张 · 题量自动安排')
+  } else {
+    expect((wrapper.get('[aria-label="选择题题量"]').element as HTMLInputElement).value).toBe('7')
+    expect(wrapper.get('.image-order-summary').text()).toBe('1 张 × 7 题')
+  }
 })
 
 it('keeps original batch conditions visible and reuses them without submitting a new batch', async () => {
