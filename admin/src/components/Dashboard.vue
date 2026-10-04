@@ -136,7 +136,7 @@ async function logout() {
 <template>
   <div class="admin-shell">
     <header class="admin-header">
-      <a class="brand" href="/"><span class="brand-mark"><UIcon name="i-lucide-notebook-pen" class="size-5" /></span><div><div class="brand-name">Learning Coach</div><div class="brand-caption">管理控制台</div></div></a>
+      <a class="brand" href="/"><span class="brand-mark"><UIcon name="i-lucide-notebook-pen" class="size-5" /></span><div class="brand-name">管理控制台</div></a>
       <div class="admin-header-actions">
         <UButton href="/" icon="i-lucide-arrow-up-right" label="出题工作台" color="neutral" variant="ghost" class="workbench-link" size="sm" />
         <UDropdownMenu :items="[{ label: '退出登录', icon: 'i-lucide-log-out', disabled: loggingOut, onSelect: logout }]">

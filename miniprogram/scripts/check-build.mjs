@@ -66,6 +66,9 @@ async function inspect(directory) {
     size += bytes
     if (!path.relative(output, file).startsWith('subpages' + path.sep)) mainSize += bytes
     count++
+    if (/\.(js|json|wxml)$/.test(item.name)) {
+      assert.ok(!/learning\s+coach/i.test(await readFile(file, 'utf8')), `Removed branding in ${path.relative(output, file)}`)
+    }
     if (item.name.endsWith('.wxss')) {
       const styles = (await readFile(file, 'utf8')).replace(/\/\*[\s\S]*?\*\//g, '')
       // WXSS rejects bare pseudo-classes after a combinator (for example

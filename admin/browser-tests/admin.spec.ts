@@ -21,6 +21,27 @@ async function api(context: BrowserContext) {
   return { writes, status: (value: number) => { status = value }, owner: (value: number) => { owner = value } }
 }
 
+for (const width of [1440, 320]) {
+  test(`后台登录和管理页不再展示英文品牌 ${width}px`, async ({ page, context }, info) => {
+    await api(context)
+    await page.setViewportSize({ width, height: width === 320 ? 640 : 1000 })
+    await page.route('**/api/v1/auth/me', route => route.fulfill({ status: 401, json: {} }))
+    await page.goto('/admin/#documents')
+    await expect(page.getByRole('heading', { name: '管理员登录' })).toBeVisible()
+    await expect(page.locator('.brand')).toHaveText('管理控制台')
+    await expect(page.locator('body')).not.toContainText(/learning\s+coach/i)
+    await expect(page.locator('.auth-footer, .brand-caption')).toHaveCount(0)
+    await page.screenshot({ path: info.outputPath('admin-login.png') })
+    await page.unroute('**/api/v1/auth/me')
+    await page.reload()
+    await expect(page.locator('#doc-body')).toBeVisible()
+    await expect(page.locator('.brand')).toHaveText('管理控制台')
+    await expect(page.locator('body')).not.toContainText(/learning\s+coach/i)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: info.outputPath('admin.png') })
+  })
+}
+
 test('文档草稿在文档切换和401同账号重认证后仍可保存', async ({ context, page }) => {
   const server = await api(context)
   await page.goto('/admin/#documents')

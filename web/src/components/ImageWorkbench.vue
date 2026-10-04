@@ -19,6 +19,8 @@ const publishedDrafts = ref<Record<string, ImagePublication>>({})
 const owner = store.ownerId
 const storageKey = 'lc_u' + owner + '_image_request'
 const grade = ref(store.grade), subject = ref(store.subject), keyword = ref(store.keyword)
+const gradeSelection = computed({ get: () => grade.value, set: chooseGrade })
+const subjectSelection = computed({ get: () => subject.value, set: chooseSubject })
 const difficulty = ref<Difficulty>(store.difficulty)
 const selected = ref<string[]>([]), counts = ref<Record<string, number | null>>({})
 const style = ref<ImageWorksheetParams['style']>('playful'), requirements = ref('')
@@ -92,6 +94,8 @@ const types = computed(() => (TYPE_GROUPS_BY_GRADE[subject.value]?.[gradeNumOf(g
 const minimumTotal = computed(() => selected.value.reduce((sum, type) => sum + (counts.value[type] ?? 1), 0))
 const issue = computed(() => !grade.value || !subject.value ? '请先选择年级和科目' : selected.value.length > 5 ? '每张图片最多选择 5 种题型' : minimumTotal.value > 24 ? '每张图片最多安排 24 道题，请减少题量' : '')
 const disabled = computed(() => busy.value || checking.value || batch.unresolved || pdfBusy.value || publicationOpen.value || !current())
+const hasSettings = computed(() => !!(grade.value || subject.value || keyword.value || selected.value.length ||
+  requirements.value || difficulty.value !== 'medium' || imageCount.value !== 1))
 const params = computed<ImageWorksheetParams>(() => ({ grade: grade.value, subject: subject.value, keyword: keyword.value.trim(), difficulty: difficulty.value,
   items: selected.value.map(game_type => ({ game_type, question_count: counts.value[game_type] ?? null })), style: style.value, requirements: requirements.value.trim(), image_count: imageCount.value, image_index: 1 }))
 const plannedCount = computed(() => plannedImageQuestionCount(params.value.items))
@@ -132,6 +136,16 @@ function showResults() {
 function reuseSettings() {
   if (disabled.value || !batchParams.value) return
   applyParams({ ...batchParams.value, image_count: batch.state.pages.length })
+  editSettings()
+}
+function clearSettings() {
+  if (disabled.value || !draftLoaded.value || !hasSettings.value ||
+    !window.confirm('清空年级、科目、知识点、题型题量和补充要求，并恢复默认难度与张数？画面风格、已生成的图片和历史批次会保留。')) return
+  applyParams({ grade: '', subject: '', keyword: '', difficulty: 'medium', items: [], style: style.value,
+    requirements: '', image_count: 1 })
+  scopeVersion++; scope.value = null; scopeLoading.value = false; scopeError.value = ''
+  knowledgeSearch.value = ''; error.value = ''; promptVersion++; prompt.value = ''; promptOpen.value = false
+  customOpen.value = true; advancedOpen.value = false
   editSettings()
 }
 async function continueBatch() {
@@ -219,7 +233,7 @@ async function previewPrompt() {
   try {
     const value = await previewImagePrompt(params.value); ownerGuard()
     if (current() && revision === promptVersion) { prompt.value = value.prompt; promptOpen.value = true }
-  } catch (e) { if (current()) error.value = e instanceof Error ? e.message : '提示词加载失败' }
+  } catch (e) { if (current() && revision === promptVersion) error.value = e instanceof Error ? e.message : '提示词加载失败' }
   finally { if (current()) promptBusy.value = false }
 }
 async function generate() {
@@ -307,8 +321,8 @@ onBeforeUnmount(() => { alive = false; scopeVersion++; promptVersion++; batch.di
 
     <div class="image-controls">
       <div class="image-panel-heading">
-        <div><h2>设计一份习题图</h2><p>知识点 · 题型 · 画面风格</p></div>
-        <span class="image-service" :class="{ online: ready && configured }">{{ configError ? '连接异常' : !ready ? '检查中' : configured ? '服务就绪' : '待配置' }}</span>
+        <div><h2>设计一份习题图</h2><p class="image-service" :class="{ online: ready && configured }">{{ configError ? '连接异常' : !ready ? '检查中' : configured ? '服务就绪' : '待配置' }}</p></div>
+        <UButton type="button" label="清空设置" icon="i-lucide-eraser" color="neutral" variant="outline" size="sm" class="shrink-0" :disabled="disabled || !draftLoaded || !hasSettings" @click="clearSettings" />
       </div>
       <form class="image-form" @submit.prevent="generate">
         <fieldset ref="settingsFields" :disabled="disabled" class="image-fields">
@@ -318,13 +332,13 @@ onBeforeUnmount(() => { alive = false; scopeVersion++; promptVersion++; batch.di
             <UAlert v-else-if="store.availableError" :title="store.availableError" color="error" :actions="[{ label: '重试', onClick: () => store.init() }]" />
             <div v-else class="image-select-row">
               <label class="image-select-field">年级
-                <select aria-label="图片年级" :value="grade" @change="chooseGrade(($event.target as HTMLSelectElement).value)">
+                <select v-model="gradeSelection" aria-label="图片年级">
                   <option value="" disabled>选择年级</option>
                   <option v-for="value in Object.keys(store.available)" :key="value" :value="value">{{ value }}</option>
                 </select>
               </label>
               <label class="image-select-field">科目
-                <select aria-label="图片科目" :value="subject" :disabled="!grade || disabled" @change="chooseSubject(($event.target as HTMLSelectElement).value)">
+                <select v-model="subjectSelection" aria-label="图片科目" :disabled="!grade || disabled">
                   <option value="" disabled>{{ grade ? '选择科目' : '先选年级' }}</option>
                   <option v-for="value in subjects" :key="value" :value="value">{{ value }}</option>
                 </select>

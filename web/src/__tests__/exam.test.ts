@@ -4,6 +4,7 @@ import { useExamStore } from '../stores/exam'
 import * as api from '../api'
 import { MAX_QUESTIONS_PER_TYPE } from '../constants'
 import type { ScopeData } from '../types'
+import { createGenerationRun } from '../generation'
 
 vi.mock('../api', async importOriginal => ({
   ...await importOriginal<typeof import('../api')>(),
@@ -123,6 +124,80 @@ describe('condition switching', () => {
     await store.selectSubject('语文')
     expect(store.grade).toBe('小学三年级')
     expect(store.subject).toBe('数学')
+  })
+})
+
+describe('clear worksheet settings', () => {
+  it('clears the builder in one undoable edit while preserving results, history and style', async () => {
+    const store = readyStore()
+    store.title = '原试卷'; store.titleHtml = '<b>原试卷</b>'; store.selectedTags = ['加减法']
+    store.difficulty = 'hard'; store.hiddenElements = ['footer']; store.paperCount = 3; store.addDayLabel = false
+    store.view = 'result'; store.templateId = 'custom'; store.style.banner = true
+    store.papers = [{ grade: store.grade, subject: store.subject, keyword: store.keyword, difficulty: 'hard', title: '已生成', sections: [] }]
+    const original = store.editSnapshot(), history = store.history
+    store.undoStack = []
+    expect(store.clearSettings()).toBe(true)
+    expect(store.editSnapshot()).toMatchObject({ grade: '', subject: '', keyword: '', selectedTags: [],
+      title: '', titleHtml: '', sections: [], hiddenElements: [], difficulty: 'medium', paperCount: 1, addDayLabel: true, view: 'build' })
+    expect(store.papers).toEqual(original.papers)
+    expect(store.style).toEqual(original.style)
+    expect(store.customTemplate).toEqual(original.customTemplate)
+    expect(store.templateId).toBe(original.templateId)
+    expect(store.history).toBe(history)
+    expect(store.canGenerate).toBe(false)
+    expect(store.canClearSettings).toBe(false)
+    expect(store.undoStack).toHaveLength(1)
+    const cleared = store.captureSnapshot()
+    store.undo()
+    expect(store.editSnapshot()).toEqual(original)
+    await Promise.resolve()
+    expect(api.fetchScope).toHaveBeenCalledWith(original.grade, original.subject)
+    store.redo()
+    expect(store.captureSnapshot()).toEqual(cleared)
+    expect(store.scope).toBeNull()
+    expect(store.scopeLoading).toBe(false)
+    store.applySnapshot(cleared)
+    expect(store.grade).toBe('')
+    expect(store.papers).toEqual(original.papers)
+  })
+
+  it.each(['generating', 'accountChanged', 'layoutMode', 'historyBusy'] as const)('refuses to clear while %s', flag => {
+    const store = readyStore()
+    store[flag] = true
+    const before = store.captureSnapshot()
+    expect(store.canClearSettings).toBe(false)
+    expect(store.clearSettings()).toBe(false)
+    expect(store.captureSnapshot()).toEqual(before)
+  })
+
+  it('waits for draft restoration and pending generation recovery', () => {
+    const store = readyStore()
+    store.persistenceReady = false
+    expect(store.clearSettings()).toBe(false)
+    store.persistenceReady = true
+    store.pendingRun = createGenerationRun({ grade: store.grade, subject: store.subject, keyword: store.keyword,
+      title: '', difficulty: store.difficulty, hiddenElements: [], count: 1, sections: [] })
+    expect(store.clearSettings()).toBe(false)
+    store.sections[0].pendingGeneration = store.pendingRun
+    store.pendingRun = null
+    expect(store.clearSettings()).toBe(false)
+    delete store.sections[0].pendingGeneration
+    expect(store.clearSettings()).toBe(true)
+  })
+
+  it('ignores a pre-clear scope response even after selecting the same subject again', async () => {
+    const store = readyStore()
+    let resolve!: (value: ScopeData) => void
+    vi.mocked(api.fetchScope).mockImplementationOnce(() => new Promise(r => { resolve = r }))
+    const pending = store.selectSubject('数学')
+    expect(store.clearSettings()).toBe(true)
+    store.selectGrade('小学三年级')
+    vi.mocked(api.fetchScope).mockResolvedValueOnce({ allowed: ['新知识点'] })
+    await store.selectSubject('数学')
+    resolve({ allowed: ['旧知识点'] })
+    await pending
+    expect(store.scope?.allowed).toEqual(['新知识点'])
+    expect(store.scopeLoading).toBe(false)
   })
 })
 

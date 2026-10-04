@@ -133,6 +133,28 @@ async function expectContentsFit(page: Page) {
     .toBe(true)
 }
 
+for (const width of [1440, 320]) {
+  test(`登录页和工作台不再展示英文品牌 ${width}px`, async ({ page, context }, info) => {
+    await api(context)
+    await page.setViewportSize({ width, height: width === 320 ? 640 : 1000 })
+    await page.route('**/api/v1/auth/me', route => route.fulfill({ status: 401, json: {} }))
+    await page.goto('/')
+    await expect(page.locator('.auth-form')).toBeVisible()
+    await expect(page).toHaveTitle('出题工作台')
+    await expect(page.locator('.brand')).toHaveText('出题工作台')
+    await expect(page.locator('body')).not.toContainText(/learning\s+coach/i)
+    await expect(page.locator('.auth-footer, .brand-caption')).toHaveCount(0)
+    await page.screenshot({ path: info.outputPath('login.png') })
+    await page.unroute('**/api/v1/auth/me')
+    await page.reload()
+    await expect(page.locator('.app-shell')).toBeVisible()
+    await expect(page.locator('.brand')).toHaveText('出题工作台')
+    await expect(page.locator('body')).not.toContainText(/learning\s+coach/i)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: info.outputPath('workspace.png') })
+  })
+}
+
 test('取消排版恢复删除、顺序和尺寸，导出预览也保持原题目', async ({ page, context }) => {
   await api(context)
   await seed(page, worksheet(6))
@@ -407,6 +429,52 @@ test('结果页在各宽度自动适宽，中屏搭建为侧栏与预览双栏',
   await expect(page.locator('.structure-panel')).toBeVisible()
   await page.screenshot({ path: info.outputPath('build-1024.png') })
 })
+
+for (const width of [1440, 320]) {
+  test(`清空试卷设置保留结果，可撤销重做并在刷新后保持 ${width}px`, async ({ page, context }, info) => {
+    await api(context)
+    const snapshot = worksheet(2)
+    snapshot.sections = snapshot.papers[0].sections.map(section => ({
+      ...section, id: section._sid!, count: section.data.questions.length, status: 'ready',
+    }))
+    snapshot.selectedTags = ['加减法']; snapshot.paperCount = 3; snapshot.difficulty = 'hard'
+    await seed(page, snapshot)
+    await page.setViewportSize({ width, height: width === 320 ? 568 : 1000 })
+    const clear = page.getByRole('button', { name: '清空设置', exact: true })
+    await expect(clear).toBeInViewport()
+    page.once('dialog', dialog => dialog.dismiss())
+    await clear.click()
+    await expect(page.locator('.result-view .paper-stack .q')).toHaveCount(2)
+    page.once('dialog', dialog => dialog.accept())
+    await clear.click()
+    await expect(page.getByRole('heading', { name: '试卷搭建', exact: true })).toBeVisible()
+    await expect(page.locator('.conditions-panel')).toBeVisible()
+    await expect(page.locator('.conditions-panel [aria-pressed=true]')).toHaveCount(1) // Default difficulty only.
+    await expect(page.locator('.conditions-panel textarea')).toHaveValue('')
+    await expect(page.locator('.workspace-meta')).toContainText('0 个大题')
+    await expect(clear).toBeDisabled()
+    await page.screenshot({ path: info.outputPath('cleared-paper-settings.png') })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    for (const action of ['撤销编辑', '重做编辑']) {
+      if (width < 621) {
+        await page.getByRole('button', { name: '工作台工具' }).click()
+        await page.getByRole('menuitem', { name: action, exact: true }).click()
+      } else await page.getByRole('button', { name: action, exact: true }).click()
+      if (action === '撤销编辑') {
+        await expect(page.locator('.result-view .paper-stack .q')).toHaveCount(2)
+        await expect(clear).toBeEnabled()
+      }
+    }
+    await expect(clear).toBeDisabled()
+    await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible()
+    await page.reload()
+    await expect(clear).toBeDisabled()
+    await expect(page.locator('.conditions-panel textarea')).toHaveValue('')
+    await page.getByRole('button', { name: /^生成结果/ }).click()
+    await expect(page.locator('.result-view .paper-stack .q')).toHaveCount(2)
+    await expect(page.locator('.result-view .paper-title').first()).toContainText(snapshot.title)
+  })
+}
 
 test('生成等待后首次结果自动适宽，两个重生成入口取消均不产生新调用', async ({ page, context }) => {
   await api(context)

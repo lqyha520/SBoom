@@ -86,7 +86,7 @@ async def lifespan(app: FastAPI):
         # 模型配置收归后台：老部署里用户自配的 LLM 一次性迁移为全局配置
         from app.services.app_config import seed_llm_from_user_configs
         seed_llm_from_user_configs()
-        logger.info("🚀 Learning Coach API 启动（多用户模式）")
+        logger.info("出题工作台 API 启动（多用户模式）")
         logger.info(f"   LLM 模型（全局兜底）: {settings.llm_model}")
         from app.services.mini_jobs import start
         maintenance_stop, maintenance_task = start()
@@ -125,7 +125,7 @@ async def lifespan(app: FastAPI):
 
 # ─── 创建应用 ───
 app = FastAPI(
-    title="Learning Coach API",
+    title="出题工作台 API",
     description="AI+教育 课堂互动系统 —— 趣味题目/知识游戏生成服务（多用户 + 后台管理）",
     version=APP_VERSION,
     lifespan=lifespan,

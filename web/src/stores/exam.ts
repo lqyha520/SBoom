@@ -24,6 +24,16 @@ export const useExamStore = defineStore('exam', {
   state: createExamState,
 
   getters: {
+    hasBuildSettings(state): boolean {
+      return !!(state.grade || state.subject || state.keyword || state.selectedTags.length ||
+        state.title || state.titleHtml || state.sections.length || state.hiddenElements.length ||
+        state.difficulty !== 'medium' || state.paperCount !== 1 || !state.addDayLabel)
+    },
+    canClearSettings(state): boolean {
+      return this.hasBuildSettings && state.persistenceReady && !state.generating &&
+        !state.accountChanged && !state.layoutMode && !state.historyBusy &&
+        !state.pendingRun && !this.hasPendingEdits && !this.hasLoading
+    },
     hasPendingEdits(state): boolean {
       return (
         state.sections.some(
@@ -130,11 +140,37 @@ export const useExamStore = defineStore('exam', {
     },
 
     undo() {
+      const { grade, subject } = this
       undoEdit(this)
+      if (this.grade !== grade || this.subject !== subject) void this.selectSubject(this.subject)
     },
 
     redo() {
+      const { grade, subject } = this
       redoEdit(this)
+      if (this.grade !== grade || this.subject !== subject) void this.selectSubject(this.subject)
+    },
+
+    clearSettings(): boolean {
+      if (!this.canClearSettings) return false
+      this.recordEdit()
+      this.scopeRevision++
+      this.grade = ''
+      this.subject = ''
+      this.keyword = ''
+      this.selectedTags = []
+      this.title = ''
+      this.titleHtml = ''
+      this.difficulty = 'medium'
+      this.hiddenElements = []
+      this.sections = []
+      this.paperCount = 1
+      this.addDayLabel = true
+      this.scope = null
+      this.scopeLoading = false
+      this.generateError = ''
+      this.view = 'build'
+      return true
     },
 
     questionSection(id: string, paperIndex?: number): Section | PaperSection | undefined {
@@ -179,6 +215,7 @@ export const useExamStore = defineStore('exam', {
     /* ── 条件选择 ── */
     selectGrade(g: string) {
       if (this.generating || this.grade === g) return
+      this.scopeRevision++
       this.grade = g
       this.subject = ''
       this.scope = null
@@ -195,16 +232,18 @@ export const useExamStore = defineStore('exam', {
       }
       this.subject = s
       this.scope = null
+      const revision = ++this.scopeRevision
+      this.scopeLoading = false
       if (!this.grade || !s) return
       const grade = this.grade
       this.scopeLoading = true
       try {
         const scope = await api.fetchScope(grade, s)
-        if (this.grade === grade && this.subject === s) this.scope = scope
+        if (this.scopeRevision === revision && this.grade === grade && this.subject === s) this.scope = scope
       } catch {
-        if (this.grade === grade && this.subject === s) this.scope = null
+        if (this.scopeRevision === revision && this.grade === grade && this.subject === s) this.scope = null
       } finally {
-        if (this.grade === grade && this.subject === s) this.scopeLoading = false
+        if (this.scopeRevision === revision && this.grade === grade && this.subject === s) this.scopeLoading = false
       }
     },
 

@@ -74,7 +74,7 @@ def render_pdf(entry, path):
         canvas.line(48, 42, A4[0] - 48, 42)
         canvas.setFont("DemoCN", 8)
         canvas.setFillColor(colors.HexColor("#62676D"))
-        canvas.drawString(48, 28, "Learning Coach | 演示试卷 | 不含真实学生信息")
+        canvas.drawString(48, 28, "演示试卷 | 不含真实学生信息")
         canvas.drawRightString(A4[0] - 48, 28, f"第 {doc.page} 页")
         canvas.restoreState()
 
@@ -118,7 +118,7 @@ def render_pdf(entry, path):
         else:
             story.extend(para(text, "answer") for text in answers)
     SimpleDocTemplate(str(path), pagesize=A4, topMargin=42, bottomMargin=58, leftMargin=48, rightMargin=48,
-                      title=paper["title"], author="Learning Coach Demo").build(story, onFirstPage=footer, onLaterPages=footer)
+                      title=paper["title"], author="习题库演示").build(story, onFirstPage=footer, onLaterPages=footer)
 
 
 def build_assets(output, font):

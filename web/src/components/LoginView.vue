@@ -50,7 +50,7 @@ async function submit() {
 <template>
   <div class="auth-page">
     <header class="auth-header">
-      <div class="brand"><span class="brand-mark"><UIcon name="i-lucide-notebook-pen" class="size-5" /></span><div><div class="brand-name">出题工作台</div><div class="brand-caption">Learning Coach</div></div></div>
+      <div class="brand"><span class="brand-mark"><UIcon name="i-lucide-notebook-pen" class="size-5" /></span><div class="brand-name">出题工作台</div></div>
       <UButton href="/admin/" icon="i-lucide-shield-check" label="后台管理" color="neutral" variant="ghost" size="sm" />
     </header>
     <main class="auth-main">
@@ -75,6 +75,5 @@ async function submit() {
         </form>
       </div>
     </main>
-    <footer class="auth-footer">Learning Coach</footer>
   </div>
 </template>

@@ -9,12 +9,12 @@ import ImageWorkbench from '../components/ImageWorkbench.vue'
 import ImagePublicationDialog from '../components/ImagePublicationDialog.vue'
 import { addImagePublication, fetchPublicationCategories } from '../image-publication'
 import { buildWorksheetPdf } from '../worksheet-pdf'
-import { fetchImageOptions, generateWorksheetImage, fetchImageStatus, type ImageWorksheetParams, type WorksheetImage } from '../image-generation'
+import { fetchImageOptions, generateWorksheetImage, fetchImageStatus, previewImagePrompt, type ImageWorksheetParams, type WorksheetImage } from '../image-generation'
 
 vi.mock('../image-publication', async original => ({ ...await original<typeof import('../image-publication')>(), addImagePublication: vi.fn(), fetchPublicationCategories: vi.fn() }))
 vi.mock('../worksheet-pdf', () => ({ buildWorksheetPdf: vi.fn() }))
 vi.mock('../api', async original => ({ ...await original<typeof import('../api')>(), fetchScope: vi.fn().mockResolvedValue({ allowed: [], forbidden: [] }) }))
-vi.mock('../image-generation', async original => ({ ...await original<typeof import('../image-generation')>(), fetchImageStatus: vi.fn(), generateWorksheetImage: vi.fn(), fetchImageOptions: vi.fn().mockResolvedValue({ configured: true }) }))
+vi.mock('../image-generation', async original => ({ ...await original<typeof import('../image-generation')>(), previewImagePrompt: vi.fn(), fetchImageStatus: vi.fn(), generateWorksheetImage: vi.fn(), fetchImageOptions: vi.fn().mockResolvedValue({ configured: true }) }))
 
 const params: ImageWorksheetParams = { grade: '小学三年级', subject: '数学', keyword: '加减法', difficulty: 'medium', items: [{ game_type: 'quiz', question_count: 4 }], style: 'clean', requirements: '' }
 const images: WorksheetImage[] = ['first', 'second'].map(request_id => ({ request_id, b64_json: btoa('fixture'), mime_type: 'image/png', width: 2, height: 3, prompt: 'fixture' }))
@@ -324,6 +324,78 @@ it('keeps original batch conditions visible and reuses them without submitting a
   expect(wrapper.get('.image-workbench').attributes('data-mobile-panel')).toBe('settings')
   expect(wrapper.get('.image-generate-actions').text()).not.toContain('设置已调整')
   expect(generateWorksheetImage).not.toHaveBeenCalled()
+})
+
+it('confirms clearing all image inputs, persists the empty draft and retains results and publication links', async () => {
+  await workbench()
+  localStorage.setItem('lc_u17_image_request_published', JSON.stringify({ 'first,second': paper }))
+  await wrapper.get('[aria-label="补充要求"]').setValue('额外要求')
+  await wrapper.get('[aria-label="图片难度"]').setValue('hard')
+  const clear = () => wrapper.findAll('button').find(button => button.text() === '清空设置')!
+  const confirm = vi.fn(() => false)
+  vi.stubGlobal('confirm', confirm)
+  await clear().trigger('click')
+  expect((wrapper.get('[aria-label="图片知识点"]').element as HTMLInputElement).value).toBe('加减法')
+  confirm.mockReturnValue(true)
+  await clear().trigger('click')
+  await flushPromises()
+  const expected = { grade: '', subject: '', keyword: '', difficulty: 'medium', items: [], requirements: '', image_count: 1, style: 'clean' }
+  expect(JSON.parse(localStorage.getItem('lc_u17_image_request_draft')!)).toMatchObject(expected)
+  expect(wrapper.get('.image-workbench').attributes('data-mobile-panel')).toBe('settings')
+  expect(wrapper.get('.image-batch-title h3').text()).toBe('加减法')
+  expect(wrapper.findAll('.image-pages button')).toHaveLength(3)
+  expect(clear().attributes('disabled')).toBeDefined()
+  expect(generateWorksheetImage).not.toHaveBeenCalled()
+  wrapper.unmount()
+  wrapper = mount(ImageWorkbench, { global: { stubs } }); await flushPromises()
+  expect((wrapper.get('[aria-label="图片年级"]').element as HTMLSelectElement).value).toBe('')
+  expect(wrapper.findAll('.image-count-row')).toHaveLength(0)
+  expect(wrapper.text()).toContain('查看后台草稿')
+  expect(wrapper.get('.image-batch-title h3').text()).toBe('加减法')
+  await wrapper.findAll('button').find(button => button.text() === '复用设置')!.trigger('click')
+  expect((wrapper.get('[aria-label="图片知识点"]').element as HTMLInputElement).value).toBe('加减法')
+  expect(wrapper.get('.image-order-summary').text()).toBe('3 张 × 4 题')
+})
+
+it.each(['success', 'failure'])('does not restore stale scope or prompt state after clearing: %s', async outcome => {
+  const store = useExamStore()
+  store.available = { '小学三年级': ['数学'] }; store.grade = '小学三年级'; store.subject = '数学'
+  let finishScope!: (value: { allowed: string[] }) => void
+  let finishPrompt!: (value: { prompt: string }) => void, failPrompt!: (reason: Error) => void
+  vi.mocked(fetchScope).mockImplementationOnce(() => new Promise(resolve => { finishScope = resolve }))
+  vi.mocked(previewImagePrompt).mockImplementationOnce(() => new Promise((resolve, reject) => { finishPrompt = resolve; failPrompt = reject }))
+  wrapper = mount(ImageWorkbench, { global: { stubs } }); await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === '查看生成说明')!.trigger('click')
+  vi.stubGlobal('confirm', vi.fn(() => true))
+  await wrapper.findAll('button').find(button => button.text() === '清空设置')!.trigger('click')
+  finishScope({ allowed: ['旧知识点'] })
+  if (outcome === 'success') finishPrompt({ prompt: '过期的出题说明' })
+  else failPrompt(new Error('过期请求失败'))
+  await flushPromises()
+  expect(wrapper.text()).not.toContain('旧知识点')
+  expect(wrapper.text()).not.toContain('过期')
+  expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+  expect(generateWorksheetImage).not.toHaveBeenCalled()
+})
+
+it('disables clearing during generation, uncertain recovery, publication and account changes', async () => {
+  await workbench()
+  const clear = () => wrapper.findAll('button').find(button => button.text() === '清空设置')!
+  await wrapper.findAll('button').find(button => button.text() === '添加到后台')!.trigger('click')
+  await flushPromises()
+  expect(clear().attributes('disabled')).toBeDefined()
+  wrapper.getComponent(ImagePublicationDialog).vm.$emit('close'); await flushPromises()
+  expect(clear().attributes('disabled')).toBeUndefined()
+  let fail!: (reason: Error) => void
+  vi.mocked(generateWorksheetImage).mockImplementationOnce(() => new Promise((_, reject) => { fail = reject }))
+  await wrapper.findAll('button').find(button => button.text() === '继续生成剩余 1 张')!.trigger('click')
+  await flushPromises()
+  expect(clear().attributes('disabled')).toBeDefined()
+  fail(new ApiError('响应中断', 504)); await flushPromises()
+  expect(wrapper.get('.image-batch-status').text()).toContain('生成结果待确认')
+  expect(clear().attributes('disabled')).toBeDefined()
+  useExamStore().accountChanged = true; await flushPromises()
+  expect(clear().attributes('disabled')).toBeDefined()
 })
 
 it('restores to results and keeps recovery actions with the preview after an uncertain response', async () => {
