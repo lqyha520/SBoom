@@ -42,6 +42,9 @@ def run_fixture(suite="http"):
             if suite != "http":
                 script = "tests/profile-membership-ui.cjs" if suite == "profile" else "tests/home-banner-ui.cjs"
                 subprocess.run(["node", script], cwd=ROOT, env=env, check=True)
+                if suite == "profile":
+                    subprocess.run(["node", "tests/mini-optimization-ui.mjs"], cwd=ROOT,
+                                   env={**env, "MINI_UI_BASE": base}, check=True)
             else:
                 subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_ui_contracts.py", "-v"], cwd=ROOT, env=env, check=True)
                 subprocess.run([sys.executable, "scripts/admin_console_check.py"], cwd=ROOT, env=env, check=True)

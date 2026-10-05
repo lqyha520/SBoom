@@ -20,7 +20,7 @@ function select(value: string) { emit('select', value); emit('close') }
   </wd-popup>
 </template>
 <style scoped>
-.grade-scroll { max-height:55vh; }
+.grade-scroll { height:55vh;max-height:440px; }
 .grade-choices { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px; }
 .grade-choice { display:flex;align-items:center;justify-content:center;width:100%;min-height:48px;margin:0;padding:10px 12px;font-size:14px;line-height:1.5;background:var(--lc-background);color:var(--lc-text);border:1px solid transparent;border-radius:12px;white-space:normal; }
 .grade-choice.selected { color:var(--lc-primary);background:var(--lc-primary-soft);border-color:var(--lc-primary); }

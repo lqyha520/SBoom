@@ -109,8 +109,8 @@ def _snapshot(raw, title):
 
 
 def list_papers(user_id, q="", grade="", subject="", category="", favorite=False, downloaded=False,
-                limit=20, offset=0, admin=False, status="", sort="featured", only_free=False, recent=False, favorite_group="", topic="", textbook="", term="", unit="", knowledge="", pagination="offset", cursor=""):
-    if not admin and user_id is None and (favorite or downloaded or recent or favorite_group):
+                limit=20, offset=0, admin=False, status="", sort="featured", only_free=False, recent=False, favorite_group="", topic="", textbook="", term="", unit="", knowledge="", pagination="offset", cursor="", ungrouped=False):
+    if not admin and user_id is None and (favorite or downloaded or recent or favorite_group or ungrouped):
         raise HTTPException(401, detail={"error": "请先登录后查看个人记录", "code": "login_required"})
     clauses, args = ([] if admin else [VISIBLE]), []
     for kind, tag_id in (("textbook", textbook), ("term", term), ("unit", unit), ("knowledge", knowledge)):
@@ -143,6 +143,10 @@ def list_papers(user_id, q="", grade="", subject="", category="", favorite=False
     if favorite_group:
         clauses.append("EXISTS (SELECT 1 FROM mini_favorite_group_items WHERE catalog_id = c.id AND user_id = ? AND group_id = ?)")
         args.extend([user_id, favorite_group])
+    if ungrouped:
+        clauses.append("EXISTS (SELECT 1 FROM mini_catalog_favorites WHERE catalog_id = c.id AND user_id = ?)")
+        clauses.append("NOT EXISTS (SELECT 1 FROM mini_favorite_group_items WHERE catalog_id = c.id AND user_id = ?)")
+        args.extend([user_id, user_id])
     if topic:
         clauses.append("EXISTS (SELECT 1 FROM site_topic_items i JOIN site_topics t ON t.id = i.topic_id "
                        "WHERE i.catalog_id = c.id AND t.id = ? AND t.is_visible = 1)")

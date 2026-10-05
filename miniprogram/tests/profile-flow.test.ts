@@ -61,7 +61,7 @@ test('opening a native photo picker keeps the profile draft alive across hide/sh
     '../../services/session': { session, ensureSession: async () => true, refreshMembership: async () => { refreshes++ } },
     '../../services/latest-request': { createLatestRequest: () => ({ invalidate() {} }) },
     '../../services/tabbar-overlay': { useTabBarOverlay() {} },
-  }, 'exports.profile = { openProfile, profileOpen }')
+  }, 'exports.profile = { openProfile, profileOpen }', { uni: { $on() {}, $off() {} } })
   page.profile.openProfile()
   hooks.hide!()
   assert.equal(page.profile.profileOpen.value, true)

@@ -7,7 +7,9 @@ export function reconcileRows(previous: PaperSummary[], incoming: PaperSummary[]
     const fresh = byId.get(old.id)
     if (!fresh) return old
     const keys = Object.keys(old) as (keyof PaperSummary)[]
-    if (keys.every(key => JSON.stringify(old[key]) === JSON.stringify(fresh[key]))) return old
-    return { ...old, ...Object.fromEntries(keys.map(key => [key, fresh[key]])) }
+    // Window rights do not carry the activity timestamp of the originating list.
+    const value = (key: keyof PaperSummary) => key === 'activity_at' && !Object.prototype.hasOwnProperty.call(fresh, key) ? old[key] : fresh[key]
+    if (keys.every(key => JSON.stringify(old[key]) === JSON.stringify(value(key)))) return old
+    return { ...old, ...Object.fromEntries(keys.map(key => [key, value(key)])) }
   })
 }

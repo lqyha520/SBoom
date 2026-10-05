@@ -250,4 +250,5 @@ jobs:
           path: |
             artifacts/home-redesign
             artifacts/profile-membership
+            artifacts/mini-optimization
           retention-days: 7

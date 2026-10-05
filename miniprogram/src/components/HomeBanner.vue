@@ -39,11 +39,10 @@ function change(event: { detail: { current: number } }) { current.value = event.
 
 <template>
   <view class="home-banner">
-    <view v-if="loading && !banners.length" class="banner-skeleton" role="status" aria-label="正在加载首页推荐"><view /><view /><view /></view>
+    <view v-if="loading && !banners.length" class="banner-skeleton" :class="{ 'welcome-skeleton': mode === 'welcome' }" role="status" aria-label="正在加载首页推荐"><view /><view /><view /></view>
     <view v-else-if="mode !== 'operations' || !banners.length" class="home-welcome">
-      <view class="welcome-copy"><view class="welcome-kicker"><view class="kicker-dot" /><text>{{ recent ? '接着上次的发现' : '今天，也有新收获' }}</text></view><text class="welcome-title">{{ recent ? recent.title : '把好奇心，\n变成小进步。' }}</text><text class="welcome-subtitle">{{ recent ? '喜欢的练习，值得再看一遍' : '选一份好练习，让知识慢慢发芽' }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="welcome-link" role="button" @click="recent ? openCatalogPaper(recent.id) : openCatalog({ grade })">{{ recent ? '继续查看' : '去发现习题' }}<wd-icon name="arrow-right" size="14px" /></button></view>
+      <view class="welcome-copy"><text class="welcome-kicker">{{ recent ? '最近浏览' : grade || '今日练习' }}</text><text class="welcome-title">{{ recent ? recent.title : '每天一份好练习' }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="welcome-link" role="button" @click="recent ? openCatalogPaper(recent.id) : openCatalog({ grade })">{{ recent ? '继续查看' : '挑选习题' }}<wd-icon name="arrow-right" size="14px" /></button></view>
       <view class="welcome-art"><BannerArtwork /></view>
-      <view class="welcome-footer"><text>{{ grade || '跟着自己的节奏学' }}</text><view class="welcome-subjects"><text>语文</text><view /><text>数学</text><view /><text>英语</text></view></view>
     </view>
     <view v-else class="banner-wrap">
       <swiper class="banner-swiper" :current="current" :autoplay="active" :interval="5000" :circular="banners.length > 1" :duration="360" @change="change">
@@ -120,30 +119,20 @@ function change(event: { detail: { current: number } }) { current.value = event.
 .banner-skeleton > view { width: 55%; height: 11px; border-radius: 8px; margin-bottom: 9px; background: #dde7de; }
 .banner-skeleton > view:last-child { width: 38%; margin-bottom: 0; }
 
-/* —— 默认欢迎卡（旧版样式原样恢复） —— */
-.home-welcome { position:relative;min-height:242px;padding:21px 18px 49px;border:1px solid #e8e4ce;border-radius:22px;background:linear-gradient(115deg,#fff8e9 0%,#f7f1d9 57%,#e5eedc 100%);overflow:hidden;box-shadow:0 5px 16px #6a79500a; }
+.home-welcome { position:relative;min-height:128px;padding:12px 16px;border:1px solid #dbe7dc;border-radius:8px;background:#edf4ed;overflow:hidden; }
 .welcome-copy { position:relative;z-index:2;width:65%; }
-.welcome-kicker { display:inline-flex;align-items:center;gap:6px;color:#66806a;font-size:10px;line-height:18px;letter-spacing:1px; }.kicker-dot { width:5px;height:5px;border-radius:50%;background:#78975d; }
-.welcome-title { display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-line;margin-top:10px;color:#294f3a;font-size:25px;font-weight:700;line-height:1.35;letter-spacing:1px; }
-.welcome-subtitle { display:block;max-width:155px;margin-top:10px;color:#78816a;font-size:11px;line-height:1.7; }
-.welcome-link { display:inline-flex;align-items:center;gap:11px;min-height:38px;margin:15px 0 0;padding:0 13px;border-radius:10px;background:#38664d;color:#fffdf1;font-size:12px;font-weight:550;line-height:1.5;box-shadow:0 3px 0 #254b3814; }
-.welcome-art { position:absolute;right:-6px;top:25px;transform:rotate(3deg) scale(.88);transform-origin:right center;pointer-events:none; }
-.welcome-footer { position:absolute;bottom:0;left:18px;right:18px;height:35px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #70815924;color:#819078;font-size:10px;letter-spacing:.3px; }.welcome-subjects { display:flex;align-items:center;gap:7px; }.welcome-subjects view { width:2px;height:2px;border-radius:50%;background:#abb497; }
-.home-welcome { min-height: 192px; padding-top: 14px; padding-bottom: 42px; border-radius: 8px; background: #edf4ed; border-color: #dbe7dc; box-shadow: none; }
-.welcome-title { font-size: 21px; margin-top: 5px; letter-spacing: 0; }
-.welcome-subtitle { margin-top: 5px; }
-.welcome-link { margin-top: 9px; min-height: 40px; border-radius: 6px; }
-.welcome-art { top: 8px; transform: scale(.7); }
-.welcome-kicker, .welcome-footer { letter-spacing: 0; }
+.welcome-kicker { display:inline-flex;align-items:center;color:#66806a;font-size:10px;line-height:18px;letter-spacing:0; }
+.welcome-title { display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-line;margin-top:4px;color:#294f3a;font-size:18px;font-weight:700;line-height:1.35;letter-spacing:0; }
+.welcome-link { display:inline-flex;align-items:center;gap:11px;min-height:44px;margin:4px 0 0;padding:0 13px;border-radius:6px;background:#38664d;color:#fffdf1;font-size:12px;font-weight:550;line-height:1.5;box-shadow:0 3px 0 #254b3814; }
+.welcome-art { position:absolute;right:0;top:-18px;transform:scale(.48);transform-origin:right center;pointer-events:none; }
+.welcome-skeleton { height:128px; }
 
 @media (max-width: 359px) {
   .home-banner { padding-left: 16px; padding-right: 16px; }
-  .banner-swiper, .banner-skeleton { min-height: 132px; }
   .text-banner { padding: 15px 14px; }
   .banner-title { font-size: 16px; }
-  .welcome-title { font-size:22px; }
-  .welcome-art { right:-16px;transform:scale(.73); }
-  .welcome-subtitle { max-width:132px; }
+  .welcome-title { font-size:17px; }
+  .welcome-art { right:-6px;transform:scale(.42); }
   .home-welcome { padding-left:15px; }
   .welcome-copy { width:64%; }
 }

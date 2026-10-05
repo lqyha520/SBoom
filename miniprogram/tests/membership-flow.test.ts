@@ -6,7 +6,7 @@ import ts from 'typescript'
 import * as vue from 'vue'
 import { parse } from 'vue/compiler-sfc'
 
-async function fixture(options: { ios?: boolean; native?: boolean; enabled?: boolean; hasWechat?: boolean; lifetime?: boolean; confirm?: boolean; supportFails?: boolean; plansFail?: boolean } = {}) {
+async function fixture(options: { contact?: boolean; ios?: boolean; native?: boolean; enabled?: boolean; hasWechat?: boolean; lifetime?: boolean; confirm?: boolean; supportFails?: boolean; plansFail?: boolean } = {}) {
   const session = vue.reactive({ user: { id: 'reader', username: 'wx1234567890', has_wechat: options.hasWechat ?? true, is_vip: !!options.lifetime, vip_expires_at: null as number | null } })
   const plans = [{ id: 'month', revision: 1, name: '月度会员', days: 30, price_fen: 1990 }, { id: 'quarter', revision: 2, name: '季度会员', days: 90, price_fen: 4990 }]
   const orders: { id: string; key: string }[] = [], confirmations: string[] = [], native: string[] = []
@@ -15,6 +15,7 @@ async function fixture(options: { ios?: boolean; native?: boolean; enabled?: boo
   const busy = vue.ref(false), loading = vue.ref(false), error = vue.ref('')
   const modules: Record<string, unknown> = {
     vue,
+    '@dcloudio/uni-app': { onLoad: (fn: (options: Record<string, string>) => void) => fn(options.contact ? { contact: '1' } : {}) },
     '../../services/session': { session, async refreshMembership() {} },
     '../../services/consumer-page': { useConsumerPage: () => ({ busy, loading, error, act(operation: (valid: () => boolean) => Promise<void>) {
       if (busy.value || loading.value) return
@@ -55,6 +56,12 @@ test('plan selection is separate from order creation and repeated confirmation i
   assert.equal(app.confirmations.length, 1)
   assert.match(app.confirmations[0]!, /90 天，¥49.90/)
   assert.deepEqual(app.native, ['order:created-order'])
+})
+
+test('contact deep link opens the contact sheet without creating an order', async () => {
+  const app = await fixture({ contact: true })
+  assert.equal(app.controls.contactOpen.value, true)
+  assert.equal(app.orders.length, 0)
 })
 
 test('restricted iOS cannot create orders, open purchase contact, or redeem cards', async () => {

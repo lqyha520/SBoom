@@ -38,6 +38,7 @@ export interface ApiSchemas {
   "DocumentUpdate": { "body"?: string; "revision": number; "title": string }
   "EditionInput": { "confirm_publication"?: boolean; "kind": "student" | "answers"; "paper_id"?: (string | null); "revision": number }
   "ErrorResponse": { "detail"?: (string | null); "error": string }
+  "FavoriteBatch": { "action": "remove" | "assign"; "group_id"?: (string | null); "ids": Array<string> }
   "FeedbackCreate": { "body": string; "catalog_id"?: (string | null); "kind": "correction" | "download" | "membership" | "other" }
   "FeedbackRequest": { "comment"?: (string | null); "game_id": string; "is_oob"?: boolean }
   "FeedbackUpdate": { "internal_note"?: string; "reply"?: string; "revision": number; "status": "pending" | "processing" | "resolved" | "closed" }
@@ -239,6 +240,7 @@ export interface ApiOperations {
   "PUT /api/v1/mini/favorite-groups/papers/{catalog_id}": { body: ApiSchemas["GroupAssignment"] }
   "DELETE /api/v1/mini/favorite-groups/{identifier}": { body: unknown }
   "PUT /api/v1/mini/favorite-groups/{identifier}": { body: ApiSchemas["GroupInput"] }
+  "POST /api/v1/mini/favorites/batch": { body: ApiSchemas["FavoriteBatch"] }
   "GET /api/v1/mini/feedback": { body: unknown }
   "POST /api/v1/mini/feedback": { body: ApiSchemas["FeedbackCreate"] }
   "GET /api/v1/mini/feedback/{identifier}": { body: unknown }

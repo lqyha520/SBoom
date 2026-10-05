@@ -49,6 +49,28 @@ test('sideways gestures only reveal buttons; vertical scrolling, cancellation an
   } finally { app.dispose() }
 })
 
+test('native sharing keeps the source button mounted; ordinary link actions still close', async () => {
+  const app = component('components/SwipeAction.vue', {}, 'perform', {
+    actions: [{ key: 'share', openType: 'share' }, { key: 'copy' }], open: true, disabled: false,
+  })
+  try {
+    app.page.perform('share')
+    assert.deepEqual(app.events, [['action', 'share']], 'do not unmount the button before the native share callback')
+    app.events.length = 0
+    app.page.perform('unknown')
+    assert.equal(app.events.length, 0)
+    app.page.perform('copy')
+    assert.deepEqual(app.events, [['action', 'copy'], ['update:open', false]])
+    app.events.length = 0
+    app.props.disabled = true; await vue.nextTick(); app.events.length = 0
+    app.page.perform('share')
+    assert.equal(app.events.length, 0)
+    app.props.disabled = false; app.props.open = false; await vue.nextTick()
+    app.page.perform('share')
+    assert.equal(app.events.length, 0)
+  } finally { app.dispose() }
+})
+
 function catalogFixture(failTags = false) {
   const calls: Record<string, unknown>[] = [], scheduled = new Map<number, () => void>()
   let timerId = 0, metadataCalls = 0
@@ -61,7 +83,7 @@ function catalogFixture(failTags = false) {
     '../services/experience': { fetchTopics: async () => ({ items: [] }) },
     '../services/growth': { emptyTags: () => ({ textbook: '', term: '', unit: '', knowledge: '' }), tagKinds: [], fetchTags: async () => { if (failTags) throw Error('offline'); return { items: [] } } },
   }
-  const app = component('components/CatalogList.vue', modules, 'activate, deactivate, searchInput, search, q, applyFilters, error, metadataError, loadMetadata, items', {}, {
+  const app = component('components/CatalogList.vue', modules, 'activate, deactivate, searchInput, search, q, grade, subject, category, sort, favoriteGroup, selecting, selectedIds, selectAll, clearConditions, resetFilters, applyFilters, error, metadataError, loadMetadata, items', {}, {
     uni: { stopPullDownRefresh() {}, pageScrollTo() {} },
     setTimeout: (fn: () => void) => { scheduled.set(++timerId, fn); return timerId }, clearTimeout: (id: number) => scheduled.delete(id),
   })
@@ -98,6 +120,27 @@ test('an optional filter failure leaves successful catalog results usable and re
     assert.equal(app.page.metadataError.value, '教学标签')
     app.restoreTags(); await app.page.loadMetadata(true)
     assert.equal(app.page.metadataError.value, ''); assert.equal(app.calls.length, 1)
+  } finally { app.page.deactivate(); app.dispose() }
+})
+
+test('clearing temporary filters keeps grade and subject; full reset clears both and selection', async () => {
+  const app = catalogFixture()
+  try {
+    await app.page.activate(); await settle()
+    app.page.grade.value = '小学一年级'; app.page.subject.value = '数学'
+    app.page.search('口算'); app.page.category.value = 'daily'; app.page.sort.value = 'latest'
+    await settle()
+    app.page.selecting.value = true; app.page.selectAll()
+    assert.equal(app.page.selectedIds.value.length, 1)
+    app.page.clearConditions(); await settle()
+    assert.equal(app.page.grade.value, '小学一年级'); assert.equal(app.page.subject.value, '数学')
+    assert.equal(app.page.q.value, ''); assert.equal(app.page.category.value, '')
+    assert.equal(app.page.sort.value, 'featured'); assert.equal(app.page.selecting.value, false)
+    app.page.favoriteGroup.value = '__ungrouped'; await settle()
+    assert.equal(app.calls.at(-1)!.ungrouped, true); assert.equal(app.calls.at(-1)!.favorite_group, '')
+    app.page.resetFilters(); await settle()
+    assert.equal(app.page.grade.value, ''); assert.equal(app.page.subject.value, '')
+    assert.equal(app.calls.at(-1)!.ungrouped, false)
   } finally { app.page.deactivate(); app.dispose() }
 })
 

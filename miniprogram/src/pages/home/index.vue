@@ -157,7 +157,7 @@ onShareAppMessage(() => shareCard('home'))
   <view class="home-page has-tabbar">
     <PageChrome />
     <view class="content-width home-search-row"><SearchGradeBar v-model="q" :grade="grade" placeholder="搜知识点、习题" :disabled="loading || !!changing" @search="search" @select-grade="gradePicker = true" /></view>
-    <HomeBanner :banners="banners" :mode="site?.banner_mode || 'welcome'" :grade="grade" :recent="recentPaper" :loading="contentLoading" :active="imagesActive" />
+    <HomeBanner :banners="banners" :mode="site?.banner_mode || 'welcome'" :grade="grade" :recent="recentPaper" :loading="contentLoading && !site" :active="imagesActive" />
     <view class="content-width home-subjects">
       <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="item in subjects" :key="item.label" class="subject-entry" role="button" :aria-label="item.subject ? item.label + '习题' : '全部习题'" @click="openCatalog({ subject: item.subject, grade })"><view class="subject-symbol" :class="item.tone"><wd-icon :name="item.icon" size="24px" /></view><text>{{ item.label }}</text></button>
     </view>
@@ -202,7 +202,7 @@ onShareAppMessage(() => shareCard('home'))
 <style scoped>
 .home-page { background: var(--lc-canvas); }
 .home-search-row { padding-top: 12px; padding-bottom: 12px; }
-.home-subjects { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding-top: 14px; padding-bottom: 16px; animation: fade-in 0.4s ease-out; }
+.home-subjects { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding-top: 12px; padding-bottom: 10px; animation: fade-in 0.4s ease-out; }
 .subject-entry { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; width: 100%; margin: 0; padding: 0; background: transparent; font-size: 12px; line-height: 1.5; color: #374c3d; }
 .subject-entry > text { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .subject-symbol { display: flex; align-items: center; justify-content: center; width: 50px; height: 50px; border-radius: 17px; color: var(--subject-color); background: var(--subject-tint); transition: transform .18s ease, box-shadow .18s ease; }

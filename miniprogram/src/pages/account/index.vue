@@ -2,7 +2,7 @@
 import { navigatePage } from '../../services/page-navigation'
 
 import { copyWithPrivacy } from '../../services/privacy'
-import { ref, watch } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { onHide, onShow, onUnload } from '@dcloudio/uni-app'
 import AuthGate from '../../components/AuthGate.vue'
 import AppTabBar from '../../components/AppTabBar.vue'
@@ -23,6 +23,10 @@ import { inboxState, refreshUnread, openRequests } from '../../services/growth'
 const summary = ref<CatalogSummary | null>(null)
 const error = ref('')
 const busy = ref(false)
+const sections = [{ key: 'summary', label: '收藏与下载统计' }, { key: 'messages', label: '消息提醒' }, { key: 'membership', label: '会员状态' }] as const
+type Section = typeof sections[number]['key']
+const sectionErrors = reactive<Record<Section, string>>({ summary: '', messages: '', membership: '' })
+const sectionLoading = reactive<Record<Section, boolean>>({ summary: false, messages: false, membership: false })
 const settingsOpen = ref(false)
 const logoutOpen = ref(false)
 const profileOpen = ref(false)
@@ -33,20 +37,27 @@ requests.show()
 let active = true
 watch(() => session.user?.id, () => {
   requests.invalidate(); summary.value = null; error.value = ''
+  for (const { key } of sections) { sectionErrors[key] = ''; sectionLoading[key] = false }
   settingsOpen.value = false; logoutOpen.value = false
   profileOpen.value = false; passwordOpen.value = false
 }, { flush: 'sync' })
 // 弹层之间不叠着开：先收起账号设置，再开编辑资料/改密码
 function openProfile() { settingsOpen.value = false; passwordOpen.value = false; profileOpen.value = true }
 function openPassword() { settingsOpen.value = false; profileOpen.value = false; passwordOpen.value = true }
-async function load() {
-  error.value = ''
+async function load(section: Section | 'all' = 'all', force = false) {
   if (!active || !await ensureSession() || !active) return
-  const current = requests.begin()
-  try {
-    const [result] = await Promise.all([fetchCatalogSummary({ scope: current }), refreshUnread({ scope: current }), refreshMembership({ scope: current })])
-    if (current()) summary.value = result
-  } catch (cause) { if (current()) error.value = errorMessage(cause) }
+  const current = requests.ticket()
+  await Promise.allSettled(sections.filter(({ key }) => (section === 'all' || key === section) && !sectionLoading[key]).map(async ({ key }) => {
+    sectionLoading[key] = true; sectionErrors[key] = ''
+    try {
+      if (key === 'summary') {
+        const result = await fetchCatalogSummary({ scope: current, force })
+        if (current()) summary.value = result
+      } else if (key === 'messages') await refreshUnread({ scope: current, force })
+      else await refreshMembership({ scope: current, force })
+    } catch (cause) { if (current()) sectionErrors[key] = errorMessage(cause) }
+    finally { if (current()) sectionLoading[key] = false }
+  }))
 }
 async function signOut() {
   if (busy.value || !logoutOpen.value || !session.user) return
@@ -73,13 +84,16 @@ function passwordSaved() { passwordOpen.value = false; uni.showToast({ title: se
 onShow(() => { active = true; requests.show(); if (!profileOpen.value) void load() })
 function suspend() {
   active = false; requests.leave()
+  for (const { key } of sections) sectionLoading[key] = false
   settingsOpen.value = false; logoutOpen.value = false
   passwordOpen.value = false
 }
 // WeChat's native avatar/album picker can hide the page. Keep the draft and
 // popup alive until the picker returns; only unloading discards the draft.
 onHide(suspend)
-onUnload(() => { suspend(); profileOpen.value = false })
+function reconnect() { if (active) void load('all', true) }
+uni.$on?.('lc-network-restored', reconnect)
+onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-restored', reconnect) })
 </script>
 
 <template>
@@ -103,9 +117,12 @@ onUnload(() => { suspend(); profileOpen.value = false })
         </view>
       </view>
     </view>
-    <AuthGate v-if="!session.user" @restored="load" />
+    <AuthGate v-if="!session.user" @restored="load()" />
     <template v-else>
-      <view v-if="error" class="content-width"><view class="error-strip"><text class="grow">{{ error }}</text><wd-button icon="refresh" type="danger" variant="text" role="button" aria-label="重试" @click="load" /></view></view>
+      <view v-if="error" class="content-width"><view class="error-strip"><text class="grow">{{ error }}</text></view></view>
+      <view v-for="section in sections" :key="section.key" class="content-width">
+        <view v-if="sectionErrors[section.key]" class="error-strip" role="status"><text class="grow">{{ section.label }}：{{ sectionErrors[section.key] }}</text><wd-button icon="refresh" role="button" variant="text" :aria-label="'重试' + section.label" :loading="sectionLoading[section.key]" :disabled="sectionLoading[section.key]" @click="load(section.key, true)" /></view>
+      </view>
       <view class="content-width dashboard">
         <view class="quick-grid" role="group" aria-label="个人数据快捷入口">
           <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="quick-card" role="button" @click="favorites"><view class="quick-icon favorite"><wd-icon name="heart" size="20px" /></view><text class="quick-value">{{ summary ? summary.favorites : '—' }}</text><text class="quick-label">我的收藏</text></button>

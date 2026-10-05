@@ -12,12 +12,12 @@ const emit = defineEmits<{ favorite: [] }>()
 <template>
   <view class="paper-card" :class="subjectTone(paper.subject)">
     <button class="paper-card-open" hover-class="control-pressed" role="button" :aria-label="'打开习题：' + exerciseText(paper.title)" @click="openCatalogPaper(paper.id)">
+      <text class="paper-card-title">{{ exerciseTitle(paper) }}</text>
       <view class="paper-cover">
         <view v-if="!paper.can_view" class="cover-sheet cover-locked"><wd-icon name="lock" size="21px" /><text>会员专享</text></view>
         <view v-else-if="paper.download_mode === 'external' && !paper.thumbnail_url" class="cover-sheet cover-locked"><wd-icon name="folder" size="21px" /><text>网盘资料</text></view><view v-else class="cover-sheet"><PrivateImage :src="paper.thumbnail_url" :active="active" /></view>
         <view class="cover-access"><PaperAccessBadge :paper="paper" /></view>
       </view>
-      <text class="paper-card-title">{{ exerciseTitle(paper) }}</text>
     </button>
     <view class="paper-card-bottom"><view class="paper-card-meta"><text>{{ paper.grade }}</text><text>{{ paper.subject }} · {{ paperExtent(paper, true) }}</text></view><wd-button :icon="paper.favorite ? 'heart-fill' : 'heart'" type="info" variant="text" :disabled="busy" role="button" :aria-pressed="paper.favorite" :aria-label="paper.favorite ? '取消收藏' : '收藏习题'" :title="paper.favorite ? '取消收藏' : '收藏习题'" :custom-class="'favorite-control' + (paper.favorite ? ' is-favorite' : '')" @click="emit('favorite')" /></view>
   </view>
@@ -33,7 +33,7 @@ const emit = defineEmits<{ favorite: [] }>()
 .language .cover-sheet { transform: rotate(5deg); }
 .cover-locked { height: 129px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; font-size: 12px; color: var(--lc-warning); }
 .cover-access { position: absolute; right: 8px; bottom: 8px; }
-.paper-card-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 45px; margin-top: 11px; color: var(--lc-text); font-size: 15px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; transition: color 0.2s ease; }
+.paper-card-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 45px; margin-bottom: 8px; color: var(--lc-text); font-size: 15px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; transition: color 0.2s ease; }
 .paper-card-bottom { display: flex; justify-content: space-between; align-items: center; gap: 2px; min-height: 44px; }
 .paper-card-meta { min-width: 0; font-size: 12px; color: var(--lc-muted); line-height: 1.6; overflow-wrap: anywhere; }
 .paper-card-meta > text { display: block; }

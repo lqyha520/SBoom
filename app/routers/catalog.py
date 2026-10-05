@@ -35,12 +35,12 @@ def papers(q: str = Query("", max_length=120), grade: str = Query("", max_length
            subject: str = Query("", max_length=80), category: str = Query("", max_length=60),
            favorite: bool = False, downloaded: bool = False, limit: int = Query(20, ge=1, le=50),
            offset: int = Query(0, ge=0, le=100000), sort: Literal["featured", "latest", "popular"] = "featured",
-           only_free: bool = False, recent: bool = False, favorite_group: str = Query("", max_length=64), topic: str = Query("", max_length=64),
+           only_free: bool = False, recent: bool = False, favorite_group: str = Query("", max_length=64), ungrouped: bool = False, topic: str = Query("", max_length=64),
            textbook: str = Query("", max_length=64), term: str = Query("", max_length=64), unit: str = Query("", max_length=64), knowledge: str = Query("", max_length=64),
            pagination: Literal["offset", "cursor"] = "offset", cursor: str = Query("", max_length=2048),
            record: bool = True, user: MiniUser | None = Depends(optional_mini_user)):
     result = catalog.list_papers(user.id if user else None, q, grade, subject, category, favorite, downloaded, limit, offset,
-                                 sort=sort, only_free=only_free, recent=recent, favorite_group=favorite_group, topic=topic, textbook=textbook, term=term, unit=unit, knowledge=knowledge, pagination=pagination, cursor=cursor)
+                                 sort=sort, only_free=only_free, recent=recent, favorite_group=favorite_group, ungrouped=ungrouped, topic=topic, textbook=textbook, term=term, unit=unit, knowledge=knowledge, pagination=pagination, cursor=cursor)
     if record and user and q.strip() and offset == 0 and not result["total"]:
         from app.services.mini_experience import record_event
         from app.services.rate_limit import allow

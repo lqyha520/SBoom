@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { safeDestination, loginUrl, routeFromPage, shareCard, HOME } from '../src/services/return-route'
+import { safeDestination, loginUrl, routeFromPage, shareCard, catalogShare, HOME } from '../src/services/return-route'
 
 test('login preserves a shared paper or topic and rebuilds only public parameters', () => {
   for (const kind of ['paper', 'topic']) {
@@ -24,13 +24,30 @@ test('inbox destinations allow owned-record identifiers without user-supplied UR
   assert.equal(safeDestination('/subpages/orders/index?id=' + 'a'.repeat(65)), HOME)
 })
 
-test('share cards contain static public artwork and a public destination', () => {
+test('share cards preserve public destinations and use the native current-page screenshot', () => {
   const card = shareCard('paper', 'paper-1', '  单元练习  ')
   assert.equal(card.title, '单元练习')
   assert.equal(card.path, '/pages/paper/index?id=paper-1')
-  assert.equal(card.imageUrl, '/static/banners/study.jpg')
+  assert.deepEqual(Object.keys(card).sort(), ['path', 'title'])
   assert.equal(shareCard('paper', '../private').path, HOME)
   assert.ok(!JSON.stringify(card).includes('assets/'))
+})
+
+test('home, topic, list buttons and list menus never override the native screenshot', () => {
+  const topic = shareCard('topic', 'topic-1', '单元复习')
+  const cases = [
+    shareCard('home'),
+    topic,
+    shareCard('paper', '../private'),
+    catalogShare({ target: { dataset: { paperId: 'paper-1', paperTitle: '看图列式' } } }),
+    catalogShare({}),
+    catalogShare({}, topic),
+    catalogShare({ target: { dataset: { paperId: '../private' } } }, topic),
+  ]
+  for (const card of cases) assert.deepEqual(Object.keys(card).sort(), ['path', 'title'])
+  assert.equal(cases[3]!.path, '/pages/paper/index?id=paper-1')
+  assert.equal(cases[3]!.title, '看图列式')
+  assert.equal(cases[5]!.path, '/pages/topic/index?id=topic-1')
 })
 
 test('login still returns to the page when the platform keeps the target encoded', () => {

@@ -24,6 +24,8 @@ export const createGroup = (name: string) => request<FavoriteGroup>('/api/v1/min
 export const renameGroup = (group: FavoriteGroup, name: string) => request<FavoriteGroup>('/api/v1/mini/favorite-groups/' + encodeURIComponent(group.id), 'PUT', { name, revision: group.revision })
 export const deleteGroup = (group: FavoriteGroup) => request<void>('/api/v1/mini/favorite-groups/' + encodeURIComponent(group.id) + '?revision=' + group.revision, 'DELETE')
 export const assignGroup = (paper: string, group: string | null) => request<void>('/api/v1/mini/favorite-groups/papers/' + encodeURIComponent(paper), 'PUT', { group_id: group })
+export const batchFavorites = (ids: string[], action: 'remove' | 'assign', groupId: string | null = null) =>
+  request<{ count: number }>('/api/v1/mini/favorites/batch', 'POST', { ids, action, group_id: groupId })
 export const recordView = (id: string) => request<void>('/api/v1/mini/history/' + encodeURIComponent(id), 'POST')
 export const clearHistory = () => request<void>('/api/v1/mini/history', 'DELETE')
 export function recordEvent(kind: 'active' | 'download_ok' | 'download_failed', catalog_id?: string) {

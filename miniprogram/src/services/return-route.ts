@@ -1,7 +1,7 @@
 /** Login and inbox targets are rebuilt from a strict public-route allowlist. */
 const routes: Record<string, readonly string[]> = {
   home: [], library: ['q', 'grade', 'subject', 'category', 'topic'], favorites: [], account: [], downloads: [], recent: [],
-  paper: ['id'], topic: ['id'], messages: [], membership: [], orders: ['id'], closure: [],
+  paper: ['id'], topic: ['id'], messages: [], membership: ['contact'], orders: ['id'], closure: [],
   requests: ['id', 'title', 'grade', 'subject'], support: ['id', 'kind', 'paper'], privacy: ['kind'],
 }
 const servicePages = new Set(["membership", "support", "orders", "privacy", "requests", "messages", "closure"])
@@ -32,6 +32,7 @@ export function safeDestination(input: unknown): string {
       if (!routes[match[1]!]!.includes(key) || values.has(key) || /[\u0000-\u001f]/.test(value)) return HOME
       if (ids.has(key) && !/^[a-zA-Z0-9_-]{1,64}$/.test(value)) return HOME
       if (value.length > 120) return HOME
+      if (key === 'contact' && value !== '1') return HOME
       if (key === 'kind' && !(match[1] === 'privacy' ? ['privacy', 'agreement'] : ['correction', 'download', 'membership', 'other']).includes(value)) return HOME
       values.set(key, value)
     }
@@ -50,7 +51,8 @@ export function routeFromPage(page: { route?: string; options?: Record<string, u
 }
 export function loginUrl(target: string) { return '/pages/login/index?returnTo=' + encodeURIComponent(safeDestination(target)) }
 export function shareCard(kind: 'home' | 'paper' | 'topic', id = '', title = '') {
-  return { title: title.trim().slice(0, 100) || '习题库 · 每天一点进步', path: safeDestination('/pages/' + kind + '/index' + (id ? '?id=' + encodeURIComponent(id) : '')), imageUrl: '/static/banners/study.jpg' }
+  // Omitting imageUrl lets WeChat capture the current page.
+  return { title: title.trim().slice(0, 100) || '习题库 · 每天一点进步', path: safeDestination('/pages/' + kind + '/index' + (id ? '?id=' + encodeURIComponent(id) : '')) }
 }
 
 /** Share the public paper chosen by a native button, never the private list. */

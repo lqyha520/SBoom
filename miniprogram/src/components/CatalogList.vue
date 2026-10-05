@@ -8,6 +8,7 @@ import EnhancedSkeleton from './EnhancedSkeleton.vue'
 import SearchGradeBar from './SearchGradeBar.vue'
 import CatalogFilterSheet from './CatalogFilterSheet.vue'
 import FavoriteGroups from './FavoriteGroups.vue'
+import FavoriteBatchActions from './FavoriteBatchActions.vue'
 import { clearHistory, fetchTopics, type Topic } from '../services/experience'
 import { readPreferences, rememberSearch, writePreferences } from '../services/preferences'
 import { errorMessage, favoriteCatalogPaper, fetchCatalogWindow, fetchCatalog, fetchCatalogSummary } from '../services/api'
@@ -79,6 +80,16 @@ const tagFilters = reactive(emptyTags())
 const chosenTags = computed(() => tagKinds.filter(item => tagFilters[item.kind]).map(item => ({ kind: item.kind, name: tags.value.find(tag => tag.id === tagFilters[item.kind])?.name || item.label })))
 const topicHeader = computed(() => topics.value.find(item => item.id === props.topicId))
 const favoriteGroup = ref('')
+const selecting = ref(false), batchBusy = ref(false), selectedIds = ref<string[]>([])
+const allSelected = computed(() => items.value.length > 0 && selectedIds.value.length === items.value.length)
+function endSelection() { selecting.value = false; selectedIds.value = []; batchBusy.value = false }
+function toggleSelection(id: string) {
+  if (batchBusy.value) return
+  selectedIds.value = selectedIds.value.includes(id) ? selectedIds.value.filter(value => value !== id) : [...selectedIds.value, id]
+}
+function selectAll() { if (!batchBusy.value) selectedIds.value = allSelected.value ? [] : items.value.map(item => item.id) }
+function batchCompleted() { endSelection(); void refresh(); void groupControl.value?.refresh() }
+watch(items, rows => { const ids = new Set(rows.map(item => item.id)); selectedIds.value = selectedIds.value.filter(id => ids.has(id)) })
 const groupControl = ref<InstanceType<typeof FavoriteGroups> | null>(null)
 const onlyFree = ref(false)
 const sort = ref('featured')
@@ -100,7 +111,8 @@ let selectionRevision = -1
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 let loaded = false
 let scrollTop = 0
-const filtered = computed(() => !!(q.value || grade.value || subject.value || category.value || (!props.topicId && topic.value) || onlyFree.value || favoriteGroup.value || chosenTags.value.length))
+const filtered = computed(() => !!(q.value || grade.value || subject.value || category.value || (!props.topicId && topic.value) || onlyFree.value || favoriteGroup.value || chosenTags.value.length || sort.value !== 'featured'))
+const temporaryFilters = computed(() => !!(q.value || category.value || (!props.topicId && topic.value) || onlyFree.value || favoriteGroup.value || chosenTags.value.length || sort.value !== 'featured'))
 function preferences() {
   const saved = readPreferences(session.user?.id || '')
   grade.value = saved.grade; subject.value = saved.subject; searches.value = saved.history
@@ -156,6 +168,7 @@ async function clearRecent() {
 }
 
 async function refresh(reset = true, preserveWindow = false) {
+  if (batchBusy.value) { uni.stopPullDownRefresh(); return }
   if (!canBrowse.value || !active) { uni.stopPullDownRefresh(); return }
   if (reset) expandedRow.value = ''
   if (!reset && (loading.value || !more.value || windowFull.value)) return
@@ -168,7 +181,7 @@ async function refresh(reset = true, preserveWindow = false) {
     recordNextSearch = false
     const filters = { record, q: q.value, grade: grade.value, subject: subject.value, category: category.value,
       favorite: props.view === 'favorites', downloaded: props.view === 'downloads', recent: props.view === 'recent',
-      favorite_group: favoriteGroup.value, topic: topic.value, only_free: onlyFree.value, sort: sort.value,
+      favorite_group: favoriteGroup.value === '__ungrouped' ? '' : favoriteGroup.value, ungrouped: favoriteGroup.value === '__ungrouped', topic: topic.value, only_free: onlyFree.value, sort: sort.value,
       ...tagFilters }
     // Revalidate the retained window in one bounded request, alongside its head.
     // The server returns current rights for every retained row; no private policy is cached.
@@ -186,7 +199,11 @@ async function refresh(reset = true, preserveWindow = false) {
       const update = favoriteUpdates.get(item.id)
       if (update && update.revision > revision) item.favorite = update.favorite
     }
-    const retained = window?.items || []
+    const head = new Map(result.items.map(item => [item.id, item]))
+    const retained = (window?.items || []).map(item => {
+      const context = head.get(item.id)
+      return context && Object.prototype.hasOwnProperty.call(context, 'activity_at') ? { ...item, activity_at: context.activity_at } : item
+    })
     const headUnchanged = preserveWindow && result.items.every((item, index) => item.id === items.value[index]?.id)
       && retained.length === items.value.length && result.total === total.value
     const existing = new Map(items.value.map(item => [item.id, item]))
@@ -201,7 +218,7 @@ async function refresh(reset = true, preserveWindow = false) {
   finally { if (current()) { loading.value = false; appending.value = false; uni.stopPullDownRefresh() } }
 }
 async function turnWindow(direction: -1 | 1) {
-  if (!active || loading.value || (direction < 0 ? !windowStart.value : !windowFull.value || !more.value)) return
+  if (!active || loading.value || batchBusy.value || (direction < 0 ? !windowStart.value : !windowFull.value || !more.value)) return
   windowStart.value = Math.max(0, windowStart.value + direction * windowSize)
   nextOffset.value = windowStart.value
   items.value = []; loaded = false; scrollTop = 0; invalidateActions()
@@ -236,6 +253,7 @@ async function activate() {
   } else active = true
 }
 function deactivate() {
+  endSelection()
   imagesActive.value = false
   invalidateActions()
   active = false; activation++; cancelSearch(); requests.invalidate(); metadataRequests.invalidate()
@@ -243,6 +261,7 @@ function deactivate() {
   uni.stopPullDownRefresh()
 }
 watch([q, grade, subject, category, topic, sort, onlyFree, favoriteGroup, () => Object.values(tagFilters).join(':')], () => {
+  endSelection()
   windowStart.value = 0; nextOffset.value = 0
   invalidateActions(); items.value = []; total.value = 0; appendError.value = ''
   requests.invalidate(); more.value = false
@@ -253,6 +272,7 @@ watch([grade, subject], () => {
   if (session.user) writePreferences(session.user.id, { ...readPreferences(session.user.id), grade: grade.value, subject: subject.value })
 })
 watch(() => session.user?.id, (owner, previous) => {
+  endSelection()
   windowStart.value = 0; nextOffset.value = 0
   invalidateActions(); appendError.value = ''; appending.value = false
   requests.invalidate(); metadataRequests.invalidate(); cancelSearch(); metadataAt = 0; metadataError.value = ''; metadataLoading.value = false; searchInput.value = ''; expandedRow.value = ''; items.value = []; summary.value = null; total.value = 0; more.value = false
@@ -264,7 +284,8 @@ watch(() => session.user?.id, (owner, previous) => {
   if (active && previous && !owner) void activate()
 }, { flush: 'sync' })
 watch(() => props.topicId, value => { topic.value = value })
-function resetFilters() { cancelSearch(); searchInput.value = ''; q.value = ''; grade.value = ''; subject.value = ''; category.value = ''; topic.value = props.topicId; onlyFree.value = false; favoriteGroup.value = ''; Object.assign(tagFilters, emptyTags()) }
+function clearConditions() { cancelSearch(); searchInput.value = ''; q.value = ''; category.value = ''; topic.value = props.topicId; onlyFree.value = false; favoriteGroup.value = ''; sort.value = 'featured'; Object.assign(tagFilters, emptyTags()) }
+function resetFilters() { clearConditions(); grade.value = ''; subject.value = '' }
 function applyFilters(filters: { grade: string; category: string; tags: TagFilters }) { grade.value = filters.grade; category.value = filters.category; Object.assign(tagFilters, filters.tags) }
 async function favorite(paper: PaperSummary) {
   if (changing.has(paper.id)) return
@@ -313,7 +334,7 @@ onBeforeUnmount(deactivate)
 </script>
 
 <template>
-  <view class="catalog-page" :class="{ 'has-tabbar': hasTabbar }">
+  <view class="catalog-page" :class="{ 'has-tabbar': hasTabbar, 'batch-mode': selecting }">
     <view class="catalog-sticky">
       <PageChrome :back="!hasTabbar" fallback="/pages/account/index" />
       <view v-if="recordTitle && view !== 'favorites'" class="content-width record-heading">
@@ -353,7 +374,8 @@ onBeforeUnmount(deactivate)
       </view>
       <view class="catalog-band">
         <view class="content-width catalog-header">
-          <template v-if="canBrowse">
+          <view v-if="selecting" class="selection-heading"><text class="section-title">整理收藏</text><button class="section-link" role="checkbox" :aria-checked="allSelected" :disabled="batchBusy" @click="selectAll">{{ allSelected ? '取消全选' : '全选已加载' }}</button></view>
+          <template v-else-if="canBrowse">
             <SearchGradeBar
               v-model="searchInput"
               :grade="grade"
@@ -408,7 +430,7 @@ onBeforeUnmount(deactivate)
           重试
         </button>
       </view>
-      <view v-if="!q && searches.length" class="search-history">
+      <view v-if="!selecting && !q && searches.length" class="search-history">
         <view class="history-heading">
           <text>最近搜索</text>
           <button
@@ -435,7 +457,7 @@ onBeforeUnmount(deactivate)
           </view>
         </scroll-view>
       </view>
-      <view class="experience-toolbar">
+      <view v-if="!selecting" class="experience-toolbar">
         <view v-if="view === 'all' && !topicId" class="sort-buttons">
           <button
             hover-class="control-pressed"
@@ -485,11 +507,11 @@ onBeforeUnmount(deactivate)
       </view>
       <FavoriteGroups
         ref="groupControl"
-        v-if="view === 'favorites'"
+        v-if="view === 'favorites' && !selecting"
         :selected="favoriteGroup"
         @select="favoriteGroup = $event"
       />
-      <view v-if="grade || category || chosenTags.length" class="active-filters">
+      <view v-if="!selecting && (grade || category || chosenTags.length)" class="active-filters">
         <wd-tag v-if="grade" closable variant="light" type="primary" @close="grade = ''">{{ grade }}</wd-tag>
         <wd-tag v-if="category" closable variant="light" type="primary" @close="category = ''">
           {{ exerciseText(categoryName) || '已选分类' }}
@@ -508,13 +530,14 @@ onBeforeUnmount(deactivate)
           hover-class="control-pressed"
           :hover-start-time="0"
           :hover-stay-time="80"
-          v-if="filtered"
+          v-if="filtered && !selecting"
           class="section-link"
           role="button"
+          aria-label="全部重置"
           @click="resetFilters"
         >
           <wd-icon name="close-circle" size="14px" />
-          <text>清除筛选</text>
+          <text>全部重置</text>
         </button>
         <text v-else>
           {{
@@ -534,6 +557,10 @@ onBeforeUnmount(deactivate)
           }}
         </text>
       </view>
+      <view v-if="!selecting && (temporaryFilters || view === 'favorites' && items.length)" class="list-tools">
+        <button v-if="temporaryFilters" class="section-link" role="button" aria-label="清除本次条件" @click="clearConditions"><wd-icon name="close" size="14px" /><text>清除本次条件</text></button>
+        <button v-if="view === 'favorites' && items.length" class="section-link" role="button" aria-label="批量整理" :disabled="loading || changing.size > 0" @click="expandedRow = ''; selecting = true"><wd-icon name="edit" size="16px" /><text>批量整理</text></button>
+      </view>
       <EnhancedSkeleton v-if="loading && !items.length" :count="4" type="row" />
       <view v-else-if="items.length" class="paper-list catalog-paper-list">
         <view v-for="paper in items" :key="paper.id" class="list-image-target" :data-paper-id="paper.id">
@@ -541,7 +568,10 @@ onBeforeUnmount(deactivate)
             :paper="paper"
             :active="imagesActive && (!observingImages || visibleImages.has(paper.id))"
             @open="rememberExplicitSearch(q)"
-            :busy="changing.has(paper.id)"
+            :busy="batchBusy || changing.has(paper.id)"
+            :selectable="selecting"
+            :selected="selectedIds.includes(paper.id)"
+            @select="toggleSelection(paper.id)"
             :expanded="expandedRow === paper.id"
             @expand="expandedRow = $event ? paper.id : ''"
             @favorite="favorite(paper)"
@@ -604,7 +634,7 @@ onBeforeUnmount(deactivate)
         <wd-button variant="text" icon="refresh" @click="refresh(false)">重试下一页</wd-button>
       </view>
       <view v-else-if="more && !loading && !windowFull" class="loading-line">
-        <wd-button variant="text" icon="down" role="button" @click="refresh(false)">加载更多</wd-button>
+        <wd-button variant="text" icon="down" role="button" :disabled="batchBusy" @click="refresh(false)">加载更多</wd-button>
       </view>
       <view v-else-if="items.length && !loading && !more" class="list-end">
         {{ windowStart ? '已到最后一组' : '已显示全部 ' + total + ' 份习题' }}
@@ -634,6 +664,7 @@ onBeforeUnmount(deactivate)
       @apply="applyFilters"
     />
     <AppTabBar v-if="hasTabbar" :current="view === 'favorites' ? 'favorites' : 'library'" />
+    <FavoriteBatchActions v-if="selecting" :ids="selectedIds" @busy="batchBusy = $event" @completed="batchCompleted" @close="endSelection" @refresh="refresh()" />
   </view>
 </template>
 

@@ -3,6 +3,7 @@ import { navigatePage } from '../../services/page-navigation'
 
 import { copyWithPrivacy } from '../../services/privacy'
 import { computed, ref } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import PageChrome from '../../components/PageChrome.vue'
 import AuthGate from '../../components/AuthGate.vue'
 import { useConsumerPage, type ConsumerTicket } from '../../services/consumer-page'
@@ -17,6 +18,7 @@ const plans = ref<Plan[]>([])
 const contact = ref<SupportSettings | null>(null)
 const enabled = ref(false), iosEnabled = ref(false)
 const contactOpen = ref(false), contactError = ref(false), detailsOpen = ref(false)
+onLoad(options => { contactOpen.value = options?.contact === '1' })
 const selectedId = ref(''), cardCode = ref('')
 const action = ref<'redeem' | 'purchase' | ''>('')
 const redeemedDays = ref(0)

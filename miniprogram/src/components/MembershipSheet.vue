@@ -27,7 +27,7 @@ onHide(() => { reads.invalidate(); contactSequence++; revision++ })
 onBeforeUnmount(reads.invalidate)
 watch(() => props.open, async value => { const current = ++contactSequence; const scope = reads.begin(); if (!value) return; try { const [result, plans] = await Promise.all([fetchSupport({ scope }), fetchPlans({ scope })]); if (props.open && current === contactSequence) { contact.value = result; iosEnabled.value = plans.ios_enabled } } catch { /* 无法确认平台能力时保留保守默认值。 */ } })
 function service() { emit('close'); navigatePage({ url: '/subpages/membership/index' }) }
-function contactService() { service() }
+function contactService() { emit('close'); navigatePage({ url: '/subpages/membership/index?contact=1' }) }
 let revision = 0
 useTabBarOverlay(() => props.open)
 watch(() => props.open, () => { revision++; error.value = ''; busy.value = false })

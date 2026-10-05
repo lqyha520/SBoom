@@ -26,8 +26,11 @@ function runtime() {
     source = source.replace(/import\.meta\.env/g, "({ VITE_API_BASE_URL: 'https://api.example', DEV: false })")
     const exports = {}
     vm.runInNewContext(ts.transpileModule(source + '\n' + expose, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
-      exports, uni, defineOptions() {}, require: (name: string) => name === 'vue' ? vue : name === '@dcloudio/uni-app'
-        ? Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onReachBottom'].map(hook => [hook, (fn: () => unknown) => { hooks[hook] = fn }])) : imports[name] || (name.endsWith('/shared/http') ? sharedHttp : name === './page-lifecycle' ? { usePageLifecycle } : name === './checkout' ? { resumeCheckouts: async () => {} } : {}),
+      exports, uni, setTimeout, clearTimeout, defineOptions() {}, require: (name: string) => name === 'vue' ? vue : name === '@dcloudio/uni-app'
+        ? Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onReachBottom'].map(hook => [hook, (fn: () => unknown) => {
+          const previous = hooks[hook]
+          hooks[hook] = () => { const result = previous?.(); const next = fn(); return Promise.all([result, next]) }
+        }])) : imports[name] || (name.endsWith('/shared/http') ? sharedHttp : name === './page-lifecycle' ? { usePageLifecycle } : name === './checkout' ? { resumeCheckouts: async () => {} } : {}),
     })
     return exports as T
   }
@@ -156,6 +159,7 @@ for (const route of ['orders', 'requests', 'messages', 'membership', 'closure'])
   try {
     scope.run(() => env.module(`subpages/${route}/index.vue`, {
       '../../services/consumer-page': env.consumer, '../../services/growth': env.growth,
+      '../../services/api': env.api,
       '../../services/message-reads': env.reads,
       '../../services/session': { session: env.session, refreshMembership: (options: import('../src/services/api').ReadOptions) => env.api.request('/api/v1/mini/me', 'GET', undefined, options) },
       '../../services/experience': { fetchSupport: (options: import('../src/services/api').ReadOptions) => env.api.request('/api/v1/site/support', 'GET', undefined, options) },

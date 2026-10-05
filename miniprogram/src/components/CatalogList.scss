@@ -33,4 +33,5 @@
 .catalog-empty .empty-actions { flex-wrap:wrap;gap:10px; }
 .request-entry { padding-top:20px; }
 .catalog-body .list-caption { min-height: 44px; }
+.list-tools,.selection-heading { display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap; }.selection-heading { min-height:56px;padding-bottom:12px; }.list-tools { margin-bottom:8px; }.list-tools .section-link:last-child { margin-left:auto; }.batch-mode { padding-bottom:calc(200px + env(safe-area-inset-bottom)); }
 @media (max-width:359px) { .catalog-paper-list { padding:0 10px; } }

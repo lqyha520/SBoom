@@ -46,7 +46,14 @@ function blocksClick(allowWhileBusy = false) {
   if (props.open) { close(); return true }
   return props.disabled && !allowWhileBusy
 }
-function perform(key: string) { if (!props.disabled && props.open) { emit('action', key); close() } }
+function perform(key: string) {
+  if (props.disabled || !props.open) return
+  const action = props.actions.find(item => item.key === key)
+  if (!action) return
+  emit('action', key)
+  // Keep the native share button and its dataset mounted until WeChat reads it.
+  if (action.openType !== 'share') close()
+}
 defineExpose({ blocksClick })
 </script>
 
