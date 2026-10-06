@@ -48,6 +48,9 @@ jobs:
           cache-dependency-path: ${{ matrix.project }}/pnpm-lock.yaml
       - run: pnpm --dir ${{ matrix.project }} install --frozen-lockfile
       - name: Audit frontend dependencies
+        # braces GHSA-vfj7-8cjw-p6xm 官方补丁版本为 <0.0.0（截至 2026-10-07 未发布修复版，
+        # 3.0.3 已是最新，且仅在 eslint 开发依赖链），经三端 pnpm.auditConfig.ignoreCves /
+        # auditConfig.ignoreCves 精确豁免该 CVE（CVE-2026-93687），其余可修复漏洞仍拦截 CI。
         run: pnpm --dir ${{ matrix.project }} audit --audit-level=high --registry https://registry.npmjs.org
       - name: Lint
         run: pnpm --dir ${{ matrix.project }} lint

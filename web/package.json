@@ -15,7 +15,7 @@
   "dependencies": {
     "@iconify-json/lucide": "^1.2.132",
     "@nuxt/ui": "^4.11.1",
-    "dompurify": "^3.2.6",
+    "dompurify": "^3.4.16",
     "html2canvas": "^1.4.1",
     "idb": "^8.0.3",
     "jspdf": "^4.2.1",
@@ -48,7 +48,13 @@
   },
   "pnpm": {
     "overrides": {
-      "esbuild@0.27.7": "0.28.1"
+      "esbuild@0.27.7": "0.28.1",
+      "source-map-js@<1.2.2": "1.2.2"
+    },
+    "auditConfig": {
+      "ignoreCves": [
+        "CVE-2026-93687"
+      ]
     }
   },
   "packageManager": "pnpm@10.14.0"
