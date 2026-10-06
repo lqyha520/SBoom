@@ -7,7 +7,7 @@
 .top-nav > button.active { color: var(--ui-primary); font-weight: 600; }
 .top-nav > button.active::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--ui-primary); animation: slide-up 0.3s ease; }
 .top-nav > button:disabled { opacity: .45; }
-.nav-count { font-size: 10px; background: #e8f4ee; padding: 1px 5px; border-radius: 4px; }
+.nav-count { font-size: 12px; background: #e8f4ee; padding: 1px 5px; border-radius: 4px; }
 .topbar-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 .header-divider { height: 24px; width: 1px; background: var(--ui-border); margin: 0 4px; }
 .account-button { padding: 4px; gap: 8px; }
@@ -39,7 +39,7 @@
 .selection-button { display: flex; align-items: center; justify-content: center; min-height: 34px; padding: 5px 4px; border: 1px solid var(--ui-border); background: #fff; border-radius: 6px; color: var(--ui-text-toned); font-size: 12px; transition: all 0.2s ease; }
 .selection-button:hover { border-color: #88c9ac; background: #f7fbf9; transform: translateY(-1px); }
 .selection-button.selected { border-color: #98ceb6; color: #087f5b; background: #edf7f2; font-weight: 600; box-shadow: 0 2px 4px rgba(8, 127, 91, 0.1); }
-.section-caption { font-size: 11px; color: var(--ui-text-muted); margin: 12px 0 8px; }
+.section-caption { font-size: 12px; color: var(--ui-text-muted); margin: 12px 0 8px; }
 .knowledge-list { display: flex; flex-direction: column; gap: 4px; }
 .knowledge-option { width: 100%; display: flex; align-items: flex-start; gap: 8px; border: 0; border-radius: 5px; background: transparent; color: var(--ui-text-toned); padding: 7px 6px; text-align: left; font-size: 12px; line-height: 1.5; transition: all 0.2s ease; }
 .knowledge-option > span:first-child { flex: none; width: 14px; height: 14px; margin-top: 2px; border: 1px solid #c8d0d5; border-radius: 3px; display: grid; place-items: center; transition: all 0.2s ease; }
@@ -54,17 +54,23 @@
 .preview-panel .panel-heading { background: #fff; }
 .preview-toolbar { min-height: 46px; background: #fff; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 16px; border-bottom: 1px solid var(--ui-border); flex-wrap: wrap; }
 .preview-fill { flex: 1; min-height: 0; overflow: auto; padding: 24px 20px; }
-.preview-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 36px; padding: 0 20px; border-top: 1px solid var(--ui-border); background: #f8f9fa; color: var(--ui-text-muted); font-size: 11px; flex: none; }
+.preview-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 36px; padding: 0 20px; border-top: 1px solid var(--ui-border); background: #f8f9fa; color: var(--ui-text-muted); font-size: 12px; flex: none; }
 .zoom-control { display: flex; gap: 6px; align-items: center; }
 .zoom-control input { width: 76px; }
-.zoom-value { width: 36px; text-align: center; font-size: 11px; color: var(--ui-text-muted); font-variant-numeric: tabular-nums; }
+.zoom-value { width: 36px; text-align: center; font-size: 12px; color: var(--ui-text-muted); font-variant-numeric: tabular-nums; }
 .toolbar-divider { width: 1px; height: 20px; background: var(--ui-border); flex: none; }
 .result-view { display: flex; flex-direction: column; min-height: 0; background: #f0f2f4; }
 .result-toolbar { padding: 12px 20px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #fff; border-bottom: 1px solid var(--ui-border); flex: none; }
 .result-editbar { justify-content: space-between; }
 .result-edit-toggle { display: none; }
 .preview-scroll { flex: 1; min-height: 0; overflow: auto; padding: 24px; }
-.result-notice { padding: 10px 20px; background: #fff; }
+.result-notice { padding: 8px 20px; background: #fff; flex: none; max-height: 30%; overflow-y: auto; }
+.quality-summary { display: flex; align-items: center; gap: 8px; color: var(--ui-warning); font-size: 13px; }
+.quality-summary > span:nth-child(2) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.quality-summary > span:first-child { flex: none; }
+.quality-details { padding: 12px 0; margin: 0; list-style: none; font-size: 13px; }
+.quality-details li + li { margin-top: 10px; }
+.quality-details p { margin: 4px 0 0; color: var(--ui-text-toned); overflow-wrap: anywhere; }
 .paper-picker { width: 150px; }
 .sortable-ghost { opacity: .4; }
 @media (min-width: 1600px) { .workbench { grid-template-columns: 280px 370px minmax(0, 1fr); } }
@@ -100,17 +106,17 @@
   .brand-caption { font-size: 9px; }
   .topbar-actions { gap: 3px; }
   .desktop-tools { display: none; }
-  .mobile-tools { display: inline-flex; min-width: 40px; min-height: 40px; }
+  .mobile-tools { display: inline-flex; min-width: 44px; min-height: 44px; }
   .header-divider { display: none; }
   .templates-button { font-size: 0; gap: 0; width: 32px; height: 32px; padding: 6px; }
   .top-nav { width: 100%; order: 3; height: 42px; justify-content: center; gap: 32px; }
   .top-nav > button { font-size: 12px; }
   .workspace-heading { padding: 10px 16px; min-height: 54px; gap: 8px; align-items: center; display: grid; grid-template-columns: minmax(0, 1fr) auto; }
   .workspace-heading-actions { display: contents; }
-  .workspace-clear { grid-column: 2; grid-row: 1; min-height: 36px; }
+  .workspace-clear { grid-column: 2; grid-row: 1; min-height: 44px; }
   .workspace-title { gap: 8px; }
   .workspace-title h1 { font-size: 18px; }
-  .workspace-meta { grid-column: 1 / -1; grid-row: 2; gap: 5px; font-size: 10px; flex-wrap: wrap; }
+  .workspace-meta { grid-column: 1 / -1; grid-row: 2; gap: 5px; font-size: 12px; flex-wrap: wrap; }
   .draft-state { margin: 0 8px 0 0; }
   .workspace-tabs { padding: 0 16px 12px; }
   .selection-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -126,6 +132,9 @@
   .result-toolbar .flex-1 { display: none; }
   .result-toolbar > .result-count { display: none; }
   .result-edit-toggle { display: inline-flex; }
+  .result-toolbar button, .zoom-control button { min-height: 44px; min-width: 44px; }
+  .result-toolbar [role='combobox'] { min-height: 44px; }
+  .quality-summary { flex-wrap: wrap; }
 }
 @media print {
   body { background: #fff; }

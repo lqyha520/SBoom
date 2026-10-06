@@ -52,7 +52,7 @@ const subjects = computed(() => {
     { label: '全部学科', icon: 'apps', tone: 'all-subjects', subject: '' }]
 })
 const categories = computed<SiteCategory[]>(() => (summary.value?.categories || []).slice(0, 4))
-const feedCaption = computed(() => grade.value ? grade.value + ' · ' + total.value + ' 份练习' : '发现适合你的下一份练习')
+const feedCaption = computed(() => (grade.value || '全部年级') + ' · ' + total.value + ' 份习题')
 const paperRequests = createLatestRequest()
 const contentRequests = createLatestRequest()
 const favoriteRequests = createLatestRequest()
@@ -173,7 +173,7 @@ onShareAppMessage(() => shareCard('home'))
         <view v-if="error" class="error-strip" role="status"><text class="grow">{{ error }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="section-link retry-papers" role="button" :disabled="loading" aria-label="重试加载习题" @click="loadPapers()">{{ loading ? '加载中' : '重试' }}</button></view>
         <EnhancedSkeleton v-if="loading && !items.length" :count="2" type="card" />
         <view v-else-if="cards.length" class="home-cards">
-          <PaperCard :active="imagesActive"
+          <PaperCard compact :active="imagesActive"
             v-for="paper in cards" 
             :key="paper.id" 
             :paper="paper" 
@@ -214,13 +214,13 @@ onShareAppMessage(() => shareCard('home'))
 .home-feed { padding-top: 0; }
 .feed-heading { margin-bottom: 0; gap: 8px; }
 .feed-tabs { display: flex; align-items: center; gap: 20px; }
-.feed-tabs button { position: relative; min-height: 44px; margin: 0; padding: 6px 0; border-radius: 0; font-size: 15px; font-weight: 500; line-height: 1.5; color: var(--lc-muted); background: transparent; }
-.feed-tabs button.active { font-size: 18px; font-weight: 650; color: #2b4131; }
-.feed-tabs button.active::before { content: ''; position: absolute; left: 0; bottom: 0; width: 20px; height: 3px; border-radius: 99px; background: var(--lc-primary); }
+.feed-tabs button { position: relative; min-height: 44px; margin: 0; padding: 6px 0; border-radius: 0; font-size: 16px; font-weight: 500; line-height: 1.5; color: var(--lc-muted); background: transparent; }
+.feed-tabs button.active { font-weight: 700; color: #252c35; }
+.feed-tabs button.active::before { content: ''; position: absolute; left: 0; bottom: 0; width: 24px; height: 3px; background: var(--lc-primary); }
 .change-papers { display: flex; align-items: center; justify-content: flex-end; gap: 4px; flex: none; min-height: 44px; margin: 0; padding: 0; background: transparent; font-size: 12px; line-height: 1.5; color: #617d67; }
 .change-papers[disabled] { opacity: .5; }
-.feed-caption { display: block; margin: 5px 0 14px; font-size: 12px; color: var(--lc-muted); }
-.home-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; animation: show-papers .18s ease-out; }
+.feed-caption { display: block; margin: 8px 0 14px; font-size: 12px; color: var(--lc-muted); }
+.home-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .retry-papers { color: #a34040; flex: none; }
 .home-empty { display: flex; flex-direction: column; align-items: center; padding: 27px 16px 13px; background: #fff; border: 1px solid #e6ede5; border-radius: 16px; }
 .empty-symbol { display: flex; align-items: center; justify-content: center; width: 56px; height: 56px; margin-bottom: 14px; border-radius: 18px; background: #eef4ee; color: #7d9b81; }
@@ -249,23 +249,8 @@ onShareAppMessage(() => shareCard('home'))
 .all-papers-title { display: block; color: #47614c; font-size: 14px; font-weight: 600; }
 .all-papers-caption { display: block; margin-top: 4px; font-size: 12px; color: var(--lc-muted); }
 .all-papers-arrow { display: flex; align-items: center; justify-content: center; flex: none; width: 36px; height: 36px; border-radius: 50%; background: #e7eee3; color: #52775a; }
-@keyframes show-papers { from { transform: translateY(4px); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slide-up { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-.list-enter-active,
-.list-leave-to {
-  transition: all 0.3s ease;
-}
-.list-enter-from,
-.list-leave-to {
-  opacity: 0;
-  transform: translateY(10px);
-}
-.list-enter-to {
-  opacity: 1;
-  transform: translateY(0);
-}
-.home-subjects { animation: fade-in 0.4s ease-out; }
 .collection-track { animation: slide-up 0.6s ease-out; }
-@media (max-width: 359px) { .home-cards { gap: 10px; } .feed-tabs { gap: 14px; } .feed-tabs button { font-size: 14px; } .feed-tabs button.active { font-size: 17px; } .category-entry { gap: 5px; padding: 12px 8px; } .category-symbol { width: 25px; } .collection-track { padding-left: 16px; padding-right: 16px; } .collection-card { width: 235px; } }
+@media (max-width: 359px) { .home-cards { gap: 10px; } .feed-tabs { gap: 14px; } .category-entry { gap: 5px; padding: 12px 8px; } .category-symbol { width: 25px; } .collection-track { padding-left: 16px; padding-right: 16px; } .collection-card { width: 235px; } }
 </style>

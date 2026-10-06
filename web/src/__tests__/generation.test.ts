@@ -139,11 +139,13 @@ describe('section-safe generation', () => {
     const store = ready()
     store.sections = []
     store.addSection('reading', 4)
-    vi.mocked(api.generateBatch).mockImplementation(async params => result(params).map(section => ({ ...section, questions: section.questions.slice(0, 2), missing_count: 2 })))
+    vi.mocked(api.generateBatch).mockImplementation(async params => result(params).map(section => ({ ...section, questions: section.questions.slice(0, 2), missing_count: 2, quality_warnings: ['请求 4 道，保留 2 道，缺少 2 道；补题有次数上限', '第 1 道题需核对答案'] })))
     await store.generate()
     expect(store.sections[0].count).toBe(4)
     expect(store.papers[0].sections[0].data.passage).toBe('Original passage')
     expect(store.papers[0].sections[0].warn).toContain('缺少 2 道')
+    expect(store.papers[0].sections[0].warn?.match(/缺少 2 道/g)).toHaveLength(1)
+    expect(store.papers[0].sections[0].warn).toContain('第 1 道题需核对答案')
     expect(store.generateWarn).toContain('缺题')
   })
 

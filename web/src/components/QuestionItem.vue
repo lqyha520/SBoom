@@ -140,11 +140,13 @@ function onExprBlur(e: FocusEvent, field: 'left_expr' | 'right_expr') {
         ></div>
       </div>
       <table v-else-if="q.left_items" class="match-table" data-e="match">
-        <tr><th style="width:50%">左栏</th><th style="width:50%">右栏</th></tr>
-        <tr v-for="(_, i) in q.left_items" :key="i">
-          <td :contenteditable="editable" @blur="onMatchBlur($event, 'left', i)">{{ `（${i + 1}）` }}{{ spaceOps(q.left_items![i]) }}</td>
-          <td :contenteditable="editable" @blur="onMatchBlur($event, 'right', i)">{{ `（${i + 1}）` }}{{ spaceOps(q.right_items?.[i]) }}</td>
-        </tr>
+        <thead><tr><th style="width:50%">左栏</th><th style="width:50%">右栏</th></tr></thead>
+        <tbody>
+          <tr v-for="(_, i) in q.left_items" :key="i">
+            <td :contenteditable="editable" @blur="onMatchBlur($event, 'left', i)">{{ `（${i + 1}）` }}{{ spaceOps(q.left_items![i]) }}</td>
+            <td :contenteditable="editable" @blur="onMatchBlur($event, 'right', i)">{{ `（${i + 1}）` }}{{ spaceOps(q.right_items?.[i]) }}</td>
+          </tr>
+        </tbody>
       </table>
     </template>
 

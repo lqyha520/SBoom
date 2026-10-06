@@ -2,6 +2,10 @@ import { beforeEach, expect, it, vi } from 'vitest'
 import { defineComponent, h, KeepAlive } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import PublicPapers from '../components/PublicPapers.vue'
+import PublicationEditorDialog from '../components/PublicationEditorDialog.vue'
+import CatalogPreviewDialog from '../components/CatalogPreviewDialog.vue'
+import PaperMetadataDialog from '../components/PaperMetadataDialog.vue'
+import { defaultDownloadSettings } from '../download-settings'
 import { uiStubs } from '../../../shared/test/ui-stubs'
 import { readAdminRoute } from '../navigation'
 import * as catalog from '../catalog'
@@ -33,14 +37,14 @@ it('required option failures show independent retry actions and retain typed for
     await flushPromises(); await button('添加习题').trigger('click'); await flushPromises()
     const title = wrapper.find('input[maxlength="240"]')
     await title.setValue('保留已填写的试卷标题')
-    await button('手动导入 PDF').trigger('click')
+    await button('导入 PDF').trigger('click')
     expect(wrapper.text()).toContain('分类加载失败')
     expect(wrapper.text()).toContain('年级与科目加载失败')
     await button('重试加载分类').trigger('click'); await flushPromises()
     await button('重试加载年级与科目').trigger('click'); await flushPromises()
     expect(wrapper.text()).not.toContain('分类加载失败')
     expect(wrapper.text()).not.toContain('年级与科目加载失败')
-    await button('选择工作台习题').trigger('click')
+    await button('工作台习题').trigger('click')
     expect((wrapper.get('input[maxlength="240"]').element as HTMLInputElement).value).toBe('保留已填写的试卷标题')
   } finally { wrapper.unmount() }
 })
@@ -58,7 +62,7 @@ it('不选原稿即可创建网盘习题，链接无效时阻止提交', async (
   const button = (label: string) => wrapper.findAll('button').find(item => item.text() === label)!
   try {
     await flushPromises(); await button('添加习题').trigger('click'); await flushPromises()
-    await button('仅添加网盘链接').trigger('click')
+    await button('网盘链接').trigger('click')
     await wrapper.get('input[maxlength="240"]').setValue('网盘资料')
     await wrapper.get('[aria-label="网盘习题年级"]').setValue('available')
     await wrapper.get('[aria-label="网盘习题科目"]').setValue('available')
@@ -122,5 +126,77 @@ it('创建后提供定位、标签与预览入口，预览后明确确认发布'
     expect(wrapper.text()).toContain('已核对内容，确认公开发布')
     expect(button('确认发布').attributes('disabled')).toBeDefined()
     expect(catalog.updatePublication).not.toHaveBeenCalled()
+  } finally { wrapper.unmount() }
+})
+
+it.each(['preview', 'metadata'] as const)('%s respects cancelled and accepted unsaved confirmation', async (action) => {
+  const wrapper = mountPapers()
+  const confirm = vi.fn().mockReturnValue(false)
+  vi.stubGlobal('confirm', confirm)
+  vi.mocked(catalog.catalogDetail).mockResolvedValue(paper)
+  try {
+    await flushPromises()
+    const dialog = wrapper.findComponent(PublicationEditorDialog)
+    const editor = dialog.props('editor')
+    editor.create()
+    await flushPromises()
+    editor.form.description = 'Unsaved description'
+    const beforeUnload = () => {
+      const event = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(event)
+      return event.defaultPrevented
+    }
+    expect(beforeUnload()).toBe(true)
+    dialog.vm.$emit(action, paper)
+    await flushPromises()
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(editor.dialog).toBe(true)
+    expect(editor.form.description).toBe('Unsaved description')
+    expect(beforeUnload()).toBe(true)
+    expect(wrapper.findComponent(CatalogPreviewDialog).props('state').previewOpen).toBe(false)
+    expect(wrapper.findComponent(PaperMetadataDialog).props('open')).toBe(false)
+
+    confirm.mockReturnValue(true)
+    dialog.vm.$emit(action, paper)
+    await flushPromises()
+    expect(editor.dialog).toBe(false)
+    expect(beforeUnload()).toBe(false)
+    if (action === 'preview') {
+      expect(wrapper.findComponent(CatalogPreviewDialog).props('state').previewOpen).toBe(true)
+    } else {
+      expect(wrapper.findComponent(PaperMetadataDialog).props('open')).toBe(true)
+    }
+  } finally {
+    vi.unstubAllGlobals()
+    wrapper.unmount()
+  }
+})
+
+it.each(['queued', 'failed'] as const)('protects %s answer attachments after the paper has been created', async (answerState) => {
+  const wrapper = mountPapers()
+  try {
+    await flushPromises()
+    const editor = wrapper.findComponent(PublicationEditorDialog).props('editor')
+    const file = new File(['%PDF-test'], 'answer.pdf', { type: 'application/pdf' })
+    editor.importQueue.rows.push({
+      id: 'imported', file, digest: '', fileError: '',
+      meta: { ...defaultDownloadSettings(), title: paper.title, grade: 'grade', subject: 'subject', category_id: 'category', mode: 'student' },
+      state: 'succeeded', progress: 100, error: '', created: paper,
+      answer: file, answerState, answerError: '', answerProgress: 0, answerFileError: '',
+    })
+    const beforeUnload = () => {
+      const event = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(event)
+      return event.defaultPrevented
+    }
+    expect(editor.pendingImport).toBe(true)
+    expect(beforeUnload()).toBe(true)
+    editor.importQueue.rows[0].answerState = 'succeeded'
+    expect(editor.pendingImport).toBe(false)
+    expect(beforeUnload()).toBe(false)
+    editor.importQueue.rows[0].answerState = answerState
+    editor.importQueue.setAnswer('imported')
+    expect(editor.pendingImport).toBe(false)
+    expect(beforeUnload()).toBe(false)
   } finally { wrapper.unmount() }
 })

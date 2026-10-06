@@ -87,8 +87,8 @@ def access_token():
 
 
 def destination(message):
-    routes = {"paper": "pages/paper/index", "feedback": "pages/support/index", "membership": "pages/membership/index", "request": "pages/requests/index", "closure": "pages/closure/index", "order": "pages/orders/index"}
-    page = routes.get(message["target_type"], "pages/messages/index")
+    routes = {"paper": "pages/paper/index", "feedback": "subpages/support/index", "membership": "subpages/membership/index", "request": "subpages/requests/index", "closure": "subpages/closure/index", "order": "subpages/orders/index"}
+    page = routes.get(message["target_type"], "subpages/messages/index")
     identifier = message["target_id"]
     return page + ("?id=" + identifier if re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", identifier) else "")
 

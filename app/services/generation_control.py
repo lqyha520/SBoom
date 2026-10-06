@@ -34,6 +34,10 @@ class Usage:
 _INSTANCE = uuid.uuid4().hex
 logger = logging.getLogger(__name__)
 _finishes: set[asyncio.Task] = set()
+LEASE_EXPIRED_ERROR = json.dumps({
+    "code": "generation_lease_expired",
+    "error": "任务心跳超时，结果尚不确定，请稍后查询原请求",
+}, ensure_ascii=False)
 
 
 async def finish(*args):
@@ -64,9 +68,19 @@ async def heartbeat(user_id, request_id):
             logger.warning("生成任务续租失败，将在下个心跳重试", exc_info=False)
 
 
-def reclaim_expired():
+def reclaim_expired(limit: int | None = None):
     with db() as conn:
-        conn.execute("UPDATE generation_requests SET status = 'unknown', finished_at = ? WHERE status = 'running' AND lease_expires_at > 0 AND lease_expires_at < ?", (int(time.time()), int(time.time())))
+        now = int(time.time())
+        query = ("UPDATE generation_requests SET status = 'unknown', finished_at = ?, error_json = ? "
+                 "WHERE (user_id, request_id) IN (SELECT user_id, request_id FROM generation_requests "
+                 "WHERE status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) < ? "
+                 "ORDER BY created_at, user_id, request_id")
+        params = [now, LEASE_EXPIRED_ERROR, now]
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        # 等待行锁后再次核对状态与租约，不能覆盖刚完成或刚续租的任务。
+        conn.execute(query + ") AND status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) < ?", [*params, now])
 
 
 current_usage: ContextVar[Usage | None] = ContextVar("generation_usage", default=None)
@@ -161,13 +175,15 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
 def _finish(user_id: int, request_id: str, usage: Usage, status: str, result=None, error=None) -> None:
     error_status, detail = error if error else (0, {})
     with db() as conn:
+        # 仅原实例可补交清理任务标记为未知的结果，真实终态不会被覆盖。
         completed = conn.execute(
             "UPDATE generation_requests SET status = ?, finished_at = ?, result_json = ?, "
             "error_json = ?, error_status = ?, model_calls = ?, reported_calls = ?, "
-            "prompt_tokens = ?, completion_tokens = ? WHERE user_id = ? AND request_id = ? AND status = 'running' RETURNING kind",
+            "prompt_tokens = ?, completion_tokens = ? WHERE user_id = ? AND request_id = ? AND instance_id = ? "
+            "AND (status = 'running' OR (status = 'unknown' AND error_status = 0 AND error_json = ?)) RETURNING kind",
             (status, int(time.time()), json.dumps(result, ensure_ascii=False) if result is not None else "",
              json.dumps(detail, ensure_ascii=False), error_status, usage.model_calls, usage.reported_calls,
-             usage.prompt_tokens, usage.completion_tokens, user_id, request_id),
+             usage.prompt_tokens, usage.completion_tokens, user_id, request_id, _INSTANCE, LEASE_EXPIRED_ERROR),
         ).fetchone()
     if completed:
         generation_requests_total.labels(completed["kind"], status).inc()

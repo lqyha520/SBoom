@@ -217,6 +217,41 @@ test('修改选项后重新分页，撤销重做与刷新保留编辑', async ({
   await expectContentsFit(page)
 })
 
+test('连线题表格编辑、刷新和 PDF 导出保持完整结构', async ({ page, context }, info) => {
+  await api(context)
+  const snapshot = worksheet(1), errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  snapshot.papers[0].sections[0] = {
+    ...snapshot.papers[0].sections[0], type: 'match_pair',
+    data: { questions: [{ _qid: 'matching', type: 'match_pair', stem: '连接算式与答案',
+      left_items: ['2+3', '3+4'], right_items: ['5', '7'], answer: [[0, 0], [1, 1]] }] },
+  }
+  await seed(page, snapshot)
+  const table = page.locator('.result-view .paper-stack .match-table')
+  await expect(table.locator('thead th')).toHaveCount(2)
+  await expect(table.locator('tbody tr')).toHaveCount(2)
+  await table.locator('tbody td').first().fill('（1）4 + 1')
+  await page.getByRole('heading', { name: '生成结果', exact: true }).click()
+  await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible()
+  await page.reload()
+  await expect(table.locator('tbody td').first()).toContainText('4 + 1')
+  for (const width of [1440, 320]) {
+    await page.setViewportSize({ width, height: 900 })
+    await expectContentsFit(page)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`match-${width}.png`) })
+  }
+  const pages = await page.locator('.result-view .paper-stack .paper').count()
+  const pending = page.waitForEvent('download')
+  await page.getByRole('button', { name: '下载 PDF', exact: true }).click()
+  const download = await pending, file = info.outputPath('matching.pdf')
+  await download.saveAs(file)
+  const pdf = (await readFile(file)).toString('latin1')
+  expect(pdf.startsWith('%PDF-')).toBe(true)
+  expect(pdf.match(/\/Type\s*\/Page\b/g)).toHaveLength(pages)
+  expect(errors).toEqual([])
+})
+
 test('仅调整富文本字号也会重新分页', async ({ page, context }) => {
   await api(context)
   const snapshot = worksheet(5)
@@ -429,6 +464,49 @@ test('结果页在各宽度自动适宽，中屏搭建为侧栏与预览双栏',
   await expect(page.locator('.structure-panel')).toBeVisible()
   await page.screenshot({ path: info.outputPath('build-1024.png') })
 })
+
+for (const width of [1280, 390, 320]) {
+  test(`核对提醒折叠、统一编辑工具和添加题型 ${width}px`, async ({ page, context }, info) => {
+    await api(context)
+    const snapshot = worksheet(2)
+    snapshot.papers[0].sections[0].warn = '缺少 3 道题，请核对答案'
+    snapshot.generateWarn = '1 个大题有质量或缺题提示，请核对后使用'
+    snapshot.sections = snapshot.papers[0].sections.map(section => ({ ...section, id: section._sid!, count: 5, status: 'ready' }))
+    await seed(page, snapshot)
+    await page.setViewportSize({ width, height: width === 1280 ? 720 : 844 })
+    await expect(page.locator('.quality-summary')).toContainText('1 个大题待核对')
+    await expect(page.getByText('缺少 3 道题，请核对答案', { exact: true }).filter({ visible: true })).toHaveCount(0)
+    await page.getByRole('button', { name: '查看详情', exact: true }).click()
+    await expect(page.locator('.quality-details')).toContainText('第 1 大题')
+    await expect(page.locator('.quality-details')).toContainText('缺少 3 道题')
+    await page.getByRole('button', { name: '收起', exact: true }).click()
+    if (width < 621) await page.getByRole('button', { name: '卷面编辑工具', exact: true }).click()
+    const tools = page.getByRole('toolbar', { name: '卷面编辑', exact: true }).filter({ visible: true })
+    await tools.getByRole('button', { name: '编辑卷面设置', exact: true }).click()
+    const settings = page.getByRole('dialog', { name: '卷面设置', exact: true })
+    await expect(settings).toBeVisible()
+    await settings.getByRole('button', { name: '完成', exact: true }).click()
+    await tools.getByRole('button', { name: '管理题目', exact: true }).click()
+    await expect(page.getByRole('dialog', { name: '管理题目', exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await page.evaluate(() => { (document.activeElement as HTMLElement)?.blur() })
+    await page.mouse.move(0, 0)
+    await expect(page.getByRole('tooltip')).toHaveCount(0)
+    await page.screenshot({ path: info.outputPath(`editing-${width}.png`) })
+    await page.getByRole('button', { name: '返回搭建', exact: true }).click()
+    if (width < 900) await page.locator('.workspace-tabs').getByRole('tab', { name: '试卷结构', exact: true }).click()
+    const structure = page.locator('.structure-panel')
+    await expect(structure.locator('.section-item').first()).toBeInViewport()
+    await expect(structure.locator('.type-picker')).toBeHidden()
+    await structure.getByRole('button', { name: '添加题型', exact: true }).click()
+    await structure.getByRole('button', { name: '判断题', exact: true }).click()
+    await expect(structure.locator('.type-picker')).toBeHidden()
+    await expect(structure.locator('.section-item')).toHaveCount(2)
+    await page.mouse.move(0, 0)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`structure-${width}.png`) })
+  })
+}
 
 for (const width of [1440, 320]) {
   test(`清空试卷设置保留结果，可撤销重做并在刷新后保持 ${width}px`, async ({ page, context }, info) => {

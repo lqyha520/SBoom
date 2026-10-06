@@ -92,12 +92,16 @@ async function retry() {
 .section-item { padding: 10px 12px; border: 1px solid var(--ui-border); border-radius: 6px; background: #fff; }
 .section-item:hover { border-color: #c5d5ce; }
 .section-topline { display: flex; align-items: center; gap: 7px; }
-.section-topline h3 { min-width: 0; flex: 1; margin: 0; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
-.section-index { font-size: 10px; font-weight: 600; color: #82918b; font-variant-numeric: tabular-nums; }
+.section-topline h3 { min-width: 0; flex: 1; margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.section-index { font-size: 12px; font-weight: 600; color: #82918b; font-variant-numeric: tabular-nums; }
 .drag-handle { display: flex; align-items: center; padding: 0; border: 0; background: transparent; color: #b2bdc4; cursor: grab; flex: none; }
 .drag-handle:active { cursor: grabbing; }
 .section-controls { display: flex; align-items: center; gap: 8px; padding-top: 10px; }
 .section-count { margin-left: auto; width: 104px; }
-.section-status { font-size: 11px; padding-top: 8px; display: flex; gap: 5px; align-items: center; }
+.section-status { font-size: 12px; padding-top: 8px; display: flex; gap: 5px; align-items: center; }
 .section-status > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 620px) {
+  .section-topline button, .section-controls button, .section-status button { min-height: 44px; min-width: 44px; }
+  .section-item { padding: 8px; }
+}
 </style>

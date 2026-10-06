@@ -156,17 +156,18 @@ def list_papers(user_id, q="", grade="", subject="", category="", favorite=False
             clauses.append(f"EXISTS (SELECT 1 FROM {table} WHERE catalog_id = c.id AND user_id = ?)")
             args.append(user_id)
     where = " AND ".join(clauses) or "1 = 1"
-    fields = (", (SELECT COUNT(*) FROM mini_catalog_favorites WHERE catalog_id = c.id) AS favorite_count, "
-              "(SELECT COUNT(*) FROM mini_catalog_downloads WHERE catalog_id = c.id) AS download_users" if admin else "")
+    fields = (", COALESCE(popularity.favorite_count, 0) AS favorite_count, "
+              "COALESCE(popularity.download_users, 0) AS download_users" if admin else "")
     activity_table = "mini_recent_views" if recent else "mini_catalog_downloads" if downloaded else "mini_catalog_favorites" if favorite else ""
     activity_params = []
     order = "c.featured DESC, c.published_at DESC, c.created_at DESC, c.id DESC"
     query_join = JOIN
+    if admin or sort == "popular":
+        query_join += " LEFT JOIN catalog_popularity popularity ON popularity.catalog_id = c.id"
     if sort == "latest":
         order = "c.published_at DESC, c.created_at DESC, c.id DESC"
     elif sort == "popular":
-        query_join += " LEFT JOIN (SELECT catalog_id, COUNT(*) n FROM mini_catalog_favorites GROUP BY catalog_id) popularity_f ON popularity_f.catalog_id = c.id LEFT JOIN (SELECT catalog_id, COUNT(*) n FROM mini_catalog_downloads GROUP BY catalog_id) popularity_d ON popularity_d.catalog_id = c.id"
-        order = "(COALESCE(popularity_f.n, 0) + COALESCE(popularity_d.n, 0)) DESC, c.published_at DESC, c.id DESC"
+        order = "(COALESCE(popularity.favorite_count, 0) + COALESCE(popularity.download_users, 0)) DESC, c.published_at DESC, c.id DESC"
     if topic:
         # Validated IDs are still bound parameters, never SQL fragments.
         fields += ", (SELECT sort_order FROM site_topic_items WHERE topic_id = ? AND catalog_id = c.id) AS topic_order"
@@ -183,7 +184,7 @@ def list_papers(user_id, q="", grade="", subject="", category="", favorite=False
     if sort == "latest":
         cursor_keys = ["COALESCE(c.published_at, 0)", "c.created_at", "c.id"]
     elif sort == "popular":
-        cursor_keys = ["(COALESCE(popularity_f.n, 0) + COALESCE(popularity_d.n, 0))", "COALESCE(c.published_at, 0)", "c.id"]
+        cursor_keys = ["(COALESCE(popularity.favorite_count, 0) + COALESCE(popularity.download_users, 0))", "COALESCE(c.published_at, 0)", "c.id"]
     if topic:
         cursor_keys, direction = ["topic_order", "id"], "ASC"
     if activity_table:

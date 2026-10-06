@@ -2,7 +2,7 @@
 import { computed, defineAsyncComponent, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
 import { useExamStore } from '../stores/exam'
 import PaperView from './PaperView.vue'
-import FormatBar from './FormatBar.vue'
+import PaperEditToolbar from './PaperEditToolbar.vue'
 import ZoomControl from './ZoomControl.vue'
 import RecoveryActions from './RecoveryActions.vue'
 import GenerationTasks from './GenerationTasks.vue'
@@ -12,7 +12,7 @@ import { deepClone } from '../utils'
 import { useFitZoom } from '../useFitZoom'
 
 const store = useExamStore()
-const emit = defineEmits<{ library: [] }>()
+const emit = defineEmits<{ library: []; 'open-settings': [] }>()
 const CloudSaveDialog = defineAsyncComponent(() => import('./CloudSaveDialog.vue'))
 const showCloudSave = ref(false)
 const manageQuestions = ref(false)
@@ -24,7 +24,12 @@ const selected = ref(0)
 const paper = computed(() => store.papers[selected.value] || store.papers[0])
 const paperOptions = computed(() => store.papers.map((p, index) => ({ label: '第 ' + (p.day || index + 1) + ' 份试卷', value: index })))
 const questionCount = computed(() => paper.value?.sections.reduce((total, section) => total + section.data.questions.length, 0) || 0)
-const qualityWarnings = computed(() => paper.value?.sections.flatMap((section, index) => section.warn ? ['第 ' + (index + 1) + ' 大题：' + section.warn] : []) || [])
+const qualityWarnings = computed(() => paper.value?.sections.flatMap((section, index) => section.warn ? [{ index, message: section.warn }] : []) || [])
+const qualityOpen = ref(false)
+const warningSummary = computed(() => [
+  store.failedCount ? store.failedCount + ' 份试卷尚未完成' : '',
+  qualityWarnings.value.length ? qualityWarnings.value.length + ' 个大题待核对' : '',
+].filter(Boolean).join(' · ') || store.generateWarn)
 const exporting = ref('')
 const exportNotice = ref('')
 const editingOpen = ref(false)
@@ -91,8 +96,11 @@ function cancelLayout() { store.finishLayout(true); paperViewEl.value?.repaginat
     <p v-if="exportNotice" class="px-4 py-2 text-sm text-primary bg-default" role="status">{{ exportNotice }}</p>
     <GenerationTasks />
     <QuestionManager v-if="paper && manageQuestions" :paper-index="selected" @close="manageQuestions = false" />
-    <div v-if="store.generateWarn || store.generateError || exportError" class="result-notice no-print">
-      <UAlert v-if="store.generateWarn" color="warning" variant="soft" :title="store.generateWarn" />
+    <div v-if="warningSummary || store.generateError || exportError" class="result-notice no-print">
+      <div v-if="warningSummary" class="quality-summary" role="status"><UIcon name="i-lucide-triangle-alert" class="size-4" /><span>{{ warningSummary }}</span><UButton v-if="qualityWarnings.length" :label="qualityOpen ? '收起' : '查看详情'" :icon="qualityOpen ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" color="warning" variant="ghost" size="sm" :aria-expanded="qualityOpen" @click="qualityOpen = !qualityOpen" /></div>
+      <UCollapsible v-if="warningSummary" v-model:open="qualityOpen">
+        <template #content><ul class="quality-details"><li v-for="warning in qualityWarnings" :key="warning.index"><strong>第 {{ warning.index + 1 }} 大题</strong><p>{{ warning.message }}</p></li></ul><div class="actions-row pb-2"><UButton label="核对题目" icon="i-lucide-list-checks" variant="outline" size="sm" :disabled="busy || store.generating || store.layoutMode" @click="manageQuestions = true" /><UButton label="调整出题条件" icon="i-lucide-arrow-left" variant="ghost" size="sm" :disabled="busy || store.layoutMode" @click="store.backToBuild()" /></div></template>
+      </UCollapsible>
       <RecoveryActions />
       <UAlert v-if="store.generateError || exportError" color="error" variant="soft" :title="exportError || store.generateError" role="alert" />
     </div>
@@ -102,13 +110,11 @@ function cancelLayout() { store.finishLayout(true); paperViewEl.value?.repaginat
       <UButton label="返回搭建" variant="outline" @click="store.backToBuild()" />
     </div>
     <template v-if="paper">
-    <div v-if="qualityWarnings.length" class="result-quality no-print"><UAlert color="warning" variant="soft" title="当前试卷待核对" :description="qualityWarnings.join('；')" /></div>
     <div class="result-toolbar no-print">
       <UTooltip text="返回搭建"><UButton icon="i-lucide-arrow-left" color="neutral" variant="ghost" aria-label="返回搭建" :disabled="busy || store.layoutMode" @click="store.backToBuild()" /></UTooltip>
       <USelect v-model="selected" :items="paperOptions" aria-label="选择试卷" class="paper-picker" :disabled="store.layoutMode || busy || store.generating" />
       <span class="result-count text-xs text-muted">共 {{ store.papers.length }} 份</span>
       <div class="flex-1"></div>
-      <UButton label="管理题目" icon="i-lucide-list-checks" variant="outline" :disabled="busy || store.layoutMode || store.generating" @click="manageQuestions = true" />
       <UButton class="result-secondary" icon="i-lucide-refresh-cw" label="重新生成" color="neutral" variant="outline" :loading="store.generating" :disabled="busy || store.layoutMode" @click="confirmRegenerate" />
       <UButton class="result-secondary" icon="i-lucide-cloud-upload" label="保存到云端" color="neutral" variant="outline" :loading="archiving" :disabled="busy || store.layoutMode || store.generating || store.accountChanged" @click="showCloudSave = true" />
       <UButton class="result-edit-toggle" icon="i-lucide-sliders-horizontal" aria-label="卷面编辑工具" :aria-expanded="editingOpen" variant="outline" color="neutral" @click="editingOpen = !editingOpen" />
@@ -118,13 +124,7 @@ function cancelLayout() { store.finishLayout(true); paperViewEl.value?.repaginat
       </UButtonGroup>
       <UDropdownMenu :items="moreExports"><UButton icon="i-lucide-ellipsis" color="neutral" variant="outline" aria-label="更多导出方式" :disabled="busy || store.layoutMode || store.generating" /></UDropdownMenu>
     </div>
-    <div class="preview-toolbar result-editbar no-print" :class="{ 'editing-open': editingOpen || store.layoutMode }">
-      <div class="actions-row"><FormatBar /><div class="toolbar-divider"></div><USwitch v-model="store.showAnswers" label="显示答案" size="sm" :disabled="store.layoutMode || busy" /></div>
-      <div class="actions-row">
-        <template v-if="!store.layoutMode"><UButton icon="i-lucide-move" label="排版模式" color="neutral" variant="ghost" size="xs" :disabled="busy" @click="toggleLayout" /></template>
-        <template v-else><UButton label="取消" color="neutral" variant="ghost" size="xs" @click="cancelLayout" /><UButton icon="i-lucide-check" label="完成排版" size="xs" @click="toggleLayout" /></template>
-      </div>
-    </div>
+    <PaperEditToolbar v-model:answers="store.showAnswers" class="result-editbar" :class="{ 'editing-open': editingOpen || store.layoutMode }" :layout-mode="store.layoutMode" :disabled="busy || store.generating" :can-layout="!!paper.sections.length" manage @settings="emit('open-settings')" @manage="manageQuestions = true" @layout="toggleLayout" @cancel="cancelLayout" />
     <div v-if="exporting" class="px-5 py-2 text-xs text-primary bg-default no-print"><span role="status">{{ exporting }}</span><UButton label="取消导出" variant="ghost" size="xs" @click="exportController?.abort()" /></div>
     <div ref="stackEl" class="preview-scroll">
       <PaperView :key="selected" ref="paperViewEl" :paper="paper" :template="store.template" :style="store.style" :show-answers="store.showAnswers" :editable="!busy" :layout-mode="store.layoutMode" :add-day="store.addDayLabel" :zoom="zoom"

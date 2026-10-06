@@ -433,6 +433,7 @@ _CORE_TABLES = (
     "generation_requests",
     "paper_archives",
     "catalog_papers",
+    "catalog_popularity",
     "mini_users",
     "mini_catalog_favorites",
     "mini_usage_events",
@@ -452,7 +453,7 @@ def _verify_schema(conn) -> tuple[list, int]:
     return [t for t in _CORE_TABLES if t not in present], len(present)
 
 
-SCHEMA_VERSION = 2026092802
+SCHEMA_VERSION = 2026100501
 
 
 def init_db(*, migrate: bool | None = None) -> None:
@@ -487,6 +488,8 @@ def init_db(*, migrate: bool | None = None) -> None:
         init_experience_schema(conn)
         init_engagement_schema(conn)
         init_commerce_schema(conn)
+        from app.catalog_popularity_schema import migrate as popularity_schema
+        popularity_schema(conn)
         add_optimization_indexes(conn)
         add_search_indexes(conn)
         init_maintenance_schema(conn)

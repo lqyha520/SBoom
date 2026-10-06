@@ -200,7 +200,7 @@ onBeforeUnmount(() => {
           <LeftPanel v-show="!imageMode && store.view === 'build'" :inert="store.layoutMode || undefined" />
           <MiddleColumn v-show="!imageMode && store.view === 'build'" :inert="store.layoutMode || undefined" @open-templates="showTpl = true" @preview="mobilePanel = 'preview'" />
           <KeepAlive><PreviewPane v-if="!imageMode && store.view === 'build'" @open-settings="showAdv = true" /></KeepAlive>
-        <KeepAlive><StepResult v-if="!imageMode && store.view === 'result'" @library="showCloud = true" /></KeepAlive>
+        <KeepAlive><StepResult v-if="!imageMode && store.view === 'result'" @library="showCloud = true" @open-settings="showAdv = true" /></KeepAlive>
       </main>
       <AdvancedDrawer v-if="showAdv" :open="showAdv" @close="showAdv = false" />
       <MyTemplatesDialog v-if="showTpl" :open="showTpl" @close="showTpl = false" />

@@ -189,7 +189,9 @@ export function assemblePaper(context: GenerationContext, job: GenerationJob): P
     }
     const missing = Math.max(0, section.count - questions.length, result?.missing_count || 0)
     const warnings = [...(result?.quality_warnings || [])]
-    if (missing) warnings.push(`缺少 ${missing} 道题（请求 ${section.count} 道，实际 ${questions.length} 道）`)
+    if (missing && !warnings.some(warning => new RegExp(`缺少\\s*${missing}\\s*道`).test(warning))) {
+      warnings.push(`缺少 ${missing} 道题（请求 ${section.count} 道，实际 ${questions.length} 道）`)
+    }
     const data: GameData = { questions, passage: result?.passage, topic: result?.topic,
       missing_count: missing, quality_warnings: warnings }
     ensureQids(data)

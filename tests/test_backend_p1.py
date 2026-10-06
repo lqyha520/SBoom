@@ -71,6 +71,64 @@ class BudgetLeaseContracts(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         model.assert_not_awaited()
 
+    def test_original_instance_recovers_result_after_lease_cleanup(self):
+        control._begin(self.user.id, "late", "batch", {})
+        with db() as conn:
+            conn.execute("UPDATE generation_requests SET lease_expires_at = 1 WHERE request_id = 'late'")
+        control.reclaim_expired(limit=100)
+        self.assertEqual(control.request_status(self.user.id, "late")["status"], "unknown")
+        result = {"sections": [{"questions": [{"stem": "late result"}]}]}
+        usage = control.Usage(model_calls=1, reported_calls=1, prompt_tokens=12, completion_tokens=34)
+        with patch.object(control, "_INSTANCE", "another-worker"):
+            control._finish(self.user.id, "late", usage, "succeeded", result)
+        self.assertIsNone(control.request_status(self.user.id, "late")["result"])
+        control._finish(self.user.id, "late", usage, "succeeded", result)
+        self.assertEqual(control.request_status(self.user.id, "late")["result"], result)
+        self.assertEqual(control._begin(self.user.id, "late", "batch", {}), result)
+        with db() as conn:
+            row = conn.execute("SELECT model_calls, prompt_tokens, completion_tokens FROM generation_requests WHERE request_id = 'late'").fetchone()
+        self.assertEqual(tuple(row.values()), (1, 12, 34))
+        control._finish(self.user.id, "late", control.Usage(), "unknown")
+        self.assertEqual(control.request_status(self.user.id, "late")["status"], "succeeded")
+
+    def test_confirmed_failure_cannot_be_overwritten_by_late_completion(self):
+        control._begin(self.user.id, "failed-terminal", "batch", {})
+        control._finish(self.user.id, "failed-terminal", control.Usage(), "unknown", error=(503, {"error": "interrupted"}))
+        control._finish(self.user.id, "failed-terminal", control.Usage(), "succeeded", {"sections": []})
+        status = control.request_status(self.user.id, "failed-terminal")
+        self.assertEqual(status["status"], "unknown")
+        self.assertEqual(status["error_status"], 503)
+        self.assertIsNone(status["result"])
+
+    def test_cleanup_rechecks_tasks_that_finish_or_renew_while_waiting_for_lock(self):
+        for finished in (True, False):
+            with self.subTest(finished=finished):
+                request_id = "cleanup-finish" if finished else "cleanup-renew"
+                control._begin(self.user.id, request_id, "batch", {})
+                with db() as conn:
+                    conn.execute("UPDATE generation_requests SET lease_expires_at = 1 WHERE request_id = ?", (request_id,))
+                with ThreadPoolExecutor(max_workers=1) as workers:
+                    with db() as blocker:
+                        pid = blocker.execute("SELECT pg_backend_pid()").fetchone()[0]
+                        if finished:
+                            blocker.execute("UPDATE generation_requests SET status = 'succeeded', result_json = ? WHERE request_id = ?",
+                                            (json.dumps({"sections": []}), request_id))
+                        else:
+                            blocker.execute("UPDATE generation_requests SET lease_expires_at = ? WHERE request_id = ?",
+                                            (int(time.time()) + 90, request_id))
+                        pending = workers.submit(control.reclaim_expired, 100)
+                        deadline = time.monotonic() + 5
+                        waiting = False
+                        while time.monotonic() < deadline:
+                            with db() as observer:
+                                waiting = observer.execute("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND ? = ANY(pg_blocking_pids(pid)))", (pid,)).fetchone()[0]
+                            if waiting:
+                                break
+                            time.sleep(0.01)
+                        self.assertTrue(waiting, "清理必须先等待生成事务的行锁")
+                    pending.result(timeout=5)
+                self.assertEqual(control.request_status(self.user.id, request_id)["status"], "succeeded" if finished else "running")
+
     def test_truncation_preserves_complete_sections_and_replays_without_repairs(self):
         self.body['items'].append({'section_id': 's2', 'game_type': 'fill_blank', 'question_count': 2})
         raw = '<think>分析</think>```json\n{"sections": [' + json.dumps(reliability.section()) + ', {"section_id": "s2", "questions": ['

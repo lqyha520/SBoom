@@ -68,6 +68,8 @@ python -m mypy app run.py scripts
 
 配置从[.env.example](.env.example)及[生产环境示例](deploy/.env.production.example)开始。生产保持`DB_AUTO_MIGRATE=false`，发布前单独迁移；provider默认禁止内网地址（`PROVIDER_ALLOW_PRIVATE=false`）。签名密钥和带编号的加密密钥环分别管理，禁止直接替换旧密钥而丢失历史密文解密能力。
 
+热门排序使用事务内维护的收藏与下载用户汇总，重复下载不重复计数。升级到数据库版本`2026100501`前执行`python -m app.migrations`，迁移会回填既有记录；迁移完成后再启动新版应用。
+
 ## 部署与维护
 
 [部署与备份恢复](docs/deploy.md)说明现有环境核对、镜像发布、异地加密备份、回滚和小程序上线验收。[运维变更手册](docs/operations.md)说明密钥轮换、数据库扩展/收缩迁移、PostgreSQL升级与敏感产物迁移。[监控说明](deploy/monitoring/README.md)提供readyz、磁盘、TLS、备份时效和维护失败检查。

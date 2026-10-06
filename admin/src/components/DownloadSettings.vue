@@ -4,7 +4,7 @@ defineProps<{ fields: DownloadSettings; disabled?: boolean; linkOnly?: boolean; 
 </script>
 <template>
   <div class="delivery-fields">
-    <UFormField label="下载方式" :hint="linkOnly ? '无需上传 PDF，用户获取链接后自行前往网盘下载。' : '选择用户在小程序中获取这份习题的方式；已有预览图继续保留。'">
+    <UFormField label="下载方式" :description="linkOnly ? '用户获取链接后前往网盘下载。' : '选择小程序中的获取方式。'">
       <USelect v-model="fields.download_mode" :items="linkOnly ? [{ label: '网盘链接', value: 'external' }] : [{ label: 'PDF 文件', value: 'pdf' }, { label: '网盘链接', value: 'external' }]" :aria-label="(labelPrefix || '') + '下载方式'" :disabled="disabled || linkOnly" class="w-full" />
     </UFormField>
     <template v-if="fields.download_mode === 'external'">

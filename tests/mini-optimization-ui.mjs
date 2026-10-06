@@ -23,12 +23,13 @@ try {
   const groups = [{ id: 'g1', name: '期末复习', revision: 1, paper_count: 0 }]
   const assigned = new Map()
   let messageFailure = false, batchFailure = false
+  let recentEnabled = true, homeEmpty = false
   let submitted = []
   const rows = Array.from({ length: 24 }, (_, i) => ({
     id: 'paper-' + i, revision: 1, title: `20 以内加减法练习 ${i + 1}`,
     grade: '小学一年级', subject: '数学', can_view: true, can_download: true,
     required_view: 'free', required_download: 'free', view_access: 'free', download_access: 'free',
-    question_count: 12, page_count: 4, created_at: now, updated_at: now,
+    question_count: 12, page_count: 4, keyword: i === 1 ? '' : '20 以内加减法', answer_readiness: i % 2 ? 'separate' : 'included', created_at: now, updated_at: now,
     thumbnail_url: '/api/v1/catalog/assets/image-' + i, file_status: 'ready',
     category: '口算练习', download_mode: 'pdf', release_number: 1,
   }))
@@ -47,6 +48,7 @@ try {
     else if (path === '/api/v1/site/topics' || path === '/api/v1/site/catalog-tags') body = { items: [] }
     else if (path === '/api/v1/catalog/papers') {
       let result = rows
+      if (homeEmpty || (!recentEnabled && url.searchParams.get('recent') === 'true')) result = []
       if (url.searchParams.get('favorite') === 'true') result = result.filter(row => favorites.has(row.id))
       if (url.searchParams.get('ungrouped') === 'true') result = result.filter(row => !assigned.has(row.id))
       if (url.searchParams.get('favorite_group')) result = result.filter(row => assigned.get(row.id) === url.searchParams.get('favorite_group'))
@@ -96,15 +98,49 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, name + ' overflow')
     report.screenshots.push(name)
   }
-  for (const [width, height] of [[320, 568], [375, 812], [430, 932]]) {
+  for (const [width, height] of [[320, 568], [375, 812], [430, 932], [1024, 900]]) {
     await page.setViewportSize({ width, height })
     await go('/pages/home/index')
     await expect(page.locator('.paper-card-title').first()).toBeVisible()
+    await page.locator('.home-search-row').scrollIntoViewIfNeeded()
+    await expect(page.locator('.home-heading')).toHaveCount(0)
+    await expect(page.locator('.home-banner')).toBeInViewport()
+    await expect(page.locator('.welcome-art')).toBeVisible()
     const title = await page.locator('.paper-card-title').first().boundingBox()
     assert.ok(title.y + title.height < height - 68, 'Home first title should fit above tabbar: ' + JSON.stringify(title))
+    const first = page.locator('.paper-card').first()
+    await expect(first.locator('.paper-card-keyword')).toHaveCount(0)
+    await expect(first.locator('.paper-card-meta')).toContainText('12 题 · 4 页')
+    await expect(first.locator('.paper-card-meta')).not.toContainText('含答案')
+    assert.ok((await first.boundingBox()).height <= (width < 768 ? 245 : 280), 'Featured cards must remain compact')
+    assert.equal(await first.locator('.cover-sheet').evaluate(element => getComputedStyle(element).transform), 'none')
+    assert.equal(await first.locator('.cover-sheet').evaluate(element => {
+      const sheet = element.getBoundingClientRect(), cover = element.closest('.paper-cover').getBoundingClientRect()
+      return sheet.left >= cover.left && sheet.right <= cover.right && sheet.top >= cover.top && sheet.bottom <= cover.bottom
+    }), true, 'Full cover must fit without clipping')
+    const covers = await page.locator('.home-cards .paper-cover').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().top))
+    assert.equal(covers[0], covers[1], 'Cards with and without keywords must align')
     await screenshot('home-' + width)
+    await first.evaluate(element => element.scrollIntoView({ block: 'center' }))
+    await expect(first.locator('.paper-card-meta')).toBeInViewport()
+    await first.screenshot({ path: output('paper-card-' + width + '.png') })
   }
-  report.flows.push('home first title visible at 320/375/430')
+  report.flows.push('home first title, complete covers and aligned keyword rows at 320/375/430/1024')
+  recentEnabled = false
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.reload()
+  await expect(page.locator('.paper-card-title').first()).toBeVisible()
+  await expect(page.locator('.home-banner')).toBeVisible()
+  await expect(page.locator('.welcome-title')).toHaveText('每天一份好练习')
+  await page.locator('.home-search-row').scrollIntoViewIfNeeded()
+  await screenshot('home-no-recent-375')
+  homeEmpty = true
+  await page.reload()
+  await expect(page.locator('.empty-title')).toHaveText('新的练习正在准备中')
+  await expect(page.getByRole('button', { name: /^进入习题库/ })).toBeVisible()
+  await screenshot('home-empty-375')
+  homeEmpty = false
+  report.flows.push('home without browsing history and empty catalog retain navigation')
   await page.setViewportSize({ width: 320, height: 568 })
   await go('/pages/favorites/index')
   await expect(page.locator('.paper-row')).toHaveCount(20)
