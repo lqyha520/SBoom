@@ -31,8 +31,6 @@
     "src/**/*.d.ts",
     "src/**/*.vue",
     "components.d.ts",
-    "auto-imports.d.ts",
-    "browser-tests/**/*.ts",
-    "playwright.config.ts"
+    "auto-imports.d.ts"
   ]
 }

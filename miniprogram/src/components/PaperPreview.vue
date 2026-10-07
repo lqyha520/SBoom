@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
+import { onHide } from '@dcloudio/uni-app'
 import ChromeBack from './ChromeBack.vue'
 import PrivateImage from './PrivateImage.vue'
 import type { Asset } from '../types'
@@ -25,15 +26,22 @@ const bar = chromeBar()
 const navigationTop = ref(bar.inset)
 const navigationHeight = ref(bar.height)
 function close() { jumpOpen.value = false; emit('close') }
+let savedPage = -1
+function savePosition() { if (savedPage !== current.value) { savedPage = current.value; rememberPosition(owner, props.paperId, props.release, current.value) } }
+onHide(savePosition)
+onBeforeUnmount(savePosition)
 function select(index: number) {
   if (!Number.isInteger(index) || index < 0 || index >= props.pages.length) return
   // Native movable-view retains internal pan/zoom state. Reset only a page
   // that was zoomed, keeping ordinary adjacent images mounted during turns.
   if (zoomed.delete(current.value)) resetKeys.value[current.value] = (resetKeys.value[current.value] || 0) + 1
   current.value = index; scale.value = 1; zoomedCurrent.value = false; jumpOpen.value = false
-  rememberPosition(owner, props.paperId, props.release, index)
 }
 function change(event: { detail: { current: number } }) { select(event.detail.current) }
+function fitPage() {
+  resetKeys.value[current.value] = (resetKeys.value[current.value] || 0) + 1
+  zoomed.delete(current.value); scale.value = 1; zoomedCurrent.value = false
+}
 // 缩放期间绝不给 movable-view 改属性（direction 固定为 all）：每帧 setData 会打断它的
 // 手势状态机，表现为"放大后拖不动"。这里只记录结果，并把倍数量化到 0.05 减少重渲染。
 function resize(event: { detail: { scale: number } }, index: number) {
@@ -61,9 +69,9 @@ watch(() => props.pages.length, count => { if (current.value >= count) select(Ma
         </movable-area>
       </swiper-item>
     </swiper>
-    <view class="reader-footer"><text class="reader-hint">{{ zoomedCurrent ? '拖动查看细节，缩小后可横滑翻页' : '左右滑动翻页 · 双指缩放查看细节' }}</text><view class="reader-controls"><wd-button role="button" variant="text" :disabled="current === 0" @click="select(current - 1)">上一页</wd-button><button class="reader-jump" role="button" hover-class="control-pressed" aria-label="选择预览页码" @click="jumpOpen = true">{{ current + 1 }} / {{ pages.length }} 页 <wd-icon name="down" size="12px" /></button><wd-button role="button" variant="text" :disabled="current >= pages.length - 1" @click="select(current + 1)">下一页</wd-button></view></view>
+    <view class="reader-footer"><view class="reader-tools"><text class="reader-hint">{{ Math.round(scale * 100) }}%</text><button class="reader-close" role="button" hover-class="control-pressed" title="恢复适宽" aria-label="恢复适宽" @click="fitPage"><wd-icon name="fullscreen" size="20px" /></button></view><view class="reader-controls"><wd-button role="button" variant="text" :disabled="current === 0" @click="select(current - 1)">上一页</wd-button><button class="reader-jump" role="button" hover-class="control-pressed" aria-label="选择预览页码" @click="jumpOpen = true">{{ current + 1 }} / {{ pages.length }} 页 <wd-icon name="down" size="12px" /></button><wd-button role="button" variant="text" :disabled="current >= pages.length - 1" @click="select(current + 1)">下一页</wd-button></view></view>
     <wd-popup v-model="jumpOpen" position="bottom" :z-index="1300" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0">
-      <view class="sheet"><view class="sheet-handle" /><view class="sheet-head"><text class="sheet-title">跳转到指定页</text><button class="reader-close" role="button" aria-label="关闭页码选择" @click="jumpOpen = false"><wd-icon name="close" size="20px" /></button></view><scroll-view scroll-y class="reader-page-options" :scroll-into-view="'reader-page-' + current"><button v-for="(page, index) in pages" :id="'reader-page-' + index" :key="page.id" class="reader-page-option" :class="{ selected: index === current }" role="button" hover-class="control-pressed" :aria-pressed="index === current" @click="select(index)">第 {{ page.page_number }} 页</button></scroll-view></view>
+      <view class="sheet"><view class="sheet-handle" /><view class="sheet-head"><text class="sheet-title">选择页面</text><button class="reader-close" role="button" aria-label="关闭页码选择" @click="jumpOpen = false"><wd-icon name="close" size="20px" /></button></view><scroll-view v-if="jumpOpen" scroll-y class="reader-page-options" :scroll-into-view="'reader-page-' + current"><view class="reader-page-grid"><button v-for="(page, index) in pages" :id="'reader-page-' + index" :key="page.id" class="reader-page-option" :class="{ selected: index === current }" role="button" hover-class="control-pressed" :aria-pressed="index === current" :aria-label="'第 ' + page.page_number + ' 页'" @click="select(index)"><view class="reader-thumb"><PrivateImage :src="page.url" :label="'第 ' + page.page_number + ' 页缩略图'" lazy /></view><text>第 {{ page.page_number }} 页</text></button></view></scroll-view></view>
     </wd-popup>
   </view>
 </template>
@@ -73,5 +81,6 @@ watch(() => props.pages.length, count => { if (current.value >= count) select(Ma
 .reader-header { position:relative;z-index:2;display:flex;align-items:center;justify-content:center;padding:0 12px;flex:none;box-sizing:border-box;background:var(--lc-card); }.reader-title { text-align:center;font-size:18px;font-weight:600;white-space:nowrap; }.reader-close { display:flex;align-items:center;justify-content:center;width:44px;height:44px;margin:0;padding:0;background:transparent;color:var(--lc-text); }
 .reader-pages { position:relative;z-index:0;overflow:hidden;flex:1;min-height:0;width:100%; }.reader-area,.reader-image { width:100%;height:100%; }.reader-image { display:block; }
 .reader-footer { position:relative;z-index:2;padding:12px 12px 16px;flex:none;background:var(--lc-card); }.reader-hint { display:block;text-align:center;font-size:12px;line-height:1.7;color:var(--lc-secondary); }.reader-controls { display:flex;align-items:center;justify-content:space-between;gap:8px; }.reader-jump { display:flex;align-items:center;justify-content:center;gap:8px;min-height:44px;margin:0;padding:0 8px;background:transparent;font-size:14px;font-variant-numeric:tabular-nums;color:var(--lc-text); }
-.reader-page-options { height:40vh; }.reader-page-option { width:100%;margin:0;padding:12px;background:transparent;color:var(--lc-text);font-size:14px;text-align:left;line-height:1.6; }.reader-page-option.selected { background:var(--lc-primary-soft);color:var(--lc-primary); }
+.reader-tools { display:flex;align-items:center;justify-content:center;gap:8px;height:44px; }.reader-tools .reader-hint { min-width:42px;font-variant-numeric:tabular-nums; }
+.reader-page-options { height:44vh; }.reader-page-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:2px; }.reader-page-option { width:100%;min-width:0;margin:0;padding:6px;border:2px solid transparent;border-radius:8px;background:transparent;color:var(--lc-text);font-size:13px;text-align:center;line-height:1.6; }.reader-page-option.selected { border-color:var(--lc-primary);background:var(--lc-primary-soft);color:var(--lc-primary); }.reader-thumb { aspect-ratio:1 / 1.4143;overflow:hidden;margin-bottom:5px; }
 </style>

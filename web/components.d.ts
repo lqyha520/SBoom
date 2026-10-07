@@ -25,6 +25,7 @@ declare module 'vue' {
     LoginView: typeof import('./src/components/LoginView.vue')['default']
     MiddleColumn: typeof import('./src/components/MiddleColumn.vue')['default']
     MyTemplatesDialog: typeof import('./src/components/MyTemplatesDialog.vue')['default']
+    PaperEditToolbar: typeof import('./src/components/PaperEditToolbar.vue')['default']
     PaperPage: typeof import('./src/components/PaperPage.vue')['default']
     PaperTemplateDialog: typeof import('./src/components/PaperTemplateDialog.vue')['default']
     PaperView: typeof import('./src/components/PaperView.vue')['default']

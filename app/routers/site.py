@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.blocking import run_sync
 from app.deps import require_admin
+from app.http_limits import limited_body
 from app.library_deps import no_store, optional_mini_user
 from app.library_files import asset_response
 from app.models.site import (
@@ -15,8 +16,10 @@ from app.models.site import (
     DictionaryAdopt,
     DictionaryInput,
     DictionaryLinksUpdate,
+    DictionaryReorder,
     DictionaryUpdate,
     DocumentUpdate,
+    HomeSettings,
     NoticeInput,
     NoticeUpdate,
     ReorderInput,
@@ -35,18 +38,7 @@ async def _image_body(request: Request) -> tuple[str, bytes]:
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
     if not content_type.startswith("image/"):
         raise HTTPException(415, detail={"error": "请上传图片文件"})
-    try:
-        declared = int(request.headers.get("content-length", "0"))
-    except ValueError as exc:
-        raise HTTPException(400, detail={"error": "无效的请求长度"}) from exc
-    if declared < 0 or declared > _IMAGE_LIMIT:
-        raise HTTPException(413, detail={"error": "Banner 图片不能超过 2 MB"})
-    content = bytearray()
-    async for chunk in request.stream():
-        if len(content) + len(chunk) > _IMAGE_LIMIT:
-            raise HTTPException(413, detail={"error": "Banner 图片不能超过 2 MB"})
-        content.extend(chunk)
-    return content_type, bytes(content)
+    return content_type, await limited_body(request, _IMAGE_LIMIT, error="Banner 图片不能超过 2 MB")
 
 
 # ─── 小程序端 ───
@@ -54,12 +46,15 @@ async def _image_body(request: Request) -> tuple[str, bytes]:
 @router.get("/home")
 def home(user: MiniUser | None = Depends(optional_mini_user)):
     """首页一次性拿全：Banner、公告、分类、年级科目字典。"""
-    return site.home_payload()
+    return {**site.home_payload(), "banner_mode": site.home_settings()["banner_mode"]}
 
 
 @router.get("/banners/{banner_id}/image")
-def banner_image(banner_id: str, user: MiniUser | None = Depends(optional_mini_user)):
-    return asset_response(site.banner_asset(banner_id))
+def banner_image(banner_id: str, v: int | None = None, user: MiniUser | None = Depends(optional_mini_user)):
+    asset = site.banner_asset(banner_id)
+    # 仅当前版本可长期缓存；旧版本 URL 不能把新内容永久缓存到错误的键下。
+    cache = "public, max-age=31536000, immutable" if v == asset["revision"] else "public, max-age=60"
+    return asset_response(asset, cache_control=cache)
 
 
 @router.get("/documents/{key}")
@@ -98,6 +93,15 @@ def delete_category(category_id: str, revision: int = Query(ge=1), user: Current
 
 
 # ─── 后台 · Banner ───
+
+@admin_router.get("/home-settings", response_model=HomeSettings)
+def home_settings(user: CurrentUser = Depends(require_admin)):
+    return site.home_settings()
+
+
+@admin_router.put("/home-settings", response_model=HomeSettings)
+def save_home_settings(body: HomeSettings, user: CurrentUser = Depends(require_admin)):
+    return site.save_home_settings(body)
 
 @admin_router.get("/banners")
 def banners(user: CurrentUser = Depends(require_admin)):
@@ -205,6 +209,11 @@ def adopt_dictionary(body: DictionaryAdopt, user: CurrentUser = Depends(require_
 @admin_router.post("/dictionary", status_code=201)
 def create_dictionary(body: DictionaryInput, user: CurrentUser = Depends(require_admin)):
     return site.create_dictionary(body)
+
+
+@admin_router.post("/dictionary/reorder")
+def reorder_dictionary(body: DictionaryReorder, user: CurrentUser = Depends(require_admin)):
+    return site.reorder_dictionary(body)
 
 
 @admin_router.put("/dictionary/{item_id}")

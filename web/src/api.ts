@@ -1,3 +1,5 @@
+import { ApiError as SharedApiError, AuthError, parseErrorDetail, retryableIdempotent, backoff } from '../../shared/http'
+export { AuthError } from '../../shared/http'
 import type { Difficulty, MyTemplate, Question, ScopeData } from './types'
 // crypto.randomUUID 是 [SecureContext] 限定 API，http://内网IP 下不存在
 import { randomId } from '../../shared/webcrypto'
@@ -13,18 +15,10 @@ export function captureWorkspaceGuard() {
   }
 }
 
-export class ApiError extends Error {
-  constructor(message: string, public status = 0, public code = '', public requestId = '') {
-    super(message)
+export class ApiError extends SharedApiError {
+  constructor(message: string, public status = 0, public code = '', public requestId = '', public partialSections?: BatchRespSection[]) {
+    super(message, status, code, requestId)
     this.name = 'ApiError'
-  }
-}
-
-/** 401 未登录/会话过期 —— 由调用方（App）捕获后展示登录页 */
-export class AuthError extends Error {
-  constructor(msg = '请先登录') {
-    super(msg)
-    this.name = 'AuthError'
   }
 }
 
@@ -41,12 +35,21 @@ export async function request<T>(url: string, init?: RequestInit, timeoutOverrid
   const requestId = headers.get('X-Request-ID') || ''
   let r: Response
   try {
-    r = await fetch(API + url, {
-      ...init,
-      headers,
-      signal: AbortSignal.timeout(timeoutMs),
-    })
+    const timeout = AbortSignal.timeout(timeoutMs)
+    const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout
+    for (let attempt = 0; ; attempt++) {
+      signal.throwIfAborted()
+      try {
+        r = await fetch(API + url, { ...init, headers, signal })
+        if (attempt === 0 && retryableIdempotent(init?.method, r.status)) { await r.body?.cancel(); await backoff(); continue }
+        break
+      } catch (error) {
+        if (attempt === 0 && !signal.aborted && retryableIdempotent(init?.method, 0)) { await backoff(); continue }
+        throw error
+      }
+    }
   } catch (e: any) {
+    if (init?.signal?.aborted) throw new DOMException('操作已取消', 'AbortError')
     if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
       throw new ApiError(paid ? '请求超时，未自动重发；可查询原请求结果' : '请求超时，请稍后重试', 0, 'network_unknown', requestId)
     }
@@ -59,18 +62,19 @@ export async function request<T>(url: string, init?: RequestInit, timeoutOverrid
       if (url === '/api/v1/auth/login' || url === '/api/v1/auth/register') {
         const e = await r.json().catch(() => ({} as any))
         const d = e?.detail
-        const base = typeof d === 'string' ? d : (d?.error || d?.detail || '登录失败，请重试')
-        throw new ApiError(base, 401, d?.code || '')
+        const parsed = parseErrorDetail(e, '登录失败，请重试')
+        throw new ApiError(parsed.message, 401, parsed.code)
       }
-      if (workspaceOwner) window.dispatchEvent(new Event(AUTH_CHANGED_EVENT))
+      if (workspaceOwner) window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT, { detail: { expired: true } }))
       throw new AuthError('请先登录')
     }
     const e = await r.json().catch(() => ({} as any))
     // FastAPI 的 detail 可能是 {error, detail} 对象，也可能是纯字符串/校验数组
     const d = e?.detail
-    const base = typeof d === 'string' ? d : (d?.error || d?.detail || `HTTP ${r.status}`)
+    const parsed = parseErrorDetail(e, `HTTP ${r.status}`)
     if (d?.code === 'account_changed') window.dispatchEvent(new Event(AUTH_CHANGED_EVENT))
-    throw new ApiError(base, r.status, d?.code || '', d?.request_id || requestId)
+    throw new ApiError(parsed.message, r.status, parsed.code, parsed.requestId || r.headers.get('X-Correlation-ID') || requestId,
+      Array.isArray(d?.partial_sections) ? d.partial_sections : undefined)
   }
   if (r.status === 204) return undefined as T
   try {
@@ -82,7 +86,8 @@ export async function request<T>(url: string, init?: RequestInit, timeoutOverrid
 }
 
 /* ── 认证 ── */
-export interface UserInfo { id: number; username: string; role: string }
+export type { UserInfo } from '../../shared/user'
+import type { UserInfo } from '../../shared/user'
 
 export async function register(username: string, password: string): Promise<UserInfo> {
   return request<UserInfo>('/api/v1/auth/register', {
@@ -189,7 +194,7 @@ export interface GenerationStatus {
   request_id: string
   status: 'running' | 'succeeded' | 'failed' | 'unknown'
   result: { sections: BatchRespSection[] } | null
-  error?: { error?: string } | null
+  error?: { error?: string; code?: string; partial_sections?: BatchRespSection[] } | null
   error_status: number
   cache_expired: boolean
 }

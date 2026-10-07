@@ -1,3 +1,5 @@
+import { usePageLifecycle } from '../src/services/page-lifecycle'
+import { reconcileRows } from '../src/services/catalog-rows'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
@@ -16,7 +18,7 @@ function fixture(file: string, modules: Record<string, unknown>, expose = '', pr
   const state = vue.reactive(props)
   scope.run(() => vm.runInNewContext(ts.transpileModule(source + '\nexports.state = {' + expose + '}', { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
     exports, require: (id: string) => id === 'vue' ? { ...vue, onMounted() {}, onBeforeUnmount() {} } : id === '@dcloudio/uni-app'
-      ? Object.fromEntries(['onShow', 'onHide', 'onUnload', 'onLoad', 'onPullDownRefresh', 'onReachBottom', 'onShareAppMessage', 'onPageScroll'].map(name => [name, (cb: (...args: any[]) => unknown) => { hooks[name] = cb }])) : modules[id] || {},
+      ? Object.fromEntries(['onShow', 'onHide', 'onUnload', 'onLoad', 'onPullDownRefresh', 'onReachBottom', 'onShareAppMessage', 'onPageScroll'].map(name => [name, (cb: (...args: any[]) => unknown) => { hooks[name] = cb }])) : modules[id] || (id.endsWith('/page-lifecycle') ? { usePageLifecycle, captureScroll: (save: (top: number) => void) => save(600) } : id.endsWith('/catalog-rows') ? { reconcileRows } : id.endsWith('/page-navigation') ? { navigatePage: (options: unknown) => (globals.uni as any)?.navigateTo?.(options) } : {}),
     defineProps: () => state, withDefaults: (_: unknown, defaults: object) => Object.assign(state, { ...defaults, ...props }),
     defineEmits: () => (...args: unknown[]) => events.push(args), defineExpose() {}, setTimeout, clearTimeout, ...globals,
   }))
@@ -35,6 +37,16 @@ function sessionFixture(token = 'saved-token') {
   }, '', {}, { uni: { getStorageSync: () => token, setStorageSync: (_key: string, value: string) => { token = value }, removeStorageSync: () => { removed++; token = '' } } })
   return { ...app, service: app.exports, removed: () => removed, calls: () => calls, unauthorized: () => unauthorized(), respond: (fn: typeof response) => { response = fn } }
 }
+
+test('logout clears local credentials immediately even while the network request never completes', async () => {
+  const app = sessionFixture()
+  try {
+    app.respond(() => new Promise(() => {}))
+    await app.service.logout()
+    assert.equal(app.removed(), 1)
+    assert.equal(app.service.session.user, null)
+  } finally { app.dispose() }
+})
 
 test('network and server failures retain the saved session and a later retry restores it', async () => {
   const app = sessionFixture()
@@ -130,7 +142,7 @@ test('opening a busy row still respects swipe click suppression but does not wai
 
 test('message navigation is immediate even while the read receipt is pending', () => {
   const actions: string[] = []
-  const app = fixture('pages/messages/index.vue', {
+  const app = fixture('subpages/messages/index.vue', {
     '../../services/consumer-page': { useConsumerPage: () => ({ ticket: () => () => true }) },
     '../../services/message-reads': { markMessageRead: () => actions.push('read') },
     '../../services/growth': { messageDestination: () => '/pages/paper/index?id=paper' },
@@ -183,7 +195,7 @@ test('a server-confirmed read clears a queued receipt after its original respons
 
 test('reading positions survive reopening, are isolated by account and release, and store no asset URLs', () => {
   let saved: unknown = []
-  const app = fixture('services/reading-position.ts', {}, '', {}, { uni: { getStorageSync: () => saved, setStorageSync: (_: string, value: unknown) => { saved = value } } })
+  const app = fixture('services/reading-position.ts', {}, '', {}, { uni: { getStorageSync: () => saved, setStorage: ({ data, complete }: { data: unknown; complete: () => void }) => { saved = data; complete() } } })
   const service = app.exports
   try {
     service.rememberPosition('reader', 'paper', 1, 8)
@@ -206,7 +218,7 @@ test('the reader restores a page, clamps navigation, resets zoom on turn and per
     app.page.select(5); assert.equal(app.page.scale.value, 1); assert.equal(app.page.current.value, 5)
     assert.equal(app.page.resetKeys.value[4], 1)
     app.page.select(8); assert.equal(app.page.current.value, 5)
-    app.page.change({ detail: { current: 6 } }); assert.deepEqual(saved, [5, 6])
+    app.page.change({ detail: { current: 6 } }); assert.deepEqual(saved, []); app.hooks.onHide(); assert.deepEqual(saved, [6])
     assert.deepEqual(Object.keys(app.page.resetKeys.value), ['4'])
     app.page.resize({ detail: { scale: 3 } }, 5)
     assert.equal(app.page.scale.value, 1)

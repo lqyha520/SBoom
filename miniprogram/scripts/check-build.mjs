@@ -24,16 +24,21 @@ assert.equal(app.tabBar.list[0].pagePath, app.pages[0], 'The first tab must poin
 assert.equal(app.tabBar.list[1].text, '习题库', 'The public tab must use exercise terminology')
 assert.equal(app.window.navigationStyle, 'custom', 'Custom navigation must also apply to WeChat')
 assert.ok(app.tabBar.list.length <= 5, 'WeChat supports at most five native tabs')
-for (const page of app.pages) {
+const allPages = [...app.pages, ...(app.subPackages || []).flatMap(pkg => pkg.pages.map(page => pkg.root + '/' + page))]
+assert.equal(allPages.length, pages.pages.length + (pages.subPackages || []).flatMap(pkg => pkg.pages).length)
+for (const page of allPages) {
   for (const extension of ['.js', '.json', '.wxml', '.wxss']) await stat(path.join(output, page + extension))
 }
 await stat(path.join(output, 'app.wxss'))
 const banner = await readFile(path.join(output, 'static/banners/study.jpg'))
 assert.deepEqual([...banner.subarray(0, 3)], [0xff, 0xd8, 0xff], 'The home banner must ship as a valid JPEG')
 assert.ok(banner.length < 150 * 1024, 'Keep the local banner within its asset budget')
+const shareCode = await readFile(path.join(output, 'services/return-route.js'), 'utf8')
+assert.ok(!shareCode.includes('imageUrl'), 'Leave share images to the native current-page screenshot')
+assert.ok(!shareCode.includes('/static/banners/study.jpg'), 'Do not restore the fixed blue share image')
 const notebook = await readFile(path.join(output, 'static/illustrations/notebook.png'))
 assert.equal(notebook.subarray(1, 4).toString(), 'PNG', 'The approved notebook must ship as a local PNG')
-assert.ok(notebook.length < 320 * 1024, 'Keep the illustration within its asset budget')
+assert.ok(notebook.length < 30 * 1024, 'Keep the illustration within its asset budget')
 for (const component of ['AppTabBar', 'PageChrome', 'MembershipSheet']) {
   await stat(path.join(output, 'components', component + '.wxml'))
 }
@@ -54,14 +59,19 @@ for (const item of app.tabBar.list) {
   assert.ok(selectedBytes.length < 40 * 1024, `Custom tab icon too large: ${selectedIcon}`)
 }
 
-let size = 0
+let size = 0, mainSize = 0
 let count = 0
 async function inspect(directory) {
   for (const item of await readdir(directory, { withFileTypes: true })) {
     const file = path.join(directory, item.name)
     if (item.isDirectory()) { await inspect(file); continue }
-    size += (await stat(file)).size
+    const bytes = (await stat(file)).size
+    size += bytes
+    if (!path.relative(output, file).startsWith('subpages' + path.sep)) mainSize += bytes
     count++
+    if (/\.(js|json|wxml)$/.test(item.name)) {
+      assert.ok(!/learning\s+coach/i.test(await readFile(file, 'utf8')), `Removed branding in ${path.relative(output, file)}`)
+    }
     if (item.name.endsWith('.wxss')) {
       const styles = (await readFile(file, 'utf8')).replace(/\/\*[\s\S]*?\*\//g, '')
       // WXSS rejects bare pseudo-classes after a combinator (for example
@@ -89,7 +99,7 @@ async function inspect(directory) {
   }
 }
 await inspect(output)
-assert.ok(size < 2 * 1024 * 1024, 'The main package must remain below 2 MiB')
+assert.ok(mainSize < 2 * 1024 * 1024, 'The main package must remain below 2 MiB')
 const assets = await readFile(path.join(output, 'services/assets.js'), 'utf8')
 assert.ok(assets.includes('openDocument'), 'WeChat must use the native PDF viewer')
 assert.ok(!assets.includes('document.createElement'), 'H5-only PDF code leaked into WeChat')
@@ -115,6 +125,6 @@ if (release) {
   const api = await readFile(path.join(output, 'services/api.js'), 'utf8')
   assert.ok(api.includes(origin.origin), 'Rebuild after changing the API origin')
 }
-console.log(`WeChat package OK: ${count} files, ${(size / 1024).toFixed(1)} KiB / 2048 KiB.`)
+console.log(`WeChat package OK: ${count} files, ${(mainSize / 1024).toFixed(1)} KiB main / 2048 KiB; ${(size / 1024).toFixed(1)} KiB total.`)
 if (wxssCompiler) console.log(`WeChat stylesheet compiler OK: ${wxssCount} WXSS files.`)
 if (!release) console.log('Structural checks only. Run check:release after configuring the AppID and HTTPS origin; device testing is still required.')

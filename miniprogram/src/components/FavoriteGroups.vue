@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { createGroup, deleteGroup, fetchGroups, renameGroup, type FavoriteGroup } from '../services/experience'
 import { errorMessage } from '../services/api'
 import { session } from '../services/session'
+import { onHide } from '@dcloudio/uni-app'
+import { createLatestRequest } from '../services/latest-request'
 import { confirmAction } from '../services/navigation'
 const props = defineProps<{ selected: string }>()
 const emit = defineEmits<{ select: [id: string] }>()
@@ -11,9 +13,14 @@ const managing = ref(false)
 const busy = ref(false)
 const error = ref('')
 let generation = 0
+const reads = createLatestRequest()
+function leave() { generation++; reads.invalidate(); managing.value = false }
+onHide(leave); onBeforeUnmount(leave)
 async function load() {
   const current = ++generation
-  try { const data = await fetchGroups(); if (current === generation) { groups.value = data.items; if (props.selected && !data.items.some(item => item.id === props.selected)) emit('select', '') } }
+  const scope = reads.begin()
+  error.value = ''
+  try { const data = await fetchGroups({ scope }); if (current === generation) { groups.value = data.items; if (props.selected && props.selected !== '__ungrouped' && !data.items.some(item => item.id === props.selected)) emit('select', '') } }
   catch (cause) { if (current === generation) error.value = errorMessage(cause) }
 }
 watch(() => session.user?.id, id => { generation++; groups.value = []; error.value = ''; managing.value = false; if (id) void load() }, { immediate: true })
@@ -39,9 +46,9 @@ defineExpose({ refresh: load })
 </script>
 <template>
   <view class="favorite-groups">
-    <scroll-view scroll-x class="group-scroll"><view class="group-chips"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" :class="{ chosen: !selected }" @click="emit('select', '')">全部收藏</button><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" v-for="group in groups" :key="group.id" :class="{ chosen: selected === group.id }" @click="emit('select', group.id)">{{ group.name }}</button></view></scroll-view>
+    <scroll-view scroll-x class="group-scroll"><view class="group-chips"><button hover-class="control-pressed" role="button" :aria-pressed="!selected" :class="{ chosen: !selected }" @click="emit('select', '')">全部收藏</button><button hover-class="control-pressed" role="button" :aria-pressed="selected === '__ungrouped'" :class="{ chosen: selected === '__ungrouped' }" @click="emit('select', '__ungrouped')">未分组</button><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" v-for="group in groups" :key="group.id" :aria-pressed="selected === group.id" :class="{ chosen: selected === group.id }" @click="emit('select', group.id)">{{ group.name }}</button></view></scroll-view>
     <view class="group-tools"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" class="section-link" :disabled="busy" @click="edit()">新建分组</button><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" class="section-link" @click="managing = !managing">{{ managing ? '收起管理' : '管理分组' }}</button></view>
-    <view v-if="error" class="error-strip">{{ error }}</view>
+    <view v-if="error" class="error-strip"><text class="grow">{{ error }}</text><button class="bare-icon" aria-label="重试加载收藏分组" @click="load"><wd-icon name="refresh" size="20px" /></button></view>
     <view v-if="managing"><view v-for="group in groups" :key="group.id" class="group-row"><text class="grow">{{ group.name }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" :disabled="busy" class="section-link" @click="edit(group)">改名</button><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" :disabled="busy" class="section-link" @click="remove(group)">删除</button></view></view>
   </view>
 </template>

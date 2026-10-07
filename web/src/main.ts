@@ -1,8 +1,13 @@
 import { createApp } from 'vue'
+import { installLoadRecovery } from '../../shared/load-recovery'
+installLoadRecovery()
 import { createPinia } from 'pinia'
 import ui from '@nuxt/ui/vue-plugin'
 import App from './App.vue'
 import { useAuthStore } from './stores/auth'
+import { prefetchWorkspace } from './workspace-loaders'
+import { useExamStore } from './stores/exam'
+import { setRecoverySave } from '../../shared/load-recovery'
 import './styles/tokens.css'
 import './styles/base.css'
 import './styles/paper.css'
@@ -15,7 +20,12 @@ function bootstrap() {
   app.use(ui)
 
   const auth = useAuthStore()
+  setRecoverySave(async () => {
+    const store = useExamStore()
+    return !store.ownerId || await store.flushDraft()
+  })
   app.mount('#app')
+  try { if (localStorage.getItem('lc_uid')) prefetchWorkspace() } catch { /* 仍可正常登录。 */ }
   void auth.init()
 }
 

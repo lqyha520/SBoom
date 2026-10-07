@@ -88,6 +88,7 @@ export const useAuthStore = defineStore('auth', {
 
     async login(username: string, password: string) {
       const u = await api.login(username, password)
+      try { localStorage.removeItem('lc_purge:' + u.id) } catch { /* 存储限制不应阻止登录。 */ }
       this.user = u
       rememberUser(u.id)
       await migrateLegacyData(u.id)
@@ -101,8 +102,12 @@ export const useAuthStore = defineStore('auth', {
       location.reload()
     },
 
-    async logout() {
+    async logout(clearLocal = false) {
       await api.logout()
+      if (clearLocal && this.user) {
+        const { clearAccountData } = await import('../local-storage')
+        await clearAccountData(String(this.user.id))
+      }
       this.user = null
       rememberUser(null)
       location.reload()

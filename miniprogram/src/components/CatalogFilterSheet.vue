@@ -48,7 +48,7 @@ function selectTag(event: { value: (string | number)[] }) { tagDraft[activeTag.v
 .catalog-sheet { max-width: 520px; margin: 0 auto; padding: 12px 22px 24px; }
 .catalog-sheet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .catalog-sheet-head .sheet-title { margin: 0; }
-.filter-options { max-height: 54vh; }
+.filter-options { height: 54vh;max-height:460px; }
 .filter-context { display:block;color:var(--lc-secondary);font-size:13px;line-height:1.7; }
 .tag-picker { display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;min-height:44px;margin:0;padding:10px 14px;border:0;border-radius:10px;background:var(--lc-background);font-size:13px;line-height:1.5;text-align:left;color:var(--lc-text); }
 .tag-picker::after { border:0; }

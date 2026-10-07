@@ -1,4 +1,4 @@
-import { reactive, watch, type Ref } from 'vue'
+import { onBeforeUnmount, reactive, watch, type Ref } from 'vue'
 
 export const adminTabs = ['overview', 'llm', 'users', 'papers', 'miniUsers', 'adminAccounts', 'supportCenter',
   'topics', 'catalogTags', 'resourceRequests', 'accountClosures', 'membershipPlans', 'membershipCards',
@@ -6,6 +6,9 @@ export const adminTabs = ['overview', 'llm', 'users', 'papers', 'miniUsers', 'ad
   'dictionary', 'typeAccess', 'feedback', 'logs'] as const
 export type AdminTab = typeof adminTabs[number]
 const remembered = new Map<string, string>()
+const leaveGuards = new Set<() => boolean>()
+export function useAdminLeaveGuard(guard: () => boolean) { leaveGuards.add(guard); onBeforeUnmount(() => leaveGuards.delete(guard)) }
+function canLeave(tab: AdminTab) { return tab === adminRoute.tab || [...leaveGuards].every(guard => guard()) }
 export function parseAdminRoute(hash: string) {
   const [name, query = ''] = hash.replace(/^#/, '').split('?')
   const tab: AdminTab = adminTabs.includes(name as AdminTab) ? name as AdminTab : 'overview'
@@ -13,14 +16,17 @@ export function parseAdminRoute(hash: string) {
 }
 export const adminRoute = reactive(parseAdminRoute(window.location.hash))
 export function readAdminRoute() {
-  Object.assign(adminRoute, parseAdminRoute(window.location.hash))
+  const next = parseAdminRoute(window.location.hash)
+  if (!canLeave(next.tab)) { window.history.replaceState(null, '', '#' + adminRoute.tab + (adminRoute.query ? '?' + adminRoute.query : '')); return }
+  Object.assign(adminRoute, next)
   remembered.set(adminRoute.tab, adminRoute.query)
 }
 export function navigateAdmin(tab: AdminTab, values?: Record<string, string>, replace = false) {
+  if (!canLeave(tab)) return
   const query = values ? new URLSearchParams(values).toString() : remembered.get(tab) || ''
   const hash = '#' + tab + (query ? '?' + query : '')
   if (window.location.hash !== hash) window.history[replace ? 'replaceState' : 'pushState'](null, '', hash)
-  readAdminRoute()
+  Object.assign(adminRoute, parseAdminRoute(hash)); remembered.set(adminRoute.tab, adminRoute.query)
 }
 export function listenAdminRoute() {
   readAdminRoute()

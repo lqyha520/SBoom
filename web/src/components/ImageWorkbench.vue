@@ -6,7 +6,7 @@ import { captureWorkspaceGuard, fetchScope } from '../api'
 import { TYPE_GROUPS_BY_GRADE, TYPE_GROUPS_DEFAULT, TYPE_NAME } from '../constants'
 import { gradeNumOf } from '../utils'
 import type { Difficulty, ScopeData } from '../types'
-import { fetchImageOptions, previewImagePrompt, type ImageWorksheetParams, type WorksheetImage } from '../image-generation'
+import { fetchImageOptions, imageWorksheetTitle, plannedImageQuestionCount, previewImagePrompt, type ImageWorksheetParams, type WorksheetImage } from '../image-generation'
 import { MAX_WORKSHEET_IMAGES, useImageBatch } from '../image-batch'
 import { publicationUrl, type ImagePublication } from '../image-publication'
 
@@ -19,8 +19,10 @@ const publishedDrafts = ref<Record<string, ImagePublication>>({})
 const owner = store.ownerId
 const storageKey = 'lc_u' + owner + '_image_request'
 const grade = ref(store.grade), subject = ref(store.subject), keyword = ref(store.keyword)
+const gradeSelection = computed({ get: () => grade.value, set: chooseGrade })
+const subjectSelection = computed({ get: () => subject.value, set: chooseSubject })
 const difficulty = ref<Difficulty>(store.difficulty)
-const selected = ref<string[]>([]), counts = ref<Record<string, number>>({})
+const selected = ref<string[]>([]), counts = ref<Record<string, number | null>>({})
 const style = ref<ImageWorksheetParams['style']>('playful'), requirements = ref('')
 const scope = ref<ScopeData | null>(null), scopeLoading = ref(false), scopeError = ref('')
 const ready = ref(false), configured = ref(false), configError = ref('')
@@ -33,7 +35,7 @@ const followLatest = ref(true), historyOpen = ref(false), draftLoaded = ref(fals
 const draftStatus = ref('')
 const draftKey = storageKey + '_draft', publishedKey = storageKey + '_published'
 const knowledgeSearch = ref('')
-const customOpen = ref(false)
+const customOpen = ref(true)
 const advancedOpen = ref(false)
 const knowledgePoints = computed(() => (scope.value?.allowed || []).filter(point => point.includes(knowledgeSearch.value.trim())))
 const suggestedKnowledge = computed(() => (scope.value?.allowed || []).slice(0, 4))
@@ -60,13 +62,14 @@ const batchParams = computed(() => {
 const batchSummary = computed(() => {
   const value = batchParams.value
   if (!value) return ''
-  return `${value.grade} · ${value.subject} · ${styles.find(item => item.value === value.style)?.label || ''} · ${value.items.reduce((sum, item) => sum + item.question_count, 0)} 题 / 张`
+  return `${value.grade} · ${value.subject} · ${styles.find(item => item.value === value.style)?.label || ''} · ${quantitySummary(value.items)}`
 })
 const settingsChanged = computed(() => {
   const saved = batchParams.value, draft = params.value
   if (!saved) return false
   return (['grade', 'subject', 'keyword', 'difficulty', 'style', 'requirements'] as const).some(key => saved[key] !== draft[key])
-    || batch.state.pages.length !== imageCount.value || JSON.stringify(saved.items) !== JSON.stringify(draft.items)
+    || batch.state.pages.length !== imageCount.value || saved.items.length !== draft.items.length
+    || saved.items.some((item, index) => item.game_type !== draft.items[index]?.game_type || (item.question_count ?? null) !== draft.items[index]?.question_count)
 })
 const status = computed(() => {
   if (checking.value) return '正在查询生成结果'
@@ -88,25 +91,35 @@ const retrying = computed(() => batch.state.pages.some(page => page.state === 'f
 const pageLabels = { queued: '待生成', running: '生成中', unknown: '待查询', failed: '未完成', ready: '已完成', expired: '已过期' }
 const subjects = computed(() => store.available[grade.value] || [])
 const types = computed(() => (TYPE_GROUPS_BY_GRADE[subject.value]?.[gradeNumOf(grade.value)] || TYPE_GROUPS_DEFAULT).flatMap(group => group[1]))
-const total = computed(() => selected.value.reduce((sum, type) => sum + (counts.value[type] || 4), 0))
-const issue = computed(() => !grade.value || !subject.value || !keyword.value.trim() ? '请先选择年级、科目并填写知识点' : !selected.value.length ? '请选择至少一种题型' : selected.value.length > 5 ? '每张图片最多选择 5 种题型' : total.value > 24 ? '每张图片最多安排 24 道题，请减少题量' : '')
+const minimumTotal = computed(() => selected.value.reduce((sum, type) => sum + (counts.value[type] ?? 1), 0))
+const issue = computed(() => !grade.value || !subject.value ? '请先选择年级和科目' : selected.value.length > 5 ? '每张图片最多选择 5 种题型' : minimumTotal.value > 24 ? '每张图片最多安排 24 道题，请减少题量' : '')
 const disabled = computed(() => busy.value || checking.value || batch.unresolved || pdfBusy.value || publicationOpen.value || !current())
+const hasSettings = computed(() => !!(grade.value || subject.value || keyword.value || selected.value.length ||
+  requirements.value || difficulty.value !== 'medium' || imageCount.value !== 1))
 const params = computed<ImageWorksheetParams>(() => ({ grade: grade.value, subject: subject.value, keyword: keyword.value.trim(), difficulty: difficulty.value,
-  items: selected.value.map(game_type => ({ game_type, question_count: counts.value[game_type] || 4 })), style: style.value, requirements: requirements.value.trim(), image_count: imageCount.value, image_index: 1 }))
+  items: selected.value.map(game_type => ({ game_type, question_count: counts.value[game_type] ?? null })), style: style.value, requirements: requirements.value.trim(), image_count: imageCount.value, image_index: 1 }))
+const plannedCount = computed(() => plannedImageQuestionCount(params.value.items))
+function quantitySummary(items: ImageWorksheetParams['items']) {
+  if (!items.length) return '题型、题量自动安排'
+  const count = plannedImageQuestionCount(items)
+  if (count !== undefined) return `${count} 题 / 张`
+  const specified = items.reduce((sum, item) => sum + (item.question_count ?? 0), 0)
+  return specified ? `已指定 ${specified} 题，其余自动` : '题量自动安排'
+}
 const styles = [{ value: 'playful' as const, label: '童趣彩色', icon: 'i-lucide-palette' }, { value: 'clean' as const, label: '简洁清爽', icon: 'i-lucide-sparkles' }, { value: 'black_white' as const, label: '黑白打印', icon: 'i-lucide-printer' }]
 const arrangements = computed(() => [
-  { label: '轻量练习', description: '选择 + 填空', items: [{ game_type: 'quiz', question_count: 4 }, { game_type: 'fill_blank', question_count: 4 }] },
+  { label: '轻量练习', description: '选择 + 填空', items: [{ game_type: 'quiz', question_count: null }, { game_type: 'fill_blank', question_count: null }] },
   { label: '综合练习', description: types.value.includes('true_false') ? '选择 + 填空 + 判断' : '选择 + 填空 + 配对', items: [
-    { game_type: 'quiz', question_count: 4 }, { game_type: 'fill_blank', question_count: 4 },
-    { game_type: types.value.includes('true_false') ? 'true_false' : 'match_pair', question_count: 4 },
+    { game_type: 'quiz', question_count: null }, { game_type: 'fill_blank', question_count: null },
+    { game_type: types.value.includes('true_false') ? 'true_false' : 'match_pair', question_count: null },
   ] },
 ])
 const arrangementSelected = (items: ImageWorksheetParams['items']) => selected.value.length === items.length && items.every(item => selected.value.includes(item.game_type) && counts.value[item.game_type] === item.question_count)
-const typeSummary = computed(() => selected.value.map(type => `${TYPE_NAME[type]} ${counts.value[type] || 4} 题`).join(' · '))
+const typeSummary = computed(() => selected.value.map(type => `${TYPE_NAME[type]} ${counts.value[type] == null ? '自动' : counts.value[type] + ' 题'}`).join(' · '))
 function applyArrangement(items: ImageWorksheetParams['items']) {
   if (disabled.value || !subject.value) return
   selected.value = items.map(item => item.game_type)
-  counts.value = Object.fromEntries(items.map(item => [item.game_type, item.question_count]))
+  counts.value = Object.fromEntries(items.map(item => [item.game_type, item.question_count ?? null]))
 }
 function editSettings() {
   mobilePanel.value = 'settings'
@@ -123,6 +136,16 @@ function showResults() {
 function reuseSettings() {
   if (disabled.value || !batchParams.value) return
   applyParams({ ...batchParams.value, image_count: batch.state.pages.length })
+  editSettings()
+}
+function clearSettings() {
+  if (disabled.value || !draftLoaded.value || !hasSettings.value ||
+    !window.confirm('清空年级、科目、知识点、题型题量和补充要求，并恢复默认难度与张数？画面风格、已生成的图片和历史批次会保留。')) return
+  applyParams({ grade: '', subject: '', keyword: '', difficulty: 'medium', items: [], style: style.value,
+    requirements: '', image_count: 1 })
+  scopeVersion++; scope.value = null; scopeLoading.value = false; scopeError.value = ''
+  knowledgeSearch.value = ''; error.value = ''; promptVersion++; prompt.value = ''; promptOpen.value = false
+  customOpen.value = true; advancedOpen.value = false
   editSettings()
 }
 async function continueBatch() {
@@ -144,7 +167,7 @@ function chooseGrade(value: string) {
 function chooseSubject(value: string) { if (subject.value === value) return; subject.value = value; keyword.value = ''; selected.value = [] }
 function toggleType(type: string) {
   if (selected.value.includes(type)) selected.value = selected.value.filter(item => item !== type)
-  else if (selected.value.length < 5 && total.value < 24) { counts.value[type] = Math.min(counts.value[type] || (type === 'reading' ? 1 : 4), 24 - total.value); selected.value.push(type) }
+  else if (selected.value.length < 5 && minimumTotal.value < 24) { counts.value[type] = null; selected.value.push(type) }
 }
 function chooseKnowledge(value: string) {
   const values = keyword.value.split('、').map(item => item.trim()).filter(Boolean)
@@ -171,14 +194,14 @@ function applyParams(saved: ImageWorksheetParams) {
   grade.value = saved.grade; subject.value = saved.subject; keyword.value = saved.keyword
   difficulty.value = saved.difficulty; style.value = saved.style; requirements.value = saved.requirements
   selected.value = saved.items.map(item => item.game_type)
-  counts.value = Object.fromEntries(saved.items.map(item => [item.game_type, item.question_count]))
+  counts.value = Object.fromEntries(saved.items.map(item => [item.game_type, item.question_count ?? null]))
   imageCount.value = saved.image_count || 1
 }
 function validDraft(value: unknown): value is ImageWorksheetParams {
   const v = value as ImageWorksheetParams | null
   return !!v && typeof v.grade === 'string' && typeof v.subject === 'string' && typeof v.keyword === 'string' && v.keyword.length <= 100
     && typeof v.requirements === 'string' && ['easy', 'medium', 'hard'].includes(v.difficulty) && ['playful', 'clean', 'black_white'].includes(v.style)
-    && Array.isArray(v.items) && v.items.length <= 5 && v.items.every(item => item && typeof item.game_type === 'string' && !!TYPE_NAME[item.game_type] && Number.isInteger(item.question_count) && item.question_count >= 1 && item.question_count <= 20)
+    && Array.isArray(v.items) && v.items.length <= 5 && v.items.every(item => item && typeof item.game_type === 'string' && !!TYPE_NAME[item.game_type] && (item.question_count == null || Number.isInteger(item.question_count) && item.question_count >= 1 && item.question_count <= 20))
     && (v.image_count === undefined || Number.isInteger(v.image_count) && v.image_count >= 1 && v.image_count <= MAX_WORKSHEET_IMAGES)
 }
 async function openHistory(id: string) {
@@ -189,7 +212,14 @@ async function openHistory(id: string) {
 }
 function choosePage(index: number) { followLatest.value = false; selectedPage.value = index }
 function updateCount(type: string, value: number | undefined) {
-  counts.value[type] = Math.max(1, Math.min(Math.floor(value || 1), 20, 24 - total.value + (counts.value[type] || 4)))
+  counts.value[type] = value == null || !Number.isFinite(Number(value)) || String(value) === '' ? null
+    : Math.max(1, Math.min(Math.floor(value), maxCount(type)))
+}
+function maxCount(type: string) {
+  return Math.max(1, Math.min(20, 24 - minimumTotal.value + (counts.value[type] ?? 1)))
+}
+function specifyCount(type: string, checked: boolean | 'indeterminate') {
+  counts.value[type] = checked === true ? Math.min(4, maxCount(type)) : null
 }
 async function loadOptions() {
   configError.value = ''; ready.value = false
@@ -203,7 +233,7 @@ async function previewPrompt() {
   try {
     const value = await previewImagePrompt(params.value); ownerGuard()
     if (current() && revision === promptVersion) { prompt.value = value.prompt; promptOpen.value = true }
-  } catch (e) { if (current()) error.value = e instanceof Error ? e.message : '提示词加载失败' }
+  } catch (e) { if (current() && revision === promptVersion) error.value = e instanceof Error ? e.message : '提示词加载失败' }
   finally { if (current()) promptBusy.value = false }
 }
 async function generate() {
@@ -291,8 +321,8 @@ onBeforeUnmount(() => { alive = false; scopeVersion++; promptVersion++; batch.di
 
     <div class="image-controls">
       <div class="image-panel-heading">
-        <div><h2>设计一份习题图</h2><p>{{ batch.state.pages.length ? '调整设置后，可生成新的批次' : '选内容、定题量，即可开始' }}</p></div>
-        <span class="image-service" :class="{ online: ready && configured }">{{ configError ? '连接异常' : !ready ? '检查中' : configured ? '服务就绪' : '待配置' }}</span>
+        <div><h2>设计一份习题图</h2><p class="image-service" :class="{ online: ready && configured }">{{ configError ? '连接异常' : !ready ? '检查中' : configured ? '服务就绪' : '待配置' }}</p></div>
+        <UButton type="button" label="清空设置" icon="i-lucide-eraser" color="neutral" variant="outline" size="sm" class="shrink-0" :disabled="disabled || !draftLoaded || !hasSettings" @click="clearSettings" />
       </div>
       <form class="image-form" @submit.prevent="generate">
         <fieldset ref="settingsFields" :disabled="disabled" class="image-fields">
@@ -302,21 +332,21 @@ onBeforeUnmount(() => { alive = false; scopeVersion++; promptVersion++; batch.di
             <UAlert v-else-if="store.availableError" :title="store.availableError" color="error" :actions="[{ label: '重试', onClick: () => store.init() }]" />
             <div v-else class="image-select-row">
               <label class="image-select-field">年级
-                <select aria-label="图片年级" :value="grade" @change="chooseGrade(($event.target as HTMLSelectElement).value)">
+                <select v-model="gradeSelection" aria-label="图片年级">
                   <option value="" disabled>选择年级</option>
                   <option v-for="value in Object.keys(store.available)" :key="value" :value="value">{{ value }}</option>
                 </select>
               </label>
               <label class="image-select-field">科目
-                <select aria-label="图片科目" :value="subject" :disabled="!grade || disabled" @change="chooseSubject(($event.target as HTMLSelectElement).value)">
+                <select v-model="subjectSelection" aria-label="图片科目" :disabled="!grade || disabled">
                   <option value="" disabled>{{ grade ? '选择科目' : '先选年级' }}</option>
                   <option v-for="value in subjects" :key="value" :value="value">{{ value }}</option>
                 </select>
               </label>
             </div>
             <div>
-              <label for="image-keyword" class="image-label">知识点 <small>必填</small></label>
-              <UTextarea id="image-keyword" v-model="keyword" aria-label="图片知识点" placeholder="想练什么？例如：20 以内进位加法" :rows="2" maxlength="100" :disabled="!subject || disabled" class="w-full" />
+              <label for="image-keyword" class="image-label">知识点 <small>选填</small></label>
+              <UTextarea id="image-keyword" v-model="keyword" aria-label="图片知识点" placeholder="自动选择本年级、本科目的知识点" :rows="2" maxlength="100" :disabled="!subject || disabled" class="w-full" />
               <p class="image-field-hint"><span>可输入多个知识点，用「、」分隔</span><span>{{ keyword.length }}/100</span></p>
               <p v-if="scopeLoading" role="status" class="image-field-hint">正在加载课程知识点…</p>
               <div v-else-if="suggestedKnowledge.length" class="image-suggestions" aria-label="推荐知识点">
@@ -338,24 +368,30 @@ onBeforeUnmount(() => { alive = false; scopeVersion++; promptVersion++; batch.di
 
           <section class="image-setting-section">
             <div class="image-section-title"><span>2</span><h3>怎么练</h3><small>每张最多 24 题</small></div>
-            <div class="image-arrangements" role="group" aria-label="快速安排题量">
+            <div class="image-arrangements" role="group" aria-label="快速选择题型">
               <button v-for="item in arrangements" :key="item.label" type="button" :disabled="!subject" :aria-pressed="arrangementSelected(item.items)" :class="{ selected: arrangementSelected(item.items) }" @click="applyArrangement(item.items)">
-                <strong>{{ item.label }} <b>{{ item.items.reduce((sum, entry) => sum + entry.question_count, 0) }} 题</b></strong>
+                <strong>{{ item.label }} <b>{{ item.items.length }} 类</b></strong>
                 <small>{{ item.description }}</small>
               </button>
             </div>
             <details class="image-custom" :open="customOpen" @toggle="customOpen = ($event.target as HTMLDetailsElement).open">
-              <summary><span>自定义题型和题量</span><small>{{ selected.length ? typeSummary : '也可以自己选题型' }}</small></summary>
+              <summary><span>题型与题量 <small class="image-optional">选填</small></span><small>{{ selected.length ? typeSummary : '题型、题量自动安排' }}</small></summary>
               <div class="image-custom-body">
                 <div class="image-type-grid" role="group" aria-label="题型">
-                  <button v-for="type in types" :key="type" type="button" :disabled="!subject || ((selected.length >= 5 || total >= 24) && !selected.includes(type))" :aria-pressed="selected.includes(type)" :class="{ selected: selected.includes(type) }" @click="toggleType(type)">
+                  <button v-for="type in types" :key="type" type="button" :disabled="!subject || ((selected.length >= 5 || minimumTotal >= 24) && !selected.includes(type))" :aria-pressed="selected.includes(type)" :class="{ selected: selected.includes(type) }" @click="toggleType(type)">
                     <UIcon :name="selected.includes(type) ? 'i-lucide-circle-check' : 'i-lucide-circle-plus'" class="size-3.5" />{{ TYPE_NAME[type] }}
                   </button>
                 </div>
+                <UButton v-if="selected.length" type="button" label="恢复自动题型" icon="i-lucide-rotate-ccw" variant="ghost" color="neutral" size="sm" :disabled="disabled" @click="selected = []" />
                 <div v-if="selected.length" class="image-counts">
-                  <div v-for="type in selected" :key="type" class="image-count-row"><span>{{ TYPE_NAME[type] }}</span><UInputNumber :model-value="counts[type] || 4" :aria-label="TYPE_NAME[type] + '题量'" :min="1" :max="Math.min(20, 24 - total + (counts[type] || 4))" :disabled="disabled" size="sm" class="w-28" @update:model-value="updateCount(type, $event)" /></div>
+                  <div v-for="type in selected" :key="type" class="image-count-row">
+                    <span>{{ TYPE_NAME[type] }}</span>
+                    <UCheckbox :model-value="counts[type] != null" :aria-label="TYPE_NAME[type] + '指定题量'" label="指定题量" :disabled="disabled" size="sm" @update:model-value="specifyCount(type, $event)" />
+                    <UInputNumber v-if="counts[type] != null" :model-value="counts[type]!" :aria-label="TYPE_NAME[type] + '题量'" :min="1" :max="maxCount(type)" :disabled="disabled" size="sm" class="image-count-value" @update:model-value="updateCount(type, $event)" />
+                    <small v-else class="image-count-auto">自动安排</small>
+                  </div>
                 </div>
-                <p class="image-field-hint">已选 {{ selected.length }}/5 种题型 · 还可添加 {{ Math.max(0, 24 - total) }} 题</p>
+                <p class="image-field-hint">已选 {{ selected.length }}/5 种题型 · {{ quantitySummary(params.items) }}</p>
               </div>
             </details>
             <div class="image-select-row">
@@ -387,7 +423,7 @@ onBeforeUnmount(() => { alive = false; scopeVersion++; promptVersion++; batch.di
             <UButton type="button" label="查看生成进度" icon="i-lucide-arrow-right" block size="lg" @click="showResults" />
           </template>
           <template v-else>
-            <div class="image-action-row"><span class="image-order-summary">{{ imageCount }} 张 × {{ total }} 题</span><span v-if="draftStatus" class="image-draft-status" :title="draftStatus">{{ draftStatus.includes('未能') ? draftStatus : '设置已保存' }}</span></div>
+            <div class="image-action-row"><span class="image-order-summary">{{ imageCount }} 张{{ plannedCount === undefined ? ' · ' + quantitySummary(params.items) : ' × ' + plannedCount + ' 题' }}</span><span v-if="draftStatus" class="image-draft-status" :title="draftStatus">{{ draftStatus.includes('未能') ? draftStatus : '设置已保存' }}</span></div>
             <p v-if="issue" class="image-field-hint">{{ issue }}</p>
             <p v-else-if="batch.state.pages.length" class="image-field-hint">{{ settingsChanged ? '设置已调整，生成后将创建新批次' : '会创建新批次，当前图片保留在历史中' }}</p>
             <UButton type="submit" :label="batch.state.pages.length ? `按当前设置新建 ${imageCount} 张` : `生成 ${imageCount} 张图片`" icon="i-lucide-image-plus" block size="lg" :disabled="disabled || !!issue || !ready || !configured" />
@@ -403,7 +439,7 @@ onBeforeUnmount(() => { alive = false; scopeVersion++; promptVersion++; batch.di
       </header>
       <div ref="previewScroll" class="image-preview-scroll">
         <div v-if="batch.state.pages.length" class="image-batch-card">
-          <div class="image-batch-title"><div><h3>{{ batchParams?.keyword || '习题图片' }}</h3><p>{{ batchSummary }}</p></div><UButton v-if="batchParams" label="复用设置" icon="i-lucide-copy" color="neutral" variant="ghost" size="sm" :disabled="disabled" @click="reuseSettings" /></div>
+          <div class="image-batch-title"><div><h3>{{ batchParams ? batchParams.keyword || imageWorksheetTitle(batchParams) : '习题图片' }}</h3><p>{{ batchSummary }}</p></div><UButton v-if="batchParams" label="复用设置" icon="i-lucide-copy" color="neutral" variant="ghost" size="sm" :disabled="disabled" @click="reuseSettings" /></div>
           <div class="image-batch-status" role="status" aria-live="polite">
             <div><UIcon :name="busy || checking ? 'i-lucide-loader-circle' : batch.unresolved || retrying ? 'i-lucide-circle-alert' : batch.remaining ? 'i-lucide-pause' : 'i-lucide-circle-check'" class="size-4" :class="{ 'animate-spin': busy || checking }" /><strong>{{ status }}</strong><span>已完成 {{ batch.completed }} / {{ batch.state.pages.length }} 张</span></div>
             <progress :value="batch.completed" :max="batch.state.pages.length" aria-label="图片生成进度" />
@@ -449,13 +485,13 @@ onBeforeUnmount(() => { alive = false; scopeVersion++; promptVersion++; batch.di
           </div>
         </template>
         <div v-else class="image-design-preview">
-          <div class="image-preview-intro"><span class="image-eyebrow"><UIcon name="i-lucide-notebook-pen" class="size-4" /> 你的下一份练习</span><h3>{{ keyword.trim() ? '练习安排好了，就可以开始' : '从一个知识点开始' }}</h3><p>{{ selected.length ? `${typeSummary}，每张独立出题。` : '选择知识点后，用快速安排一键选好题型和题量。' }}</p></div>
+          <div class="image-preview-intro"><span class="image-eyebrow"><UIcon name="i-lucide-notebook-pen" class="size-4" /> 你的下一份练习</span><h3>习题预览</h3><p>{{ selected.length ? typeSummary : '题型、题量自动安排' }}</p></div>
           <div class="image-paper" :data-style="style">
             <div class="image-paper-top"><span>{{ grade || '选择年级' }} · {{ subject || '选择科目' }}</span><UIcon :name="activeStyle.icon" class="size-6" /></div>
-            <h4>{{ keyword.trim() || '我的专属练习' }}</h4><p class="image-paper-meta">姓名 __________　日期 __________</p><div class="image-paper-rule"></div>
-            <div v-if="!selected.length" class="image-paper-placeholder"><UIcon name="i-lucide-list-plus" class="size-6" /><p>选好题型，在这里查看安排</p><span>可选轻量练习，或自定义题型和题量</span></div>
-            <div v-for="(type, index) in selected" :key="type" class="image-paper-exercise"><div><span>{{ String(index + 1).padStart(2, '0') }}</span><strong>{{ TYPE_NAME[type] }}</strong><small>{{ counts[type] || 4 }} 题</small></div><div class="image-paper-lines"><i></i><i></i></div></div>
-            <div class="image-paper-bottom"><span>{{ activeStyle.label }}</span><span>{{ total }} 题 / 张 · {{ imageCount }} 张</span></div>
+            <h4>{{ keyword.trim() || (grade && subject ? imageWorksheetTitle(params) : '我的专属练习') }}</h4><p class="image-paper-meta">姓名 __________　日期 __________</p><div class="image-paper-rule"></div>
+            <div v-if="!selected.length" class="image-paper-placeholder"><UIcon name="i-lucide-sparkles" class="size-6" /><p>题型自动安排</p><span>题量自动安排</span></div>
+            <div v-for="(type, index) in selected" :key="type" class="image-paper-exercise"><div><span>{{ String(index + 1).padStart(2, '0') }}</span><strong>{{ TYPE_NAME[type] }}</strong><small>{{ counts[type] == null ? '自动安排' : counts[type] + ' 题' }}</small></div><div class="image-paper-lines"><i></i><i></i></div></div>
+            <div class="image-paper-bottom"><span>{{ activeStyle.label }}</span><span>{{ quantitySummary(params.items) }} · {{ imageCount }} 张</span></div>
           </div>
           <p class="image-preview-disclaimer"><UIcon name="i-lucide-info" class="size-3.5" /> 配置示意，实际题目与版面将在生成后呈现</p>
           <UButton class="image-back-settings" label="返回设置，开始出题" icon="i-lucide-arrow-left" color="neutral" variant="outline" @click="editSettings" />
@@ -503,13 +539,15 @@ summary { cursor:pointer;font-size:12px;color:var(--ui-text-toned);line-height:1
 .image-arrangements strong { display:flex;align-items:center;justify-content:space-between;gap:4px;font-size:12px;font-weight:600; }.image-arrangements b { font-size:12px;font-weight:600;white-space:nowrap; }
 .image-arrangements small { display:block;margin-top:5px;font-size:10px;color:var(--ui-text-muted);font-weight:400; }
 .image-custom,.image-advanced { border:1px solid var(--ui-border);border-radius:8px;padding:10px 12px; }
-.image-custom summary small { display:block;margin:4px 0 0 14px;font-size:11px;color:var(--ui-text-muted);font-weight:400;overflow-wrap:anywhere; }
+.image-custom summary>small { display:block;margin:4px 0 0 14px;font-size:11px;color:var(--ui-text-muted);font-weight:400;overflow-wrap:anywhere; }
+.image-optional { margin-left:4px;font-size:10px;color:var(--ui-text-muted);font-weight:400; }
 .image-custom-body { display:flex;flex-direction:column;gap:12px;margin-top:14px; }
 .image-advanced summary small { float:right;font-size:10px;color:var(--ui-text-muted); }
 .image-type-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px; }
 .image-type-grid button { display:flex;align-items:center;gap:6px;min-height:36px;padding:7px 8px;border:1px solid var(--ui-border);border-radius:7px;background:var(--ui-bg);font-size:12px;cursor:pointer; }
 .image-counts { display:flex;flex-direction:column;gap:10px;background:var(--ui-bg-muted);padding:10px;border-radius:8px; }
-.image-count-row { display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--ui-text-toned); }
+.image-count-row { display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;font-size:12px;color:var(--ui-text-toned); }
+.image-count-row>span { overflow-wrap:anywhere; }.image-count-value { grid-column:1/-1;width:100%; }.image-count-auto { grid-column:1/-1;color:var(--ui-text-muted);font-size:11px; }
 .image-style-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px; }
 .image-style-grid button { display:flex;flex-direction:column;align-items:center;gap:7px;padding:6px 6px 9px;border:1px solid var(--ui-border);border-radius:8px;background:var(--ui-bg);cursor:pointer; }
 .image-style-grid strong { font-size:11px;font-weight:500; }
@@ -518,7 +556,7 @@ summary { cursor:pointer;font-size:12px;color:var(--ui-text-toned);line-height:1
 button.selected { border-color:var(--ui-primary);background:color-mix(in srgb,var(--ui-primary) 7%,var(--ui-bg));color:var(--ui-primary); }
 .image-arrangements button:not(:disabled):hover,.image-style-grid button:not(:disabled):hover,.image-type-grid button:not(:disabled):hover,.image-suggestions button:not(:disabled):hover { border-color:var(--ui-primary); }
 .image-generate-actions { flex-shrink:0;display:flex;flex-direction:column;gap:9px;padding:12px 20px;border-top:1px solid var(--ui-border);background:var(--ui-bg);box-shadow:0 -6px 20px #163b3505; }
-.image-generate-actions .image-field-hint { margin-top:0; }.image-action-row { display:flex;align-items:center;justify-content:space-between;gap:8px; }.image-order-summary { font-size:12px;font-weight:600;color:var(--ui-text-toned); }.image-draft-status { color:var(--ui-text-muted);font-size:10px; }
+.image-generate-actions .image-field-hint { margin-top:0; }.image-action-row { display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap; }.image-order-summary { font-size:12px;font-weight:600;color:var(--ui-text-toned); }.image-draft-status { color:var(--ui-text-muted);font-size:10px; }
 .image-preview-panel { min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--ui-bg-muted); }.image-preview-heading { background:var(--ui-bg);padding:16px 24px; }
 .image-preview-scroll { flex:1;min-height:0;overflow:auto;padding:24px;scrollbar-width:thin;background-image:radial-gradient(color-mix(in srgb,var(--ui-text-muted) 14%,transparent) .8px,transparent .8px);background-size:20px 20px; }
 .image-batch-card { max-width:960px;margin:0 auto 20px;padding:18px 20px;border:1px solid var(--ui-border);border-radius:12px;background:var(--ui-bg); }

@@ -92,6 +92,12 @@ function ownedRange(owner: string) {
   return IDBKeyRange.bound([owner, 0], [owner, Number.MAX_SAFE_INTEGER])
 }
 
+function assertNotPurged(owner: string) {
+  let purged = false
+  try { purged = !!localStorage.getItem('lc_purge:' + owner) } catch { /* IndexedDB 不依赖 localStorage 可用。 */ }
+  if (purged) throw new Error('本机数据已清除，请重新登录后继续编辑')
+}
+
 function validateSnapshot(value: WorkspaceSnapshot): WorkspaceSnapshot {
   if (!value || value.version !== 1 || !Array.isArray(value.sections) || !Array.isArray(value.papers)
       || typeof value.grade !== 'string' || typeof value.keyword !== 'string' || !value.style || !value.customTemplate
@@ -131,6 +137,7 @@ export async function saveDraft(owner: string, sessionId: string, snapshot: Work
   const db = await database()
   const updatedAt = Date.now()
   try {
+    assertNotPurged(owner)
     const record = { id: owner + ':' + sessionId, owner, updatedAt, snapshot: captured }
     const tx = db.transaction(['drafts', 'draftMeta'], 'readwrite')
     await tx.objectStore('drafts').put(record)
@@ -153,10 +160,13 @@ export async function addHistory(owner: string, snapshot: WorkspaceSnapshot, rea
   }
   const db = await database()
   try {
+    assertNotPurged(owner)
     const tx = db.transaction(['history', 'historyMeta'], 'readwrite')
     await tx.objectStore('history').add({ ...entry, snapshot })
     await tx.objectStore('historyMeta').add(entry)
     await tx.done
+    // 历史只保留有界的恢复窗口，避免每次生成积累两份无限增长的快照。
+    await pruneHistory(owner)
     return entry
   } finally { db.close() }
 }
@@ -236,4 +246,52 @@ export async function removeDraft(owner: string, entry: DraftEntry, currentSessi
     if (!lock) throw new Error('草稿正在其他页面使用，请先关闭该页面')
     await remove()
   })
+}
+
+export const RETENTION = { drafts: 10, history: 100, days: 30 } as const
+
+async function pruneHistory(owner: string): Promise<void> {
+  const db = await database()
+  try {
+    const tx = db.transaction(['history', 'historyMeta'], 'readwrite')
+    let cursor = await tx.objectStore('historyMeta').index('ownerUpdated').openCursor(ownedRange(owner), 'prev')
+    let count = 0
+    while (cursor) {
+      if (++count > RETENTION.history || (count > 1 && cursor.value.updatedAt < Date.now() - RETENTION.days * 86400000)) {
+        await tx.objectStore('history').delete(cursor.value.id)
+        await cursor.delete()
+      }
+      cursor = await cursor.continue()
+    }
+    await tx.done
+  } finally { db.close() }
+}
+
+/** 正在其他标签页使用的草稿有 Web Lock；不支持锁时只清理至少一天未更新的副本。 */
+export async function pruneWorkspace(owner: string, currentSession: string): Promise<void> {
+  await pruneHistory(owner)
+  const db = await database()
+  let entries: DraftEntry[]
+  try { entries = (await db.getAllFromIndex('draftMeta', 'ownerUpdated', ownedRange(owner))).reverse() }
+  finally { db.close() }
+  for (const [index, entry] of entries.entries()) {
+    if (entry.id === owner + ':' + currentSession) continue
+    if (index < RETENTION.drafts && entry.updatedAt >= Date.now() - RETENTION.days * 86400000) continue
+    if (!navigator.locks && entry.updatedAt >= Date.now() - 86400000) continue
+    try { await removeDraft(owner, entry, currentSession) }
+    catch { /* 活跃页面或并发更新拥有优先权，下次启动再清理。 */ }
+  }
+}
+
+/** 只删除本账号的草稿/历史，不触碰其他账号的数据。 */
+export async function clearWorkspace(owner: string): Promise<void> {
+  const db = await database()
+  try {
+    const tx = db.transaction(['drafts', 'draftMeta', 'history', 'historyMeta'], 'readwrite')
+    for (const name of ['drafts', 'draftMeta', 'history', 'historyMeta'] as const) {
+      let cursor = await tx.objectStore(name).index('ownerUpdated').openCursor(ownedRange(owner))
+      while (cursor) { await cursor.delete(); cursor = await cursor.continue() }
+    }
+    await tx.done
+  } finally { db.close() }
 }

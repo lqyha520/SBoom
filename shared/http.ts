@@ -43,8 +43,17 @@ export interface RequestOptions {
 export function parseErrorDetail(body: unknown, fallback: string): { message: string; code: string; requestId: string } {
   const detail = (body as { detail?: unknown } | null)?.detail
   if (typeof detail === 'string') return { message: detail, code: '', requestId: '' }
+  if (Array.isArray(detail)) {
+    const messages = detail.slice(0, 5).map(value => {
+      const issue = value as { loc?: unknown[]; msg?: unknown }
+      const field = Array.isArray(issue.loc) ? issue.loc.filter(part => part !== 'body' && part !== 'query').join('.') : ''
+      return `${field ? `${field}：` : ''}${typeof issue.msg === 'string' ? issue.msg : '输入不符合要求'}`
+    })
+    return { message: messages.join('；') || fallback, code: 'validation_error', requestId: '' }
+  }
   const record = (detail && typeof detail === 'object' && !Array.isArray(detail) ? detail : {}) as Record<string, unknown>
-  const message = typeof record.error === 'string' ? record.error : typeof record.detail === 'string' ? record.detail : fallback
+  const top = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
+  const message = typeof record.error === 'string' ? record.error : typeof record.detail === 'string' ? record.detail : typeof top.error === 'string' ? top.error : fallback
   return { message, code: typeof record.code === 'string' ? record.code : '', requestId: typeof record.request_id === 'string' ? record.request_id : '' }
 }
 

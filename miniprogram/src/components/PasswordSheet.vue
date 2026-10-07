@@ -20,11 +20,11 @@ useTabBarOverlay(() => props.open)
 const hasPassword = computed(() => !!session.user?.has_password)
 const localError = computed(() => {
   if (hasPassword.value && !current.value) return '请输入当前密码'
-  if (next.value && next.value.length < 6) return '新密码至少需要 6 位'
+  if (next.value && next.value.length < 8) return '新密码至少需要 8 位'
   if (confirm.value && confirm.value !== next.value) return '两次输入的新密码不一致'
   return ''
 })
-const canSave = computed(() => !busy.value && next.value.length >= 6 && confirm.value === next.value &&
+const canSave = computed(() => !busy.value && next.value.length >= 8 && confirm.value === next.value &&
   (!hasPassword.value || current.value.length > 0))
 
 function reset() {
@@ -68,11 +68,11 @@ async function save() {
       <text v-if="hasPassword" class="field-label">当前密码</text>
       <wd-input v-if="hasPassword" v-model="current" prefix-icon="lock" show-password custom-class="field-input" placeholder="请输入当前密码" aria-label="当前密码" :maxlength="128" :disabled="busy" @input="input" />
       <text class="field-label">新密码</text>
-      <wd-input v-model="next" prefix-icon="lock" show-password custom-class="field-input" placeholder="至少 6 位" aria-label="新密码" :maxlength="128" :disabled="busy" @input="input" />
+      <wd-input v-model="next" prefix-icon="lock" show-password custom-class="field-input" placeholder="至少 8 位" aria-label="新密码" :maxlength="128" :disabled="busy" @input="input" />
       <text class="field-label">确认新密码</text>
       <wd-input v-model="confirm" prefix-icon="lock" show-password custom-class="field-input" placeholder="再输入一次" aria-label="确认新密码" :maxlength="128" confirm-type="done" :disabled="busy" @input="input" @confirm="save" />
       <text v-if="touched && localError" class="field-hint error-text">{{ localError }}</text>
-      <text v-else class="field-hint">{{ hasPassword ? '密码至少 6 位，建议字母与数字混合；修改后其它设备会退出登录。' : '密码至少 6 位，建议字母与数字混合。登录时请填写账号。' }}</text>
+      <text v-else class="field-hint">{{ hasPassword ? '密码至少 8 位，建议字母与数字混合；修改后其它设备会退出登录。' : '密码至少 8 位，建议字母与数字混合。登录时请填写账号。' }}</text>
       <view v-if="error" class="error-strip" role="alert">{{ error }}</view>
       <view class="sheet-actions"><wd-button role="button" block :loading="busy" :disabled="!canSave" @click="save">{{ hasPassword ? '保存新密码' : '设置密码' }}</wd-button></view>
     </view>

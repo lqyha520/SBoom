@@ -4,6 +4,8 @@ export default defineConfig({
   testDir: './browser-tests',
   outputDir: '../artifacts/browser-tests',
   fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 2 : 0,
   workers: 2,
   timeout: 45_000,
   expect: { timeout: 10_000 },

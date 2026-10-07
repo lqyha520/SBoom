@@ -1,5 +1,6 @@
 /** 后台「小程序管理」—— 运营内容接口封装（分类 / Banner / 公告 / 协议文档 / 字典 / 看板） */
 
+import type { ApiSchemas } from '../../shared/api-schema'
 import { request } from './api'
 
 export type AccessLevel = 'inherit' | 'free' | 'vip'
@@ -49,6 +50,10 @@ export interface Analytics {
 }
 
 const base = '/api/v1/admin/site'
+export interface HomeSettings { revision: number; banner_mode: 'welcome' | 'operations' }
+export const getHomeSettings = () => request<HomeSettings>(base + '/home-settings')
+export const saveHomeSettings = (adminId: number, body: HomeSettings) =>
+  request<HomeSettings>(base + '/home-settings', mutation('PUT', adminId, body))
 
 function mutation(method: string, adminId: number, body?: unknown): RequestInit {
   return {
@@ -62,11 +67,11 @@ function mutation(method: string, adminId: number, body?: unknown): RequestInit 
 
 export function siteCategories() { return request<{ items: Category[] }>(base + '/categories') }
 
-export function createCategory(adminId: number, body: { name: string; description: string; icon: string; sort_order: number; is_visible: boolean }) {
+export function createCategory(adminId: number, body: ApiSchemas["CategoryInput"]) {
   return request<Category>(base + '/categories', mutation('POST', adminId, body))
 }
 
-export function updateCategory(adminId: number, id: string, body: { revision: number; name: string; description: string; icon: string; sort_order: number; is_visible: boolean }) {
+export function updateCategory(adminId: number, id: string, body: ApiSchemas["CategoryUpdate"]) {
   return request<Category>(base + '/categories/' + encodeURIComponent(id), mutation('PUT', adminId, body))
 }
 
@@ -82,11 +87,11 @@ export function reorderCategories(adminId: number, ids: string[]) {
 
 export function siteBanners() { return request<{ items: Banner[] }>(base + '/banners') }
 
-export function createBanner(adminId: number, body: Record<string, unknown>) {
+export function createBanner(adminId: number, body: ApiSchemas["BannerInput"]) {
   return request<Banner>(base + '/banners', mutation('POST', adminId, body))
 }
 
-export function updateBanner(adminId: number, id: string, body: Record<string, unknown>) {
+export function updateBanner(adminId: number, id: string, body: ApiSchemas["BannerUpdate"]) {
   return request<Banner>(base + '/banners/' + encodeURIComponent(id), mutation('PUT', adminId, body))
 }
 
@@ -113,11 +118,11 @@ export function bannerImageUrl(id: string, revision?: number) { return base + '/
 
 export function siteNotices() { return request<{ items: Notice[] }>(base + '/notices') }
 
-export function createNotice(adminId: number, body: Record<string, unknown>) {
+export function createNotice(adminId: number, body: ApiSchemas["NoticeInput"]) {
   return request<Notice>(base + '/notices', mutation('POST', adminId, body))
 }
 
-export function updateNotice(adminId: number, id: string, body: Record<string, unknown>) {
+export function updateNotice(adminId: number, id: string, body: ApiSchemas["NoticeUpdate"]) {
   return request<Notice>(base + '/notices/' + encodeURIComponent(id), mutation('PUT', adminId, body))
 }
 
@@ -129,7 +134,7 @@ export function deleteNotice(adminId: number, id: string, revision: number) {
 
 export function siteDocuments() { return request<{ items: SiteDocument[] }>(base + '/documents') }
 
-export function updateDocument(adminId: number, key: string, body: { revision: number; title: string; body: string }) {
+export function updateDocument(adminId: number, key: string, body: ApiSchemas["DocumentUpdate"]) {
   return request<SiteDocument>(base + '/documents/' + encodeURIComponent(key), mutation('PUT', adminId, body))
 }
 
@@ -160,11 +165,11 @@ export function adoptDictionary(adminId: number, kind: 'grade' | 'subject', valu
   return request<{ added: number; items: DictionaryItem[] }>(base + '/dictionary/adopt', mutation('POST', adminId, { kind, values }))
 }
 
-export function createDictionary(adminId: number, body: { kind: string; parent?: string; value: string; label: string; sort_order: number; is_visible: boolean }) {
+export function createDictionary(adminId: number, body: ApiSchemas["DictionaryInput"]) {
   return request<DictionaryItem>(base + '/dictionary', mutation('POST', adminId, body))
 }
 
-export function updateDictionary(adminId: number, id: string, body: { revision: number; value: string; label: string; sort_order: number; is_visible: boolean }) {
+export function updateDictionary(adminId: number, id: string, body: ApiSchemas["DictionaryUpdate"]) {
   return request<DictionaryItem>(base + '/dictionary/' + encodeURIComponent(id), mutation('PUT', adminId, body))
 }
 
@@ -175,3 +180,8 @@ export function deleteDictionary(adminId: number, id: string, revision: number) 
 /* ── 内容数据看板 ── */
 
 export function siteAnalytics() { return request<Analytics>(base + '/analytics') }
+
+/** 整组原子排序，任意版本冲突均不会产生部分更新。 */
+export function reorderDictionary(adminId: number, body: ApiSchemas['DictionaryReorder']) {
+  return request<{ items: DictionaryItem[] }>(base + '/dictionary/reorder', mutation('POST', adminId, body))
+}

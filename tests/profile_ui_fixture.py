@@ -1,13 +1,14 @@
 """Disposable local server for the account, avatar and membership UI checks.
 
 Build miniprogram H5, then run: py -3.12 tests/profile_ui_fixture.py --port 8349
-Uses temporary SQLite only, with all provider traffic disabled by ui_fixture.
+Uses disposable lc_test_* PostgreSQL only; provider traffic is disabled by ui_fixture.
 """
 
 import argparse
 import threading
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import ui_fixture as base  # Set the disposable environment before app imports.
 import uvicorn
@@ -47,12 +48,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8349)
     parser.add_argument("--seconds", type=int, default=1800)
+    parser.add_argument("--demo-library", type=Path, help="Optional prebuilt demo bundles; not required by profile tests")
     args = parser.parse_args()
     if not 1 <= args.seconds <= 3600:
         raise ValueError("Fixture lifetime must be between 1 and 3600 seconds")
     app = base.fixture
     app.router.lifespan_context = lifespan
-    app.state.demo_library = base.ROOT / "artifacts" / "miniprogram" / "demo"
+    app.state.demo_library = args.demo_library
     app.router.routes[:] = [route for route in app.router.routes if getattr(route, "name", "") != "web"]
     app.mount("/", StaticFiles(directory=base.ROOT / "miniprogram" / "dist" / "build" / "h5", html=True), name="mini")
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))

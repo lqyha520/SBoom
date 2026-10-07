@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { navigatePage } from '../../services/page-navigation'
+
+import { copyWithPrivacy } from '../../services/privacy'
+import { reactive, ref, watch } from 'vue'
 import { onHide, onShow, onUnload } from '@dcloudio/uni-app'
 import AuthGate from '../../components/AuthGate.vue'
 import AppTabBar from '../../components/AppTabBar.vue'
@@ -9,7 +12,8 @@ import ProfileSheet from '../../components/ProfileSheet.vue'
 import ProfileAvatar from '../../components/ProfileAvatar.vue'
 import { errorMessage, fetchCatalogSummary } from '../../services/api'
 import { ensureSession, logout, refreshMembership, session } from '../../services/session'
-import { createLatestRequest } from '../../services/latest-request'
+import { usePageLifecycle } from '../../services/page-lifecycle'
+import { version as appVersion } from '../../../package.json'
 import { useTabBarOverlay } from '../../services/tabbar-overlay'
 import { membershipExpiry } from '../../presentation'
 import { openSupport } from '../../services/experience'
@@ -19,31 +23,41 @@ import { inboxState, refreshUnread, openRequests } from '../../services/growth'
 const summary = ref<CatalogSummary | null>(null)
 const error = ref('')
 const busy = ref(false)
+const sections = [{ key: 'summary', label: '收藏与下载统计' }, { key: 'messages', label: '消息提醒' }, { key: 'membership', label: '会员状态' }] as const
+type Section = typeof sections[number]['key']
+const sectionErrors = reactive<Record<Section, string>>({ summary: '', messages: '', membership: '' })
+const sectionLoading = reactive<Record<Section, boolean>>({ summary: false, messages: false, membership: false })
 const settingsOpen = ref(false)
 const logoutOpen = ref(false)
 const profileOpen = ref(false)
 const passwordOpen = ref(false)
 useTabBarOverlay(() => settingsOpen.value || logoutOpen.value)
-const requests = createLatestRequest()
+const requests = usePageLifecycle(() => session.user?.id)
+requests.show()
 let active = true
 watch(() => session.user?.id, () => {
   requests.invalidate(); summary.value = null; error.value = ''
+  for (const { key } of sections) { sectionErrors[key] = ''; sectionLoading[key] = false }
   settingsOpen.value = false; logoutOpen.value = false
   profileOpen.value = false; passwordOpen.value = false
 }, { flush: 'sync' })
 // 弹层之间不叠着开：先收起账号设置，再开编辑资料/改密码
 function openProfile() { settingsOpen.value = false; passwordOpen.value = false; profileOpen.value = true }
 function openPassword() { settingsOpen.value = false; profileOpen.value = false; passwordOpen.value = true }
-async function load() {
-  error.value = ''
+async function load(section: Section | 'all' = 'all', force = false) {
   if (!active || !await ensureSession() || !active) return
-  const current = requests.begin()
-  try {
-    await refreshMembership()
-    if (!current()) return
-    const [result] = await Promise.all([fetchCatalogSummary(), refreshUnread()])
-    if (current()) summary.value = result
-  } catch (cause) { if (current()) error.value = errorMessage(cause) }
+  const current = requests.ticket()
+  await Promise.allSettled(sections.filter(({ key }) => (section === 'all' || key === section) && !sectionLoading[key]).map(async ({ key }) => {
+    sectionLoading[key] = true; sectionErrors[key] = ''
+    try {
+      if (key === 'summary') {
+        const result = await fetchCatalogSummary({ scope: current, force })
+        if (current()) summary.value = result
+      } else if (key === 'messages') await refreshUnread({ scope: current, force })
+      else await refreshMembership({ scope: current, force })
+    } catch (cause) { if (current()) sectionErrors[key] = errorMessage(cause) }
+    finally { if (current()) sectionLoading[key] = false }
+  }))
 }
 async function signOut() {
   if (busy.value || !logoutOpen.value || !session.user) return
@@ -53,30 +67,33 @@ async function signOut() {
   } catch (cause) { if (active) error.value = errorMessage(cause) }
   finally { busy.value = false }
 }
-function privacy() { uni.navigateTo({ url: '/pages/privacy/index' }) }
+function privacy() { navigatePage({ url: '/subpages/privacy/index' }) }
 function favorites() { uni.switchTab({ url: '/pages/favorites/index' }) }
-function recent() { uni.navigateTo({ url: '/pages/recent/index' }) }
-function downloads() { uni.navigateTo({ url: '/pages/downloads/index' }) }
-function messages() { uni.navigateTo({ url: '/pages/messages/index' }) }
-function orders() { uni.navigateTo({ url: '/pages/orders/index' }) }
-function membership() { uni.navigateTo({ url: '/pages/membership/index' }) }
+function recent() { navigatePage({ url: '/pages/recent/index' }) }
+function downloads() { navigatePage({ url: '/pages/downloads/index' }) }
+function messages() { navigatePage({ url: '/subpages/messages/index' }) }
+function orders() { navigatePage({ url: '/subpages/orders/index' }) }
+function membership() { navigatePage({ url: '/subpages/membership/index' }) }
 function copyAccount() {
   if (!session.user) return
-  uni.setClipboardData({ data: session.user.username, success: () => uni.showToast({ title: '账号已复制', icon: 'none' }) })
+  copyWithPrivacy({ data: session.user.username, success: () => uni.showToast({ title: '账号已复制', icon: 'none' }) })
 }
-function closure() { settingsOpen.value = false; uni.navigateTo({ url: '/pages/closure/index' }) }
+function closure() { settingsOpen.value = false; navigatePage({ url: '/subpages/closure/index' }) }
 function profileSaved() { profileOpen.value = false; void load(); uni.showToast({ title: '资料已更新', icon: 'none' }) }
 function passwordSaved() { passwordOpen.value = false; uni.showToast({ title: session.user?.has_password ? '密码已保存' : '密码已设置', icon: 'none' }) }
-onShow(() => { active = true; if (!profileOpen.value) void load() })
+onShow(() => { active = true; requests.show(); if (!profileOpen.value) void load() })
 function suspend() {
-  active = false; requests.invalidate()
+  active = false; requests.leave()
+  for (const { key } of sections) sectionLoading[key] = false
   settingsOpen.value = false; logoutOpen.value = false
   passwordOpen.value = false
 }
 // WeChat's native avatar/album picker can hide the page. Keep the draft and
 // popup alive until the picker returns; only unloading discards the draft.
 onHide(suspend)
-onUnload(() => { suspend(); profileOpen.value = false })
+function reconnect() { if (active) void load('all', true) }
+uni.$on?.('lc-network-restored', reconnect)
+onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-restored', reconnect) })
 </script>
 
 <template>
@@ -100,9 +117,12 @@ onUnload(() => { suspend(); profileOpen.value = false })
         </view>
       </view>
     </view>
-    <AuthGate v-if="!session.user" @restored="load" />
+    <AuthGate v-if="!session.user" @restored="load()" />
     <template v-else>
-      <view v-if="error" class="content-width"><view class="error-strip"><text class="grow">{{ error }}</text><wd-button icon="refresh" type="danger" variant="text" role="button" aria-label="重试" @click="load" /></view></view>
+      <view v-if="error" class="content-width"><view class="error-strip"><text class="grow">{{ error }}</text></view></view>
+      <view v-for="section in sections" :key="section.key" class="content-width">
+        <view v-if="sectionErrors[section.key]" class="error-strip" role="status"><text class="grow">{{ section.label }}：{{ sectionErrors[section.key] }}</text><wd-button icon="refresh" role="button" variant="text" :aria-label="'重试' + section.label" :loading="sectionLoading[section.key]" :disabled="sectionLoading[section.key]" @click="load(section.key, true)" /></view>
+      </view>
       <view class="content-width dashboard">
         <view class="quick-grid" role="group" aria-label="个人数据快捷入口">
           <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="quick-card" role="button" @click="favorites"><view class="quick-icon favorite"><wd-icon name="heart" size="20px" /></view><text class="quick-value">{{ summary ? summary.favorites : '—' }}</text><text class="quick-label">我的收藏</text></button>
@@ -141,7 +161,7 @@ onUnload(() => { suspend(); profileOpen.value = false })
           <wd-cell title="编辑资料" :label="session.user?.nickname || session.user?.username" is-link role="button" aria-label="编辑头像与昵称" @click="openProfile"><template #prefix><view class="menu-symbol profile-symbol"><wd-icon name="user" size="21px" /></view></template></wd-cell>
           <wd-cell :title="session.user?.has_password ? '修改密码' : '设置密码'" :label="session.user?.has_password ? '定期更换更安全' : '设置后可使用固定账号登录'" is-link role="button" aria-label="密码设置" @click="openPassword"><template #prefix><view class="menu-symbol lock-symbol"><wd-icon name="lock" size="21px" /></view></template></wd-cell>
         </wd-cell-group>
-        <wd-cell title="登录账号" :value="session.user?.username" /><wd-cell title="应用版本" value="0.1.0" />
+        <wd-cell title="登录账号" :value="session.user?.username" /><wd-cell title="应用版本" :value="appVersion" />
         <wd-cell title="注销账号" label="申请、查看审核进度或撤回" is-link role="button" @click="closure" />
         <view v-if="error" class="error-strip">{{ error }}</view>
         <view class="settings-logout"><wd-button type="info" variant="plain" block icon="poweroff" role="button" :disabled="busy" @click="error = ''; logoutOpen = true">退出登录</wd-button></view>

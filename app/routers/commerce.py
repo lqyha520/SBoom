@@ -5,12 +5,14 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.blocking import run_sync
-from app.deps import require_admin
+from app.deps import require_admin, require_recent_admin
+from app.http_limits import limited_body
 from app.library_deps import no_store, require_mini_user
 from app.models.commerce import BillInput, OrderInput, PlanInput, RefundInput, RefundReview
 from app.models.membership_cards import CardCreate, CardRedeem
 from app.services import membership_cards, mini_orders, mini_refunds, payment_bills
 from app.services.mini_auth import MiniUser
+from app.services.payment_admission import execute, throttle
 from app.services.user_store import CurrentUser
 from app.services.wechat_pay import PaymentError, WeChatPay
 
@@ -20,7 +22,7 @@ OrderStatus = Literal["", "created", "pending", "paid", "closed", "refunded", "r
 
 def payment_call(function, *args):
     try:
-        return function(*args)
+        return execute(function, *args)
     except PaymentError as error:
         raise HTTPException(503, detail={"error": str(error), "code": "payment_unavailable"}) from error
 
@@ -31,11 +33,12 @@ def plans(user: MiniUser = Depends(require_mini_user)):
 
 @router.post('/mini/membership/redeem')
 def redeem_card(body: CardRedeem, user: MiniUser = Depends(require_mini_user)):
+    throttle(user.id, "redeem")
     return membership_cards.redeem(user.id, body.code)
 
 @router.get('/admin/commerce/cards')
-def admin_cards(status: str = '', limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), user: CurrentUser = Depends(require_admin)):
-    return membership_cards.listing(status, limit, offset)
+def admin_cards(q: str = Query('', max_length=4), status: str = '', limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), user: CurrentUser = Depends(require_admin)):
+    return membership_cards.listing(status, limit, offset, q)
 
 @router.post('/admin/commerce/cards', status_code=201)
 def create_cards(body: CardCreate, user: CurrentUser = Depends(require_admin)):
@@ -53,6 +56,7 @@ def orders(limit: int = Query(20, ge=1, le=50), offset: int = Query(0, ge=0, le=
 
 @router.post("/mini/orders", status_code=201)
 def create_order(body: OrderInput, user: MiniUser = Depends(require_mini_user)):
+    throttle(str(user.id), "create_order")
     return mini_orders.create(user.id, body)
 
 
@@ -63,26 +67,31 @@ def order(identifier: str, user: MiniUser = Depends(require_mini_user)):
 
 @router.post("/mini/orders/{identifier}/pay")
 def pay(identifier: str, user: MiniUser = Depends(require_mini_user)):
+    throttle(str(user.id), "pay")
     return payment_call(mini_orders.pay, identifier, user.id)
 
 
 @router.post("/mini/orders/{identifier}/sync")
 def sync_order(identifier: str, user: MiniUser = Depends(require_mini_user)):
+    throttle(str(user.id), "sync_order")
     return payment_call(mini_orders.sync, identifier, user.id)
 
 
 @router.post("/mini/orders/{identifier}/cancel")
 def cancel_order(identifier: str, user: MiniUser = Depends(require_mini_user)):
+    throttle(str(user.id), "cancel_order")
     return payment_call(mini_orders.cancel, identifier, user.id)
 
 
 @router.post("/mini/orders/{identifier}/refund")
 def request_refund(identifier: str, body: RefundInput, user: MiniUser = Depends(require_mini_user)):
+    throttle(str(user.id), "request_refund")
     return mini_refunds.request(identifier, user.id, body)
 
 
 @router.post("/mini/refunds/{identifier}/sync")
 def sync_refund(identifier: str, user: MiniUser = Depends(require_mini_user)):
+    throttle(str(user.id), "sync_refund")
     return payment_call(mini_refunds.sync, identifier, user.id)
 
 
@@ -113,6 +122,7 @@ def export_orders(status: OrderStatus = "", q: str = Query("", max_length=120), 
 
 @router.post("/admin/commerce/orders/{identifier}/sync")
 def admin_sync(identifier: str, user: CurrentUser = Depends(require_admin)):
+    throttle(str(user.id), "admin_sync")
     return payment_call(mini_orders.sync, identifier)
 
 
@@ -123,16 +133,19 @@ def admin_order(identifier: str, user: CurrentUser = Depends(require_admin)):
 
 @router.post("/admin/commerce/orders/{identifier}/cancel")
 def admin_cancel(identifier: str, user: CurrentUser = Depends(require_admin)):
+    throttle(str(user.id), "admin_cancel")
     return payment_call(mini_orders.cancel, identifier)
 
 
 @router.put("/admin/commerce/refunds/{identifier}")
-def review_refund(identifier: str, body: RefundReview, user: CurrentUser = Depends(require_admin)):
+def review_refund(identifier: str, body: RefundReview, user: CurrentUser = Depends(require_recent_admin)):
+    throttle(str(user.id), "review_refund")
     return payment_call(mini_refunds.review, user.id, identifier, body)
 
 
 @router.post("/admin/commerce/refunds/{identifier}/sync")
 def admin_sync_refund(identifier: str, user: CurrentUser = Depends(require_admin)):
+    throttle(str(user.id), "admin_sync_refund")
     return payment_call(mini_refunds.sync, identifier)
 
 
@@ -148,6 +161,7 @@ def bill(identifier: str, user: CurrentUser = Depends(require_admin)):
 
 @router.post("/admin/commerce/reconciliations")
 def reconcile(body: BillInput, user: CurrentUser = Depends(require_admin)):
+    throttle(str(user.id), "reconcile")
     return payment_call(payment_bills.reconcile, user.id, body.bill_date)
 
 
@@ -157,11 +171,7 @@ def _verify_callback(headers, raw: bytes):
 
 
 async def receive(request, refund=False):
-    raw = bytearray()
-    async for chunk in request.stream():
-        raw.extend(chunk)
-        if len(raw) > 1048576:
-            raise HTTPException(413, detail={"error": "通知过大"})
+    raw = await limited_body(request, 1048576, error="通知过大")
     try:
         identifier, kind, value = await run_sync(_verify_callback, request.headers, bytes(raw))
     except PaymentError as error:

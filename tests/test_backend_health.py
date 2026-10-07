@@ -91,7 +91,8 @@ class HealthContracts(unittest.IsolatedAsyncioTestCase):
                             {"grade": "小学一年级", "subject": "数学", "allowed": [], "forbidden": []})
                 target, name = (auth.user_store, "create_user") if route == "register" else (generate.knowledge_scope_service, "get_scope")
                 with patch.object(target, name, side_effect=slow), patch.object(auth.user_store, "get_user_by_username", return_value=None), \
-                        patch.object(auth, "allow", return_value=True), patch.object(auth.settings, "registration_enabled", True):
+                        patch.object(auth, "allow", return_value=True), patch.object(auth.settings, "registration_enabled", True), patch("app.services.workspace_sessions.create", return_value="test-session"):
+
                     job = asyncio.create_task(self.client.post("/api/v1/auth/register", json={"username": "worker-user", "password": "password"}) if route == "register" else
                                               self.client.get("/api/v1/scope?grade=小学一年级&subject=数学"))
                     try:

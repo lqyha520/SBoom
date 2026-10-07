@@ -1,4 +1,5 @@
 import { CN_NUM, TYPE_NAME } from './constants'
+import { toRaw, isProxy } from 'vue'
 import type { GameData, PaperSection, Question } from './types'
 
 /* ── 年级数字：小学一~六 → 1~6，初一~三 → 7~9 ── */
@@ -183,6 +184,20 @@ export function ensureQids(data: GameData): void {
   ;(data.questions || []).forEach(q => { if (!q._qid) q._qid = uid('q') })
 }
 export function deepClone<T>(value: T): T {
-  try { return structuredClone(value) }
+  try { return structuredClone(toRaw(value)) }
+  catch { /* 组合快照中可能仍含嵌套代理，下面按需解包。 */ }
+  // 快照外壳可能是普通对象，但字段仍是 Vue 代理；递归解包只访问对象一次。
+  const seen = new WeakMap<object, unknown>()
+  const unwrap = (input: unknown): unknown => {
+    if (!input || typeof input !== 'object') return input
+    const raw = isProxy(input) ? toRaw(input) : input
+    if (seen.has(raw)) return seen.get(raw)
+    if (!Array.isArray(raw) && Object.getPrototypeOf(raw) !== Object.prototype) return raw
+    const out: Record<string, unknown> | unknown[] = Array.isArray(raw) ? [] : {}
+    seen.set(raw, out)
+    for (const [key, item] of Object.entries(raw)) (out as Record<string, unknown>)[key] = unwrap(item)
+    return out
+  }
+  try { return structuredClone(unwrap(value)) as T }
   catch { return JSON.parse(JSON.stringify(value)) }
 }

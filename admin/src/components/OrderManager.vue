@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useAdminListRoute } from '../navigation'
-import { ref, watch } from 'vue'
+import { onDeactivated, ref, watch } from 'vue'
 import type { UserInfo } from '../api'
 import { useAdminPage } from '../admin-page'
 import { getOrders, getOrder, getPlans, syncOrder, cancelOrder, reviewRefund, syncRefund, exportOrders, orderStatuses, refundStatuses, choices, yuan, dateTime, type Order, type OrderFilter } from '../growth'
@@ -8,7 +8,10 @@ const props = defineProps<{ user: UserInfo }>()
 const items = ref<Order[]>([]), summary = ref({ orders: 0, paid_fen: 0, refunded_fen: 0 }), total = ref(0), pageNumber = ref(1), status = ref('all'), q = ref(''), start = ref(''), end = ref(''), online = ref(false)
 const selected = ref<Order | null>(null), dialog = ref(false), action = ref<'approve' | 'reject'>('reject'), reply = ref(''), confirmRefund = ref(false), cancelConfirm = ref(false)
 const filter = (): OrderFilter => ({ status: status.value === 'all' ? '' : status.value, q: q.value.trim(), start_date: start.value, end_date: end.value })
-const page = useAdminPage(async valid => { const [result, plans] = await Promise.all([getOrders(filter(), (pageNumber.value - 1) * 20), getPlans()]); if (valid()) { items.value = result.items; total.value = result.total; summary.value = result.summary; online.value = plans.checkout_enabled } }, () => { dialog.value = false; cancelConfirm.value = false })
+let plansPromise: ReturnType<typeof getPlans> | undefined
+onDeactivated(() => { plansPromise = undefined })
+function checkoutPlans() { return plansPromise ||= getPlans().catch(cause => { plansPromise = undefined; throw cause }) }
+const page = useAdminPage(async valid => { const [result, plans] = await Promise.all([getOrders(filter(), (pageNumber.value - 1) * 20), checkoutPlans()]); if (valid()) { items.value = result.items; total.value = result.total; summary.value = result.summary; online.value = plans.checkout_enabled } }, () => { dialog.value = false; cancelConfirm.value = false })
 const { error, notice, loading, busy } = page
 const routeState = useAdminListRoute('orders', { q, status, start, end, page: pageNumber }, () => { void page.load() })
 watch(pageNumber, page.load); watch(status, () => { if (routeState.restoring) return; if (pageNumber.value === 1) void page.load(); else pageNumber.value = 1 })

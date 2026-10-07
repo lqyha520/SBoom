@@ -13,6 +13,7 @@ from app.services import membership_ledger, mini_auth
 from app.services.mini_errors import fail
 from app.services.mini_messages import notify
 from app.services.wechat_pay import PaymentError, WeChatPay, configuration
+from app.sql_utils import escape_like
 
 PUBLIC_FIELDS = ("id", "plan_id", "plan_name", "plan_days", "amount_fen", "currency", "status", "revision", "created_at", "expires_at", "paid_at", "closed_at", "updated_at")
 REFUND_FIELDS = ("id", "reason", "reply", "status", "revision", "created_at", "updated_at", "completed_at")
@@ -166,8 +167,14 @@ def validate_payment(order, value):
             not isinstance(amount.get("total"), int) or isinstance(amount.get("total"), bool) or
             amount["total"] != order["amount_fen"] or amount.get("currency") != "CNY"):
         fail("支付通知与订单金额或商户不一致", 400)
-    if order["payer_enc"] and payer.get("openid") != decrypt_secret(order["payer_enc"]):
-        fail("支付用户与订单不一致", 400)
+    if order["payer_enc"]:
+        expected_payer = decrypt_secret(order["payer_enc"])
+        if not expected_payer:
+            import logging
+            logging.getLogger(__name__).error("订单付款人解密失败，等待密钥恢复后重试 order_id=%s", order["id"])
+            fail("支付确认暂不可用，请联系管理员检查加密密钥；通知将重试", 503)
+        if payer.get("openid") != expected_payer:
+            fail("支付用户与订单不一致", 400)
     transaction = value.get("transaction_id")
     if not isinstance(transaction, str) or not 8 <= len(transaction) <= 64:
         fail("支付交易标识无效", 400)
@@ -216,6 +223,8 @@ def confirm_payment(value, event_id=None):
 def sync(identifier, user_id=None):
     with db() as conn:
         order = dict(owned(conn, identifier, user_id))
+        if order["status"] not in ("created", "pending"):
+            return public_order(conn, order, user_id is None)
     ensure_tenant(order)
     value = WeChatPay().query(identifier)
     if value.get("out_trade_no") != identifier or value.get("mchid") != order["mchid"] or value.get("appid") != order["appid"]:
@@ -284,7 +293,7 @@ def listing(user_id=None, status="", q="", limit=20, offset=0, start_date="", en
         fail("订单日期范围无效", 422)
     if q:
         clauses.append("(o.id LIKE ? ESCAPE '\\' OR LOWER(u.username) LIKE ? ESCAPE '\\' OR LOWER(u.nickname) LIKE ? ESCAPE '\\')")
-        escaped = "%" + q.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        escaped = "%" + escape_like(q.lower()) + "%"
         args.extend([escaped] * 3)
     where = " AND ".join(clauses) or "1=1"
     with db() as conn:

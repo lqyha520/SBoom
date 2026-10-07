@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const { mkdir, writeFile } = require('node:fs/promises')
 const path = require('node:path')
 const { createRequire } = require('node:module')
-const { chromium, request } = require('playwright')
+const { chromium, request } = createRequire(path.resolve(__dirname, '../web/package.json'))('@playwright/test')
 const sharp = createRequire(path.resolve(__dirname, '../miniprogram/package.json'))('sharp')
 
 const base = process.env.HOME_UI_BASE || 'http://127.0.0.1:8361'
@@ -42,6 +42,7 @@ async function main() {
   }
   for (const item of await list()) assert.equal((await api.delete('/api/v1/admin/site/banners/' + item.id, { params: { revision: item.revision } })).status(), 204)
   const papers = (await (await api.get('/api/v1/catalog/papers?limit=12')).json()).items
+  const site = await (await api.get('/api/v1/site/home')).json()
   assert.ok(papers.length > 2)
   const existingCategories = (await (await api.get('/api/v1/admin/site/categories')).json()).items
   const categories = []
@@ -77,16 +78,25 @@ async function main() {
     { input: Buffer.from('<svg width="900" height="1200"><rect x="45" y="45" width="810" height="1110" rx="24" fill="#fff1d9" stroke="#8b622f" stroke-width="6"/><text x="450" y="180" text-anchor="middle" font-size="60" fill="#835b2d">READING</text><path d="M180 360H720M180 440H720M180 520H720M180 600H720" stroke="#c3a174" stroke-width="12"/><text x="450" y="1060" text-anchor="middle" font-size="42" fill="#835b2d">FULL POSTER</text></svg>') },
   ]).png().toFile(portrait)
 
-  const browser = await chromium.launch({ headless: true, channel: 'chrome' })
+  const browser = await chromium.launch({ headless: true })
   const adminContext = await browser.newContext({ viewport: { width: 1365, height: 950 }, storageState: await api.storageState() })
   const readerContext = await browser.newContext({ viewport: { width: 375, height: 812 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true })
+  await readerContext.tracing.start({ screenshots: true, snapshots: true })
+  // 真实浏览器验收只允许访问当前一次性服务，防止本机构建的生产地址误发请求。
+  for (const context of [adminContext, readerContext]) await context.route('**/*', route => {
+    const url = new URL(route.request().url())
+    return ['data:', 'blob:'].includes(url.protocol) || url.origin === new URL(base).origin ? route.continue() : route.abort()
+  })
   const admin = await adminContext.newPage(), reader = await readerContext.newPage()
+  await reader.clock.install()
   for (const page of [admin, reader]) { page.setDefaultTimeout(12000); page.on('pageerror', error => errors.push(error.message)) }
   const goHome = async () => {
     if (await reader.locator('.home-page').isVisible()) {
       await reader.getByRole('button', { name: '习题库', exact: true }).click()
       await reader.waitForURL('**/pages/library/index'); await settle(reader)
     }
+    // TTL 内返回首页应命中缓存；推进墙钟验证发布更新，避免实际等待一分钟。
+    await reader.clock.fastForward(65_000)
     const refreshed = reader.waitForResponse(response => response.url().endsWith('/api/v1/site/home'))
     await reader.getByRole('button', { name: '首页', exact: true }).click()
     await reader.waitForURL(url => url.hash === '#/' || url.hash.startsWith('#/pages/home/index'))
@@ -126,21 +136,34 @@ async function main() {
     check('Save publishes the chosen file, copy, fit and destination', (await home())[0].image_url === banner.image_url)
     await shot(admin, '02-admin-gallery')
 
-    await reader.goto(base + '/#/pages/home/index'); await reader.locator('.paper-card').nth(1).waitFor(); await bannerLoaded(reader, 1200)
+    const imageRequests = []
+    reader.on('request', request => { if (/\/site\/banners\/.*\/image/.test(request.url())) imageRequests.push(request.url()) })
+    await reader.goto(base + '/#/pages/home/index'); await reader.locator('.paper-card').nth(1).waitFor(); await settle(reader)
+    check('Welcome mode retains published banners without downloading hidden artwork', await reader.locator('.home-welcome').isVisible() && imageRequests.length === 0)
+    check('The admin identifies published banners awaiting operations mode', await admin.getByText('待启用运营模式', { exact: true }).isVisible())
+    await shot(reader, '00-home-welcome-375')
+    await admin.getByRole('switch', { name: '启用运营 Banner', exact: true }).click()
+    await expectMode()
+    await goHome(); await bannerLoaded(reader, 1200)
     check('Visitors see the uploaded banner and real recommended papers', await reader.locator('.paper-card').count() === 2)
     const bounds = await reader.evaluate(() => {
-      const image = document.querySelector('.banner-media').getBoundingClientRect(), copy = document.querySelector('.banner-body').getBoundingClientRect()
-      return { width: image.width, height: image.height, imageBottom: image.bottom, copyTop: copy.top }
+      const image = document.querySelector('.banner-media').getBoundingClientRect(), copy = document.querySelector('.banner-body').getBoundingClientRect(), slide = document.querySelector('.banner-slide').getBoundingClientRect()
+      return { imageBottom: image.bottom, imageWidth: image.width, imageHeight: image.height, copyTop: copy.top, copyLeft: copy.left, copyRight: copy.right, copyBottom: copy.bottom, slideLeft: slide.left, slideRight: slide.right, slideBottom: slide.bottom, slideWidth: slide.width }
     })
-    check('The photo keeps a 12:5 frame and text does not cover the uploaded image', Math.abs(bounds.width / bounds.height - 2.4) < .04 && bounds.copyTop >= bounds.imageBottom - 1)
+    check('Artwork fills its own row and readable copy stays below without overlap',
+      Math.abs(bounds.imageWidth - bounds.slideWidth) < 2 && bounds.imageHeight === 150 &&
+      bounds.copyTop >= bounds.imageBottom &&
+      bounds.copyLeft >= bounds.slideLeft && bounds.copyRight <= bounds.slideRight && bounds.copyBottom <= bounds.slideBottom)
     await noOverflow(reader); await shot(reader, '03-home-photo-375')
     await reader.setViewportSize({ width: 320, height: 640 }); await noOverflow(reader); await shot(reader, '04-home-photo-320')
     await reader.setViewportSize({ width: 375, height: 812 })
     await reader.locator('.home-collections').scrollIntoViewIfNeeded(); await shot(reader, '05-home-collections')
     await reader.locator('.home-search-row').scrollIntoViewIfNeeded()
-    const navigation = reader.waitForResponse(response => response.url().includes('/api/v1/catalog/papers?') && new URL(response.url()).searchParams.get('q') === '数学')
-    await reader.getByRole('button', { name: '新学期，练好每一课，开始练习', exact: true }).click()
-    assert.equal((await navigation).status(), 200)
+    const [navigation] = await Promise.all([
+      reader.waitForResponse(response => response.url().includes('/api/v1/catalog/papers?') && new URL(response.url()).searchParams.get('q') === '数学'),
+      reader.getByRole('button', { name: '新学期，练好每一课，开始练习', exact: true }).click(),
+    ])
+    assert.equal(navigation.status(), 200)
     check('Tapping anywhere on a configured banner opens the intended keyword results', reader.url().includes('/pages/library/index'))
     await goHome()
     const before = await reader.locator('.paper-card-open').first().getAttribute('aria-label')
@@ -155,13 +178,13 @@ async function main() {
     reader.off('request', countContent)
     await reader.getByRole('button', { name: '选择年级', exact: true }).click()
     await reader.getByRole('dialog', { name: '选择年级', exact: true }).waitFor()
-    check('The grade chooser shows every grade as a direct choice', await reader.locator('.grade-choice').count() === 13)
+    check('The grade chooser shows every configured grade as a direct choice', await reader.locator('.grade-choice').count() === new Set(site.dictionaries.grades).size + 1)
     await shot(reader, '09-home-grade-chooser')
     const gradeLoad = reader.waitForResponse(response => response.url().includes('/api/v1/catalog/papers?') && new URL(response.url()).searchParams.get('grade') === papers[0].grade)
     await reader.getByRole('button', { name: papers[0].grade, exact: true }).click(); await gradeLoad; await settle(reader)
-    assert.equal(await reader.locator('.grade-entry').innerText(), papers[0].grade)
+    assert.equal((await reader.locator('.search-grade-choice').innerText()).trim(), papers[0].grade.replace(/^小学/, ''))
     await goHome()
-    check('A guest grade selection filters papers and survives leaving and returning home', (await reader.locator('.grade-entry').innerText()).trim() === papers[0].grade)
+    check('A guest grade selection filters papers and survives leaving and returning home', (await reader.locator('.search-grade-choice').innerText()).trim() === papers[0].grade.replace(/^小学/, ''))
     await reader.getByRole('button', { name: '选择年级', exact: true }).click()
     await reader.getByRole('button', { name: '全部年级', exact: true }).click(); await settle(reader)
     await reader.getByRole('button', { name: '收藏习题', exact: true }).first().click()
@@ -228,7 +251,7 @@ async function main() {
     check('Cancel discards a selected replacement without uploading it', (await list())[0].revision === banner.revision)
 
     const originalCopy = banner
-    banner = await updateBanner(banner, { title: '长标题'.repeat(13), kicker: '上方小字'.repeat(10), subtitle: '副标题说明'.repeat(12), target_type: 'keyword', target_value: '数学', action_label: '去看看'.repeat(6) })
+    banner = await updateBanner(banner, { title: '长标题'.repeat(13), kicker: '上方小字'.repeat(6), subtitle: '副标题说明'.repeat(12), target_type: 'keyword', target_value: '数学', action_label: '去看看'.repeat(4) })
     await goHome(); await bannerLoaded(reader, 900); await reader.setViewportSize({ width: 320, height: 640 })
     const copyBounds = await reader.locator('.banner-body').evaluate(element => ({ content: element.scrollHeight, frame: element.clientHeight }))
     check('Maximum-length copy stays inside the banner at 320 px', copyBounds.content <= copyBounds.frame + 1)
@@ -277,8 +300,10 @@ async function main() {
     await save()
     await goHome()
     check('Removing a photo clears the cached image in the existing home component', await reader.locator('.banner-slide').first().getAttribute('class').then(value => value.includes('text-banner')))
-    for (const item of await list()) await api.delete('/api/v1/admin/site/banners/' + item.id, { params: { revision: item.revision } })
+    for (const item of await list()) assert.equal((await api.delete('/api/v1/admin/site/banners/' + item.id, { params: { revision: item.revision } })).status(), 204)
+    assert.deepEqual(await home(), [])
     await goHome()
+    await reader.locator('.home-welcome').waitFor()
     check('An unconfigured homepage has one honest entry point and no fixed fake carousel', await reader.locator('.home-welcome').isVisible() && await reader.locator('.banner-swiper').count() === 0)
     await noOverflow(reader); await shot(reader, '08-home-without-banner')
     check('Both applications finish without unhandled browser errors', errors.length === 0)
@@ -289,7 +314,12 @@ async function main() {
     throw error
   } finally {
     await writeFile(path.join(output, 'checks.json'), JSON.stringify({ checks, errors, screenshots }, null, 2))
+    await readerContext.tracing.stop({ path: path.join(output, 'trace.zip') })
     await browser.close(); await api.dispose()
+  }
+  async function expectMode() {
+    await admin.getByText('运营 Banner 已启用', { exact: true }).waitFor()
+    assert.equal((await (await api.get('/api/v1/site/home')).json()).banner_mode, 'operations')
   }
 }
 main().catch(error => { console.error(error); process.exitCode = 1 })

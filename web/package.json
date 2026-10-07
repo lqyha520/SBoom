@@ -6,15 +6,16 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "vue-tsc --noEmit",
+    "typecheck": "vue-tsc --noEmit && tsc --noEmit -p tsconfig.browser.json",
     "test": "vitest run",
     "preview": "vite preview",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "lint": "eslint src browser-tests *.ts"
   },
   "dependencies": {
     "@iconify-json/lucide": "^1.2.132",
     "@nuxt/ui": "^4.11.1",
-    "dompurify": "^3.2.6",
+    "dompurify": "^3.4.16",
     "html2canvas": "^1.4.1",
     "idb": "^8.0.3",
     "jspdf": "^4.2.1",
@@ -26,6 +27,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
+    "@types/node": "^22.20.2",
     "@types/sortablejs": "^1.15.8",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/eslint-config-typescript": "^14.9.0",
@@ -46,7 +48,14 @@
   },
   "pnpm": {
     "overrides": {
-      "esbuild@0.27.7": "0.28.1"
+      "esbuild@0.27.7": "0.28.1",
+      "source-map-js@<1.2.2": "1.2.2"
+    },
+    "auditConfig": {
+      "ignoreCves": [
+        "CVE-2026-93687"
+      ]
     }
-  }
+  },
+  "packageManager": "pnpm@10.14.0"
 }

@@ -13,7 +13,7 @@ from app.services.mini_messages import notify
 def create(user_id, body):
     now = int(time.time())
     fingerprint = hashlib.sha256("\n".join([body.title.casefold(), body.grade.casefold(), body.subject.casefold()]).encode()).hexdigest()
-    with db(serialized=True) as conn:
+    with db(content_user=str(user_id)) as conn:
         existing = conn.execute("SELECT * FROM mini_content_requests WHERE user_id = ? AND fingerprint = ? AND status IN ('pending', 'planned')", (user_id, fingerprint)).fetchone()
         if existing:
             return dict(existing)

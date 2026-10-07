@@ -5,21 +5,7 @@ export const MAX_QUESTIONS_PER_TYPE = 30
 export const MAX_GENERATION_TYPES = 10
 
 /* ── 题型 ── */
-export const TYPE_NAME: Record<string, string> = {
-  quiz: '选择题',
-  fill_blank: '填空题',
-  match_pair: '连线配对',
-  challenge: '闯关挑战',
-  oral_math: '口算题',
-  reading: '阅读理解',
-  vertical_calc: '竖式计算',
-  recursive_calc: '脱式计算',
-  smart_calc: '简便计算',
-  number_split: '数的分成',
-  compare: '比大小',
-  true_false: '判断题',
-  word_problem: '应用题',
-}
+export { TYPE_NAME } from '../../shared/question-types'
 
 /** 按年级+科目动态显示题型（依据人教版真实试卷结构） */
 export const TYPE_GROUPS_BY_GRADE: Record<string, Record<number, [string, string[]][]>> = {

@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
 import { useExamStore } from '../stores/exam'
 import type { PaperData } from '../types'
 import PaperView from './PaperView.vue'
-import FormatBar from './FormatBar.vue'
+import PaperEditToolbar from './PaperEditToolbar.vue'
 import ZoomControl from './ZoomControl.vue'
 import { useFitZoom } from '../useFitZoom'
 
@@ -19,17 +19,19 @@ const previewBox = ref<HTMLElement | null>(null)
 const paperViewEl = ref<InstanceType<typeof PaperView> | null>(null)
 const { zoom, manual, setManual } = useFitZoom(previewBox)
 const layoutMode = computed({ get: () => store.layoutMode, set: value => { store.layoutMode = value } })
-onBeforeUnmount(() => { store.layoutMode = false })
+function leaveLayout() { if (store.layoutMode) store.finishLayout(true) }
+onBeforeUnmount(leaveLayout)
+onDeactivated(leaveLayout)
 function toggleLayout() {
-  if (!layoutMode.value) store.recordEdit()
+  if (!layoutMode.value) { store.beginLayout(); return }
   if (layoutMode.value) {
     const sections = paperViewEl.value?.applyLayout()
     if (sections) store.syncSections(sections)
   }
-  layoutMode.value = !layoutMode.value
+  store.finishLayout()
 }
 function cancelLayout() {
-  layoutMode.value = false
+  store.finishLayout(true)
   paperViewEl.value?.repaginate()
 }
 const saveOpen = ref(false)
@@ -75,23 +77,10 @@ function onTitleEdited(title: string, html: string) { store.title = title; store
       <h2 id="preview-title"><UIcon name="i-lucide-file-text" class="size-4" />卷面预览</h2>
       <div class="actions-row">
         <UBadge color="neutral" variant="soft" size="xs">草稿</UBadge>
-        <UTooltip text="卷面设置"><UButton icon="i-lucide-settings-2" color="neutral" variant="ghost" size="xs" aria-label="预览卷面设置" @click="$emit('open-settings')" /></UTooltip>
+        <UTooltip text="卷面设置"><UButton icon="i-lucide-settings-2" color="neutral" variant="ghost" size="xs" aria-label="预览卷面设置" :disabled="store.layoutMode" @click="$emit('open-settings')" /></UTooltip>
       </div>
     </div>
-    <div class="preview-toolbar no-print">
-      <FormatBar />
-      <div class="actions-row">
-        <template v-if="!layoutMode">
-          <UTooltip text="排版模式"><UButton icon="i-lucide-move" color="neutral" variant="ghost" aria-label="排版模式" :disabled="!store.sections.length" class="icon-tool" @click="toggleLayout" /></UTooltip>
-          <div class="toolbar-divider"></div>
-          <UButton icon="i-lucide-bookmark-plus" label="保存模板" color="neutral" variant="outline" size="xs" :disabled="!store.sections.length" @click="openSave" />
-        </template>
-        <template v-else>
-          <UButton label="取消" color="neutral" variant="ghost" size="xs" @click="cancelLayout" />
-          <UButton label="完成排版" icon="i-lucide-check" size="xs" @click="toggleLayout" />
-        </template>
-      </div>
-    </div>
+    <PaperEditToolbar :layout-mode="layoutMode" :disabled="store.generating" :can-layout="!!store.sections.length" save-template @settings="$emit('open-settings')" @layout="toggleLayout" @cancel="cancelLayout" @save="openSave" />
     <div ref="previewBox" class="preview-fill">
       <PaperView ref="paperViewEl" :paper="previewPaper" :template="store.template" :style="store.style" :editable="true" :layout-mode="layoutMode" :zoom="zoom"
         @toggle-element="store.toggleHiddenElement($event)" @title-edited="onTitleEdited"

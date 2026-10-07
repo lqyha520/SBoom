@@ -19,7 +19,7 @@ function loadNavigation(pages: PageLike[], backFails = false) {
   const exports: Record<string, any> = {}
   vm.runInNewContext(compile('../src/services/navigation.ts'), {
     exports,
-    require: (id: string) => id === './return-route' ? returnRoute : id === 'vue' ? { reactive: (value: unknown) => value } : {},
+    require: (id: string) => id === './page-navigation' ? { navigatePage: (options: any) => calls.push('navigateTo ' + options.url) } : id === './return-route' ? returnRoute : id === 'vue' ? { reactive: (value: unknown) => value } : {},
     uni: {
       navigateTo: (options: any) => { calls.push('navigateTo ' + options.url) },
       redirectTo: (options: any) => { calls.push('redirectTo ' + options.url) },
@@ -43,10 +43,10 @@ test('login returns to the paper page it came from without duplicating it', () =
 
 test('login returns to a search or request page with encoded parameters', () => {
   const app = loadNavigation([
-    { route: 'pages/requests/index', options: { title: encodeURIComponent('分数应用题'), grade: encodeURIComponent('六年级') } },
+    { route: 'subpages/requests/index', options: { title: encodeURIComponent('分数应用题'), grade: encodeURIComponent('六年级') } },
     { route: 'pages/login/index' },
   ])
-  app.visit('/pages/requests/index?title=' + encodeURIComponent('分数应用题') + '&grade=' + encodeURIComponent('六年级'), true)
+  app.visit('/subpages/requests/index?title=' + encodeURIComponent('分数应用题') + '&grade=' + encodeURIComponent('六年级'), true)
   assert.deepEqual(app.calls, ['navigateBack 1'])
 })
 
@@ -78,7 +78,19 @@ test('tab pages keep using switchTab and inbox jumps keep pushing', () => {
   const tab = loadNavigation([{ route: 'pages/library/index' }, { route: 'pages/login/index' }])
   tab.visit('/pages/library/index', true)
   assert.deepEqual(tab.calls, ['switchTab /pages/library/index'])
-  const inbox = loadNavigation([{ route: 'pages/messages/index' }, { route: 'pages/paper/index', options: { id: 'abc' } }])
+  const inbox = loadNavigation([{ route: 'subpages/messages/index' }, { route: 'pages/paper/index', options: { id: 'abc' } }])
   inbox.visit('/pages/paper/index?id=abc')
   assert.deepEqual(inbox.calls, ['navigateTo /pages/paper/index?id=abc'])
+})
+
+test('页面栈满时替换顶页，替换失败给出用户可见反馈', () => {
+  const calls: string[] = [], exports: Record<string, any> = {}
+  vm.runInNewContext(compile('../src/services/page-navigation.ts'), { exports, uni: {
+    navigateTo: (options: any) => { calls.push('push'); options.fail() },
+    redirectTo: (options: any) => { calls.push(options.url); options.fail() },
+    showToast: (options: any) => calls.push(options.title),
+  } })
+  exports.navigatePage({ url: '/pages/paper/index?id=paper' })
+  assert.deepEqual(calls.slice(0, 2), ['push', '/pages/paper/index?id=paper'])
+  assert.match(calls[2]!, /返回后重试/)
 })

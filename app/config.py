@@ -18,17 +18,22 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.deepseek.com"
     llm_model: str = "deepseek-chat"
     llm_temperature: float = 0.4
-    llm_max_tokens: int = 4096
+    llm_max_tokens: int = Field(16384, ge=1024, le=131072)
     llm_top_p: float = 0.9
+    provider_allow_private: bool = False  # 内网自建模型需显式启用；默认只允许公网 HTTPS
+    provider_max_response_bytes: int = Field(8 * 1024 * 1024, ge=1024, le=64 * 1024 * 1024)
 
     # 题目生成
     default_question_count: int = 5
     max_question_count: int = 30
-    generation_daily_limit: int = Field(100, ge=1, le=100000)
-    generation_user_concurrency: int = Field(3, ge=1, le=100)
+    generation_daily_limit: int = Field(20, ge=1, le=100000)
+    generation_user_concurrency: int = Field(2, ge=1, le=100)
     generation_global_concurrency: int = Field(6, ge=1, le=1000)
     generation_repair_limit: int = Field(3, ge=0, le=10)
     generation_lease_seconds: int = Field(3600, ge=60, le=86400)
+    generation_heartbeat_seconds: int = Field(90, ge=30, le=300)
+    generation_global_daily_tokens: int = Field(2_000_000, ge=10000)
+    generation_global_daily_images: int = Field(100, ge=1)
     generation_result_days: int = Field(7, ge=1, le=365)
 
     # 服务
@@ -37,7 +42,7 @@ class Settings(BaseSettings):
     debug: bool = False  # 仅开发时设 true：启用热重载。生产必须为 false
     workers: int = 1  # worker 进程数；>1 时建议配合 PostgreSQL 使用
     log_to_file: bool = False
-    # 日志格式：auto = FORCE_HTTPS 时 JSON、否则文本（沿用旧行为）；也可显式指定 json / text
+    # 日志格式：auto/json 使用 JSON；text 供本机阅读
     log_format: Literal["auto", "json", "text"] = "auto"
     # 非上传接口的请求体上限（按 Content-Length 在中间件层直接 413）；上传接口自带流式限额
     max_request_body_bytes: int = Field(4 * 1024 * 1024, ge=1024, le=1024 * 1024 * 1024)
@@ -58,7 +63,7 @@ class Settings(BaseSettings):
     db_pool_timeout: float = Field(30.0, ge=1.0, le=600.0)  # 池耗尽时最多等多久（秒）
     # 服务端超时（毫秒，0 = 不限）：单条语句 / 等锁（含 db(serialized=...) 的事务级咨询锁）/ 事务内空闲
     db_statement_timeout_ms: int = Field(30000, ge=0, le=3_600_000)
-    db_lock_timeout_ms: int = Field(10000, ge=0, le=3_600_000)
+    db_lock_timeout_ms: int = Field(2500, ge=0, le=3_600_000)
     db_idle_in_transaction_timeout_ms: int = Field(60000, ge=0, le=3_600_000)
 
     # 注册开关
@@ -67,6 +72,9 @@ class Settings(BaseSettings):
 
     # 多用户
     secret_key: str = ""  # 会话签名/加密密钥；空则自动生成并持久化到 data/secret_key.txt
+    encryption_keys: dict[str, str] = {}  # JSON 密钥环，保留旧编号直到重新加密完成
+    encryption_active_key: str = ""
+    session_idle_seconds: int = Field(86400, ge=300, le=30 * 86400)
     cors_origins: str = ""  # 逗号分隔的跨域白名单；空 = 仅同源（默认，最安全）
     force_https: bool = False  # HTTPS 部署时设 true：会话 Cookie 加 Secure 标志
 
@@ -98,6 +106,9 @@ class Settings(BaseSettings):
     # 后台管理
     admin_username: str = ""  # 种子管理员用户名（可选；设置后启动时自动创建/对齐）
     admin_password: str = ""  # 种子管理员密码（需与 ADMIN_USERNAME 同时设置）
+    admin_reset_on_start: bool = False  # 应急重置开关；使用后关闭，同时吊销旧会话
+    api_docs_enabled: bool | None = None  # 未指定时 HTTPS 生产环境关闭
+    db_auto_migrate: bool = True  # 生产发布先执行 python -m app.migrations，再设为 false
 
     model_config = SettingsConfigDict(
         env_file=str(_ENV_PATH),
@@ -120,6 +131,11 @@ class Settings(BaseSettings):
         # 相关性检查
         if self.log_to_file and self.workers > 1:
             errors.append("LOG_TO_FILE=true 与 WORKERS>1 不兼容，多进程部署应使用容器日志")
+
+        if self.encryption_active_key and self.encryption_active_key not in self.encryption_keys:
+            errors.append("ENCRYPTION_ACTIVE_KEY 必须存在于 ENCRYPTION_KEYS")
+        if any(not key or ":" in key or len(value.encode()) < 32 for key, value in self.encryption_keys.items()):
+            errors.append("加密密钥编号不能为空或含冒号，每把密钥至少 32 字节")
 
         # 支付配置相关性检查
         if self.wechat_pay_enabled:

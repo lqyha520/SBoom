@@ -124,3 +124,25 @@ describe.each([[UsersPage, 'user'], [AdminAccounts, 'admin']] as const)('服务�
     } finally { vi.unstubAllGlobals() }
   })
 })
+
+
+it('字典移动提交一次整组原子排序，失败后重新获取版本', async () => {
+  const entries = [1, 2].map(value => ({ id: 'g' + value, kind: 'grade', value: '年级' + value, label: '', parent: '', sort_order: value * 10, revision: 3, is_visible: true }))
+  mocks.request.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/reorder')) throw new Error('排序冲突')
+    if (url.endsWith('/unlisted')) return { grade: [], subject: [] }
+    if (url.endsWith('/links')) return { links: [] }
+    return { items: entries }
+  })
+  wrapper = mount(defineComponent({ setup: () => () => h(KeepAlive, () => h(DictionaryManager, { user })) }), { global: { stubs: uiStubs } })
+  await flushPromises()
+  const down = wrapper.findAll('button').find(item => item.attributes('aria-label')?.includes('下移'))
+  expect(down).toBeDefined()
+  await down!.trigger('click'); await flushPromises()
+  const writes = mocks.request.mock.calls.filter(([, init]) => init?.method)
+  expect(writes).toHaveLength(1)
+  expect(writes[0]?.[0]).toContain('/dictionary/reorder')
+  expect(JSON.parse(writes[0]?.[1].body)).toEqual({ kind: 'grade', parent: '', items: [{ id: 'g2', revision: 3 }, { id: 'g1', revision: 3 }] })
+  expect(mocks.request.mock.calls.filter(([url]) => url.endsWith('/dictionary'))).toHaveLength(2)
+  expect(wrapper.text()).toContain('排序冲突')
+})

@@ -1,0 +1,22 @@
+# 仅用于现有 glibc PostgreSQL 生产卷。禁止在 Alpine 初始化的卷上套用。
+# 两个文件必须一起使用；外部网络/卷名和可信代理显式填写，避免误建空卷。
+services:
+  db:
+    image: ${POSTGRES_IMAGE:?Set the verified postgres 16 bookworm image including digest}
+    stop_grace_period: 60s
+  app:
+    image: ${APP_IMAGE:?Set the tested application image}
+    environment:
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:?Set verified trusted proxy IPs}
+networks:
+  default:
+    external: true
+    name: ${PROD_NETWORK:?Set existing production network}
+    ipam: !reset null
+volumes:
+  pgdata:
+    external: true
+    name: ${PROD_PGDATA_VOLUME:?Set existing production database volume}
+  appdata:
+    external: true
+    name: ${PROD_APPDATA_VOLUME:?Set existing production application volume}

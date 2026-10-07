@@ -53,7 +53,7 @@ function tap() {
 <template>
   <view class="private-image" :class="{ fit }" :role="preview || failed ? 'button' : 'img'" :tabindex="preview || failed ? 0 : -1" :aria-label="failed ? '重试加载预览图' : label || (preview ? '放大习题预览' : '习题封面')" @click="tap" @keydown.enter="tap">
     <image v-if="source" :src="source" mode="aspectFit" class="image" @error="imageFailed" />
-    <view v-else class="placeholder"><wd-icon :name="failed ? 'refresh' : src ? 'image' : 'file'" size="22px" color="#acb9af" /></view>
+    <view v-else class="placeholder"><text v-if="failed" class="retry-mark">↻</text><view v-else class="placeholder-paper" /></view>
     <view v-if="preview && source" class="zoom-badge" aria-hidden="true"><wd-icon name="fullscreen" size="17px" /></view>
   </view>
 </template>
@@ -63,5 +63,6 @@ function tap() {
 .private-image.fit { height:100%;padding-bottom:0; }
 .image, .placeholder { position: absolute; inset: 0; width: 100%; height: 100%; }
 .placeholder { display: flex; align-items: center; justify-content: center; background: #f7faf8; }
+.placeholder-paper { width:21px;height:28px;border:2px solid #acb9af;border-radius:2px;background:repeating-linear-gradient(to bottom,transparent 0,transparent 5px,#dbe3de 5px,#dbe3de 7px); }.retry-mark { color:#acb9af;font-size:26px; }
 .zoom-badge { position: absolute; top: 10px; right: 10px; width: 31px; height: 31px; display: flex; align-items: center; justify-content: center; color: #74849f; background: #fff; border: 1px solid #e6ebf2; border-radius: 4px; pointer-events: none; }
 </style>

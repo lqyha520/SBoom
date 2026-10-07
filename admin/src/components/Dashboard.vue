@@ -1,36 +1,37 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { lazyComponent } from '../../../shared/async-component'
 import * as api from '../api'
 import { adminRoute, navigateAdmin, listenAdminRoute } from '../navigation'
 
 const props = defineProps<{ user: api.UserInfo }>()
 const emit = defineEmits<{ logout: [] }>()
 const views = {
-  overview: defineAsyncComponent(() => import('./OverviewPage.vue')),
-  llm: defineAsyncComponent(() => import('./ModelSettings.vue')),
-  users: defineAsyncComponent(() => import('./UsersPage.vue')),
-  papers: defineAsyncComponent(() => import('./PublicPapers.vue')),
-  miniUsers: defineAsyncComponent(() => import('./MiniUsers.vue')),
-  adminAccounts: defineAsyncComponent(() => import('./AdminAccounts.vue')),
-  supportCenter: defineAsyncComponent(() => import('./SupportCenter.vue')),
-  topics: defineAsyncComponent(() => import('./TopicManager.vue')),
-  catalogTags: defineAsyncComponent(() => import('./CatalogTags.vue')),
-  resourceRequests: defineAsyncComponent(() => import('./ResourceRequests.vue')),
-  accountClosures: defineAsyncComponent(() => import('./AccountClosures.vue')),
-  membershipPlans: defineAsyncComponent(() => import('./MembershipPlans.vue')),
-  membershipCards: defineAsyncComponent(() => import('./MembershipCards.vue')),
-  orders: defineAsyncComponent(() => import('./OrderManager.vue')),
-  reconciliations: defineAsyncComponent(() => import('./Reconciliations.vue')),
-  delivery: defineAsyncComponent(() => import('./DeliveryStatus.vue')),
-  miniAnalytics: defineAsyncComponent(() => import('./MiniAnalytics.vue')),
-  categories: defineAsyncComponent(() => import('./CategoryManager.vue')),
-  banners: defineAsyncComponent(() => import('./BannerManager.vue')),
-  notices: defineAsyncComponent(() => import('./NoticeManager.vue')),
-  documents: defineAsyncComponent(() => import('./DocumentManager.vue')),
-  dictionary: defineAsyncComponent(() => import('./DictionaryManager.vue')),
-  typeAccess: defineAsyncComponent(() => import('./TypeAccessRules.vue')),
-  feedback: defineAsyncComponent(() => import('./FeedbackPage.vue')),
-  logs: defineAsyncComponent(() => import('./LogsPage.vue')),
+  overview: lazyComponent(() => import('./OverviewPage.vue')),
+  llm: lazyComponent(() => import('./ModelSettings.vue')),
+  users: lazyComponent(() => import('./UsersPage.vue')),
+  papers: lazyComponent(() => import('./PublicPapers.vue')),
+  miniUsers: lazyComponent(() => import('./MiniUsers.vue')),
+  adminAccounts: lazyComponent(() => import('./AdminAccounts.vue')),
+  supportCenter: lazyComponent(() => import('./SupportCenter.vue')),
+  topics: lazyComponent(() => import('./TopicManager.vue')),
+  catalogTags: lazyComponent(() => import('./CatalogTags.vue')),
+  resourceRequests: lazyComponent(() => import('./ResourceRequests.vue')),
+  accountClosures: lazyComponent(() => import('./AccountClosures.vue')),
+  membershipPlans: lazyComponent(() => import('./MembershipPlans.vue')),
+  membershipCards: lazyComponent(() => import('./MembershipCards.vue')),
+  orders: lazyComponent(() => import('./OrderManager.vue')),
+  reconciliations: lazyComponent(() => import('./Reconciliations.vue')),
+  delivery: lazyComponent(() => import('./DeliveryStatus.vue')),
+  miniAnalytics: lazyComponent(() => import('./MiniAnalytics.vue')),
+  categories: lazyComponent(() => import('./CategoryManager.vue')),
+  banners: lazyComponent(() => import('./BannerManager.vue')),
+  notices: lazyComponent(() => import('./NoticeManager.vue')),
+  documents: lazyComponent(() => import('./DocumentManager.vue')),
+  dictionary: lazyComponent(() => import('./DictionaryManager.vue')),
+  typeAccess: lazyComponent(() => import('./TypeAccessRules.vue')),
+  feedback: lazyComponent(() => import('./FeedbackPage.vue')),
+  logs: lazyComponent(() => import('./LogsPage.vue')),
 }
 type Tab = keyof typeof views
 interface NavItem { id: Tab; label: string; icon: string }
@@ -112,9 +113,11 @@ function toggleGroup(id: string) {
   persistCollapsed()
 }
 // 切到某个菜单项时，它所在的组必须展开，否则用户会「跳到一个看不见当前项」的分组里
-watch(tab, value => {
+watch(tab, async value => {
   const group = groups.find(item => item.items.some(entry => entry.id === value))
   if (group && isCollapsed(group.id)) { collapsed.value = collapsed.value.filter(id => id !== group.id); persistCollapsed() }
+  await nextTick()
+  document.querySelector('.nav-item[aria-current="page"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
 })
 const activeTab = computed(() => flat.value.find(item => item.id === tab.value)!)
 const activeGroup = computed(() => groups.find(group => group.items.some(item => item.id === tab.value))!)
@@ -133,7 +136,7 @@ async function logout() {
 <template>
   <div class="admin-shell">
     <header class="admin-header">
-      <a class="brand" href="/"><span class="brand-mark"><UIcon name="i-lucide-notebook-pen" class="size-5" /></span><div><div class="brand-name">Learning Coach</div><div class="brand-caption">管理控制台</div></div></a>
+      <a class="brand" href="/"><span class="brand-mark"><UIcon name="i-lucide-notebook-pen" class="size-5" /></span><div class="brand-name">管理控制台</div></a>
       <div class="admin-header-actions">
         <UButton href="/" icon="i-lucide-arrow-up-right" label="出题工作台" color="neutral" variant="ghost" class="workbench-link" size="sm" />
         <UDropdownMenu :items="[{ label: '退出登录', icon: 'i-lucide-log-out', disabled: loggingOut, onSelect: logout }]">
@@ -145,6 +148,7 @@ async function logout() {
     </header>
     <div class="admin-workspace">
       <aside class="admin-sidebar">
+        <label class="mobile-nav">管理页面<select v-model="tab" aria-label="选择管理页面"><optgroup v-for="group in groups" :key="group.id" :label="group.label"><option v-for="item in group.items" :key="item.id" :value="item.id">{{ item.label }}</option></optgroup></select></label>
         <nav aria-label="管理后台导航">
           <div v-for="group in groups" :key="group.id" class="nav-group">
             <button type="button" class="nav-group-caption" :aria-expanded="!isCollapsed(group.id)" :aria-controls="'nav-panel-' + group.id" :title="(isCollapsed(group.id) ? '展开' : '折叠') + '「' + group.label + '」'" @click="toggleGroup(group.id)">
@@ -163,8 +167,13 @@ async function logout() {
       <main class="admin-main">
         <UAlert v-if="logoutError" :title="logoutError" color="error" role="alert" />
         <div class="admin-page-heading"><div class="breadcrumb">{{ activeGroup.label }} <UIcon name="i-lucide-chevron-right" class="size-3" /> {{ activeTab.label }}</div><h1>{{ activeTab.label }}</h1></div>
-        <KeepAlive><component :is="views[tab]" :user="props.user" @configure="tab = 'llm'" /></KeepAlive>
+        <KeepAlive :max="25"><component :is="views[tab]" :user="props.user" @configure="tab = 'llm'" /></KeepAlive>
       </main>
     </div>
   </div>
 </template>
+
+<style scoped>
+.mobile-nav { display:none }
+@media (max-width: 800px) { .mobile-nav { display:flex; align-items:center; gap:12px; padding:10px 16px; width:100% } .mobile-nav select { flex:1; min-width:0; padding:8px; border:1px solid var(--ui-border); border-radius:6px; background:var(--ui-bg) } .admin-sidebar nav, .sidebar-footer { display:none !important } }
+</style>

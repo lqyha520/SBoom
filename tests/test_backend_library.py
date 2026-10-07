@@ -247,6 +247,7 @@ class PaperLibraryContracts(unittest.TestCase):
         failed = self.client.get(f"/api/v1/library/papers/{paper['id']}").json()
         self.assertEqual((failed["file_status"], failed["assets"]), ("failed", []))
         self.assertEqual(failed["snapshot"], self.body["snapshot"])
+        pg_support.drain_after_file_grace()
         self.assertEqual(list((self.root / "private").rglob("*.pdf")), [])
         self.assertEqual(self.upload(paper["id"]).json()["file_status"], "ready")
 
@@ -281,6 +282,7 @@ class PaperLibraryContracts(unittest.TestCase):
         ready = self.upload(paper["id"]).json()
         self.assertEqual(self.client.delete(f"/api/v1/library/papers/{paper['id']}").status_code, 204)
         self.assertEqual(self.client.get(ready["assets"][0]["url"]).status_code, 404)
+        pg_support.drain_after_file_grace()
         self.assertEqual(list((self.root / "private").rglob("*.jpg")), [])
 
     def test_storage_rejects_unknown_backend_and_path_escape(self):

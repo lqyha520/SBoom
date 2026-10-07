@@ -11,6 +11,19 @@ from app.db import db
 TARGETS = {"paper", "feedback", "membership", "request", "closure", "order", ""}
 
 
+def notify_favorites(conn, catalog_id: str, release: int, title: str, body: str) -> None:
+    """一条 INSERT SELECT 生成收藏更新通知及订阅投递，避免每个收藏者四次往返。"""
+    now = int(time.time())
+    conn.execute("""WITH inserted AS (
+        INSERT INTO mini_notifications(id, user_id, event_key, kind, title, body, target_type, target_id, created_at)
+        SELECT md5(? || ':' || f.user_id), f.user_id, ?, 'paper', ?, ?, 'paper', ?, ?
+        FROM mini_catalog_favorites f WHERE f.catalog_id = ?
+        ON CONFLICT(user_id, event_key) DO NOTHING RETURNING id, user_id
+    ) INSERT INTO mini_notice_deliveries(notification_id, updated_at)
+      SELECT n.id, ? FROM inserted n JOIN mini_notice_subscriptions s ON s.user_id = n.user_id WHERE s.credits > 0
+      ON CONFLICT DO NOTHING""", (uuid.uuid4().hex, f"paper:{catalog_id}:{release}", title[:100], body[:1000], catalog_id, now, catalog_id, now))
+
+
 def notify(conn, user_id, event_key, kind, title, body, target_type="", target_id=""):
     if target_type not in TARGETS or len(target_id) > 64:
         raise ValueError("Invalid inbox destination")

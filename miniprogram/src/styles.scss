@@ -106,3 +106,6 @@ button:focus-visible, .private-image:focus-visible { outline:2px solid var(--lc-
   *, *::before, *::after { animation-duration:.01ms !important;transition-duration:.01ms !important; }
 }
 /* #endif */
+
+/* 吸顶由原生 view 承担，避免自定义组件宿主限制 sticky 的滚动范围。 */
+.page-navigation-sticky { position:sticky;top:0;z-index:40;background:var(--lc-background); }

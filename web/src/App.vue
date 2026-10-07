@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { defineAsyncComponent } from 'vue'
+import { lazyComponent } from '../../shared/async-component'
 import { zh_cn } from '@nuxt/ui/locale'
 import { useAuthStore } from './stores/auth'
+import { loadWorkspace } from './workspace-loaders'
 
 const auth = useAuthStore()
-const LoginView = defineAsyncComponent(() => import('./components/LoginView.vue'))
-const Workspace = defineAsyncComponent(() => import('./Workspace.vue'))
+const LoginView = lazyComponent(() => import('./components/LoginView.vue'))
+const Workspace = lazyComponent(loadWorkspace)
 </script>
 
 <template>

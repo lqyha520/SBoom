@@ -1,5 +1,5 @@
-# pnpm v11 构建脚本白名单（allowBuilds 映射；v10 的 onlyBuiltDependencies 在 v11 已被忽略）
-# esbuild：vite 依赖的本地二进制；core-js：发布时的资金提示脚本（均可安全执行）
-allowBuilds:
-  esbuild: true
-  core-js: true
+# pnpm 10 构建脚本白名单。
+onlyBuiltDependencies:
+  - esbuild
+  - core-js
+  - vue-demi

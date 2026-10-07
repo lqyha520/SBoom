@@ -38,20 +38,26 @@ export function patchArchive(id: string, body: { title?: string; folder_id?: str
   return request<ArchiveDetail>('/api/v1/library/papers/' + encodeURIComponent(id), json('PUT', body))
 }
 export function deleteArchive(id: string) { return request<void>('/api/v1/library/papers/' + encodeURIComponent(id), { method: 'DELETE' }) }
-export async function completeArchive(record: ArchiveDetail, progress?: (message: string) => void, isActive = () => true) {
+export async function completeArchive(record: ArchiveDetail, progress?: (message: string) => void, isActive = () => true, signal?: AbortSignal) {
   const assertOwner = captureWorkspaceGuard()
   function assertActive() {
     assertOwner()
-    if (!isActive()) throw new Error('保存已停止，可在云端试卷中重试未完成的文件')
+    if (!isActive() || signal?.aborted) throw new Error('保存已停止，可在云端试卷中重试未完成的文件')
   }
   assertActive()
   if (record.file_status === 'ready') return record
   const { createArchiveBundle } = await import('./exporter')
   assertActive()
   progress?.('正在生成 PDF 与预览图')
-  const bundle = await createArchiveBundle(record.snapshot, progress)
+  const bundle = await createArchiveBundle(record.snapshot, progress, { signal, isActive })
   assertActive()
   progress?.('正在上传文件')
   return request<ArchiveDetail>(`/api/v1/library/papers/${encodeURIComponent(record.id)}/files`,
-    { method: 'PUT', headers: { 'Content-Type': 'application/zip' }, body: bundle }, 120000)
+    { method: 'PUT', headers: { 'Content-Type': 'application/zip' }, body: bundle, signal }, 120000)
+}
+
+export function safeLibraryUrl(value: string): string {
+  const url = new URL(value, location.origin)
+  if (url.origin !== location.origin || !url.pathname.startsWith('/api/v1/library/') || url.username || url.password) throw new Error('下载地址无效，请刷新试卷库后重试')
+  return url.href
 }

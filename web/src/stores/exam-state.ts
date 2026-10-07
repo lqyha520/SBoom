@@ -66,6 +66,7 @@ export const createExamState = () => {
     availableError: '',
     scope: null as ScopeData | null,
     scopeLoading: false,
+    scopeRevision: 0,
 
     /* 出题条件 */
     grade: '',

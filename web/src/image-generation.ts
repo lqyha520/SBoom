@@ -6,7 +6,7 @@ export interface ImageWorksheetParams {
   subject: string
   keyword: string
   difficulty: Difficulty
-  items: { game_type: string; question_count: number }[]
+  items: { game_type: string; question_count?: number | null }[]
   style: 'playful' | 'clean' | 'black_white'
   requirements: string
   image_count?: number
@@ -32,6 +32,16 @@ export const generateWorksheetImage = (params: ImageWorksheetParams, requestId: 
   method: 'POST', headers: { ...jsonHeaders, 'X-Request-ID': requestId }, body: JSON.stringify(params),
 }, 630_000)
 export const fetchImageStatus = (requestId: string) => request<ImageGenerationStatus>('/api/v1/me/generations/' + encodeURIComponent(requestId))
+
+export function plannedImageQuestionCount(items: ImageWorksheetParams['items']): number | undefined {
+  return items.length && items.every(item => item.question_count != null)
+    ? items.reduce((sum, item) => sum + item.question_count!, 0)
+    : undefined
+}
+
+export function imageWorksheetTitle(params: ImageWorksheetParams): string {
+  return `${params.grade}${params.subject}·${params.keyword.trim() || '年级知识练习'}`
+}
 
 export function imageBlob(image: WorksheetImage): Blob {
   if (image.blob instanceof Blob && image.blob.type === 'image/png' && image.blob.size <= 12 * 1024 * 1024) return image.blob

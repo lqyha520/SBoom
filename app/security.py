@@ -71,7 +71,14 @@ def get_secret() -> bytes:
 
 # ─── 密码哈希（PBKDF2-SHA256） ───
 
-_PBKDF2_ITER = 240_000
+_PBKDF2_ITER = 600_000
+
+
+def password_needs_upgrade(stored: str) -> bool:
+    try:
+        return int(stored.split("$")[1]) < _PBKDF2_ITER
+    except (ValueError, IndexError):
+        return True
 
 
 def hash_password(password: str) -> str:
@@ -107,11 +114,11 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
-def create_token(user_id: int, ttl_seconds: int = _TOKEN_TTL_SECONDS) -> str:
+def create_token(user_id: int, ttl_seconds: int = _TOKEN_TTL_SECONDS, *, session_id: str | None = None, issued_after: int = 0) -> str:
     header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
-    now = int(time.time())
+    now = max(int(time.time()), issued_after)
     payload = _b64url(json.dumps(
-        {"sub": str(user_id), "iat": now, "exp": now + ttl_seconds},
+        {"sub": str(user_id), "iat": now, "exp": now + ttl_seconds, **({"sid": session_id} if session_id else {})},
         separators=(",", ":"),
     ).encode())
     signing_input = f"{header}.{payload}".encode("ascii")
@@ -149,11 +156,26 @@ try:
     def encrypt_secret(plain: str) -> str:
         if not plain:
             return ""
+        settings = get_settings()
+        if settings.encryption_active_key:
+            identifier = settings.encryption_active_key
+            key = settings.encryption_keys.get(identifier, "")
+            if not key or ":" in identifier or len(key.encode()) < 32:
+                raise ValueError("当前加密密钥编号或密钥无效")
+            return "enc2:" + identifier + ":" + _fernet(key.encode()).encrypt(plain.encode()).decode("ascii")
         return "enc:" + _fernet().encrypt(plain.encode("utf-8")).decode("ascii")
 
     def decrypt_secret(stored: str) -> str:
         if not stored:
             return ""
+        if stored.startswith("enc2:"):
+            try:
+                _, identifier, value = stored.split(":", 2)
+                key = get_settings().encryption_keys[identifier]
+                return _fernet(key.encode()).decrypt(value.encode()).decode()
+            except (KeyError, ValueError, InvalidToken, UnicodeError):
+                logger.error("加密密钥环无法解密历史数据，请恢复对应密钥版本")
+                return ""
         if stored.startswith("b64:"):
             try:
                 return base64.b64decode(stored[4:], validate=True).decode("utf-8")
@@ -164,6 +186,11 @@ try:
         try:
             return _fernet().decrypt(stored[4:].encode("ascii")).decode("utf-8")
         except (InvalidToken, UnicodeError, ValueError):
+            for key in get_settings().encryption_keys.values():
+                try:
+                    return _fernet(key.encode()).decrypt(stored[4:].encode()).decode()
+                except (InvalidToken, UnicodeError, ValueError):
+                    continue
             # Older builds ignored SECRET_KEY in .env and encrypted with this file.
             # Only decrypt historical values with it; new sessions use the configured key.
             if get_settings().secret_key.strip() and _SECRET_FILE.exists():
@@ -194,7 +221,7 @@ except ImportError:  # pragma: no cover - cryptography 未安装时的降级
                 return base64.b64decode(stored[4:], validate=True).decode("utf-8")
             except (ValueError, UnicodeError):
                 return ""
-        if stored.startswith("enc:"):
+        if stored.startswith(("enc:", "enc2:")):
             return ""
         return stored
 

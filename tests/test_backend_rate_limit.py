@@ -46,12 +46,14 @@ class RateLimitContracts(unittest.TestCase):
         self.now.return_value = 60.0
         self.assertTrue(rate_limit.allow("reader", 1, 60))
 
-    def test_capacity_rejects_new_keys_without_resetting_existing_limits(self):
+    def test_capacity_admits_new_keys_and_remains_bounded(self):
         with patch.object(rate_limit, "_MAX_KEYS", 2):
             self.assertTrue(rate_limit.allow("first", 2, 60))
             self.assertTrue(rate_limit.allow("second", 1, 60))
-            self.assertFalse(rate_limit.allow("third", 1, 60))
+            self.assertTrue(rate_limit.allow("third", 1, 60))
+            self.assertLessEqual(len(rate_limit._hits), 2)
             self.assertTrue(rate_limit.allow("first", 2, 60))
+            rate_limit.allow("first", 2, 60)
             self.assertFalse(rate_limit.allow("first", 2, 60))
             self.now.return_value = 60.0
             self.assertTrue(rate_limit.allow("third", 1, 60))

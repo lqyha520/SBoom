@@ -1,16 +1,20 @@
 """Private paper archives belonging exclusively to workbench users."""
 
 
+import tempfile
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import ValidationError
 
 from app.blocking import run_sync
 from app.config import get_settings
 from app.deps import require_user
+from app.http_limits import limited_body
 from app.library_deps import no_store, require_library_user
 from app.library_files import asset_response
 from app.models.library import ArchiveCreate, ArchiveUpdate, FolderInput
 from app.services import paper_library as library
+from app.services.resource_admission import admitted_media
 from app.services.user_store import CurrentUser
 
 router = APIRouter(prefix="/api/v1/library", tags=["试卷库"], dependencies=[Depends(no_store)])
@@ -19,18 +23,7 @@ router = APIRouter(prefix="/api/v1/library", tags=["试卷库"], dependencies=[D
 async def _limited_body(request: Request, limit: int, content_type: str):
     if request.headers.get("content-type", "").split(";")[0].strip() != content_type:
         raise HTTPException(415, detail={"error": "文件或请求格式不正确"})
-    try:
-        declared = int(request.headers.get("content-length", "0"))
-    except ValueError as exc:
-        raise HTTPException(400, detail={"error": "无效的请求长度"}) from exc
-    if declared < 0 or declared > limit:
-        raise HTTPException(413, detail={"error": "请求过大，请减少页数后重试"})
-    content = bytearray()
-    async for chunk in request.stream():
-        if len(content) + len(chunk) > limit:
-            raise HTTPException(413, detail={"error": "请求过大，请减少页数后重试"})
-        content.extend(chunk)
-    return bytes(content)
+    return await limited_body(request, limit, error="请求过大，请减少页数后重试")
 
 
 @router.get("/summary")
@@ -76,8 +69,18 @@ def delete_paper(paper_id: str, user: CurrentUser = Depends(require_library_user
 @router.put("/papers/{paper_id}/files")
 async def upload_files(paper_id: str, request: Request, user: CurrentUser = Depends(require_user)):
     await run_sync(library.get_paper, user.id, paper_id)
-    content = await _limited_body(request, get_settings().archive_max_bundle_mb * 1024 * 1024, "application/zip")
-    return await run_sync(library.publish_bundle, user.id, paper_id, content)
+    with admitted_media(), tempfile.TemporaryFile() as content:
+        if request.headers.get("content-type", "").split(";")[0] != "application/zip":
+            raise HTTPException(415, detail={"error": "请选择 ZIP 文件包"})
+        limit = get_settings().archive_max_bundle_mb * 1024 * 1024
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > limit:
+                raise HTTPException(413, detail={"error": "文件包过大"})
+            await run_sync(content.write, chunk)
+        content.seek(0)
+        return await run_sync(library.publish_bundle, user.id, paper_id, content)
 
 
 @router.get("/assets/{asset_id}")

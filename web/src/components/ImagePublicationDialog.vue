@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { captureWorkspaceGuard, ApiError } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useExamStore } from '../stores/exam'
-import type { ImageWorksheetParams, WorksheetImage } from '../image-generation'
+import { imageWorksheetTitle, plannedImageQuestionCount, type ImageWorksheetParams, type WorksheetImage } from '../image-generation'
 import { addImagePublication, fetchPublicationCategories, publicationUrl, type ImagePublication, type ImagePublicationMeta } from '../image-publication'
 
 const props = defineProps<{ open: boolean; images: WorksheetImage[]; params: ImageWorksheetParams }>()
@@ -12,11 +12,12 @@ const auth = useAuthStore(), store = useExamStore()
 const owner = store.ownerId, ownerGuard = captureWorkspaceGuard()
 let alive = true
 const current = () => alive && store.ownerId === owner && !store.accountChanged && auth.user?.role === 'admin' && String(auth.user.id) === owner
+const plannedCount = plannedImageQuestionCount(props.params.items)
 const meta = ref<ImagePublicationMeta>({
-  title: `${props.params.grade}${props.params.subject}·${props.params.keyword}`.slice(0, 240),
+  title: imageWorksheetTitle(props.params).slice(0, 240),
   grade: props.params.grade, subject: props.params.subject, category_id: '', description: '',
   keyword: props.params.keyword, question_types: props.params.items.map(item => item.game_type).join(','),
-  question_count: props.params.items.reduce((sum, item) => sum + item.question_count, 0) * props.images.length,
+  ...(plannedCount === undefined ? {} : { question_count: plannedCount * props.images.length }),
 })
 const categories = ref<{ label: string; value: string }[]>([])
 const loading = ref(false), categoryError = ref(''), error = ref(''), busy = ref(false), progress = ref('')
@@ -76,7 +77,7 @@ onBeforeUnmount(() => { alive = false })
         <UFormField label="习题标题" required><UInput v-model="meta.title" aria-label="习题标题" maxlength="240" required color="primary" variant="outline" :disabled="busy" class="w-full" /></UFormField>
         <div class="grid grid-cols-2 gap-4">
           <UFormField label="年级" required><UInput v-model="meta.grade" aria-label="习题年级" maxlength="80" required color="primary" variant="outline" :disabled="busy" class="w-full" /></UFormField>
-          <UFormField label="科目" required><UInput v-model="meta.subject" aria-label="习题科目" maxlength="80" required color="primary" variant="outline" :disabled="busy" class="w-full" /></UFormField>
+          <UFormField label="科目" required><UInput v-model="meta.subject" aria-label="习题科目" placeholder="图片实际科目" maxlength="80" required color="primary" variant="outline" :disabled="busy" class="w-full" /></UFormField>
         </div>
         <UFormField label="分类" required><USelect v-model="meta.category_id" aria-label="习题分类" :items="categories" color="primary" variant="outline" placeholder="请选择习题分类" :loading="loading" :disabled="busy || loading" class="w-full" /></UFormField>
         <UAlert v-if="categoryError" :title="categoryError" color="error" variant="soft" :actions="[{ label: '重新加载分类', onClick: loadCategories }]" />

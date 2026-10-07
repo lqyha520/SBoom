@@ -188,7 +188,7 @@ class UiContracts(unittest.TestCase):
             file = self.reader.get(asset["url"])
             self.assertEqual(file.status_code, 200)
             self.assertEqual(len(file.content), asset["byte_size"])
-            self.assertEqual(file.headers["cache-control"], "private, no-store")
+            self.assertEqual(file.headers["cache-control"], "private, no-store" if asset["kind"] == "pdf" else "private, max-age=86400")
         self.reader.put(path + "/favorite", json={"favorite": True}).raise_for_status()
         pdf = self.reader.post(path + "/download").json()
         self.assertTrue(self.reader.get(pdf["url"]).content.startswith(b"%PDF-"))

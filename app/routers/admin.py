@@ -13,11 +13,12 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from psycopg.errors import UniqueViolation
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.blocking import run_sync
 from app.config import APP_VERSION, get_settings
-from app.deps import require_admin
+from app.deps import require_admin, require_recent_admin
+from app.http_limits import limited_lines
 from app.security import encryption_backend, security_warnings
 from app.services import app_config, user_store
 from app.services.generation_control import usage_summary
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/api/v1/admin", tags=["后台管理"])
 
 settings = get_settings()
 # app/routers/admin.py → 上三级 = 项目根目录
-_LOG_PATH = Path(__file__).resolve().parent.parent.parent / "server.log"
+_LOG_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "logs" / "application.log"
 
 
 # ─── 数据概览 ───
@@ -94,12 +95,12 @@ class AdminCreateUser(BaseModel):
 
 
 @router.post("/users", summary="创建用户")
-def create_user(req: AdminCreateUser, admin: CurrentUser = Depends(require_admin)):
+def create_user(req: AdminCreateUser, admin: CurrentUser = Depends(require_recent_admin)):
     import re
     if not re.match(r"^[\w\u4e00-\u9fa5-]{2,32}$", req.username):
         raise HTTPException(status_code=400, detail={"error": "用户名需为 2-32 位字母、数字、下划线、中文"})
-    if len(req.password) < 6:
-        raise HTTPException(status_code=400, detail={"error": "密码至少 6 位"})
+    if len(req.password) < 8:
+        raise HTTPException(status_code=400, detail={"error": "密码至少 8 位"})
     if req.role not in ("user", "admin"):
         raise HTTPException(status_code=400, detail={"error": "role 只能是 user 或 admin"})
     if user_store.get_user_by_username(req.username):
@@ -119,11 +120,11 @@ class AdminUpdateUser(BaseModel):
 
 
 @router.put("/users/{user_id}", summary="更新用户（重置密码 / 改角色 / 启用禁用）")
-def update_user(user_id: int, req: AdminUpdateUser, admin: CurrentUser = Depends(require_admin)):
+def update_user(user_id: int, req: AdminUpdateUser, admin: CurrentUser = Depends(require_recent_admin)):
     if req.role is not None and req.role not in ("user", "admin"):
         raise HTTPException(status_code=400, detail={"error": "role 只能是 user 或 admin"})
-    if req.password is not None and len(req.password) < 6:
-        raise HTTPException(status_code=400, detail={"error": "密码至少 6 位"})
+    if req.password is not None and len(req.password) < 8:
+        raise HTTPException(status_code=400, detail={"error": "密码至少 8 位"})
 
     # 护栏：不能对自己降级 / 禁用（删除见下方 delete）
     if user_id == admin.id:
@@ -206,6 +207,7 @@ class AdminLlmConfigIn(BaseModel):
     model: str = ""
     apiKey: str = ""   # 空串 = 保留已保存的密钥不变
     timeout: int = 60
+    maxTokens: int = Field(default=16384, ge=1024, le=131072)
 
 
 @router.get("/llm-config", summary="获取全局模型配置（不含密钥明文）")
@@ -215,25 +217,29 @@ def get_llm_config(admin: CurrentUser = Depends(require_admin)):
         "baseUrl": g["baseUrl"],
         "model": g["model"],
         "timeout": g["timeout"],
+        "maxTokens": g["maxTokens"],
         "hasKey": g["hasKey"],
     }
 
 
 @router.put("/llm-config", summary="保存全局模型配置（密钥服务端加密存储，全体用户生效）")
-def save_llm_config(req: AdminLlmConfigIn, admin: CurrentUser = Depends(require_admin)):
+def save_llm_config(req: AdminLlmConfigIn, admin: CurrentUser = Depends(require_recent_admin)):
+    from app.provider_policy import validate_endpoint
+    validate_endpoint(req.baseUrl)
     app_config.save_llm(
         base_url=req.baseUrl.rstrip("/"),
         model=req.model,
         api_key=req.apiKey,
         timeout=max(10, min(600, req.timeout or 60)),
+        max_tokens=req.maxTokens,
     )
     has_key = app_config.get_llm()["hasKey"]
-    logger.info(f"管理员 {admin.username} 更新了全局模型配置: {req.baseUrl} / {req.model}")
+    logger.info("管理员 id=%s 更新了全局模型配置", admin.id)
     return {"status": "ok", "message": "模型配置已保存，全体用户生效", "hasKey": has_key}
 
 
 @router.delete("/llm-config", summary="清除全局模型配置（含已存密钥）")
-def clear_llm_config(admin: CurrentUser = Depends(require_admin)):
+def clear_llm_config(admin: CurrentUser = Depends(require_recent_admin)):
     """整行删除全局 LLM 配置。用于部署纠错/安全清理（如密钥泄露后重置）。"""
     app_config.clear_llm()
     logger.info(f"管理员 {admin.username} 清除了全局模型配置")
@@ -261,6 +267,8 @@ def _pin_public_url(url: str) -> tuple[str, str]:
 
     只按主机名解析一次、随后直接连该 IP，避免 DNS 重绑定把探测请求引到内网。
     """
+    from app.provider_policy import validate_endpoint
+    validate_endpoint(url, resolve=False)
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
         raise ValueError("接口地址须为 http(s)://主机[:端口]/路径 形式，且不能包含账号密码")
@@ -291,13 +299,17 @@ async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Dep
     timeout = (req.timeout if req and req.timeout else g["timeout"]) or 60
     request_headers: dict[str, str] = {}
     extensions: dict = {}
-    if requested and requested != saved_base:
+    from app.provider_policy import require_new_key, validate_endpoint
+    require_new_key(saved_base, base_url, req.apiKey if req else "")
+    if not settings.provider_allow_private:
         try:
-            base_url, host_header = await run_sync(_pin_public_url, requested)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail={"error": "接口地址不允许", "detail": str(exc)}) from exc
+            base_url, host_header = await run_sync(_pin_public_url, base_url)
+        except (ValueError, HTTPException) as exc:
+            raise HTTPException(status_code=400, detail={"error": "接口地址不允许"}) from exc
         request_headers["Host"] = host_header
         extensions["sni_hostname"] = host_header.split(":")[0]  # TLS 证书仍按原始域名校验
+    else:
+        validate_endpoint(base_url, resolve=False)
     try:
         async with _httpx.AsyncClient(
             base_url=base_url,
@@ -319,12 +331,11 @@ async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Dep
                 extensions=extensions,
             ) as resp:
                 if resp.status_code != 200:
-                    body = (await resp.aread()).decode("utf-8", errors="replace")[:200]
                     raise HTTPException(
                         status_code=502,
-                        detail={"error": f"模型服务返回 {resp.status_code}", "detail": body},
+                        detail={"error": f"模型服务返回 {resp.status_code}"},
                     )
-                async for line in resp.aiter_lines():
+                async for line in limited_lines(resp, get_settings().provider_max_response_bytes):
                     if line.startswith("data: ") and '"content"' in line:
                         return {"status": "ok", "reply": "已连通（流式响应正常）"}
                 # 流结束但没收到 content（如空回复）——链路已通，也算成功
@@ -341,7 +352,7 @@ async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Dep
     except _httpx.TransportError as e:
         raise HTTPException(
             status_code=502,
-            detail={"error": "无法连接模型服务", "detail": f"{e}（检查接口地址/网络）"},
+            detail={"error": "无法连接模型服务，请检查接口地址与网络"},
         ) from e
     except Exception as e:
-        raise HTTPException(status_code=502, detail={"error": "模型连接失败", "detail": str(e)}) from e
+        raise HTTPException(status_code=502, detail={"error": "模型连接失败"}) from e

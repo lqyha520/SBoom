@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useRevisionConflict } from '../revision-conflict'
 import { computed, onActivated, onDeactivated, ref } from 'vue'
 import type { UserInfo } from '../api'
 import { createCategory, deleteCategory, reorderCategories, siteCategories, updateCategory, type Category } from '../site'
@@ -12,6 +13,7 @@ const busy = ref(false)
 const dialog = ref(false)
 const target = ref<Category | null>(null)
 const formError = ref('')
+const recovery = useRevisionConflict(target, async id => { const value = (await siteCategories()).items.find(item => item.id === id); if (!value) throw new Error('该条目已删除，请复制修改后新建'); return value }, formError)
 const removing = ref<Category | null>(null)
 const removeOpen = ref(false)
 const removeError = ref('')
@@ -79,7 +81,7 @@ async function save() {
       notice.value = '分类已创建'
     }
     dialog.value = false; await load()
-  } catch (cause) { formError.value = message(cause) }
+  } catch (cause) { recovery.capture(cause); formError.value = message(cause) }
   finally { busy.value = false }
 }
 
@@ -155,7 +157,7 @@ onDeactivated(() => { sequence++; loading.value = false; dialog.value = false; r
       <UFormField label="图标"><USelect v-model="selectedIcon" :items="iconOptions" :disabled="busy" class="w-full" /></UFormField>
       <UFormField label="展示顺序" hint="数值小的排前面，也可以用列表里的上下箭头调整"><UInput v-model.number="form.sort_order" type="number" min="0" :disabled="busy" class="w-full" /></UFormField>
       <USwitch v-model="form.is_visible" label="在小程序展示" :disabled="busy" />
-      <UAlert v-if="formError" :title="formError" color="error" variant="soft" />
+      <UButton v-if="recovery.conflict.value" label="载入最新并保留我的修改" :loading="recovery.recovering.value" @click="recovery.reload" /><UAlert v-if="formError" :title="formError" color="error" variant="soft" />
     </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="dialog = false" /><UButton type="submit" form="category-form" :label="target ? '保存' : '创建'" icon="i-lucide-check" :loading="busy" :disabled="busy || !form.name.trim()" /></template></UModal>
 
     <UModal v-model:open="removeOpen" title="删除分类" :dismissible="!busy" :close="!busy"><template #body><div class="field-stack"><p>确认删除分类「{{ removing?.name }}」？该操作不可撤销。</p><UAlert v-if="removing?.paper_count" color="warning" variant="soft" :title="'当前还有 ' + removing.paper_count + ' 份习题属于该分类，需要先把这些习题改到其他分类。'" /><UAlert v-if="removeError" :title="removeError" color="error" variant="soft" /></div></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="removeOpen = false" /><UButton label="确认删除" color="error" icon="i-lucide-trash-2" :loading="busy" :disabled="busy" @click="confirmRemove" /></template></UModal>

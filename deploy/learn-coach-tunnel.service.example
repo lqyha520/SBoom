@@ -1,0 +1,12 @@
+[Unit]
+Description=Learning Coach encrypted reverse proxy tunnel
+After=network-online.target
+[Service]
+User=learncoach-tunnel
+# 在反代机器运行；Host learncoach-origin 的地址/密钥放在该用户的 SSH config。
+# 预先核实主机指纹；不关闭 StrictHostKeyChecking。
+ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 127.0.0.1:33403:127.0.0.1:33403 learncoach-origin
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

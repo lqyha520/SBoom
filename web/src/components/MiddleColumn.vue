@@ -13,7 +13,7 @@ const store = useExamStore()
 const emit = defineEmits<{ 'open-templates': []; preview: [] }>()
 const showTemplate = ref(false)
 const showCustom = ref(false)
-const typesOpen = ref(true)
+const typesOpen = ref(false)
 const templateItems = TEMPLATES.map(t => ({ label: t.name, value: t.id }))
 const missingConditions = computed(() => [
   !store.grade && '年级', !store.subject && '科目', !store.keyword.trim() && '知识点',
@@ -40,15 +40,16 @@ function pickTemplate(id: string) {
           </div>
         </UFormField>
       </div>
-      <UCollapsible v-model:open="typesOpen">
-        <button class="builder-section-heading" :aria-expanded="typesOpen"><span>添加题型</span><UIcon :name="typesOpen ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" class="size-3.5" /></button>
-        <template #content><TypePicker @custom="showCustom = true" /></template>
-      </UCollapsible>
-      <div class="divider"></div>
       <div class="builder-section-heading">
-        <span>卷面内容 <span class="section-total">{{ store.sections.length }}</span></span>
-        <UTooltip text="从我的模板添加"><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="从我的模板添加" @click="emit('open-templates')" /></UTooltip>
+        <span>卷面内容 <span class="section-total">{{ store.sections.length }} 个大题</span></span>
+        <div class="actions-row">
+          <UTooltip text="从我的模板添加"><UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" aria-label="从我的模板添加" @click="emit('open-templates')" /></UTooltip>
+          <UButton icon="i-lucide-plus" label="添加题型" variant="soft" size="sm" :disabled="store.generating" :aria-expanded="typesOpen" @click="typesOpen = !typesOpen" />
+        </div>
       </div>
+      <UCollapsible v-model:open="typesOpen">
+        <template #content><TypePicker @custom="showCustom = true" @added="typesOpen = false" /></template>
+      </UCollapsible>
       <SectionList />
     </div>
     <div class="generation-footer">
@@ -67,7 +68,7 @@ function pickTemplate(id: string) {
       <GenerationTasks />
       <p v-if="store.usage" class="mb-2 text-xs text-muted numeric">24 小时请求 {{ store.usage.requests }} / {{ store.usage.daily_limit }}</p>
       <div class="flex gap-2">
-        <UButton icon="i-lucide-sparkles" :label="store.generating ? store.generateProgress || '正在生成试卷' : '生成试卷'" :loading="store.generating" :disabled="!store.canGenerate" block class="min-h-10 whitespace-normal" @click="store.generate()" />
+        <UButton icon="i-lucide-sparkles" :label="store.generating ? store.generateProgress || '正在生成试卷' : '生成试卷'" :loading="store.generating" :disabled="!store.canGenerate || store.layoutMode" block class="min-h-10 whitespace-normal" @click="store.requestGeneration()" />
         <UButton class="mobile-preview" icon="i-lucide-eye" color="neutral" variant="outline" aria-label="卷面预览" @click="emit('preview')" />
       </div>
     </div>
@@ -78,11 +79,11 @@ function pickTemplate(id: string) {
 
 <style scoped>
 .builder-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.paper-fields { padding: 20px; border-bottom: 1px solid var(--ui-border-muted); }
+.paper-fields { padding: 14px 20px; gap: 12px; border-bottom: 1px solid var(--ui-border-muted); }
 .builder-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 48px; padding: 10px 20px; font-size: 12px; font-weight: 600; color: var(--ui-text-toned); background: transparent; border: 0; text-align: left; transition: color 0.2s ease; }
 .builder-section-heading:hover { color: var(--ui-text-highlighted); }
-.section-total { font-weight: 500; font-size: 11px; color: var(--ui-text-muted); margin-left: 4px; }
-.generation-footer { flex: none; padding: 16px 20px; border-top: 1px solid var(--ui-border); background: linear-gradient(to bottom, #fcfdfd, #f8f9fa); }
+.section-total { font-weight: 500; font-size: 12px; color: var(--ui-text-muted); margin-left: 4px; }
+.generation-footer { flex: none; padding: 12px 20px; max-height: 45%; overflow-y: auto; border-top: 1px solid var(--ui-border); background: #f8f9fa; }
 .mobile-preview { display: none; }
-@media (max-width: 1023px) { .mobile-preview { display: inline-flex; } }
+@media (max-width: 899px) { .mobile-preview { display: inline-flex; } }
 </style>

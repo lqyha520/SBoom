@@ -16,8 +16,7 @@ export type PlanInput = Omit<Plan, 'id'>
 export interface PaymentConfig { enabled: boolean; ready: boolean; missing: string[]; ios_enabled: boolean; payment_callback: string; refund_callback: string }
 export interface Refund { id: string; reason: string; reply: string; status: 'requested' | 'processing' | 'success' | 'closed' | 'abnormal' | 'rejected'; revision: number; created_at: number; updated_at: number; completed_at: number | null }
 export interface Order { id: string; user_id: string | null; username: string; nickname: string; plan_name: string; plan_days: number; amount_fen: number; status: 'created' | 'pending' | 'paid' | 'closed' | 'refunded'; revision: number; created_at: number; paid_at: number | null; expires_at: number; transaction_id: string | null; refund: Refund | null }
-export const orderStatuses = { created: '待付款', pending: '待确认付款', paid: '已付款', closed: '已关闭', refunded: '已退款', refund_requested: '退款待审核', refund_processing: '退款处理中', refund_abnormal: '退款需人工处理', refund_closed: '退款已关闭' }
-export const refundStatuses = { requested: '待审核', processing: '处理中', success: '退款成功', closed: '已关闭', abnormal: '需人工处理', rejected: '未通过' }
+export { orderFilterLabels as orderStatuses, adminRefundLabels as refundStatuses } from '../../shared/commerce'
 export interface OrderFilter { status?: string; q?: string; start_date?: string; end_date?: string }
 export interface Reconciliation { id: string; bill_date: string; status: 'running' | 'complete' | 'error'; error: string; created_at: number; summary: { wechat_paid_fen?: number; wechat_refunded_fen?: number; local_paid_fen?: number; local_refunded_fen?: number; differences?: number; wechat_orders?: number; local_orders?: number }; differences?: { order_id: string; refund_id: string; reason: string; remote_fen: number | null; local_fen: number | null }[] }
 export const yuan = (fen: number) => '¥' + (fen / 100).toFixed(2)
@@ -38,7 +37,7 @@ export const reviewClosure = (admin: number, item: Closure, action: 'approve' | 
 export const getDelivery = () => request<{ available: boolean; template_id: string; delivery_counts: Record<string, number> }>(base + '/delivery-status')
 export const getPlans = () => request<{ items: Plan[]; checkout_enabled: boolean; configuration: PaymentConfig }>(commerce + '/plans')
 export const savePlan = (admin: number, plan: PlanInput, id = '') => change<Plan>(commerce + '/plans' + (id ? '/' + encodeURIComponent(id) : ''), admin, plan, id ? 'PUT' : 'POST')
-export const getCards = (status = '', offset = 0) => request<{ items: MembershipCard[]; total: number; has_more: boolean }>(commerce + '/cards?' + new URLSearchParams({ status, offset: String(offset) }))
+export const getCards = (status = '', offset = 0, q = '') => request<{ items: MembershipCard[]; total: number; has_more: boolean }>(commerce + '/cards?' + new URLSearchParams({ status, offset: String(offset), q }))
 export const createCards = (admin: number, days: number, quantity: number, expires_at: number | null) => change<{ items: { code: string; days: number; expires_at: number | null }[] }>(commerce + '/cards', admin, { days, quantity, expires_at })
 export const disableCard = (admin: number, id: string) => change<{ status: string }>(commerce + '/cards/' + encodeURIComponent(id) + '/disable', admin)
 export const getOrders = (filter: OrderFilter = {}, offset = 0) => request<Page<Order> & { summary: { orders: number; paid_fen: number; refunded_fen: number } }>(commerce + '/orders?' + new URLSearchParams({ ...filter, offset: String(offset) }))

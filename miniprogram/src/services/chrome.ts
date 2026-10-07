@@ -6,9 +6,10 @@
  *    「胶囊下方 8px」取较大值。用作占位高度时直接用它；若元素已经用
  *    padding-top 顶出状态栏（border-box），也直接用它，**不要再加 inset**。
  */
-export function chromeBar(): { inset: number; height: number } {
+export function chromeBar(): { inset: number; height: number; backTop: number } {
   let inset = 0
   let height = 52
+  let backTop = 5
   // #ifdef MP-WEIXIN
   const windowInfo = uni.getWindowInfo()
   const capsule = uni.getMenuButtonBoundingClientRect()
@@ -16,6 +17,7 @@ export function chromeBar(): { inset: number; height: number } {
   // 胶囊 bottom 缺失时用 top + height 兜底，否则会算出 NaN 把整条栏压塌。
   const bottom = capsule.bottom || (capsule.top || 0) + (capsule.height || 0)
   height = Math.max(inset + 44, bottom + 8)
+  backTop = capsule.top && capsule.height ? capsule.top + capsule.height / 2 - 22 : inset
   // #endif
-  return { inset, height }
+  return { inset, height, backTop }
 }

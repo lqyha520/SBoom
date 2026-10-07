@@ -1,0 +1,17 @@
+groups:
+  - name: learn-coach
+    rules:
+      - alert: LearnCoachMetricsUnavailable
+        expr: up{job="learn-coach"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Learn Coach metrics endpoint is unavailable
+      - alert: LearnCoachMaintenanceFailures
+        expr: sum(increase(maintenance_failures_total[10m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Learn Coach maintenance task failed

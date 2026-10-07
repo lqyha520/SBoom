@@ -26,6 +26,62 @@ class ExperienceContracts(unittest.TestCase):
         for router in (experience.router, site.router, site.admin_router, engagement.router):
             self.client.app.include_router(router)
 
+    def test_favorite_batch_assign_ungrouped_remove_and_account_isolation(self):
+        papers = [self.publish(), self.publish()]
+        ids = [paper["id"] for paper in papers]
+        self.sign_in(self.viewer)
+        for identifier in ids:
+            self.client.put(f"/api/v1/catalog/papers/{identifier}/favorite", json={"favorite": True}).raise_for_status()
+        group = self.client.post("/api/v1/mini/favorite-groups", json={"name": "复习资料"}).json()
+        path = "/api/v1/mini/favorites/batch"
+        response = self.client.post(path, json={"ids": ids, "action": "assign", "group_id": group["id"]})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.client.get("/api/v1/catalog/papers?favorite=true&ungrouped=true").json()["total"], 0)
+        self.assertEqual(self.client.get("/api/v1/catalog/papers", params={"favorite_group": group["id"]}).json()["total"], 2)
+        self.client.post(path, json={"ids": [ids[0]], "action": "assign"}).raise_for_status()
+        result = self.client.get("/api/v1/catalog/papers?favorite=true&ungrouped=true").json()
+        self.assertEqual([item["id"] for item in result["items"]], [ids[0]])
+        self.sign_in(self.other)
+        self.assertEqual(self.client.get("/api/v1/catalog/papers?ungrouped=true").json()["total"], 0)
+        self.assertEqual(self.client.post(path, json={"ids": ids, "action": "assign", "group_id": group["id"]}).status_code, 404)
+        self.client.post(path, json={"ids": ids, "action": "remove"}).raise_for_status()
+        self.sign_in(self.viewer)
+        self.assertEqual(self.client.get("/api/v1/catalog/papers?favorite=true").json()["total"], 2)
+        for _ in range(2):
+            self.client.post(path, json={"ids": ids, "action": "remove"}).raise_for_status()
+        self.assertEqual(self.client.get("/api/v1/catalog/papers?favorite=true").json()["total"], 0)
+        self.assertEqual(self.client.get("/api/v1/mini/favorite-groups").json()["items"][0]["paper_count"], 0)
+        self.client.headers.pop("Authorization")
+        self.assertEqual(self.client.get("/api/v1/catalog/papers?ungrouped=true").status_code, 401)
+        self.assertEqual(self.client.post(path, json={"ids": ids, "action": "remove"}).status_code, 401)
+
+    def test_favorite_batch_conflict_is_atomic_and_inputs_are_bounded(self):
+        paper = self.publish()
+        self.sign_in(self.viewer)
+        self.client.put(f"/api/v1/catalog/papers/{paper['id']}/favorite", json={"favorite": True}).raise_for_status()
+        group = self.client.post("/api/v1/mini/favorite-groups", json={"name": "原分组"}).json()
+        other = self.client.post("/api/v1/mini/favorite-groups", json={"name": "新分组"}).json()
+        path = "/api/v1/mini/favorites/batch"
+        self.client.post(path, json={"ids": [paper["id"]], "action": "assign", "group_id": group["id"]}).raise_for_status()
+        response = self.client.post(path, json={"ids": [paper["id"], "missing"], "action": "assign", "group_id": other["id"]})
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(self.client.get("/api/v1/catalog/papers", params={"favorite_group": group["id"]}).json()["total"], 1)
+        for ids in ([], [paper["id"], paper["id"]], ["x" * 65], [str(i) for i in range(201)]):
+            self.assertEqual(self.client.post(path, json={"ids": ids, "action": "remove"}).status_code, 422)
+        self.assertEqual(self.client.post(path, json={"ids": [paper["id"]], "action": "remove", "group_id": group["id"]}).status_code, 422)
+
+    def test_home_mode_defaults_to_welcome_and_rejects_stale_updates(self):
+        path = '/api/v1/admin/site/home-settings'
+        self.assertEqual(self.client.get(path).json(), {'revision': 0, 'banner_mode': 'welcome'})
+        response = self.client.put(path, json={'revision': 0, 'banner_mode': 'operations'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.client.get('/api/v1/site/home').json()['banner_mode'], 'operations')
+        self.assertEqual(self.client.put(path, json={'revision': 0, 'banner_mode': 'welcome'}).status_code, 409)
+        self.assertEqual(self.client.put(path, json={'revision': 1, 'banner_mode': 'invalid'}).status_code, 422)
+        self.client.cookies.clear()
+        self.assertEqual(self.client.get('/api/v1/site/home').json()['banner_mode'], 'operations')
+        self.assertEqual(self.client.get(path).status_code, 401)
+
     def test_current_documents_are_readable_before_login(self):
         docs = self.client.get('/api/v1/admin/site/documents').json()['items']
         document = next(item for item in docs if item['key'] == 'privacy')

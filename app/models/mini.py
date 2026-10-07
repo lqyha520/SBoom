@@ -51,6 +51,7 @@ class MiniCredentials(BaseModel):
 
 
 class MiniRegistration(MiniCredentials):
+    password: str = Field(min_length=8, max_length=128)
     """New login identifiers are ASCII; existing Chinese accounts can still log in."""
 
     @field_validator("username")
@@ -94,7 +95,7 @@ class MiniPasswordUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     current_password: str = Field("", max_length=128)
-    new_password: str = Field(min_length=6, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class MiniAvatarUpdate(BaseModel):
@@ -122,7 +123,7 @@ class AdminProfileUpdate(BaseModel):
     username: str | None = Field(None, min_length=1, max_length=32)
     nickname: str | None = Field(None, min_length=1, max_length=32)
     avatar: str | None = Field(None, max_length=32)
-    new_password: str | None = Field(None, min_length=6, max_length=128)
+    new_password: str | None = Field(None, min_length=8, max_length=128)
 
     @field_validator("username", "nickname", mode="before")
     @classmethod

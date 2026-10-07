@@ -39,16 +39,16 @@ class ImageModelConfig(BaseModel):
 class ImageWorksheetItem(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     game_type: GameType
-    question_count: int = Field(4, ge=1, le=20)
+    question_count: int | None = Field(None, ge=1, le=20, strict=True)
 
 
 class ImageWorksheetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     grade: str = Field(min_length=1, max_length=20)
     subject: str = Field(min_length=1, max_length=20)
-    keyword: str = Field(min_length=1, max_length=100)
+    keyword: str = Field("", max_length=100)
     difficulty: Difficulty = Difficulty.MEDIUM
-    items: list[ImageWorksheetItem] = Field(min_length=1, max_length=5)
+    items: list[ImageWorksheetItem] = Field(default_factory=list, max_length=5)
     style: Literal["playful", "clean", "black_white"] = "playful"
     requirements: str = Field("", max_length=600)
     image_count: int = Field(1, ge=1, le=10)
@@ -60,6 +60,6 @@ class ImageWorksheetRequest(BaseModel):
             raise ValueError("图片序号不能大于生成张数")
         if len({item.game_type for item in self.items}) != len(self.items):
             raise ValueError("同一题型只需选择一次")
-        if sum(item.question_count for item in self.items) > 24:
-            raise ValueError("一张图片最多安排 24 道题，请减少题量")
+        if sum(item.question_count or 1 for item in self.items) > 24:
+            raise ValueError("一张图片最多安排 24 道题，自动题量的题型至少预留 1 道，请减少题量")
         return self

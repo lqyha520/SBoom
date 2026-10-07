@@ -120,11 +120,14 @@ export const templatesActions = {
     return { local, synced }
   },
 
-  loadMyTemplate(this: ExamWorkspace, name: string): boolean {
+  async loadMyTemplate(this: ExamWorkspace, name: string): Promise<boolean> {
     if (this.generating || this.accountChanged) return false
     const tpl = this.myTemplates.find((t) => t.name === name)
     if (!tpl) return false
     if (!tpl.cards.length && !tpl.sections?.length) return false
+    if ((this.sections.length || this.papers.length || this.keyword) && !await this.saveHistory('before-restore')) return false
+    // 在修改任何字段前捕获完整编辑状态，撤销能恢复条件、标题和生成结果。
+    this.recordEdit()
     this.grade = tpl.grade
     this.subject = tpl.subject
     this.keyword = tpl.keyword
@@ -133,8 +136,11 @@ export const templatesActions = {
     this.templateId = tpl.templateId
     this.title = tpl.title || ''
     this.titleHtml = (tpl as any).titleHtml || ''
-    if (tpl.style) this.setStyle(tpl.style)
+    if (tpl.style) Object.assign(this.style, tpl.style)
     this.hiddenElements = [...(tpl.hiddenElements || [])]
+    this.papers = []
+    this.view = 'build'
+    this.pendingRun = null
 
     if (tpl.sections?.length) {
       // V2：完整还原（每题文字、版式、数量都在）
@@ -167,7 +173,8 @@ export const templatesActions = {
         layout: c.layout,
       }))
     }
-    this.selectSubject(tpl.subject)
+    void this.selectSubject(tpl.subject)
+    await this.flushDraft()
     return true
   },
 

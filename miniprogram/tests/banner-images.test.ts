@@ -10,7 +10,7 @@ function fixture() {
   const displayed: Record<string, string> = {}
   const pool = createFilePool(url => new Promise((resolve, reject) => downloads.push({ url, resolve, reject })), path => disposed.push(path))
   const images = createBannerImages(pool.acquire, (id, path) => { displayed[id] = path })
-  return { images, downloads, disposed, displayed }
+  return { images, downloads, disposed, displayed, pool }
 }
 
 test('a home refresh preserves an in-flight image and shares the same download', async () => {
@@ -26,7 +26,7 @@ test('a home refresh preserves an in-flight image and shares the same download',
 })
 
 test('replacing a banner image updates the same id and ignores an older late download', async () => {
-  const { images, downloads, displayed, disposed } = fixture()
+  const { images, downloads, displayed, disposed, pool } = fixture()
   images.sync([{ id: 'banner', image_url: '/image?v=1' }])
   await settle()
   images.sync([{ id: 'banner', image_url: '/image?v=2' }])
@@ -38,11 +38,12 @@ test('replacing a banner image updates the same id and ignores an older late dow
   assert.equal(displayed.banner, 'replacement.png')
   assert.ok(disposed.includes('old.png'))
   images.clear()
+  assert.ok(!disposed.includes('replacement.png')); pool.trim()
   assert.ok(disposed.includes('replacement.png'))
 })
 
 test('removing a photo or hiding a banner clears the displayed file and releases it', async () => {
-  const { images, downloads, displayed, disposed } = fixture()
+  const { images, downloads, displayed, disposed, pool } = fixture()
   images.sync([{ id: 'a', image_url: '/a' }, { id: 'b', image_url: '/b' }])
   await settle()
   downloads[0]!.resolve('a.png'); downloads[1]!.resolve('b.png')
@@ -50,11 +51,12 @@ test('removing a photo or hiding a banner clears the displayed file and releases
   images.sync([{ id: 'a', image_url: null }])
   assert.equal(displayed.a, '')
   assert.equal(displayed.b, '')
+  assert.deepEqual(disposed, []); pool.trim()
   assert.deepEqual(disposed.sort(), ['a.png', 'b.png'])
 })
 
 test('failed downloads and invalid decoded images can be retried on the next refresh', async () => {
-  const { images, downloads, displayed, disposed } = fixture()
+  const { images, downloads, displayed, disposed, pool } = fixture()
   const banners = [{ id: 'a', image_url: '/a' }]
   images.sync(banners); await settle()
   downloads[0]!.reject(new Error('offline')); await settle()
@@ -72,7 +74,7 @@ test('failed downloads and invalid decoded images can be retried on the next ref
 })
 
 test('leaving before a download completes never restores the old banner', async () => {
-  const { images, downloads, displayed, disposed } = fixture()
+  const { images, downloads, displayed, disposed, pool } = fixture()
   images.sync([{ id: 'a', image_url: '/a' }]); await settle()
   images.clear()
   downloads[0]!.resolve('late.png'); await settle()

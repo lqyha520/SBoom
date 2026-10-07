@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { copyWithPrivacy } from '../../services/privacy'
 import { computed, nextTick, ref, watch } from 'vue'
-import { onHide, onLoad, onPullDownRefresh, onShow, onUnload, onShareAppMessage, onPageScroll } from '@dcloudio/uni-app'
+import { onHide, onLoad, onPullDownRefresh, onShow, onUnload, onShareAppMessage } from '@dcloudio/uni-app'
 import PageChrome from '../../components/PageChrome.vue'
 import PrivateImage from '../../components/PrivateImage.vue'
 import PaperPreview from '../../components/PaperPreview.vue'
@@ -14,6 +15,7 @@ import { fileSize, fileStatus, formatDate } from '../../content'
 import { difficultyLabel, exerciseText, exerciseTitle, downloadAccessHint, subjectTone } from '../../presentation'
 import { assignGroup, createGroup, fetchGroups, openSupport, recordEvent, recordView, type FavoriteGroup } from '../../services/experience'
 import type { ExternalDownload, PaperDetail, PrintEdition } from '../../types'
+import { captureScroll } from '../../services/page-lifecycle'
 import { shareCard } from '../../services/return-route'
 
 const id = ref('')
@@ -21,6 +23,8 @@ const edition = ref<PrintEdition['kind']>('original')
 const paper = ref<PaperDetail | null>(null)
 const verified = ref(false)
 let scrollTop = 0
+let viewedBy = ''
+const groupReads = createLatestRequest()
 const loading = ref(false)
 const error = ref('')
 const downloading = ref(false)
@@ -84,7 +88,10 @@ async function load() {
       verified.value = true
       if (restoring) { await nextTick(); if (current()) uni.pageScrollTo?.({ scrollTop, duration: 0 }) }
       if (!result.editions?.some(item => item.kind === edition.value)) edition.value = 'original'
-      if (current() && session.user) void recordView(result.id).catch(() => {})
+      if (current() && session.user && viewedBy !== session.user.id) {
+        const owner = session.user.id; viewedBy = owner
+        void recordView(result.id).catch(() => { if (viewedBy === owner) viewedBy = '' })
+      }
     }
   } catch (cause) {
     if (current()) {
@@ -136,7 +143,7 @@ function copyLink() {
   const revision = actionRevision
   const target = linkTarget.value
   copyingLink.value = true; linkError.value = ''
-  uni.setClipboardData({
+  copyWithPrivacy({
     data: target.url + (target.extraction_code ? '\n提取码：' + target.extraction_code : ''),
     success: () => { if (active && revision === actionRevision) uni.showToast({ title: '链接已复制', icon: 'success' }) },
     fail: () => { if (active && revision === actionRevision) linkError.value = '复制失败，请重试或长按上方链接手动复制' },
@@ -148,7 +155,7 @@ async function chooseGroup() {
   const revision = actionRevision
   groupBusy.value = true; groupError.value = ''; groupName.value = ''; groupOpen.value = true
   try {
-    const { items } = await fetchGroups()
+    const { items } = await fetchGroups({ scope: groupReads.begin() })
     if (!active || revision !== actionRevision) return
     groupItems.value = items; groupOpen.value = true
   } catch (cause) { if (active && revision === actionRevision) groupError.value = errorMessage(cause) }
@@ -193,7 +200,7 @@ function viewMembership() { if (requireLogin()) membershipOpen.value = true }
 function sharePaper() {
   if (!paper.value) return
   const card = shareCard('paper', paper.value.id, paper.value.title)
-  uni.setClipboardData({
+  copyWithPrivacy({
     data: window.location.origin + window.location.pathname + '#' + card.path,
     success: () => uni.showToast({ title: '资料链接已复制，可发送给好友', icon: 'none' }),
     fail: () => uni.showToast({ title: '复制失败，请重试', icon: 'none' }),
@@ -201,18 +208,17 @@ function sharePaper() {
 }
 // #endif
 onLoad(options => { id.value = typeof options?.id === 'string' ? options.id : '' })
-onPageScroll(event => { scrollTop = event.scrollTop })
 onShareAppMessage(() => shareCard('paper', id.value, paper.value?.title))
 onShow(async () => { active = true; await ensureSession(); if (active) void load() })
 function leave() {
-  active = false; actionRevision++; requests.invalidate(); loading.value = false; verified.value = false
+  active = false; groupReads.invalidate(); actionRevision++; requests.invalidate(); loading.value = false; verified.value = false
   if (paper.value) paper.value = { ...paper.value, assets: [], snapshot: null, thumbnail_url: null, editions: paper.value.editions?.map(({ url: _url, ...item }) => item) }
   cancelPdfDownload()
   previewOpen.value = false; membershipOpen.value = false; uni.stopPullDownRefresh()
   clearLink()
   groupOpen.value = false; groupBusy.value = false; groupError.value = ''; groupItems.value = []; groupName.value = ''
 }
-onHide(leave)
+onHide(() => { captureScroll(top => { scrollTop = top }); leave() })
 function reconnect() { if (active && !changing.value && !downloading.value) void load() }
 uni.$on?.('lc-network-restored', reconnect)
 onUnload(() => { leave(); paper.value = null; uni.$off?.('lc-network-restored', reconnect) })
@@ -221,8 +227,12 @@ onPullDownRefresh(() => { void load() })
 
 <template>
   <view class="detail-page" :class="{ 'has-editions': hasEditions }">
+    <view class="page-navigation-sticky"><PageChrome back fallback="/pages/library/index" /></view>
+    <view v-if="paper" class="content-width detail-heading">
+      <view class="detail-tags"><text>{{ paper.subject }}</text><text>{{ paper.grade }}</text><PaperAccessBadge :paper="paper" /></view>
+      <text class="detail-title">{{ exerciseTitle(paper) }}</text>
+    </view>
     <view class="detail-hero" :class="subjectTone(paper?.subject || '')">
-      <PageChrome back fallback="/pages/library/index" />
       <view v-if="paper" class="paper-stage">
         <view v-if="!verified" class="preview-sheet locked-sheet"><wd-loading v-if="loading" /><text>{{ loading ? '正在核验访问权限' : '请重试加载资料' }}</text></view>
         <view v-else-if="!paper.can_view" class="preview-sheet locked-sheet"><wd-icon name="lock" size="31px" /><text>VIP 专享习题</text></view>
@@ -236,8 +246,6 @@ onPullDownRefresh(() => { void load() })
       <view v-if="loading && !paper" class="state-block"><wd-loading /></view>
       <template v-if="paper">
         <view class="content-width detail-content">
-          <view class="detail-tags"><text>{{ paper.subject }}</text><text>{{ paper.grade }}</text><PaperAccessBadge :paper="paper" /></view>
-          <text class="detail-title">{{ exerciseTitle(paper) }}</text>
           <view v-if="paper.tags?.length" class="detail-tags curriculum-tags"><wd-tag v-for="tag in paper.tags" :key="tag.id" variant="light">{{ tag.name }}</wd-tag></view>
           <view class="detail-meta"><text v-if="paper.question_count">{{ paper.question_count }} 道题</text><text v-if="paper.page_count">{{ paper.page_count }} 页</text><text v-if="external">网盘下载</text><text v-if="paper.snapshot?.paper.difficulty">{{ difficultyLabel(paper.snapshot.paper.difficulty) }}</text></view>
           <text v-if="paper.description || paper.keyword" class="detail-description">{{ exerciseText(paper.description || paper.keyword) }}</text>
@@ -256,7 +264,7 @@ onPullDownRefresh(() => { void load() })
         </view>
         <view class="detail-dock">
           <text class="download-hint">{{ downloadAccessHint(paper) }}</text>
-          <view v-if="hasEditions && paper.editions" class="edition-choice"><text>选择文件版本</text><picker :range="paper.editions.map(item => item.label)" :value="Math.max(0, paper.editions.findIndex(item => item.kind === edition))" :disabled="downloading" @change="edition = paper.editions[Number($event.detail.value)]!.kind"><view class="edition-picker">{{ selectedEdition?.label }} · {{ fileSize(selectedEdition?.byte_size || 0) }}<wd-icon name="down" /></view></picker></view>
+          <view v-if="hasEditions && paper.editions" class="edition-choice"><view class="edition-segments" role="radiogroup" aria-label="文件版本"><button v-for="item in paper.editions" :key="item.kind" role="radio" hover-class="control-pressed" :aria-checked="edition === item.kind" :class="{ selected: edition === item.kind }" :disabled="downloading || loading || !verified" @click="edition = item.kind"><text>{{ item.label }}</text><text class="edition-size">{{ fileSize(item.byte_size) }}</text></button></view></view>
           <text v-if="downloading" class="transfer-status" role="status">{{ external ? '正在获取网盘链接…' : downloadProgress === null ? '正在准备文件…' : downloadProgress < 100 ? '正在下载 ' + downloadProgress + '%' : '下载完成，正在打开 PDF…' }}</text>
           <text v-if="retryDownload && error" class="download-error" role="alert">{{ error }}</text>
           <view class="detail-actions">
@@ -307,18 +315,20 @@ onPullDownRefresh(() => { void load() })
 .link-sheet{max-width:520px;margin:0 auto}.link-tip{display:block;color:var(--lc-secondary);font-size:13px;line-height:1.8}.external-url{display:block;overflow-wrap:anywhere;word-break:break-all;padding:16px;margin:16px 0;background:var(--lc-background);border-radius:8px;color:var(--lc-primary);font-size:14px}.external-code{display:block;margin:0 0 20px;font-size:15px}
 .curriculum-tags { margin-top:14px; }.edition-choice { margin:0;font-size:13px;color:var(--lc-secondary); }.edition-picker { display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:48px;padding:10px 14px;margin-top:8px;background:var(--lc-background);border:1px solid var(--lc-border);border-radius:10px; }
 .detail-service { display:flex;gap:16px;flex-wrap:wrap;margin:14px 0; }.version-notes text { display:block;font-size:12px;color:var(--lc-muted);margin:8px 0; }
+.edition-segments { display:flex;gap:6px; }.edition-segments button { flex:1;min-width:0;min-height:54px;margin:0;padding:6px;border:1px solid var(--lc-border);border-radius:6px;background:var(--lc-surface);color:var(--lc-secondary);font-size:13px;line-height:1.5;overflow-wrap:anywhere; }.edition-segments button.selected { border-color:var(--lc-primary);background:var(--lc-primary-soft);color:var(--lc-primary); }.edition-size { display:block;font-size:12px;margin-top:2px; }
 .group-create { display:flex;flex-direction:column;gap:12px;margin:14px 0; }.group-name-input { height:46px;padding:0 12px;background:var(--lc-background);border-radius:8px;font-size:14px; }.group-empty { display:block;font-size:13px;color:var(--lc-secondary);line-height:1.7;margin:12px 0; }.group-sheet { max-width:520px;margin:0 auto; }.group-options { height:32vh; }.group-option { width:100%;margin:0;padding:14px 0;background:transparent;color:var(--lc-text);font-size:15px;line-height:1.5;text-align:left;overflow-wrap:anywhere;border-bottom:1px solid var(--lc-card-line); }
 .detail-page { padding-bottom: calc(180px + env(safe-area-inset-bottom)); }
 .detail-page.has-editions { padding-bottom: calc(270px + env(safe-area-inset-bottom)); }
 .detail-hero { background-color:var(--subject-tint);background-image:linear-gradient(160deg,#ffffff60,transparent);border-radius:0 0 24px 24px; }
-.paper-stage { display: flex; align-items: center; justify-content: center; position: relative; min-height: 250px; padding: 15px 30px 28px; }
-.preview-sheet { width: 148px; flex: none; transform: rotate(-5deg); box-shadow: 5px 7px 0 #ffffff80, 0 9px 28px #5261831f; border-radius: 2px; background: #fff; }
+.paper-stage { display: flex; align-items: center; justify-content: center; position: relative; min-height: 240px; padding: 16px 24px 60px; }
+.preview-sheet { width: 192px; max-width: 72%; flex: none; box-shadow: 0 4px 16px #5261831f; border-radius: 2px; background: #fff; }
 .preview-entry { display: block; padding: 0; margin: 0; line-height: 1.5; }
-.preview-entry:active { transform: rotate(-2deg); }
+.preview-entry:active { opacity:.9; }
 .locked-sheet { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 15px; height: 209px; color: var(--lc-warning); font-size: 13px; }
 .preview-pill { position: absolute; bottom: 16px; right: 22px; display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 13px; margin: 0; border-radius: 999px; background: #fff; color: var(--lc-secondary); font-size: 12px; line-height: 1.5; box-shadow: 0 2px 9px #52618308; }
 .preview-access { position: absolute; bottom: 24px; right: 22px; }
 .detail-content { padding-top: 25px; padding-bottom: 22px; }
+.detail-heading { padding-top:10px;padding-bottom:14px;background:var(--lc-surface); }.detail-heading .detail-title { margin-top:5px;font-size:21px; }
 .detail-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--lc-primary); font-size: 12px; }
 .detail-title { display: block; font-size: 23px; line-height: 1.5; font-weight: 650; margin-top: 10px; overflow-wrap: anywhere; }
 .detail-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--lc-muted); font-size: 12px; margin-top: 9px; }
@@ -340,4 +350,6 @@ onPullDownRefresh(() => { void load() })
 .detail-favorite.selected { color:var(--lc-coral); }
 .download-button { flex: 1; min-width: 0; --wot-button-height-medium: 49px; }
 @media (max-width: 359px) { .detail-title { font-size: 21px; } .detail-dock { padding-left: 17px; padding-right: 17px; } }
+@media (max-height:680px) { .preview-sheet { width:152px; }.paper-stage { min-height:0;padding-top:10px; } }
+@media (max-height:600px) { .has-editions .preview-sheet { width:128px; } }
 </style>

@@ -2,6 +2,8 @@
 # 环境变量 & 敏感配置
 # ============================
 .env
+.env.*
+!**/.env*.example
 
 # ============================
 # Python 编译缓存
@@ -60,20 +62,10 @@ build/
 # ============================
 # 前端（Vue）
 # ============================
-web/node_modules/
-admin/node_modules/
-miniprogram/node_modules/
-miniprogram/.env.local
-miniprogram/.env.*.local
+node_modules
 miniprogram/src/project.private.config.json
 miniprogram/project.private.config.json
-artifacts/miniprogram/
-artifacts/miniprogram-ui/
-artifacts/ui-refactor/
-artifacts/pdf-layout-check/
-artifacts/admin-mini-e2e/
 # 账号删除备份含微信标识哈希与密码哈希，属用户数据，绝不入库
-artifacts/account-delete-backup/
 # 注：web/admin 的 pnpm-workspace.yaml 需要入库（含 pnpm v10+ 构建脚本白名单，
 # 缺失时新 clone 的 esbuild postinstall 会被拒绝，vite 无法使用）
 
@@ -100,6 +92,6 @@ server.log*
 server.pid
 *.pid
 # 截图/压测/回归产物（子目录白名单见上）
-artifacts/
 # 生产环境密钥
-deploy/.env.production
+artifacts/
+deploy/ops-status/

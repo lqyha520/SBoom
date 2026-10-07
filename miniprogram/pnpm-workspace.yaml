@@ -1,6 +1,50 @@
+# uni-app 间接依赖兼容/安全基线；变更时重跑两端构建及 pnpm audit。
+# 来源为上游公告或发布记录；历史升级未保存具体公告编号，不补造 CVE。
+
+# braces GHSA-vfj7-8cjw-p6xm：官方补丁版本为 <0.0.0（截至 2026-10-07 未发布修复版，
+# 3.0.3 已是最新，且仅在 eslint 开发依赖链）。上游发布修复后应移除本豁免。
+auditConfig:
+  ignoreCves:
+    - CVE-2026-93687
+
 onlyBuiltDependencies:
   - esbuild
   - sharp
-allowBuilds:
-  esbuild: true
-  sharp: true
+
+overrides:
+  # https://github.com/vitejs/vite/security/advisories
+  "vite@5.2.8": "6.4.3"
+  # https://github.com/postcss/postcss/releases
+  "postcss@<8.5.28": "8.5.28"
+  # https://github.com/websockets/ws/security/advisories/GHSA-3h5v-q93c-6h6q
+  "ws@8.18.0": "8.21.0"
+  # https://github.com/babel/babel/security/advisories/GHSA-67hx-6x53-jw92
+  "@babel/core@7.25.2": "7.29.7"
+  # https://github.com/intlify/vue-i18n/security/advisories
+  "@intlify/core-base@9.1.9": "9.14.5"
+  # https://github.com/intlify/vue-i18n/security/advisories
+  "@intlify/shared@9.1.9": "9.14.5"
+  # https://github.com/jpeg-js/jpeg-js/releases
+  "jpeg-js@0.3.7": "0.4.4"
+  # https://github.com/cthackers/adm-zip/releases
+  "adm-zip@0.5.16": "0.6.1"
+  # https://github.com/intlify/vue-i18n/security/advisories
+  "@intlify/message-resolver@9.1.9": "9.1.11"
+  # https://github.com/ethanent/phin/releases
+  "phin@2.9.3": "3.7.1"
+  # https://github.com/evanw/esbuild/security/advisories/GHSA-67mh-4wv8-2f99
+  "esbuild@0.20.2": "0.25.12"
+  # https://github.com/expressjs/express/security/advisories
+  "express@4.20.0": "4.22.3"
+  # https://github.com/ljharb/qs/releases
+  "qs@<6.16.0": "6.16.0"
+  # https://github.com/expressjs/body-parser/security/advisories
+  "body-parser@<1.20.6": "1.20.6"
+  # https://github.com/jshttp/proxy-addr/security/advisories
+  "proxy-addr@<2.0.8": "2.0.8"
+  # https://github.com/postcss/postcss-selector-parser/releases
+  "postcss-selector-parser@<7.1.6": "7.1.6"
+  # https://github.com/vuejs/core/security/advisories
+  "@vue/server-renderer@<3.5.42": "3.5.42"
+  # https://github.com/7rulnik/source-map-js/releases
+  "source-map-js@<1.2.2": "1.2.2"

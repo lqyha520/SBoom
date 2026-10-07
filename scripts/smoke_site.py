@@ -2,66 +2,33 @@
 
 用一次性 PostgreSQL 测试库运行，绝不触碰业务库：
     python scripts/smoke_site.py
-（依赖 .env 或环境变量 DATABASE_URL 指向一个可达的 PostgreSQL 实例；脚本会在同一实例上
- 另建 lc_smoke_ 前缀的一次性库，结束后自动删除。）
+（只使用 LC_TEST_PG_ADMIN 指定的本机测试实例，创建 lc_test_site_* 一次性库；
+ 不读取业务 DATABASE_URL 来派生管理连接。）
 """
 
+import atexit
 import os
 import sys
-import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
-def _env_database_url() -> str:
-    """.env 里的 DATABASE_URL（PG 直连串），用于派生一次性测试库。"""
-    url = os.environ.get("DATABASE_URL") or ""
-    if not url:
-        try:
-            from dotenv import dotenv_values
-
-            url = str(dotenv_values(ROOT / ".env").get("DATABASE_URL") or "")
-        except Exception:
-            pass
-    return url
-
-
-def _create_temp_pg(url: str) -> tuple[str, str]:
-    """在同一个 PG 实例上建一个一次性库；返回 (测试库连接串, 库名)。"""
-    from urllib.parse import urlsplit, urlunsplit
-
-    import psycopg
-
-    parts = urlsplit(url)
-    temp_name = "lc_smoke_" + uuid.uuid4().hex[:10]
-    admin_url = urlunsplit((parts.scheme, parts.netloc, "/postgres", "", ""))
-    with psycopg.connect(admin_url, autocommit=True) as conn:
-        conn.execute(f'CREATE DATABASE "{temp_name}"')
-    return urlunsplit((parts.scheme, parts.netloc, "/" + temp_name, "", "")), temp_name
+sys.path.insert(0, str(ROOT / "tests"))
+import pg_support
 
 
 def _drop_temp_pg(url: str, name: str) -> None:
-    from urllib.parse import urlsplit, urlunsplit
-
-    import psycopg
-
-    parts = urlsplit(url)
-    admin_url = urlunsplit((parts.scheme, parts.netloc, "/postgres", "", ""))
-    with psycopg.connect(admin_url, autocommit=True) as conn:
-        conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+    pg_support.drop_test_db(name)
 
 
 _tmp = Path(__import__("tempfile").mkdtemp(prefix="lc-site-smoke-"))
 os.environ["ARCHIVE_LOCAL_DIR"] = str(_tmp / "files")
 # .env 里配置了 DATABASE_URL 时会连到真实库：强制改连一次性测试库，绝不使用业务库。
-_pg_temp = ("", "")
-_base_url = _env_database_url()
-if not _base_url.startswith(("postgresql://", "postgres://")):
-    raise SystemExit("DATABASE_URL 未配置：本脚本需要一个可达的 PostgreSQL 实例来派生一次性测试库")
-_pg_temp = _create_temp_pg(_base_url)
+_pg_temp = pg_support.create_test_db(prefix="lc_test_site_")
 os.environ["DATABASE_URL"] = _pg_temp[0]
+atexit.register(pg_support.drop_test_db, _pg_temp[1])
 print(f"使用一次性 PostgreSQL 测试库：{_pg_temp[1]}")
 
 from app.db import init_db  # noqa: E402
@@ -202,7 +169,7 @@ if _pg_temp[1]:
 
     close_pg_pool()
     try:
-        _drop_temp_pg(_env_database_url(), _pg_temp[1])
+        _drop_temp_pg(_pg_temp[0], _pg_temp[1])
         print(f"已清理一次性 PostgreSQL 测试库：{_pg_temp[1]}")
     except Exception as exc:  # 清理失败不影响测试结论，仅提示手工回收
         print(f"⚠️  测试库 {_pg_temp[1]} 自动清理失败，请手工 DROP：{exc}")

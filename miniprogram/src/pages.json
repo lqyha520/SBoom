@@ -57,24 +57,13 @@
       }
     },
     {
-      "path": "pages/privacy/index",
+      "path": "pages/topic/index",
       "style": {
-        "navigationBarTitleText": "隐私政策"
+        "navigationBarTitleText": "资料专题",
+        "enablePullDownRefresh": true,
+        "onReachBottomDistance": 160
       }
     },
-    {
-      "path": "pages/support/index",
-      "style": {
-        "navigationBarTitleText": "服务与反馈",
-        "enablePullDownRefresh": false
-      }
-    },
-    { "path": "pages/topic/index", "style": { "navigationBarTitleText": "资料专题", "enablePullDownRefresh": true, "onReachBottomDistance": 160 } },
-    { "path": "pages/messages/index", "style": { "navigationBarTitleText": "消息中心", "enablePullDownRefresh": true, "onReachBottomDistance": 160 } },
-    { "path": "pages/requests/index", "style": { "navigationBarTitleText": "资料需求", "enablePullDownRefresh": true, "onReachBottomDistance": 160 } },
-    { "path": "pages/closure/index", "style": { "navigationBarTitleText": "注销账号", "enablePullDownRefresh": true } },
-    { "path": "pages/membership/index", "style": { "navigationBarTitleText": "会员服务", "enablePullDownRefresh": true } },
-    { "path": "pages/orders/index", "style": { "navigationBarTitleText": "我的订单", "enablePullDownRefresh": true, "onReachBottomDistance": 160 } },
     {
       "path": "pages/recent/index",
       "style": {
@@ -121,5 +110,71 @@
         "selectedIconPath": "static/tabs/user-round-active.png"
       }
     ]
+  },
+  "subPackages": [
+    {
+      "root": "subpages",
+      "pages": [
+        {
+          "path": "privacy/index",
+          "style": {
+            "navigationBarTitleText": "隐私政策"
+          }
+        },
+        {
+          "path": "support/index",
+          "style": {
+            "navigationBarTitleText": "服务与反馈",
+            "enablePullDownRefresh": false
+          }
+        },
+        {
+          "path": "messages/index",
+          "style": {
+            "navigationBarTitleText": "消息中心",
+            "enablePullDownRefresh": true,
+            "onReachBottomDistance": 160
+          }
+        },
+        {
+          "path": "requests/index",
+          "style": {
+            "navigationBarTitleText": "资料需求",
+            "enablePullDownRefresh": true,
+            "onReachBottomDistance": 160
+          }
+        },
+        {
+          "path": "closure/index",
+          "style": {
+            "navigationBarTitleText": "注销账号",
+            "enablePullDownRefresh": true
+          }
+        },
+        {
+          "path": "membership/index",
+          "style": {
+            "navigationBarTitleText": "会员服务",
+            "enablePullDownRefresh": true
+          }
+        },
+        {
+          "path": "orders/index",
+          "style": {
+            "navigationBarTitleText": "我的订单",
+            "enablePullDownRefresh": true,
+            "onReachBottomDistance": 160
+          }
+        }
+      ]
+    }
+  ],
+  "preloadRule": {
+    "pages/account/index": {
+      "network": "wifi",
+      "packages": [
+        "subpages"
+      ]
+    }
   }
 }

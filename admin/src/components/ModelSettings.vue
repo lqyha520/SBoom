@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { useAdminRefresh } from '../admin-page'
+import { useBeforeUnload } from '../unsaved'
+import { computed, ref } from 'vue'
 import * as api from '../api'
 import ImageModelSettings from './ImageModelSettings.vue'
 
-const config = ref({ baseUrl: '', model: '', apiKey: '', timeout: 60 })
+const config = ref({ baseUrl: '', model: '', apiKey: '', timeout: 60, maxTokens: 16384 })
 const hasKey = ref(false)
 const loading = ref(true)
 const loadError = ref('')
@@ -11,15 +13,23 @@ const busy = ref<'save' | 'test' | 'clear' | ''>('')
 const message = ref('')
 const ok = ref(true)
 const clearOpen = ref(false)
+const baseline = ref('')
+const dirty = computed(() => !!baseline.value && baseline.value !== JSON.stringify(config.value))
+useBeforeUnload(dirty)
+let loadSequence = 0
 async function load() {
+  if (dirty.value) return
+  const sequence = ++loadSequence
   loading.value = true
   loadError.value = ''
   try {
     const value = await api.fetchLlmConfig()
-    config.value = { baseUrl: value.baseUrl, model: value.model, apiKey: '', timeout: value.timeout || 60 }
+    if (sequence !== loadSequence || dirty.value) return
+    config.value = { baseUrl: value.baseUrl, model: value.model, apiKey: '', timeout: value.timeout || 60, maxTokens: value.maxTokens || 16384 }
     hasKey.value = value.hasKey
-  } catch (e: unknown) { loadError.value = e instanceof Error ? e.message : '配置加载失败' }
-  finally { loading.value = false }
+    baseline.value = JSON.stringify(config.value)
+  } catch (e: unknown) { if (sequence === loadSequence) loadError.value = e instanceof Error ? e.message : '配置加载失败' }
+  finally { if (sequence === loadSequence) loading.value = false }
 }
 async function execute(action: 'save' | 'test' | 'clear') {
   if (busy.value || loading.value || loadError.value) return
@@ -30,14 +40,15 @@ async function execute(action: 'save' | 'test' | 'clear') {
     if (action === 'save') {
       const result = await api.saveLlmConfig(value)
       hasKey.value = result.hasKey
-      config.value.apiKey = ''
+      config.value.apiKey = ''; baseline.value = JSON.stringify(config.value)
       message.value = result.message || '模型配置已保存'
     } else if (action === 'test') {
       const result = await api.testLlm(value)
       message.value = '连接成功：' + result.reply
     } else {
       await api.clearLlmConfig()
-      config.value = { baseUrl: '', model: '', apiKey: '', timeout: 60 }
+      config.value = { baseUrl: '', model: '', apiKey: '', timeout: 60, maxTokens: 16384 }
+      baseline.value = JSON.stringify(config.value)
       hasKey.value = false
       clearOpen.value = false
       message.value = '模型配置与已保存密钥已清除'
@@ -48,7 +59,7 @@ async function execute(action: 'save' | 'test' | 'clear') {
     message.value = e instanceof Error ? e.message : '操作失败，请重试'
   } finally { busy.value = '' }
 }
-onMounted(load)
+useAdminRefresh(load, () => { loadSequence++; loading.value = false })
 </script>
 
 <template>
@@ -63,6 +74,7 @@ onMounted(load)
           <UFormField label="模型名称" required><UInput v-model="config.model" placeholder="模型 ID" :disabled="!!busy" required /></UFormField>
           <UFormField label="超时时间（秒）"><UInputNumber :model-value="config.timeout" :min="10" :max="600" :step="10" :disabled="!!busy" @update:model-value="config.timeout = $event ?? 60" /></UFormField>
         </div>
+        <UFormField label="模型最大输出 token" description="请按服务商支持的上限设置，系统会按题量分配。"><UInputNumber v-model="config.maxTokens" :min="1024" :max="131072" :step="1024" :disabled="!!busy" /></UFormField>
         <UFormField label="API 密钥"><UInput v-model="config.apiKey" type="password" autocomplete="new-password" :placeholder="hasKey ? '留空保留已保存的密钥' : 'sk-...'" :disabled="!!busy" icon="i-lucide-key-round" /></UFormField>
         <UAlert v-if="message && !clearOpen" :color="ok ? 'success' : 'error'" variant="soft" :title="message" role="status" />
         <div class="actions-row"><UButton type="submit" icon="i-lucide-save" label="保存配置" :loading="busy === 'save'" :disabled="!!busy" /><UButton icon="i-lucide-plug" label="测试连接" color="neutral" variant="outline" :loading="busy === 'test'" :disabled="!!busy" @click="execute('test')" /></div>

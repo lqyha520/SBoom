@@ -41,6 +41,7 @@ export interface Snapshot {
 }
 export interface PaperSummary {
   revision?: number
+  answer_readiness?: 'included' | 'separate' | 'missing' | 'unknown'
   download_mode?: 'pdf' | 'external'
   tags?: import('./services/growth').CatalogTag[]
   can_view: boolean; can_download: boolean; required_view: 'free' | 'vip'; required_download: 'free' | 'vip'
@@ -70,6 +71,7 @@ export interface SiteBanner {
 export interface SiteNotice { id: string; title: string; body: string; placement: 'popup' | 'banner'; level: 'info' | 'warning' }
 export interface SiteHome {
   banners: SiteBanner[]
+  banner_mode?: 'welcome' | 'operations'
   notices: { popup: SiteNotice[]; banner: SiteNotice[] }
   categories: SiteCategory[]
   dictionaries: { grades: string[]; subjects: string[] }

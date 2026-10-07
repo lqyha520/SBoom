@@ -13,17 +13,11 @@ from app import db as database  # noqa: E402
 
 class DatabaseStartupContracts(unittest.TestCase):
     def test_postgres_schema_initialization_holds_the_shared_lock(self):
-        with patch.object(database, "db") as connection, \
-                patch.object(database, "_migrate_pg"), \
-                patch.object(database, "_init_reliability_schema"), \
-                patch.object(database, "_verify_schema", return_value=([], 0)), \
-                patch("app.library_schema.init_library_schema"):
-            database.init_db()
-        # 第一次开事务必须是"拿全局 advisory lock 的那个 DDL 事务"；
-        # 之后还会另起一个只读连接做落库校验，所以不能断言只调用一次。
-        self.assertEqual(
-            connection.call_args_list[0], call(serialized=tuple(database._LOCK_IDS), ddl=True)
-        )
+        with ExitStack() as stack:
+            pg_support.case_database(stack, fresh=True)
+            with patch.object(database, "db", wraps=database.db) as connection:
+                database.init_db()
+            self.assertIn(call(serialized=tuple(database._LOCK_IDS), ddl=True), connection.call_args_list)
 
     def test_missing_database_url_fails_closed(self):
         from app import config

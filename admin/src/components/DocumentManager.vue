@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, ref, watch } from 'vue'
-import type { UserInfo } from '../api'
+import { computed, onActivated, onDeactivated, ref } from 'vue'
+import { ApiError, type UserInfo } from '../api'
+import { useBeforeUnload } from '../unsaved'
 import { siteDocuments, updateDocument, type SiteDocument } from '../site'
 
 const props = defineProps<{ user: UserInfo }>()
@@ -10,14 +11,24 @@ const loading = ref(false)
 const error = ref('')
 const notice = ref('')
 const busy = ref(false)
-const dirty = ref(false)
+const drafts = ref<Partial<Record<SiteDocument['key'], { title: string; body: string; revision: number }>>>({})
+const conflict = ref(false)
+const dirty = computed(() => {
+  const draft = drafts.value[kind.value], server = current.value
+  return !!draft && !!server && (draft.title !== server.title || draft.body !== server.body)
+})
+const anyDirty = computed(() => documents.value.some(server => {
+  const draft = drafts.value[server.key]
+  return !!draft && (draft.title !== server.title || draft.body !== server.body)
+}))
+useBeforeUnload(anyDirty)
 let sequence = 0
 
 const labels = { agreement: '用户协议', privacy: '隐私政策' }
 const tabs = [{ label: '用户协议', value: 'agreement' }, { label: '隐私政策', value: 'privacy' }]
 const current = computed(() => documents.value.find(item => item.key === kind.value) || null)
-const title = ref('')
-const body = ref('')
+const title = computed({ get: () => drafts.value[kind.value]?.title || '', set: value => { const draft = drafts.value[kind.value]; if (draft) draft.title = value } })
+const body = computed({ get: () => drafts.value[kind.value]?.body || '', set: value => { const draft = drafts.value[kind.value]; if (draft) draft.body = value } })
 const message = (cause: unknown) => (cause instanceof Error ? cause.message : '操作失败，请重试')
 const date = (stamp: number) => new Date(stamp * 1000).toLocaleString('zh-CN', { hour12: false })
 
@@ -27,46 +38,47 @@ const parsed = computed(() => body.value.split('\n').map(line => line.trim()).fi
     ? { heading: line.slice(3).trim(), text: '' }
     : { heading: '', text: line })))
 
-watch([title, body], () => { dirty.value = true })
-watch(current, value => {
-  if (!value) return
-  title.value = value.title
-  body.value = value.body
-  // 赋值本身会触发 dirty，这里在下一帧清掉
-  queueMicrotask(() => { dirty.value = false })
-}, { immediate: true })
-
 async function load() {
   const current_ = ++sequence
   loading.value = true; error.value = ''
   try {
     const result = await siteDocuments()
     if (current_ !== sequence) return
+    for (const item of result.items) {
+      const old = documents.value.find(value => value.key === item.key)
+      const draft = drafts.value[item.key]
+      if (!draft || old && draft.title === old.title && draft.body === old.body) drafts.value[item.key] = { title: item.title, body: item.body, revision: item.revision }
+    }
     documents.value = result.items
-    const active = result.items.find(item => item.key === kind.value)
-    if (active) { title.value = active.title; body.value = active.body; queueMicrotask(() => { dirty.value = false }) }
+    return true
   } catch (cause) { if (current_ === sequence) error.value = message(cause) }
   finally { if (current_ === sequence) loading.value = false }
 }
 async function save() {
   const document = current.value
   if (!document || busy.value || !title.value.trim()) return
+  if (body.value.length > 20000) { error.value = '正文最多 20000 字'; return }
   busy.value = true; error.value = ''
   try {
-    const saved = await updateDocument(props.user.id, document.key, { revision: document.revision, title: title.value.trim(), body: body.value })
+    const saved = await updateDocument(props.user.id, document.key, { revision: drafts.value[document.key]!.revision, title: title.value.trim(), body: body.value })
     documents.value = documents.value.map(item => (item.key === saved.key ? saved : item))
-    dirty.value = false
+    drafts.value[saved.key] = { title: saved.title, body: saved.body, revision: saved.revision }; conflict.value = false
     notice.value = labels[document.key] + '已保存，小程序端立即生效'
-  } catch (cause) { error.value = message(cause) }
+  } catch (cause) { conflict.value = cause instanceof ApiError && cause.status === 409; error.value = message(cause) }
   finally { busy.value = false }
 }
 function restore() {
   const document = current.value
   if (!document) return
-  title.value = document.title; body.value = document.body
-  queueMicrotask(() => { dirty.value = false })
+  if (dirty.value && !window.confirm('确认放弃当前文档未保存的修改？')) return
+  drafts.value[document.key] = { title: document.title, body: document.body, revision: document.revision }; conflict.value = false
 }
 
+async function reloadConflict() {
+  if (!await load()) return
+  const document = current.value, draft = drafts.value[kind.value]
+  if (document && draft) { draft.revision = document.revision; conflict.value = false; notice.value = '已载入最新版本，您的修改已保留，请核对后保存' }
+}
 onActivated(load)
 onDeactivated(() => { sequence++; loading.value = false })
 </script>
@@ -82,7 +94,7 @@ onDeactivated(() => { sequence++; loading.value = false })
         <UButton label="保存" icon="i-lucide-check" :loading="busy" :disabled="busy || !dirty || !title.trim()" @click="save" />
       </div>
     </div>
-    <UAlert v-if="error" :title="error" color="error" variant="soft" class="notice" />
+    <UButton v-if="conflict" label="载入最新并保留我的修改" @click="reloadConflict" /><UAlert v-if="error" :title="error" color="error" variant="soft" class="notice" />
     <UAlert v-if="notice" :title="notice" color="success" variant="soft" close class="notice" @update:open="notice = ''" />
     <div class="doc-meta">
       <span>{{ labels[kind] }}</span>
@@ -94,11 +106,11 @@ onDeactivated(() => { sequence++; loading.value = false })
         <label class="field-label" for="doc-title">标题</label>
         <UInput id="doc-title" v-model="title" maxlength="60" :disabled="busy || loading" class="w-full" />
         <label class="field-label" for="doc-body">正文<small>以「## 」开头是小标题，其余每一行是一个段落</small></label>
-        <textarea id="doc-body" v-model="body" class="doc-textarea" spellcheck="false" :disabled="busy || loading" />
+        <textarea id="doc-body" v-model="body" class="doc-textarea" maxlength="20000" spellcheck="false" :disabled="busy || loading" />
       </div>
       <div class="doc-pane preview">
         <span class="field-label" aria-hidden="true">小程序里的显示效果</span>
-        <div class="doc-preview" aria-live="polite">
+        <div class="doc-preview">
           <p class="preview-title">{{ title || '（未填写标题）' }}</p>
           <template v-for="(line, index) in parsed" :key="index">
             <p v-if="line.heading" class="preview-heading">{{ line.heading }}</p>

@@ -20,6 +20,8 @@ from app.models.image_generation import ImageWorksheetRequest
 from app.services.generation_control import record_attempt, record_usage
 from app.services.knowledge_scope import knowledge_scope_service
 from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
+from app.services.provider_http import borrow_client
+from app.services.resource_admission import bounded_image_request, bounded_media
 
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_RESPONSE_BYTES = 18 * 1024 * 1024
@@ -36,12 +38,24 @@ STYLES = {"playful": "清新彩色，搭配少量童趣插画，装饰不能抢�
 
 def build_prompt(request: ImageWorksheetRequest) -> str:
     scope = knowledge_scope_service.get_scope(request.grade, request.subject)
-    if not scope.allowed and not scope.forbidden:
+    if (not scope.allowed and not scope.forbidden) or (not request.keyword and not scope.allowed):
         raise HTTPException(400, detail={"error": "暂不支持所选年级与科目"})
     for item in request.items:
         if _grade_num(request.grade) < MIN_GRADE_FOR_TYPE.get(item.game_type.value, 0):
             raise HTTPException(400, detail={"error": f"{request.grade}暂不适合{TYPE_NAMES[item.game_type.value]}"})
-    items = "；".join(f"{TYPE_NAMES[item.game_type.value]} {item.question_count} 道" for item in request.items)
+    available_types = "、".join(name for kind, name in TYPE_NAMES.items()
+                              if _grade_num(request.grade) >= MIN_GRADE_FOR_TYPE.get(kind, 0))
+    items = "；".join(
+        f"{TYPE_NAMES[item.game_type.value]} {item.question_count} 道"
+        if item.question_count is not None else f"{TYPE_NAMES[item.game_type.value]}（题量自动安排）"
+        for item in request.items
+    ) or f"自动安排：根据所选科目和知识点，从适龄题型（{available_types}）中选择 1 至 5 种，不必全部使用"
+    quantity_rule = (
+        "已指定的题量必须准确落实；未指定题量的题型，由你根据内容难度、图片尺寸和答题空间安排合理数量，"
+        "每种至少 1 道、最多 20 道，整张合计不超过 24 道。不要为了凑满题数挤压字号或作答区。"
+        if not request.items or any(item.question_count is None for item in request.items) else "每种题量都必须准确落实。"
+    )
+    keyword = request.keyword or "自动安排：从所选科目的允许知识范围中选择 1 至 3 个本年级核心知识点，优先基础巩固"
     difficulty = {"easy": "基础", "medium": "标准", "hard": "提升"}[request.difficulty.value]
     series = (f"【本组图片】\n共 {request.image_count} 张，这是第 {request.image_index} 张。"
               "本次只生成这一张完整习题图，不要把多张图拼在一起。"
@@ -50,11 +64,14 @@ def build_prompt(request: ImageWorksheetRequest) -> str:
     return (
         "请直接生成一张完整、清晰、可打印的小学生习题图片。输出成品图片。\n\n"
         "【必须遵守的出题条件】\n"
-        f"年级：{request.grade}\n科目：{request.subject}\n知识点：{request.keyword}\n"
+        f"年级：{request.grade}\n科目：{request.subject}\n知识点：{keyword}\n"
         f"题型及题量：{items}\n难度：{difficulty}\n\n"
         f"{series}"
         "【内容要求】\n"
-        "题目必须围绕所选知识点，符合该年级学习范围；每种题型及题量都必须落实，不能只画插图。"
+        "题目必须围绕已指定或自动选定的知识点，符合该年级学习范围；每种选定题型都必须出现，不能只画插图。"
+        "自动安排的内容必须符合对应科目的知识范围，不得把其他科目的知识范围用于本学科；"
+        "已指定的科目、知识点和题型不得擅自替换，自动题型必须适合科目与年级。"
+        f"{quantity_rule}"
         "检查题干、数字、算式和选项是否准确、可解，避免重复题、超纲内容、错别字与乱码。"
         "语文、数学使用简体中文；英语题目使用适龄英文，必要说明可用简体中文。"
         "学生作答区不显示答案或解析，并为书写、计算、连线预留足够空间。\n"
@@ -93,7 +110,7 @@ async def _read_limited(response: httpx.Response, limit: int) -> bytes:
 async def _public_image(url: str) -> bytes:
     # Provider URLs never receive the provider API key. Resolve and pin each hop
     # to a public IP, including redirects, so DNS rebinding cannot reach local services.
-    async with httpx.AsyncClient(timeout=30, trust_env=False, follow_redirects=False) as client:
+    async with borrow_client("public-image", 30) as client:
         for _ in range(4):
             parts = urlsplit(url)
             if (parts.scheme != "https" or not parts.hostname or parts.username or parts.password
@@ -115,13 +132,14 @@ async def _public_image(url: str) -> bytes:
     raise ValueError("图片下载地址重定向次数过多")
 
 
+@bounded_media
 def normalize_image(raw: bytes) -> dict:
     if not raw or len(raw) > MAX_IMAGE_BYTES:
         raise ValueError("图片为空或超过大小限制")
     with warnings.catch_warnings():
         warnings.simplefilter("error", Image.DecompressionBombWarning)
         with Image.open(io.BytesIO(raw)) as source:
-            if source.format not in ("PNG", "JPEG", "WEBP") or source.width * source.height > 16_000_000:
+            if source.format not in ("PNG", "JPEG", "WEBP") or source.width * source.height > 4_000_000:
                 raise ValueError("图片格式或尺寸不受支持")
             source.load()
             result = io.BytesIO()
@@ -134,6 +152,7 @@ def normalize_image(raw: bytes) -> dict:
 
 
 @observe_provider
+@bounded_image_request
 async def generate_image(config: dict, prompt: str) -> dict:
     body = {"model": config["model"], "prompt": prompt, "n": 1, "size": config["size"]}
     if config["responseFormat"] != "auto":
@@ -141,8 +160,10 @@ async def generate_image(config: dict, prompt: str) -> dict:
     try:
         # Total timeout also bounds a provider trickling bytes indefinitely.
         async with asyncio.timeout(config["timeout"]):
-            async with httpx.AsyncClient(timeout=config["timeout"], follow_redirects=False) as client:
+            async with borrow_client("image-generation", config["timeout"]) as client:
                 record_attempt()
+                from app.services.generation_budget import reserve
+                await run_sync(reserve, images=1)
                 async with client.stream("POST", generation_url(config["baseUrl"]), json=body,
                                          headers={"Authorization": "Bearer " + config["api_key"]}) as response:
                     response.raise_for_status()

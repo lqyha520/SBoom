@@ -1,10 +1,10 @@
 # Secure server deployment. Set up the encrypted upstream before applying.
 # The application port is reachable only from the host; remote proxies use a TLS
 # or SSH tunnel. See docs/optimization-2026-09-21.md for migration and rollback.
-# docker compose -p learncoach --env-file .env.production -f docker-compose.server.yml up -d --build
+# 现有生产必须叠加 docker-compose.prod.yml；通过 scripts/release/release.py 只更新 app。
 #
 # 镜像内应用以非 root（uid 10001）运行；从旧版镜像升级时 appdata 卷需一次性
-# chown，网络改为固定网段后首次 up 前需先 `docker compose down`（不带 -v），见 docs/deploy.md。
+# chown；现有生产网络使用 prod 覆盖文件，禁止为了发布重建网络，见 docs/deploy.md。
 
 # 服务共用的日志轮转：单文件 10m × 3 份，防止 json-file 日志把磁盘吃满
 x-logging: &default-logging
@@ -15,17 +15,21 @@ x-logging: &default-logging
 
 services:
   db:
-    # 与根目录 docker-compose.yml、deploy/docker-compose.yml、CI 统一用 16-alpine（宿主机现有的
-    # deploy-db-1 / learncoach-db 也是这个镜像）。不要在 postgres:16（glibc）与 16-alpine（musl）之间
-    # 切换已有的 pgdata 卷：两者文本排序规则不同，换镜像后需要 REINDEX，见 docs/deploy.md。
-    image: postgres:16-alpine
+    init: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    pids_limit: 256
+    cpus: 1.0
+    stop_grace_period: 60s
+    command: [postgres, -c, shared_buffers=256MB, -c, effective_cache_size=768MB, -c, work_mem=4MB, -c, max_connections=100, -c, shared_preload_libraries=pg_stat_statements, -c, log_min_duration_statement=1000, -c, log_lock_waits=on]
+    # 新安装与 CI 使用 bookworm。生产用 prod 覆盖文件固定核实过的 digest。
+    # 已有 Alpine 卷保留原镜像，跨发行版必须 dump/restore 到新卷。
+    image: postgres:16-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67
     restart: unless-stopped
     logging: *default-logging
     shm_size: 256m
-    deploy:
-      resources:
-        limits:
-          memory: 1g
+    mem_limit: 1g
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-learncoach}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
@@ -39,23 +43,32 @@ services:
       retries: 10
 
   app:
+    init: true
+    read_only: true
+    tmpfs: [/tmp:size=512m,mode=1777]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 512
+    cpus: 2.0
+    image: ${APP_IMAGE:-learncoach-app:local}
     build:
       context: ..
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file: .env.production
+    env_file: ${SERVICE_ENV_FILE:-.env.production}
     logging: *default-logging
     # 给在途生成任务/连接池收尾留时间；超过后才 SIGKILL
     stop_grace_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 2g
+    mem_limit: 2g
     environment:
       # 容器内固定项：监听全部网卡、连 compose 网络里的 db、开多 worker
       HOST: 0.0.0.0
       PORT: "8000"
       LOG_TO_FILE: "false"
+      DB_AUTO_MIGRATE: "false"
+      METRICS_ENABLED: "true"
+      METRICS_HOST: 0.0.0.0
+      LOG_FORMAT: json
       FORCE_HTTPS: "true"
       # 宿主机上的隧道/反代连到 127.0.0.1:33403 时，容器看到的来源是 docker 网桥网关（172.30.0.1），
       # 不是 127.0.0.1。旧默认值 127.0.0.1 会让 uvicorn 丢弃 X-Forwarded-For，所有请求共用一个限流桶。

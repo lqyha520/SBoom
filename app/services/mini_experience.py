@@ -106,7 +106,7 @@ def groups(user_id):
 
 
 def save_group(user_id, body, identifier=None):
-    with db(serialized=True) as conn:
+    with db(content_user=str(user_id)) as conn:
         existing = conn.execute("SELECT id FROM mini_favorite_groups WHERE user_id = ? AND name = ?", (user_id, body.name)).fetchone()
         if existing and existing[0] != identifier:
             fail("已有同名收藏分组")
@@ -127,7 +127,7 @@ def save_group(user_id, body, identifier=None):
 
 
 def delete_group(user_id, identifier, revision):
-    with db(serialized=True) as conn:
+    with db(content_user=str(user_id)) as conn:
         row = conn.execute("SELECT revision FROM mini_favorite_groups WHERE id = ? AND user_id = ?", (identifier, user_id)).fetchone()
         if not row:
             fail("收藏分组不存在", 404)
@@ -137,7 +137,7 @@ def delete_group(user_id, identifier, revision):
 
 
 def assign_group(user_id, catalog_id, group_id):
-    with db(serialized=True) as conn:
+    with db(content_user=str(user_id)) as conn:
         catalog._visible(conn, catalog_id)
         if not conn.execute("SELECT 1 FROM mini_catalog_favorites WHERE user_id = ? AND catalog_id = ?", (user_id, catalog_id)).fetchone():
             fail("请先收藏这份资料", 422)
@@ -147,6 +147,38 @@ def assign_group(user_id, catalog_id, group_id):
         if group_id:
             conn.execute("INSERT INTO mini_favorite_group_items(user_id, catalog_id, group_id) VALUES (?, ?, ?)", (user_id, catalog_id, group_id))
     return {"group_id": group_id}
+
+
+def batch_favorites(user_id, body):
+    slots = ",".join("?" for _ in body.ids)
+    # Use the same per-account transaction lock as individual favorites/groups.
+    with db(content_user=str(user_id)) as conn:
+        if body.group_id and not conn.execute(
+            "SELECT 1 FROM mini_favorite_groups WHERE id = ? AND user_id = ?", (body.group_id, user_id)
+        ).fetchone():
+            fail("收藏分组不存在，请刷新分组后重试", 404)
+        if body.action == "assign":
+            count = conn.execute(
+                f"SELECT COUNT(*) FROM mini_catalog_favorites WHERE user_id = ? AND catalog_id IN ({slots})",
+                [user_id, *body.ids],
+            ).fetchone()[0]
+            if count != len(body.ids):
+                fail("部分资料已不在收藏中，请刷新后重新选择", 409)
+        conn.execute(
+            f"DELETE FROM mini_favorite_group_items WHERE user_id = ? AND catalog_id IN ({slots})",
+            [user_id, *body.ids],
+        )
+        if body.action == "remove":
+            conn.execute(
+                f"DELETE FROM mini_catalog_favorites WHERE user_id = ? AND catalog_id IN ({slots})",
+                [user_id, *body.ids],
+            )
+        elif body.group_id:
+            conn.executemany(
+                "INSERT INTO mini_favorite_group_items(user_id, catalog_id, group_id) VALUES (?, ?, ?)",
+                [(user_id, catalog_id, body.group_id) for catalog_id in body.ids],
+            )
+    return {"count": len(body.ids), "action": body.action, "group_id": body.group_id}
 
 
 def record_view(user_id, catalog_id):

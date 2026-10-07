@@ -15,6 +15,10 @@ The transparent artwork is resized and bundled locally for the home and login
 screens. It does not make third-party requests at runtime. CC0 permits copying,
 modification, distribution, and commercial use without requiring attribution.
 
+The same local artwork is also reused by `src/components/TopicCard.vue` and
+the editorial compositions in `marketing/study-collection/`. Those compositions
+are reproducible with `scripts/build-editorial-assets.mjs`.
+
 ## Banner Photograph
 
 Photo: "a blue notebook and a pen on a blue surface" by Cinthya Gonzalez
@@ -30,6 +34,9 @@ The photograph was resized and blended onto a flat backdrop for legible text.
 The original notebook and pen are photographic content, not a product endorsement.
 The source is bundled locally; no Unsplash API, tracking, or third-party request
 is required to display it. Attribution is appreciated but not required.
+
+The reading Banner in `marketing/study-collection/reading-banner.jpg` and its
+editable SVG use this existing local derivative with new typography.
 
 Unsplash grants an irrevocable, nonexclusive, worldwide copyright license to
 download, copy, modify, distribute, perform, and use images for free, including

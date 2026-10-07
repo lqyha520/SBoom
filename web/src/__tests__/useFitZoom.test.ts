@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { defineComponent, h, ref } from 'vue'
+import { defineComponent, h, nextTick, ref } from 'vue'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { useFitZoom } from '../useFitZoom'
 
@@ -8,10 +8,12 @@ describe('paper fit zoom', () => {
   let element: HTMLElement | undefined
   let resize: () => void
   const disconnect = vi.fn()
+  const observe = vi.fn()
   beforeEach(() => {
+    vi.clearAllMocks()
     vi.stubGlobal('ResizeObserver', class {
       constructor(callback: () => void) { resize = callback }
-      observe() {}
+      observe = observe
       disconnect = disconnect
     })
   })
@@ -66,5 +68,26 @@ describe('paper fit zoom', () => {
     wrapper!.unmount()
     wrapper = undefined
     expect(disconnect).toHaveBeenCalledOnce()
+  })
+  it('observes a container that appears after mount and its replacement', async () => {
+    const target = ref<HTMLElement | null>(null)
+    let state!: ReturnType<typeof useFitZoom>
+    wrapper = mount(defineComponent({ setup() { state = useFitZoom(target); return () => h('div') } }))
+    expect(observe).not.toHaveBeenCalled()
+    const first = document.createElement('div')
+    Object.defineProperty(first, 'clientWidth', { value: 390 })
+    target.value = first
+    await nextTick()
+    expect(state.zoom.value).toBeCloseTo((390 - 12) / 810)
+    state.setManual(0.8)
+    const second = document.createElement('div')
+    Object.defineProperty(second, 'clientWidth', { value: 600 })
+    target.value = second
+    await nextTick()
+    expect(observe).toHaveBeenLastCalledWith(second)
+    expect(disconnect).toHaveBeenCalledOnce()
+    expect(state.zoom.value).toBe(0.8)
+    state.setManual(0)
+    expect(state.zoom.value).toBeCloseTo((600 - 12) / 810)
   })
 })

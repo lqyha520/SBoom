@@ -3,6 +3,7 @@
 import uuid
 
 from app.db import db
+from app.public_cache import cached_public
 from app.services.catalog_delivery import availability_sql
 from app.services.mini_errors import fail
 
@@ -10,6 +11,15 @@ KINDS = ("textbook", "term", "unit", "knowledge")
 
 
 def tags(admin=False):
+    return _tags(True) if admin else _public_tags()
+
+
+@cached_public
+def _public_tags():
+    return _tags(False)
+
+
+def _tags(admin=False):
     with db() as conn:
         rows = conn.execute("SELECT t.*, (SELECT COUNT(*) FROM catalog_paper_tags p JOIN catalog_papers c ON c.id = p.catalog_id "
                             f"JOIN paper_archives a ON a.id = c.paper_id WHERE p.tag_id = t.id AND c.status = 'published' AND {availability_sql()}) AS paper_count "

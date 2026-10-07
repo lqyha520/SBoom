@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { useAdminRefresh } from '../admin-page'
+import { useBeforeUnload } from '../unsaved'
+import { computed, ref } from 'vue'
 import { fetchImageConfig, saveImageConfig, clearImageConfig, type ImageModelConfig } from '../image-api'
 
 const empty = () => ({ baseUrl: '', model: '', apiKey: '', timeout: 300, size: '1024x1536', responseFormat: 'auto' as ImageModelConfig['responseFormat'] })
@@ -7,29 +9,35 @@ const config = ref(empty())
 const hasKey = ref(false), loading = ref(true), busy = ref(false), clearOpen = ref(false)
 const loadError = ref(''), error = ref(''), message = ref('')
 const formats = [{ label: '自动（使用接口默认）', value: 'auto' }, { label: 'Base64 图片', value: 'b64_json' }, { label: '图片 URL', value: 'url' }]
+const baseline = ref('')
+const dirty = computed(() => !!baseline.value && baseline.value !== JSON.stringify(config.value))
+useBeforeUnload(dirty)
+let loadSequence = 0
 async function load() {
+  if (dirty.value) return
+  const sequence = ++loadSequence
   loading.value = true; loadError.value = ''
-  try { const value = await fetchImageConfig(); const { hasKey: saved, ...fields } = value; config.value = { ...fields, apiKey: '' }; hasKey.value = saved }
-  catch (e) { loadError.value = e instanceof Error ? e.message : '生图配置加载失败' }
-  finally { loading.value = false }
+  try { const value = await fetchImageConfig(); const { hasKey: saved, ...fields } = value; if (sequence !== loadSequence || dirty.value) return; config.value = { ...fields, apiKey: '' }; hasKey.value = saved; baseline.value = JSON.stringify(config.value) }
+  catch (e) { if (sequence === loadSequence) loadError.value = e instanceof Error ? e.message : '生图配置加载失败' }
+  finally { if (sequence === loadSequence) loading.value = false }
 }
 async function save() {
-  if (busy.value) return
+  if (busy.value || loading.value || loadError.value) return
   busy.value = true; error.value = ''; message.value = ''
   try {
     const result = await saveImageConfig({ ...config.value, baseUrl: config.value.baseUrl.trim(), model: config.value.model.trim(), apiKey: config.value.apiKey.trim() })
-    hasKey.value = result.hasKey; config.value.apiKey = ''; message.value = '生图配置已保存，可在出题工作台「图片出题」中使用'
+    hasKey.value = result.hasKey; config.value.apiKey = ''; baseline.value = JSON.stringify(config.value); message.value = '生图配置已保存，可在出题工作台「图片出题」中使用'
   } catch (e) { error.value = e instanceof Error ? e.message : '保存失败' }
   finally { busy.value = false }
 }
 async function clear() {
-  if (busy.value) return
+  if (busy.value || loading.value || loadError.value) return
   busy.value = true; error.value = ''; message.value = ''
-  try { await clearImageConfig(); config.value = empty(); hasKey.value = false; clearOpen.value = false; message.value = '生图配置已清除' }
+  try { await clearImageConfig(); config.value = empty(); baseline.value = JSON.stringify(config.value); hasKey.value = false; clearOpen.value = false; message.value = '生图配置已清除' }
   catch (e) { error.value = e instanceof Error ? e.message : '清除失败' }
   finally { busy.value = false }
 }
-onMounted(load)
+useAdminRefresh(load, () => { loadSequence++; loading.value = false })
 </script>
 
 <template>

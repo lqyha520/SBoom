@@ -5,6 +5,7 @@
 """
 
 import io
+import json
 import time
 import uuid
 
@@ -20,9 +21,11 @@ from app.models.site import (
     DictionaryInput,
     DictionaryUpdate,
     DocumentUpdate,
+    HomeSettings,
     NoticeInput,
     NoticeUpdate,
 )
+from app.public_cache import cached_public
 from app.services.paper_storage import storage_for
 
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
@@ -144,6 +147,23 @@ def reorder_categories(ids: list[str]) -> dict:
 
 
 # ─── 首页 Banner ───
+
+def home_settings() -> dict:
+    with db() as conn:
+        row = conn.execute("SELECT value FROM app_config WHERE key = 'home_settings'").fetchone()
+    return HomeSettings.model_validate_json(row[0]).model_dump() if row else HomeSettings().model_dump()
+
+
+def save_home_settings(body: HomeSettings) -> dict:
+    with db(serialized=True) as conn:
+        row = conn.execute("SELECT value FROM app_config WHERE key = 'home_settings'").fetchone()
+        previous = json.loads(row[0]) if row else {"revision": 0}
+        if previous["revision"] != body.revision:
+            raise _conflict("首页模式已更新，请刷新后重试")
+        value = {**body.model_dump(), "revision": body.revision + 1}
+        conn.execute("INSERT INTO app_config(key, value) VALUES ('home_settings', ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(value),))
+    return value
 
 def _banner_row(row) -> dict:
     item = dict(row)
@@ -270,11 +290,11 @@ def clear_banner_image(banner_id: str, revision: int) -> dict:
 def banner_asset(banner_id: str, require_visible: bool = True) -> dict:
     """给 asset_response 用的资产描述；游客也只能读取可见 Banner。"""
     with db() as conn:
-        row = conn.execute("SELECT image_key, image_storage, image_mime, image_bytes, title FROM site_banners "
+        row = conn.execute("SELECT image_key, image_storage, image_mime, image_bytes, title, revision FROM site_banners "
                            "WHERE id = ?" + (" AND is_visible = 1" if require_visible else ""), (banner_id,)).fetchone()
     if not row or not row["image_key"]:
         raise _missing("Banner 图片不存在")
-    return {"storage": row["image_storage"], "storage_key": row["image_key"], "kind": "banner",
+    return {"storage": row["image_storage"], "storage_key": row["image_key"], "kind": "banner", "revision": row["revision"],
             "mime_type": row["image_mime"] or "image/jpeg", "byte_size": row["image_bytes"], "title": row["title"]}
 
 
@@ -405,6 +425,20 @@ def list_dictionary(kind: str = "", parent: str = "") -> dict:
     with db() as conn:
         rows = conn.execute(f"SELECT * FROM site_dictionary{clause} ORDER BY kind, parent, sort_order, value", args).fetchall()
     return {"items": [_dictionary_row(row) for row in rows]}
+
+
+def reorder_dictionary(body) -> dict:
+    identifiers = [item.id for item in body.items]
+    if len(set(identifiers)) != len(identifiers):
+        raise HTTPException(422, detail={"error": "排序列表不能包含重复条目"})
+    with db(serialized="content") as conn:
+        current = conn.execute("SELECT id, revision FROM site_dictionary WHERE kind = ? AND parent = ?", (body.kind, body.parent)).fetchall()
+        versions = {row["id"]: row["revision"] for row in current}
+        if set(versions) != set(identifiers) or any(versions.get(item.id) != item.revision for item in body.items):
+            raise HTTPException(409, detail={"code": "revision_conflict", "error": "字典已更新，请重新载入后排序"})
+        conn.executemany("UPDATE site_dictionary SET sort_order = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
+                         [(position, _now(), identifier) for position, identifier in enumerate(identifiers)])
+    return list_dictionary(body.kind, body.parent)
 
 
 def create_dictionary(body: DictionaryInput) -> dict:
@@ -550,6 +584,7 @@ def _active_notices(conn, now: int, placement: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+@cached_public
 def home_payload() -> dict:
     """首页一次请求拿全：Banner、公告、分类、字典。"""
     now = _now()

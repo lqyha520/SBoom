@@ -6,6 +6,7 @@ import time
 
 from app.db import db
 from app.services.mini_errors import fail
+from app.sql_utils import escape_like
 
 LABELS = {"original": "原稿 PDF", "student": "练习版", "answers": "答案解析版"}
 
@@ -29,10 +30,10 @@ def listing(conn, catalog_id, admin=False, can_download=True):
     originals.extend((row["kind"], row["paper_id"]) for row in conn.execute("SELECT kind, paper_id FROM catalog_print_editions WHERE catalog_id = ? ORDER BY kind", (catalog_id,)) if row["paper_id"] != paper[0])
     result = []
     for kind, paper_id in originals:
-        asset = conn.execute("SELECT s.id, s.byte_size, a.snapshot_json FROM paper_assets s JOIN paper_archives a ON a.id = s.paper_id WHERE s.paper_id = ? AND s.kind = 'pdf' AND a.file_status = 'ready'", (paper_id,)).fetchone()
+        asset = conn.execute("SELECT s.id, s.byte_size, a.export_mode FROM paper_assets s JOIN paper_archives a ON a.id = s.paper_id WHERE s.paper_id = ? AND s.kind = 'pdf' AND a.file_status = 'ready'", (paper_id,)).fetchone()
         if not asset:
             continue
-        mode = json.loads(asset["snapshot_json"])["export_options"]["mode"]
+        mode = asset["export_mode"]
         label = LABELS[kind] if kind != "original" else {"student": "练习版", "answersOnly": "答案版", "withAnswers": "习题与答案版"}[mode]
         item = {"kind": kind, "label": label, "byte_size": asset["byte_size"], "mode": mode}
         if admin:
@@ -74,7 +75,7 @@ def sources(admin_id, catalog_id, q=""):
             where = "user_id = ? AND grade = ? AND subject = ? AND question_count = ? AND file_status = 'ready'"
         if q:
             where += " AND LOWER(title) LIKE ? ESCAPE '\\'"
-            args.append("%" + q.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+            args.append("%" + escape_like(q.lower()) + "%")
         rows = conn.execute(f"SELECT id, title, version, snapshot_json FROM paper_archives WHERE {where} ORDER BY created_at DESC, id DESC LIMIT 500", args)
         items = []
         for row in rows:

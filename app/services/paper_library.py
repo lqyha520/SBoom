@@ -10,13 +10,15 @@ import uuid
 from fastapi import HTTPException
 
 from app.config import get_settings
+from app.constants import UPLOAD_LEASE
 from app.db import db
 from app.models.library import ArchiveCreate, ArchiveUpdate
 from app.services.file_retention import enqueue
 from app.services.paper_storage import storage_for, thumbnail, unpack_bundle
+from app.sql_utils import escape_like
 
 logger = logging.getLogger(__name__)
-UPLOAD_LEASE = 180
+
 SUMMARY_COLUMNS = """a.id, a.source_id, a.version, a.title, a.grade, a.subject, a.keyword,
     a.question_count, a.folder_id, f.name AS folder_name, a.group_id, a.group_name, a.favorite,
     a.file_status, a.file_error, a.upload_started_at, a.page_count, a.created_at, a.updated_at,
@@ -28,7 +30,7 @@ def _missing():
 
 
 def _owned(conn, user_id: int, paper_id: str):
-    row = conn.execute("SELECT * FROM paper_archives WHERE id = ? AND user_id = ?", (paper_id, user_id)).fetchone()
+    row = conn.execute("SELECT id, user_id, file_status, upload_started_at, upload_token FROM paper_archives WHERE id = ? AND user_id = ?", (paper_id, user_id)).fetchone()
     if not row:
         _missing()
     return row
@@ -85,7 +87,7 @@ def create_paper(user_id: int, request: ArchiveCreate):
     fingerprint = hashlib.sha256(encoded).hexdigest()
     paper = snapshot["paper"]
     now = int(time.time())
-    with db(serialized=True) as conn:
+    with db(content_user=str(user_id)) as conn:
         replay = conn.execute(
             "SELECT id, source_id, content_hash FROM paper_archives WHERE user_id = ? AND request_id = ?",
             (user_id, request.request_id),
@@ -122,9 +124,10 @@ def create_paper(user_id: int, request: ArchiveCreate):
 
 
 def list_papers(user_id: int, q="", grade="", subject="", folder_id=None, favorite=False, limit=20, offset=0):
-    clauses, args = ["a.user_id = ?"], [user_id]
+    clauses = ["a.user_id = ?"]
+    args: list = [user_id]
     if q.strip():
-        escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        escaped = escape_like(q.strip())
         pattern = "%" + escaped + "%"
         clauses.append("(LOWER(a.title) LIKE LOWER(?) ESCAPE '\\' OR LOWER(a.keyword) LIKE LOWER(?) ESCAPE '\\' "
                        "OR LOWER(a.group_name) LIKE LOWER(?) ESCAPE '\\')")
@@ -154,7 +157,7 @@ def update_paper(user_id: int, paper_id: str, request: ArchiveUpdate):
     # args 同时承载 str（folder_id/title）与 int（favorite），不能由首条 append 推定元素类型
     updates: list[str] = []
     args: list = []
-    with db(serialized=True) as conn:
+    with db(content_user=str(user_id)) as conn:
         _owned(conn, user_id, paper_id)
         if "folder_id" in request.model_fields_set:
             _folder(conn, user_id, request.folder_id)
@@ -181,7 +184,7 @@ def _cleanup(files):
 
 
 def delete_paper(user_id: int, paper_id: str):
-    with db(serialized=True) as conn:
+    with db(content_user=str(user_id)) as conn:
         _owned(conn, user_id, paper_id)
         if conn.execute("SELECT id FROM catalog_papers WHERE paper_id = ?", (paper_id,)).fetchone():
             raise HTTPException(409, detail={"error": "试卷已加入公共库，请先在管理后台删除对应条目"})
@@ -195,7 +198,7 @@ def delete_paper(user_id: int, paper_id: str):
     _cleanup([(row["storage"], row["storage_key"]) for row in assets])
 
 
-def publish_bundle(user_id: int, paper_id: str, data: bytes):
+def publish_bundle(user_id: int, paper_id: str, data):
     with db() as conn:
         current = _owned(conn, user_id, paper_id)
         ready = current["file_status"] == "ready"
@@ -206,7 +209,7 @@ def publish_bundle(user_id: int, paper_id: str, data: bytes):
     files.append(("thumbnail", 1, "image/jpeg", thumbnail(first)))
     size = sum(len(content) for _, _, _, content in files)
     token, now = secrets.token_hex(16), int(time.time())
-    with db(serialized=True) as conn:
+    with db(content_user=str(user_id)) as conn:
         row = _owned(conn, user_id, paper_id)
         if row["file_status"] == "ready":
             ready = True
@@ -238,7 +241,7 @@ def publish_bundle(user_id: int, paper_id: str, data: bytes):
             written.append((backend, key))
             storage.put(key, content, mime)
             manifest.append((uuid.uuid4().hex, paper_id, kind, page, backend, key, mime, len(content), hashlib.sha256(content).hexdigest()))
-        with db(serialized=True) as conn:
+        with db(content_user=str(user_id)) as conn:
             current = _owned(conn, user_id, paper_id)
             if current["upload_token"] != token or current["file_status"] != "uploading":
                 raise HTTPException(409, detail={"error": "上传状态已变化，请刷新试卷库"})
@@ -248,7 +251,7 @@ def publish_bundle(user_id: int, paper_id: str, data: bytes):
                          "upload_reserved_bytes = 0, updated_at = ? WHERE id = ?", (sum(kind == "page" for kind, _, _, _ in files), int(time.time()), paper_id))
     except Exception as exc:
         _cleanup(written)
-        with db(serialized=True) as conn:
+        with db(content_user=str(user_id)) as conn:
             conn.execute("UPDATE paper_archives SET file_status = 'failed', file_error = ?, upload_reserved_bytes = 0, upload_token = '' "
                          "WHERE id = ? AND user_id = ? AND upload_token = ?",
                          ("内容已保存，文件未完成，请从电脑重试文件", paper_id, user_id, token))
@@ -277,7 +280,7 @@ def list_folders(user_id: int):
 
 
 def save_folder(user_id: int, name: str, folder_id: str | None = None):
-    with db(serialized=True) as conn:
+    with db(content_user=str(user_id)) as conn:
         if folder_id:
             _folder(conn, user_id, folder_id)
         duplicate = conn.execute("SELECT id FROM paper_folders WHERE user_id = ? AND name = ?", (user_id, name)).fetchone()
@@ -295,7 +298,7 @@ def save_folder(user_id: int, name: str, folder_id: str | None = None):
 
 
 def delete_folder(user_id: int, folder_id: str):
-    with db(serialized=True) as conn:
+    with db(content_user=str(user_id)) as conn:
         _folder(conn, user_id, folder_id)
         conn.execute("DELETE FROM paper_folders WHERE id = ? AND user_id = ?", (folder_id, user_id))
 

@@ -4,7 +4,7 @@ import { TYPE_DEFAULT, TYPE_NAME } from '../constants'
 import type { CustomType } from '../types'
 
 const store = useExamStore()
-defineEmits<{ custom: [] }>()
+const emit = defineEmits<{ custom: []; added: [] }>()
 const icons: Record<string, string> = {
   oral_math: 'i-lucide-calculator', quiz: 'i-lucide-list-checks', fill_blank: 'i-lucide-text-cursor-input',
   true_false: 'i-lucide-circle-check', match_pair: 'i-lucide-git-compare-arrows', reading: 'i-lucide-book-open',
@@ -13,8 +13,10 @@ const icons: Record<string, string> = {
   compare: 'i-lucide-equal', challenge: 'i-lucide-flag',
 }
 function add(type: string | CustomType) {
+  if (store.generating) return
   if (typeof type === 'string') store.addSection(type, TYPE_DEFAULT[type] || 4)
   else store.addSection(type.baseType, type.defaultCount, type.name)
+  emit('added')
 }
 </script>
 
@@ -37,13 +39,14 @@ function add(type: string | CustomType) {
 <style scoped>
 .type-picker { padding: 0 20px 12px; }
 .type-group { margin-bottom: 12px; }
-.type-group-label { color: var(--ui-text-muted); font-size: 11px; margin: 0 0 8px; }
+.type-group-label { color: var(--ui-text-muted); font-size: 12px; margin: 0 0 8px; }
 .type-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-.type-option { min-width: 0; display: flex; align-items: center; gap: 7px; padding: 8px; border: 1px solid var(--ui-border); border-radius: 6px; background: #fff; color: var(--ui-text-toned); text-align: left; font-size: 12px; min-height: 36px; }
+.type-option { min-width: 0; display: flex; align-items: center; gap: 7px; padding: 8px; border: 1px solid var(--ui-border); border-radius: 6px; background: #fff; color: var(--ui-text-toned); text-align: left; font-size: 14px; min-height: 36px; }
 .type-option > span:first-child { color: #7b8991; flex: none; }
 .type-option > span:nth-child(2) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .type-plus { color: #a7b2b9; flex: none; }
 .type-option:hover:not(:disabled) { border-color: #a2ceb9; background: #f4faf7; color: #087f5b; }
 .type-option:disabled { opacity: .5; }
-@media (min-width: 620px) and (max-width: 1023px) { .type-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .type-option { min-height: 44px; } }
+@media (min-width: 620px) and (max-width: 899px) { .type-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 </style>

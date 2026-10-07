@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from app.blocking import run_sync
 from app.deps import require_admin
+from app.http_limits import limited_body
 from app.library_deps import no_store, optional_mini_user, require_mini_user
 from app.library_files import asset_response
 from app.models.catalog import CatalogCreate, CatalogFavorite, CatalogUpdate, CatalogWindow, TypeAccessUpdate
@@ -34,12 +35,13 @@ def papers(q: str = Query("", max_length=120), grade: str = Query("", max_length
            subject: str = Query("", max_length=80), category: str = Query("", max_length=60),
            favorite: bool = False, downloaded: bool = False, limit: int = Query(20, ge=1, le=50),
            offset: int = Query(0, ge=0, le=100000), sort: Literal["featured", "latest", "popular"] = "featured",
-           only_free: bool = False, recent: bool = False, favorite_group: str = Query("", max_length=64), topic: str = Query("", max_length=64),
+           only_free: bool = False, recent: bool = False, favorite_group: str = Query("", max_length=64), ungrouped: bool = False, topic: str = Query("", max_length=64),
            textbook: str = Query("", max_length=64), term: str = Query("", max_length=64), unit: str = Query("", max_length=64), knowledge: str = Query("", max_length=64),
-           user: MiniUser | None = Depends(optional_mini_user)):
+           pagination: Literal["offset", "cursor"] = "offset", cursor: str = Query("", max_length=2048),
+           record: bool = True, user: MiniUser | None = Depends(optional_mini_user)):
     result = catalog.list_papers(user.id if user else None, q, grade, subject, category, favorite, downloaded, limit, offset,
-                                 sort=sort, only_free=only_free, recent=recent, favorite_group=favorite_group, topic=topic, textbook=textbook, term=term, unit=unit, knowledge=knowledge)
-    if user and q.strip() and offset == 0 and not result["total"]:
+                                 sort=sort, only_free=only_free, recent=recent, favorite_group=favorite_group, ungrouped=ungrouped, topic=topic, textbook=textbook, term=term, unit=unit, knowledge=knowledge, pagination=pagination, cursor=cursor)
+    if record and user and q.strip() and offset == 0 and not result["total"]:
         from app.services.mini_experience import record_event
         from app.services.rate_limit import allow
         if allow("search-miss:" + user.id, 20, 60):
@@ -64,7 +66,12 @@ def download(catalog_id: str, edition: Literal["original", "student", "answers"]
 
 @router.get("/papers/{catalog_id}/assets/{asset_id}")
 def asset(catalog_id: str, asset_id: str, user: MiniUser | None = Depends(optional_mini_user)):
-    return asset_response(catalog.get_asset(catalog_id, asset_id, user_id=user.id if user else None))
+    item = catalog.get_asset(catalog_id, asset_id, user_id=user.id if user else None)
+    if item.get("limited_preview"):
+        from app.library_files import limited_preview
+        return limited_preview(item)
+    cache = "private, max-age=86400" if item.get("cache_public_preview") and item["kind"] != "pdf" else None
+    return asset_response(item, cache_control=cache)
 
 
 @admin_router.get("/type-rules")
@@ -105,18 +112,7 @@ async def _pdf_body(request: Request, limit: int):
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
     if content_type not in ("application/pdf", "application/octet-stream"):
         raise HTTPException(415, detail={"error": "请上传 PDF 文件"})
-    try:
-        declared = int(request.headers.get("content-length", "0"))
-    except ValueError as exc:
-        raise HTTPException(400, detail={"error": "无效的请求长度"}) from exc
-    if declared < 0 or declared > limit:
-        raise HTTPException(413, detail={"error": "PDF 不能超过 32 MB"})
-    content = bytearray()
-    async for chunk in request.stream():
-        if len(content) + len(chunk) > limit:
-            raise HTTPException(413, detail={"error": "PDF 不能超过 32 MB"})
-        content.extend(chunk)
-    return bytes(content)
+    return await limited_body(request, limit, error="PDF 不能超过 32 MB")
 
 
 @admin_router.post("/import", status_code=201)

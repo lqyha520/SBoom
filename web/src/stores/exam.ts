@@ -12,7 +12,7 @@ import {
 import * as api from '../api'
 import type { CustomType, GameData, PaperTemplate, PaperStyle, SecLayout, Section, PaperSection } from '../types'
 import { ensureQids, gradeNumOf, mockQuestions, uid } from '../utils'
-import { captureEdit, recordEdit, undoEdit, redoEdit, type EditSnapshot } from '../workspace-history'
+import { beginLayout, finishLayout, captureEdit, recordEdit, undoEdit, redoEdit, type EditSnapshot } from '../workspace-history'
 import { K, safeSet, styleSaveTimers } from './exam-local'
 import { createExamState } from './exam-state'
 import { draftActions } from './exam-draft'
@@ -24,6 +24,16 @@ export const useExamStore = defineStore('exam', {
   state: createExamState,
 
   getters: {
+    hasBuildSettings(state): boolean {
+      return !!(state.grade || state.subject || state.keyword || state.selectedTags.length ||
+        state.title || state.titleHtml || state.sections.length || state.hiddenElements.length ||
+        state.difficulty !== 'medium' || state.paperCount !== 1 || !state.addDayLabel)
+    },
+    canClearSettings(state): boolean {
+      return this.hasBuildSettings && state.persistenceReady && !state.generating &&
+        !state.accountChanged && !state.layoutMode && !state.historyBusy &&
+        !state.pendingRun && !this.hasPendingEdits && !this.hasLoading
+    },
     hasPendingEdits(state): boolean {
       return (
         state.sections.some(
@@ -114,12 +124,53 @@ export const useExamStore = defineStore('exam', {
       recordEdit(this, key)
     },
 
+    beginLayout() { beginLayout(this) },
+
+    finishLayout(cancel = false) {
+      finishLayout(this, cancel)
+      clearTimeout(styleSaveTimers.get(this))
+      safeSet(K(this.ownerId, LS.paperStyle), JSON.stringify(this.style))
+    },
+
+    async requestGeneration() {
+      if (!this.canGenerate || this.layoutMode) return
+      if ((this.papers.length || this.pendingRun || this.hasPendingEdits) &&
+        !window.confirm(`将按${this.grade}${this.subject}「${this.keyword}」生成 ${this.paperCount} 份新试卷，产生新的模型调用费用（以服务商实际计费为准）。当前结果会先保存到本机历史，保存失败将停止。是否继续？`)) return
+      await this.generate()
+    },
+
     undo() {
+      const { grade, subject } = this
       undoEdit(this)
+      if (this.grade !== grade || this.subject !== subject) void this.selectSubject(this.subject)
     },
 
     redo() {
+      const { grade, subject } = this
       redoEdit(this)
+      if (this.grade !== grade || this.subject !== subject) void this.selectSubject(this.subject)
+    },
+
+    clearSettings(): boolean {
+      if (!this.canClearSettings) return false
+      this.recordEdit()
+      this.scopeRevision++
+      this.grade = ''
+      this.subject = ''
+      this.keyword = ''
+      this.selectedTags = []
+      this.title = ''
+      this.titleHtml = ''
+      this.difficulty = 'medium'
+      this.hiddenElements = []
+      this.sections = []
+      this.paperCount = 1
+      this.addDayLabel = true
+      this.scope = null
+      this.scopeLoading = false
+      this.generateError = ''
+      this.view = 'build'
+      return true
     },
 
     questionSection(id: string, paperIndex?: number): Section | PaperSection | undefined {
@@ -144,22 +195,18 @@ export const useExamStore = defineStore('exam', {
     async init() {
       // 草稿持久化失败（IndexedDB 被禁用、存储配额耗尽等）不能连坐：年级科目必须照常加载，
       // 否则工作台会整片空白，用户完全看不出问题出在本地存储上。
-      try {
-        await this.initPersistence()
-      } catch (error) {
-        this.persistenceReady = true
-        this.draftState = 'error'
-        this.storageError = error instanceof Error ? error.message : '本地草稿初始化失败'
-      }
       this.availableLoading = true
       this.availableError = ''
-      try {
-        this.available = await api.fetchAvailable()
-      } catch {
-        this.availableError = '年级加载失败，请刷新重试'
-      } finally {
-        this.availableLoading = false
-      }
+      await Promise.allSettled([
+        this.initPersistence().catch(error => {
+          this.persistenceReady = true
+          this.draftState = 'error'
+          this.storageError = error instanceof Error ? error.message : '本地草稿初始化失败'
+        }),
+        api.fetchAvailable().then(value => { this.available = value }).catch(() => {
+          this.availableError = '年级加载失败，请刷新重试'
+        }).finally(() => { this.availableLoading = false }),
+      ])
       if (this.grade && this.subject) void this.selectSubject(this.subject)
       void this.syncTemplatesFromServer()
       void this.refreshUsage()
@@ -168,6 +215,7 @@ export const useExamStore = defineStore('exam', {
     /* ── 条件选择 ── */
     selectGrade(g: string) {
       if (this.generating || this.grade === g) return
+      this.scopeRevision++
       this.grade = g
       this.subject = ''
       this.scope = null
@@ -184,16 +232,18 @@ export const useExamStore = defineStore('exam', {
       }
       this.subject = s
       this.scope = null
+      const revision = ++this.scopeRevision
+      this.scopeLoading = false
       if (!this.grade || !s) return
       const grade = this.grade
       this.scopeLoading = true
       try {
         const scope = await api.fetchScope(grade, s)
-        if (this.grade === grade && this.subject === s) this.scope = scope
+        if (this.scopeRevision === revision && this.grade === grade && this.subject === s) this.scope = scope
       } catch {
-        if (this.grade === grade && this.subject === s) this.scope = null
+        if (this.scopeRevision === revision && this.grade === grade && this.subject === s) this.scope = null
       } finally {
-        if (this.grade === grade && this.subject === s) this.scopeLoading = false
+        if (this.scopeRevision === revision && this.grade === grade && this.subject === s) this.scopeLoading = false
       }
     },
 

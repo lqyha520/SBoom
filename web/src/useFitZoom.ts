@@ -1,4 +1,4 @@
-import { onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
+import { onActivated, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 
 /**
  * 容器宽度自适应缩放：纸缩放到容器宽度放得下为止（上限 100% 原尺寸），
@@ -34,10 +34,13 @@ export function useFitZoom(container: Ref<HTMLElement | null>) {
   }
 
   onMounted(() => {
-    update()
     ro = new ResizeObserver(update)
-    if (container.value) ro.observe(container.value)
+    watch(container, (element, previous) => {
+      if (previous) ro?.disconnect()
+      if (element) { ro?.observe(element); update() }
+    }, { immediate: true, flush: 'post' })
   })
+  onActivated(update)
   onBeforeUnmount(() => ro?.disconnect())
 
   return { zoom, manual, setManual }

@@ -44,7 +44,8 @@ function freeSlot() {
 
 function downloadAsset(path: string, progress: (percent: number) => void, registerCancel: RegisterDownloadCancel): Promise<string> {
   const pdf = path.startsWith('pdf:')
-  if (pdf) path = path.slice(4)
+  const byteSize = pdf ? Number(path.split(':', 2)[1]) || 0 : 0
+  if (pdf) path = path.slice(path.indexOf(':', 4) + 1)
   const epoch = authGeneration()
   let cancelled = false
   let task: UniApp.DownloadTask | undefined
@@ -59,7 +60,7 @@ function downloadAsset(path: string, progress: (percent: number) => void, regist
       const settle = (run: () => void) => { run(); freeSlot() }
       task = uni.downloadFile({
         // 缩略图/预览图没必要等满 60 秒；PDF 文件大，仍给足时间。
-        url, header: authHeaders(), timeout: pdf ? 60000 : 20000,
+        url, header: authHeaders(), timeout: pdf ? pdfTimeout(byteSize) : 20000,
         success(result) {
           if (epoch !== authGeneration()) { release(result.tempFilePath); settle(() => reject(new ApiError('登录状态已变化'))); return }
           if (result.statusCode !== 200) {
@@ -80,10 +81,21 @@ function downloadAsset(path: string, progress: (percent: number) => void, regist
 }
 
 const files = createFilePool(downloadAsset, release)
+uni.$on?.('lc-memory-warning', () => files.trim())
 export function acquireAsset(path: string) { return files.acquire(path) }
 
+export function pdfTimeout(bytes: number) {
+  // 按 64 KiB/s 预留传输时间和握手余量，最大允许 10 分钟。
+  return Math.max(60_000, Math.min(600_000, 20_000 + Math.ceil((Number(bytes) || 0) / 65536) * 1000))
+}
+
 export async function openPdf(asset: Asset, title: string, progress?: (percent: number) => void) {
-  const handle = files.acquire('pdf:' + asset.url, progress)
+  const handle = files.acquire('pdf:' + (asset.byte_size || 0) + ':' + asset.url, progress)
+  uni.getNetworkType?.({ success: result => {
+    if (['2g', '3g', '4g', '5g'].includes(result.networkType) && asset.byte_size > 5 * 1024 * 1024) {
+      uni.showToast({ title: '正在使用移动网络下载 ' + (asset.byte_size / 1048576).toFixed(1) + ' MB', icon: 'none', duration: 3000 })
+    }
+  } })
   pdfHandle?.release()
   pdfHandle = handle
   pendingPdf = handle

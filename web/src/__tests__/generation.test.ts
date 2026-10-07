@@ -12,6 +12,9 @@ vi.mock('../api', async importOriginal => ({
 
 function ready() {
   const store = useExamStore()
+  store.ownerId = "1"; store.persistenceReady = true
+  vi.spyOn(store, "flushDraft").mockResolvedValue(true)
+  vi.spyOn(store, "saveHistory").mockResolvedValue(true)
   store.grade = '小学三年级'
   store.subject = '数学'
   store.keyword = '加法'
@@ -36,6 +39,88 @@ beforeEach(() => {
 afterEach(() => useExamStore().disposePersistence())
 
 describe('section-safe generation', () => {
+  it.each(['whole', 'section', 'question'])('does not send %s generation when draft persistence fails', async mode => {
+    const store = ready()
+    const section = store.sections[0]
+    section.data = { questions: [{ _qid: 'old-q', stem: '原题', answer: '原答案' }] }
+    vi.mocked(store.flushDraft).mockResolvedValue(false)
+    if (mode === 'whole') await store.generate()
+    else if (mode === 'section') await store.retrySection(section.id)
+    else await expect(store.replaceQuestion(section.id, 'old-q')).rejects.toThrow('未发送付费请求')
+    expect(api.generateBatch).not.toHaveBeenCalled()
+    expect(section.data.questions[0].stem).toBe('原题')
+  })
+
+  it('blocks a first request before persistence is ready', async () => {
+    const store = ready(); store.persistenceReady = false
+    await store.generate()
+    expect(api.generateBatch).not.toHaveBeenCalled()
+  })
+
+  it('groups by total questions and splits a truncated section only on manual retry', async () => {
+    const store = ready(); store.sections[0].count = 30
+    store.addSection('fill_blank', 8)
+    vi.mocked(api.generateBatch).mockImplementationOnce(async params => result(params))
+      .mockRejectedValueOnce(new api.ApiError('达到输出上限', 422, 'generation_truncated'))
+    await store.generate()
+    expect(api.generateBatch).toHaveBeenCalledTimes(2)
+    await store.retryFailed()
+    const calls = vi.mocked(api.generateBatch).mock.calls
+    expect(calls.map(([params]) => params.items.reduce((sum, item) => sum + item.question_count, 0))).toEqual([30, 8, 4, 4])
+    expect(store.papers[0].sections.map(section => section.data.questions.length)).toEqual([30, 8])
+  })
+
+  it('rejects duplicate section IDs from a single provider response', async () => {
+    const store = ready()
+    vi.mocked(api.generateBatch).mockImplementation(async params => [...result(params), ...result(params)])
+    await store.generate()
+    expect(store.papers).toHaveLength(0)
+    expect(store.generateError).toContain('没有可用题目')
+  })
+
+  it('preserves complete sections in a truncated response and retries only unfinished sections', async () => {
+    const store = ready(); store.addSection('fill_blank', 6)
+    vi.mocked(api.generateBatch).mockImplementationOnce(async params => {
+      throw new api.ApiError('达到输出上限', 422, 'generation_truncated', '', result(params).slice(0, 1))
+    })
+    await store.generate()
+    expect(api.generateBatch).toHaveBeenCalledOnce()
+    expect(store.pendingRun!.jobs[0].chunks[0].result?.[0].questions).toHaveLength(4)
+    await store.retryFailed()
+    const calls = vi.mocked(api.generateBatch).mock.calls
+    expect(calls.map(([params]) => params.items.map(item => item.question_count))).toEqual([[4, 6], [6]])
+    expect(store.papers[0].sections.map(section => section.data.questions.length)).toEqual([4, 6])
+  })
+
+  it.each(['retry', 'recover'])('retains truncated sections found during %s status lookup', async mode => {
+    const store = ready(); store.addSection('fill_blank', 6)
+    vi.mocked(api.generateBatch).mockRejectedValueOnce(new api.ApiError('Network', 0))
+    await store.generate()
+    const [params, requestId] = vi.mocked(api.generateBatch).mock.calls[0]
+    vi.mocked(api.fetchGenerationStatus).mockResolvedValueOnce({ request_id: requestId!, status: 'failed', result: null,
+      error: { code: 'generation_truncated', error: '达到输出上限', partial_sections: result(params).slice(0, 1) }, error_status: 422, cache_expired: false })
+    if (mode === 'recover') {
+      await store.recoverPending()
+      expect(api.generateBatch).toHaveBeenCalledOnce()
+      expect(store.pendingRun!.jobs[0].chunks[0].result?.[0].questions).toHaveLength(4)
+    }
+    await store.retryFailed()
+    expect(api.generateBatch).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(api.generateBatch).mock.calls[1][0].items.map(item => item.question_count)).toEqual([6])
+    expect(store.papers[0].sections.map(section => section.data.questions.length)).toEqual([4, 6])
+  })
+
+  it('uses all validated sections when only the final JSON wrapper was truncated', async () => {
+    const store = ready()
+    vi.mocked(api.generateBatch).mockImplementationOnce(async params => {
+      throw new api.ApiError('达到输出上限', 422, 'generation_truncated', '', result(params))
+    })
+    await store.generate()
+    expect(api.generateBatch).toHaveBeenCalledOnce()
+    expect(store.papers[0].sections[0].data.questions).toHaveLength(4)
+    expect(store.failedCount).toBe(0)
+  })
+
   it('keeps repeated 4 + 6 sections independent even when responses are reordered', async () => {
     const store = ready()
     store.addSection('fill_blank', 6)
@@ -54,11 +139,13 @@ describe('section-safe generation', () => {
     const store = ready()
     store.sections = []
     store.addSection('reading', 4)
-    vi.mocked(api.generateBatch).mockImplementation(async params => result(params).map(section => ({ ...section, questions: section.questions.slice(0, 2), missing_count: 2 })))
+    vi.mocked(api.generateBatch).mockImplementation(async params => result(params).map(section => ({ ...section, questions: section.questions.slice(0, 2), missing_count: 2, quality_warnings: ['请求 4 道，保留 2 道，缺少 2 道；补题有次数上限', '第 1 道题需核对答案'] })))
     await store.generate()
     expect(store.sections[0].count).toBe(4)
     expect(store.papers[0].sections[0].data.passage).toBe('Original passage')
     expect(store.papers[0].sections[0].warn).toContain('缺少 2 道')
+    expect(store.papers[0].sections[0].warn?.match(/缺少 2 道/g)).toHaveLength(1)
+    expect(store.papers[0].sections[0].warn).toContain('第 1 道题需核对答案')
     expect(store.generateWarn).toContain('缺题')
   })
 

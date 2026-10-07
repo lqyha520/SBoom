@@ -7,7 +7,7 @@ import tempfile
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
+from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -138,7 +138,7 @@ class BackendReliability(unittest.TestCase):
         raw = {"sections": [section(count=0)]}
         with patch.object(generate, "_call_llm_and_parse", new=AsyncMock(return_value=raw)) as mock:
             response = self.client.post("/api/v1/generate-batch", json=self.body)
-        self.assertEqual(mock.await_count, 3)
+        self.assertEqual(mock.await_count, 2)
         self.assertEqual(response.json()["sections"][0]["missing_count"], 2)
 
     def test_duplicate_questions_are_removed_across_sections(self):
@@ -228,7 +228,7 @@ class BackendReliability(unittest.TestCase):
             yield json.dumps({"questions": questions()})
         body = {key: value for key, value in self.body.items() if key != "items"}
         body.update(game_type="fill_blank", question_count=2)
-        with patch.object(generate, "_merged_llm_params", return_value={"base_url": "http://unused", "model": "test", "api_key": "fake", "timeout": 120}), \
+        with patch.object(generate, "_merged_llm_params", return_value={"base_url": "http://unused", "model": "test", "api_key": "fake", "timeout": 120, "max_tokens": 16384}), \
                 patch.object(generate.llm_client, "chat_stream", new=stream):
             response = self.client.post("/api/v1/generate/stream", json=body, headers={"X-Request-ID": "stream-one"})
         self.assertIn("[DONE]", response.text)
@@ -357,6 +357,10 @@ class ProviderRetry(unittest.IsolatedAsyncioTestCase):
             client = LLMClient()
             fake = AsyncMock(spec=httpx.AsyncClient)
             fake.post.side_effect = error
+            @asynccontextmanager
+            async def streamed(*args, fake=fake, **kwargs):
+                yield await fake.post(*args, **kwargs)
+            fake.stream.side_effect = streamed
             with patch.object(client, "_get_client_for", return_value=fake):
                 with self.assertRaises(type(error)):
                     await client.chat([], base_url="http://unused", api_key="fake")
@@ -367,6 +371,10 @@ class ProviderRetry(unittest.IsolatedAsyncioTestCase):
         fake = AsyncMock(spec=httpx.AsyncClient)
         result = httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]}, request=httpx.Request("POST", "http://unused"))
         fake.post.side_effect = [httpx.ConnectError("connect"), result]
+        @asynccontextmanager
+        async def streamed(*args, fake=fake, **kwargs):
+            yield await fake.post(*args, **kwargs)
+        fake.stream.side_effect = streamed
         with patch.object(client, "_get_client_for", return_value=fake), patch("app.services.llm_client.asyncio.sleep", new=AsyncMock()):
             self.assertEqual(await client.chat([], base_url="http://unused", api_key="fake"), "ok")
         fake.aclose.assert_not_awaited()

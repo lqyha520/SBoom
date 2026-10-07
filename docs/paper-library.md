@@ -21,7 +21,7 @@
 - 微信 code 由服务端交换，不返回 OpenID、session_key 或 AppSecret；常规 HTTPX 日志过滤微信 URL 敏感参数。
 - `MINI_REGISTRATION_ENABLED` 独立控制消费者注册，出题端继续使用 `REGISTRATION_ENABLED`。
 
-新增表与已有 SQLite/PostgreSQL 数据兼容。旧账号、归档及旧关联表保留，但不再复用旧绑定和 `lc_mini_` 会话。
+当前仅支持PostgreSQL，结构变更由版本迁移管理。旧账号、归档及旧关联表保留，但不再复用旧绑定和 `lc_mini_` 会话。
 不自动把旧共享身份、公共收藏或下载记录复制给新消费者，避免错误关联私人账号。正式升级前须备份并明确迁移方案。
 新用户始终是普通消费者；管理员只能通过现有出题端管理体系授权。
 
@@ -42,7 +42,7 @@
 消费者分普通用户和 VIP。`membership=vip` 且到期时间为空或晚于当前时间才具有 VIP 权限。
 后台可开通、续期、取消会员和禁用账号，更新带 revision，并写入 `mini_membership_events` 审计记录。
 快捷续期从有效到期日或当前时间累加；拒绝旧 revision 重放和长期会员续期，保留账号禁用状态。后台可筛选 7 天内到期与已过期用户。
-会员支持管理员配置和可选的微信支付。套餐默认不上架、支付默认关闭；启用后的订单、全额退款和对账流程见[功能扩展说明](mini-growth.md)。不提供自动续费。
+会员支持管理员配置和可选的微信支付。套餐默认不上架、支付默认关闭；启用后的订单、全额退款和对账流程见[小程序账号与会员说明](../miniprogram/README.md#账号与会员权限)。不提供自动续费。
 
 权限由 `catalog_access` 的逐份覆盖和 `catalog_type_rules` 的题型默认规则共同决定：
 
@@ -117,25 +117,25 @@
 ## 部署与运维
 
 文件存储固定为本地磁盘（data/paper-files，可用 ARCHIVE_LOCAL_DIR 调整），不能作为静态目录公开。
-持久化数据库、data/secret_key.txt 和文件目录；多实例需要共享存储。数据库迁移追加建表，部署前仍应备份。
+持久化数据库、data/secret_key.txt 和文件目录；多实例需要共享存储。生产关闭自动迁移，部署前备份后单独运行迁移命令。
 
 反向代理支持至少 40 MB ZIP 和 180 秒上传超时；上述账号、会员、资料 API 全部禁止公共缓存。
 不要记录 Authorization、Cookie、微信 code、密码或请求正文。HTTPS 部署开启 FORCE_HTTPS。
 微信后台需配置 request 和 downloadFile 合法域名，本机地址不能作为真机服务端。
 
 删除或上传失败仅尽力回收文件；断电、存储故障可能留下不可通过 API 访问的孤立文件，但仍占物理空间。
-目前没有持久清理队列/自动扫描器，上线前需制定备份、停写核对与清理方案，不能给有效归档前缀设置短期自动过期。
-配额统计不是存储账单。COS、PostgreSQL 多实例并发和故障恢复需目标环境验收；进程内限流应在大规模部署前改为共享限流。
+维护任务按登记引用扫描并使用6小时物理删除宽限，不能给有效归档前缀设置短期自动过期；清理前仍需备份和核对。
+配额统计不是存储账单。PostgreSQL多进程限流、共享文件存储和故障恢复需在目标环境验收；生产备份使用加密异地存储。
 
 ## 验证与边界
 
 后端覆盖账号隔离、旧绑定不复用、普通/VIP 内容与文件鉴权、到期/撤销/禁用、混合题型、逐份覆盖、
 元数据更新保留权限、并发冲突、收藏/下载隔离、上传校验、配额、去重与发布下架。
-小程序覆盖 10 页路由、Wot 插槽契约、VIP UI、首页分组、筛选、偏好隔离、请求顺序及文件生命周期。
+小程序覆盖主包及服务分包路由、Wot 插槽契约、VIP UI、首页分组、筛选、偏好隔离、请求顺序及文件生命周期。
 本地 H5 验证普通用户锁定态、VIP 原稿加载、账号切换，以及后台会员编辑与题型保存；检查手机窄屏和桌面布局。
 
 ```bash
-python -m unittest discover -s tests -p 'test_backend_*.py' -v
+python scripts/dev.py test
 pnpm --dir web typecheck
 pnpm --dir web test
 pnpm --dir web build
@@ -149,12 +149,12 @@ pnpm --dir miniprogram build:h5
 ```
 
 演示数据为 22 份已发布内容和 2 份草稿，含普通、VIP 专享和免费预览/VIP 下载样例。
-见 [小程序运行说明](../miniprogram/README.md#隔离演示)。演示生成器和导入器仅可用于隔离测试服务，不能导入正式库/COS。
+见 [小程序运行说明](../miniprogram/README.md#隔离演示)。演示生成器和导入器仅可用于隔离测试服务，不能导入正式数据库或文件目录。
 教师的私人数据仅在出题工作台可用。
-新增流程可通过 `tests/test_backend_experience.py` 在 SQLite 验证；设置指向本机临时 `lc_verify*` 数据库的 `LC_TEST_PG_DSN` 后运行 `tests/postgres_experience.py`，逐例隔离 schema 并清理。详见 [本轮验收说明](mini-optimization.md)。
+新增流程通过 `python scripts/dev.py test -- tests/test_backend_experience.py` 在独立本机55432测试实例验证；护栏只接受 `lc_test_*` 一次性数据库，逐例隔离并清理。浏览器验证使用提供的fixture。
 
-当前没有在线付款、普通投稿、在线答题/批改、逐题组题、手机 AI 出题、扫码分享或完整离线备份。
-真实微信登录、设备文件保存、HTTPS/COS 部署、运营主体/隐私信息、微信审核尚需实际配置与验收。
+微信付款需要实际商户配置，默认关闭；当前没有普通投稿、在线答题/批改、逐题组题、手机 AI 出题、扫码分享或完整离线备份。
+真实微信登录、设备文件保存、HTTPS部署、运营主体/隐私信息、微信审核尚需实际配置与验收。
 编译、API 或浏览器预览通过不等于已经正式商用上线。
 
 网盘资料使用 `download_mode=external`；默认和历史资料为 `pdf`。下载请求根据模式返回 PDF 资产或 `{kind: "external", url, extraction_code}`，消费者列表和详情不包含网盘链接、提取码。具体操作与兼容规则见[后台添加习题流程](publication-workflow.md)。

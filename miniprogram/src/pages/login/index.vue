@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { navigatePage } from '../../services/page-navigation'
+
+import { hasConsent, rememberConsent, requirePrivacy } from '../../services/privacy'
 import { ref } from 'vue'
 import { onHide, onLoad, onShow, onUnload } from '@dcloudio/uni-app'
 import PageChrome from '../../components/PageChrome.vue'
@@ -9,7 +12,7 @@ import { HOME, safeDestination } from '../../services/return-route'
 import { openCatalog, visitDestination } from '../../services/navigation'
 import { registrationAccountError } from '../../../../shared/mini-profile'
 
-const agreed = ref(false)
+const agreed = ref(hasConsent())
 const busy = ref(false)
 const error = ref('')
 let active = true
@@ -23,7 +26,7 @@ const password = ref('')
 const webMode = ref<'login' | 'register'>('login')
 // #endif
 function home() { visitDestination(returnTo, true) }
-function legal(kind: 'privacy' | 'agreement') { uni.navigateTo({ url: '/pages/privacy/index?kind=' + kind }) }
+function legal(kind: 'privacy' | 'agreement') { navigatePage({ url: '/subpages/privacy/index?kind=' + kind }) }
 function requireConsent() {
   if (agreed.value) return true
   error.value = '请先阅读并同意用户协议和隐私政策'
@@ -45,14 +48,15 @@ async function submitWeb() {
   const name = username.value.trim()
   if (name.length < 2 || name.length > 32) { error.value = '用户名需为 2 至 32 位'; return }
   if (webMode.value === 'register' && registrationAccountError(name)) { error.value = registrationAccountError(name); return }
-  if (password.value.length < 6) { error.value = '密码至少需要 6 位'; return }
+  const minimum = webMode.value === 'register' ? 8 : 6
+  if (password.value.length < minimum) { error.value = `密码至少需要 ${minimum} 位`; return }
   const current = ++revision
   busy.value = true; error.value = ''
   try {
     const endpoint = webMode.value === 'register' ? '/api/v1/mini/register' : '/api/v1/mini/login-password'
     const result = await request<Authenticated>(endpoint, 'POST', { username: name, password: password.value })
     if (!active || current !== revision) return
-    password.value = ''; loginMini(result); home()
+    password.value = ''; rememberConsent(); loginMini(result); home()
   } catch (cause) { if (active && current === revision) error.value = errorMessage(cause) }
   finally { if (current === revision) busy.value = false }
 }
@@ -67,6 +71,7 @@ async function wechatLogin() {
   const current = ++revision
   busy.value = true; error.value = ''
   try {
+    await requirePrivacy()
     const wxCode = await new Promise<string>((resolve, reject) => uni.login({
       provider: 'weixin',
       success(result) { result.code ? resolve(result.code) : reject(new Error('未获得微信登录凭证')) },
@@ -75,7 +80,7 @@ async function wechatLogin() {
     if (!active || current !== revision) return
     const result = await request<Authenticated>('/api/v1/mini/login', 'POST', { code: wxCode })
     if (!active || current !== revision) return
-    loginMini(result); home()
+    rememberConsent(); loginMini(result); home()
   } catch (cause) { if (active && current === revision) error.value = errorMessage(cause) }
   finally { if (current === revision) busy.value = false }
 }
@@ -121,7 +126,7 @@ onUnload(leave)
         <view class="sheet-handle" />
         <view class="sheet-head"><text class="sheet-title">习题库账号</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭账号登录" :disabled="busy" @click="closeAccount"><wd-icon name="close" size="20px" /></button></view>
         <wd-tabs v-model="webMode" line-theme="text" @change="error = ''"><wd-tab name="login" title="登录" :disabled="busy" /><wd-tab name="register" title="注册" :disabled="busy" /></wd-tabs>
-        <view class="login-form"><text class="field-label">账号</text><wd-input v-model="username" prefix-icon="user" custom-class="login-input" :placeholder="webMode === 'register' ? '设置英文或数字账号' : '请输入登录账号'" aria-label="用户名" :maxlength="32" :disabled="busy" /><text v-if="webMode === 'register'" class="account-hint">2-32 位英文、数字、下划线或短横线；中文昵称可在个人资料中设置。</text><text class="field-label">密码</text><wd-input v-model="password" prefix-icon="lock" custom-class="login-input" show-password placeholder="密码" aria-label="密码" :maxlength="128" :disabled="busy" confirm-type="done" @confirm="submitWeb" /></view>
+        <view class="login-form"><text class="field-label">账号</text><wd-input v-model="username" prefix-icon="user" custom-class="login-input" :placeholder="webMode === 'register' ? '设置英文或数字账号' : '请输入登录账号'" aria-label="用户名" :maxlength="32" :disabled="busy" /><text v-if="webMode === 'register'" class="account-hint">2-32 位英文、数字、下划线或短横线；中文昵称可在个人资料中设置。</text><text class="field-label">密码</text><wd-input v-model="password" prefix-icon="lock" custom-class="login-input" show-password :placeholder="webMode === 'register' ? '至少 8 位' : '密码'" aria-label="密码" :maxlength="128" :disabled="busy" confirm-type="done" @confirm="submitWeb" /></view>
         <view v-if="error" class="error-strip" role="alert">{{ error }}</view>
         <view class="login-submit"><wd-button role="button" block :loading="busy" :disabled="!agreed || busy" @click="submitWeb">{{ webMode === 'register' ? '注册并登录' : '登录' }}</wd-button></view>
       </view>

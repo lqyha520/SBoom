@@ -10,6 +10,7 @@
     "appid": "wx754635aaf3583729",
     "setting": { "urlCheck": true, "es6": true, "minified": true },
     "usingComponents": true,
+    "__usePrivacyCheck__": true,
     "lazyCodeLoading": "requiredComponents"
   },
   "h5": { "router": { "mode": "hash" }, "title": "习题库" },

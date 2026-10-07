@@ -25,7 +25,7 @@ import pg_support  # noqa: E402  一次性测试库，必须在 import app 之�
 
 pg_support.install_module_database({
     "SECRET_KEY": "ui-fixture-disposable-secret-never-use-in-production",
-    "LLM_API_KEY": "", "LLM_BASE_URL": "http://127.0.0.1:1", "LLM_MODEL": "ui-fixture",
+    "PROVIDER_ALLOW_PRIVATE": "true", "LLM_API_KEY": "", "LLM_BASE_URL": "http://127.0.0.1:1", "LLM_MODEL": "ui-fixture",
     "ADMIN_USERNAME": "", "ADMIN_PASSWORD": "", "FORCE_HTTPS": "false",
     "REGISTRATION_ENABLED": "true", "MINI_REGISTRATION_ENABLED": "true", "CORS_ORIGINS": "",
     "ARCHIVE_LOCAL_DIR": str(Path(TEMP.name) / "private-papers"),
@@ -130,6 +130,19 @@ async def lifespan(_app):
         print(f"Demo library ready: {result['papers']} papers, {result['favorites']} favorites", flush=True)
         public = seed_public_catalog(publisher, mini_auth.get_user(vip["id"]), TEMP.name, demo_library)
         print(f"Public catalog ready: {public['published']} published, {public['draft']} drafts", flush=True)
+    if os.environ.get("LC_SEED_MINI_FIXTURE") == "1":
+        from test_backend_library import bundle, snapshot
+
+        from app.models.catalog import CatalogCreate, CatalogUpdate
+        from app.models.library import ArchiveCreate
+        from app.services import paper_library, public_catalog
+        for index in range(4):
+            value = snapshot()
+            value["paper"]["title"] = f"首页浏览器用例 {index + 1}"
+            source = paper_library.create_paper(publisher.id, ArchiveCreate(request_id=f"home-browser-{index}", source_id=f"home-browser-{index}", snapshot=value))
+            paper_library.publish_bundle(publisher.id, source["id"], bundle())
+            item = public_catalog.create_paper(publisher.id, CatalogCreate(paper_id=source["id"], title=value["paper"]["title"]))
+            public_catalog.update_paper(publisher.id, item["id"], CatalogUpdate(revision=item["revision"], title=item["title"], description="", category="", status="published", featured=True, confirm_publication=True))
     app_config.save_llm("http://127.0.0.1:1", "ui-fixture", "test-only-key", 60)
     with db() as conn:
         conn.execute("INSERT INTO feedbacks (user_id, username, game_id, is_oob, comment) VALUES (?, ?, ?, ?, ?)", (teacher.id, teacher.username, "ui-paper-001", 1, "这道应用题的数值范围偏大。"))

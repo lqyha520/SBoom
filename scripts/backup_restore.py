@@ -16,9 +16,10 @@ import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.constants import LOCK_IDS, MAINTENANCE_LOCK
 from app.storage_registry import REFERENCES
 
-LOCKS = [70634195, 70634191, 70634192, 70634193, 70634194]
+LOCKS = [MAINTENANCE_LOCK, *LOCK_IDS.values()]
 
 def digest(path):
     with path.open('rb') as stream:
@@ -79,6 +80,7 @@ def backup(args):
         # Session locks first, then take the snapshot. Waiting must not make a
         # repeatable-read snapshot older than the protected filesystem manifest.
         conn.execute("SET statement_timeout = '120s'")
+        conn.execute("SET idle_in_transaction_session_timeout = '0'")
         for key in LOCKS:
             conn.execute('SELECT pg_advisory_lock(%s)', (key,))
         conn.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
@@ -86,8 +88,11 @@ def backup(args):
         if snapshot_row is None:
             raise RuntimeError('Database snapshot was not returned')
         snapshot = snapshot_row[0]
-        pg_tool(args, dsn, 'pg_dump', root / 'database.dump', snapshot)
         records = private_files(conn)
+        # 快照与文件清单已经一致；释放业务锁，保留维护锁防止复制期间物理删除。
+        for key in LOCKS[1:]:
+            conn.execute('SELECT pg_advisory_unlock(%s)', (key,))
+        pg_tool(args, dsn, 'pg_dump', root / 'database.dump', snapshot)
         for backend, key in records:
             if backend != 'local':
                 raise ValueError('Unsupported storage backend')
@@ -98,6 +103,9 @@ def backup(args):
         shutil.copyfile(args.env_file, root / 'service.env')
         if args.secret_file:
             shutil.copyfile(args.secret_file, root / 'secret_key.txt')
+        extra = getattr(args, 'extra_files_root', None)
+        if extra and extra.is_dir():
+            shutil.copytree(extra, root / 'wechat')
         manifest = {str(path.relative_to(root)).replace('\\','/'): digest(path) for path in root.rglob('*') if path.is_file()}
         (root / 'manifest.json').write_text(json.dumps({'version': 1, 'created_at': int(time.time()), 'sha256': manifest}, indent=2), encoding='utf-8')
         for path in root.rglob('*'):
@@ -110,7 +118,10 @@ def backup(args):
 def restore(args):
     dsn = os.environ['LC_RESTORE_DATABASE_URL']
     config = {key: str(value) for key, value in conninfo_to_dict(dsn).items() if value is not None}
-    if config.get('host') not in ('127.0.0.1','localhost') or not config.get('dbname','').startswith(('lc_restore_','lc_test_')):
+    if (config.get('host') not in ('127.0.0.1','localhost', '::1')
+            or config.get('hostaddr', config.get('host')) not in ('127.0.0.1','localhost', '::1')
+            or config.get('port', '5432') not in ('5432', '55432') or config.get('service')
+            or not config.get('dbname','').startswith(('lc_restore_','lc_test_'))):
         raise ValueError('Restore requires a local disposable lc_restore_* / lc_test_* database')
     manifest = json.loads((args.source / 'manifest.json').read_text(encoding='utf-8'))
     if manifest.get('version') != 1 or not {'database.dump', 'service.env'}.issubset(manifest.get('sha256', {})):
@@ -131,6 +142,8 @@ def restore(args):
     shutil.copyfile(args.source / 'service.env', args.destination / 'service.env')
     if (args.source / 'secret_key.txt').exists():
         shutil.copyfile(args.source / 'secret_key.txt', args.destination / 'secret_key.txt')
+    if (args.source / 'wechat').exists():
+        shutil.copytree(args.source / 'wechat', args.destination / 'wechat')
     for path in args.destination.rglob('*'):
         if path.is_file():
             path.chmod(0o600)
@@ -145,6 +158,7 @@ def main():
     b.add_argument('--files-root', type=Path, required=True)
     b.add_argument('--env-file', type=Path, required=True)
     b.add_argument('--secret-file', type=Path)
+    b.add_argument('--extra-files-root', type=Path, help='微信支付密钥目录，随清单加密备份')
     r = sub.add_parser('restore')
     r.add_argument('--source', type=Path, required=True)
     r.add_argument('--destination', type=Path, required=True)

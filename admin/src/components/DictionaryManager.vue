@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, ref, watch } from 'vue'
-import type { UserInfo } from '../api'
+import { ApiError, type UserInfo } from '../api'
 import {
   adoptDictionary, createDictionary, deleteDictionary, dictionaryLinks, siteDictionary, setDictionaryLinks,
-  unlistedDictionary, updateDictionary,
+  unlistedDictionary, updateDictionary, reorderDictionary,
   type DictionaryItem,
 } from '../site'
 
@@ -19,6 +19,7 @@ const busy = ref(false)
 const dialog = ref(false)
 const target = ref<DictionaryItem | null>(null)
 const formError = ref('')
+const conflict = ref(false)
 const removing = ref<DictionaryItem | null>(null)
 const removeOpen = ref(false)
 // 知识点 Tab：当前选中的年级/科目组合
@@ -82,12 +83,19 @@ function create() {
   if (kind.value === 'knowledge_point' && !validPair.value) return
   target.value = null
   form.value = { entry: '', label: '', sort_order: (visible.value.length + 1) * 10, is_visible: true }
-  formError.value = ''; dialog.value = true
+  formError.value = ''; conflict.value = false; dialog.value = true
 }
 function edit(item: DictionaryItem) {
   target.value = item
   form.value = { entry: item.value, label: item.label, sort_order: item.sort_order, is_visible: item.is_visible }
-  formError.value = ''; dialog.value = true
+  formError.value = ''; conflict.value = false; dialog.value = true
+}
+async function reloadConflict() {
+  try {
+    const latest = (await siteDictionary()).items.find(item => item.id === target.value?.id)
+    if (!latest) throw new Error('该条目已删除，请复制修改后新建')
+    target.value = latest; conflict.value = false; formError.value = '已载入最新版本，您的修改已保留，请核对后保存'
+  } catch (cause) { formError.value = message(cause) }
 }
 async function save() {
   if (busy.value || !form.value.entry.trim()) return
@@ -100,7 +108,7 @@ async function save() {
     else await createDictionary(props.user.id, { kind: kind.value, ...payload })
     notice.value = kindLabel.value + '字典已更新'
     dialog.value = false; await load()
-  } catch (cause) { formError.value = message(cause) }
+  } catch (cause) { conflict.value = cause instanceof ApiError && cause.status === 409; formError.value = message(cause) }
   finally { busy.value = false }
 }
 async function move(index: number, delta: number) {
@@ -112,12 +120,10 @@ async function move(index: number, delta: number) {
   reordered.splice(next, 0, moved!)
   busy.value = true; error.value = ''
   try {
-    await Promise.all(reordered.map((item, position) => updateDictionary(props.user.id, item.id, {
-      revision: item.revision, value: item.value, label: item.label, sort_order: (position + 1) * 10, is_visible: item.is_visible,
-    })))
+    await reorderDictionary(props.user.id, { kind: kind.value, parent: kind.value === 'knowledge_point' ? pairKey.value : '', items: reordered.map(item => ({ id: item.id, revision: item.revision })) })
     notice.value = '顺序已保存'
     await load()
-  } catch (cause) { error.value = message(cause) }
+  } catch (cause) { await load(); error.value = message(cause) }
   finally { busy.value = false }
 }
 async function toggleVisible(item: DictionaryItem) {
@@ -221,7 +227,7 @@ onDeactivated(() => { sequence++; loading.value = false; dialog.value = false; r
       <UFormField :label="kind === 'knowledge_point' ? '备注' : '显示名'" hint="留空则直接显示内容本身"><UInput v-model="form.label" maxlength="80" :disabled="busy" class="w-full" /></UFormField>
       <UFormField label="展示顺序" hint="数值小的排前面"><UInput v-model.number="form.sort_order" type="number" min="0" :disabled="busy" class="w-full" /></UFormField>
       <USwitch v-model="form.is_visible" :label="kind === 'knowledge_point' ? '参与出题范围约束' : '在小程序展示'" :disabled="busy" />
-      <UAlert v-if="formError" :title="formError" color="error" variant="soft" />
+      <UButton v-if="conflict" label="载入最新并保留我的修改" @click="reloadConflict" /><UAlert v-if="formError" :title="formError" color="error" variant="soft" />
     </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="dialog = false" /><UButton type="submit" form="dict-form" :label="target ? '保存' : '创建'" icon="i-lucide-check" :loading="busy" :disabled="busy || !form.entry.trim()" /></template></UModal>
 
     <UModal v-model:open="linkOpen" :title="'关联科目 · ' + (linkGrade?.value || '')" :dismissible="!busy" :close="!busy"><template #body><div class="field-stack">

@@ -9,7 +9,6 @@ from app.mini_schema import index_question_types
 from app.services import catalog_access, catalog_editions
 from app.services import public_catalog as catalog
 from app.services.mini_experience import fail
-from app.services.mini_messages import notify
 
 
 def batch(body, admin_id=None):
@@ -132,9 +131,8 @@ def revise(admin_id, catalog_id, body):
             from app.services.catalog_review import confirm
             confirm(conn, catalog_id, admin_id)
         if row["status"] == "published":
-            recipients = conn.execute("SELECT user_id FROM mini_catalog_favorites WHERE catalog_id = ?", (catalog_id,)).fetchall()
-            for recipient in recipients:
-                notify(conn, recipient[0], f"paper:{catalog_id}:{release}", "paper", "收藏的资料有更新", row["title"] + "：" + body.note, "paper", catalog_id)
+            from app.services.mini_messages import notify_favorites
+            notify_favorites(conn, catalog_id, release, "收藏的资料有更新", row["title"] + "：" + body.note)
     return catalog.get_paper(admin_id, catalog_id, admin=True)
 
 

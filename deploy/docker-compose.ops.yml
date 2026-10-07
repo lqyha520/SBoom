@@ -1,0 +1,67 @@
+services:
+  backup:
+    profiles: [ops]
+    image: ${OPS_IMAGE:-learncoach-ops:local}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: ops
+    env_file: ${OPS_ENV_FILE:-./ops.env}
+    command: [backup]
+    group_add: ["${OPS_STATUS_GID:-10002}"]
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 2g
+    read_only: true
+    tmpfs: [/tmp:size=1g,mode=1777]
+    volumes:
+      - appdata:/app/data:ro
+      - ${OPS_STATUS_DIR:-./ops-status}:/run/ops-status
+      - ${SERVICE_ENV_FILE:?Set absolute service env path}:/run/secrets/service.env:ro
+      - ${RESTIC_PASSWORD_PATH:?Set absolute restic password path}:/run/secrets/restic-password:ro
+    environment:
+      RESTIC_PASSWORD_FILE: /run/secrets/restic-password
+      RESTIC_CACHE_DIR: /tmp/restic-cache
+      ARCHIVE_LOCAL_DIR: /app/data/paper-files
+      BACKUP_STATUS_FILE: /run/ops-status/backup.json
+    depends_on:
+      db:
+        condition: service_healthy
+  restore-db:
+    profiles: [restore]
+    image: ${POSTGRES_IMAGE:?Set verified PostgreSQL image}
+    environment:
+      POSTGRES_USER: restore
+      POSTGRES_PASSWORD: isolated-restore-only
+      POSTGRES_DB: lc_restore_probe
+    tmpfs: [/var/lib/postgresql/data:size=2g]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U restore -d lc_restore_probe]
+      interval: 2s
+      retries: 30
+  restore-check:
+    profiles: [restore]
+    image: ${OPS_IMAGE:-learncoach-ops:local}
+    network_mode: service:restore-db
+    env_file: ${OPS_ENV_FILE:-./ops.env}
+    command: [restore-check]
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 2g
+    read_only: true
+    tmpfs: [/tmp:size=2g,mode=1777]
+    volumes:
+      - ${RESTIC_PASSWORD_PATH:?Set absolute restic password path}:/run/secrets/restic-password:ro
+    environment:
+      RESTIC_PASSWORD_FILE: /run/secrets/restic-password
+      RESTIC_CACHE_DIR: /tmp/restic-cache
+      LC_RESTORE_DATABASE_URL: postgresql://restore:isolated-restore-only@127.0.0.1:5432/lc_restore_probe
+    depends_on:
+      restore-db:
+        condition: service_healthy

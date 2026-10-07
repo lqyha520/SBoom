@@ -9,6 +9,7 @@ from app.library_deps import no_store, optional_mini_user, require_mini_user
 from app.models.experience import (
     CatalogBatch,
     CatalogRevision,
+    FavoriteBatch,
     FeedbackCreate,
     FeedbackUpdate,
     GroupAssignment,
@@ -55,6 +56,11 @@ def feedback_detail(identifier: str, user: MiniUser = Depends(require_mini_user)
 @router.get("/mini/favorite-groups")
 def groups(user: MiniUser = Depends(require_mini_user)):
     return experience.groups(user.id)
+
+
+@router.post("/mini/favorites/batch")
+def batch_favorites(body: FavoriteBatch, user: MiniUser = Depends(require_mini_user)):
+    return experience.batch_favorites(user.id, body)
 
 
 @router.post("/mini/favorite-groups", status_code=201)

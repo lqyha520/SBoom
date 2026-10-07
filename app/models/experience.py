@@ -37,6 +37,25 @@ class GroupAssignment(Input):
     group_id: str | None = Field(None, max_length=64)
 
 
+class FavoriteBatch(Input):
+    ids: list[str] = Field(min_length=1, max_length=200)
+    action: Literal["remove", "assign"]
+    group_id: str | None = Field(None, min_length=1, max_length=64)
+
+    @field_validator("ids")
+    @classmethod
+    def unique_ids(cls, value):
+        if len(set(value)) != len(value) or any(not item or len(item) > 64 for item in value):
+            raise ValueError("请选择不重复的有效收藏资料")
+        return value
+
+    @model_validator(mode="after")
+    def valid_action(self):
+        if self.action == "remove" and self.group_id is not None:
+            raise ValueError("取消收藏时不能指定分组")
+        return self
+
+
 class UsageEvent(Input):
     event_id: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     kind: Literal["active", "download_ok", "download_failed"]

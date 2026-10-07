@@ -24,6 +24,10 @@
 }
 
 html, body, #app { min-width: 320px; min-height: 100%; }
+button:focus-visible, a:focus-visible { outline: 2px solid #087f5b; outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
 body { margin: 0; background: var(--canvas); font-family: var(--font-sans); color: var(--ui-text); font-size: 14px; -webkit-font-smoothing: antialiased; }
 *, *::before, *::after { box-sizing: border-box; }
 body, button, input, select, textarea { letter-spacing: 0; }

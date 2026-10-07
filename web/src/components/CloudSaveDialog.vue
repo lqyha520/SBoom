@@ -24,6 +24,7 @@ const loadingFolders = ref(true)
 interface SaveJob { request: ArchiveRequest; record?: ArchiveDetail; state: 'pending' | 'saving' | 'files' | 'ready' | 'failed'; error: string }
 const jobs = ref<SaveJob[]>([])
 let active = true
+let saveController: AbortController | undefined
 const folderOptions = computed(() => [{ label: '未分类', value: 'unfiled' }, ...folders.value.map(value => ({ label: value.name, value: value.id }))])
 const options = computed(() => [{ label: '当前试卷', value: 'current' }, { label: `全部 ${store.papers.length} 份`, value: 'all' }])
 const allReady = computed(() => jobs.value.length > 0 && jobs.value.every(job => job.state === 'ready'))
@@ -56,10 +57,12 @@ async function save() {
   if (busy.value || store.accountChanged || store.generating || store.layoutMode) return
   if (!jobs.value.length) prepare()
   busy.value = true; emit('busy', true); error.value = ''
+  saveController = new AbortController()
   const assertOwner = captureWorkspaceGuard()
-  const canContinue = () => active && !store.accountChanged
+  const canContinue = () => active && !store.accountChanged && !saveController?.signal.aborted
   try {
     for (const [index, job] of jobs.value.entries()) {
+      if (!canContinue()) break
       if (job.state === 'ready') continue
       job.error = ''
       try {
@@ -71,16 +74,16 @@ async function save() {
         assertOwner()
         if (!canContinue()) throw new Error('保存已停止，可在云端试卷中重试文件')
         job.state = 'files'
-        job.record = await completeArchive(job.record, message => { progress.value = `第 ${index + 1}/${jobs.value.length} 份 · ${message}` }, canContinue)
+        job.record = await completeArchive(job.record, message => { progress.value = `第 ${index + 1}/${jobs.value.length} 份 · ${message}` }, canContinue, saveController.signal)
         job.state = 'ready'
       } catch (cause) { job.state = 'failed'; job.error = cause instanceof Error ? cause.message : '保存失败，请重试' }
     }
-  } finally { busy.value = false; progress.value = ''; emit('busy', false) }
+  } finally { if (saveController.signal.aborted) error.value = '保存已取消，已完成内容仍在云端；可重试未完成项'; busy.value = false; progress.value = ''; emit('busy', false) }
 }
 function close() { if (!busy.value) emit('close') }
 function warnOnExit(event: BeforeUnloadEvent) { if (busy.value) { event.preventDefault(); event.returnValue = '' } }
 onMounted(() => { void loadFolders(); window.addEventListener('beforeunload', warnOnExit) })
-onBeforeUnmount(() => { active = false; emit('busy', false); window.removeEventListener('beforeunload', warnOnExit) })
+onBeforeUnmount(() => { active = false; saveController?.abort(); emit('busy', false); window.removeEventListener('beforeunload', warnOnExit) })
 </script>
 
 <template>
@@ -100,6 +103,7 @@ onBeforeUnmount(() => { active = false; emit('busy', false); window.removeEventL
       </div>
     </template>
     <template #footer>
+      <UButton v-if="busy" label="取消保存" color="neutral" variant="outline" @click="saveController?.abort()" />
       <UButton :label="allReady ? '完成' : '关闭'" color="neutral" variant="outline" :disabled="busy" @click="close" />
       <UButton v-if="allReady" icon="i-lucide-library" label="查看云端试卷" @click="emit('library')" />
       <UButton v-else icon="i-lucide-cloud-upload" :label="jobs.length ? '重试未完成项' : '保存试卷'" :loading="busy" :disabled="busy || loadingFolders || store.accountChanged" @click="save" />

@@ -1,4 +1,6 @@
-import { AUTH_EXPIRED_EVENT, AuthError, accountChanged, request } from './api'
+import { AUTH_EXPIRED_EVENT, FORBIDDEN_EVENT, ApiError, AuthError, ForbiddenError, adminAccountEpoch, accountChanged, request } from './api'
+import type { ApiSchemas } from '../../shared/api-schema'
+import { backoff, parseErrorDetail } from '../../shared/http'
 import type { DownloadSettings } from './download-settings'
 
 export type PublicationStatus = 'draft' | 'published' | 'withdrawn'
@@ -37,7 +39,7 @@ function mutation(method: string, userId: number, body?: unknown): RequestInit {
   return { method, headers: { 'Content-Type': 'application/json', 'X-Workspace-User': String(userId) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) }
 }
-export function createPublication(userId: number, body: DownloadSettings & { paper_id: string; grade?: string; subject?: string; title: string; description: string; category_id: string; view_access: string; download_access: string }) {
+export function createPublication(userId: number, body: ApiSchemas["CatalogCreate"]) {
   return request<CatalogDetail>(base + '/papers', mutation('POST', userId, body))
 }
 export interface CatalogImportMeta extends DownloadSettings {
@@ -46,35 +48,55 @@ export interface CatalogImportMeta extends DownloadSettings {
   view_access: string; download_access: string
 }
 export type UploadProgress = (percent: number) => void
-/** Upload progress measures transferred bytes; PDF processing continues after 100%. */
-export function uploadPdf<T>(url: string, userId: number, file: File, progress?: UploadProgress): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
-    xhr.open('POST', url)
-    xhr.timeout = 120000
-    xhr.setRequestHeader('Content-Type', 'application/pdf')
-    xhr.setRequestHeader('X-Workspace-User', String(userId))
-    xhr.upload.onprogress = event => { if (event.lengthComputable) progress?.(Math.round(event.loaded / event.total * 100)) }
-    xhr.upload.onload = () => progress?.(100)
-    xhr.onerror = () => reject(new Error('网络异常，请检查连接；重试前可检查是否已创建草稿'))
-    xhr.ontimeout = () => reject(new Error('处理超时，请先检查是否已创建草稿，再重试'))
-    xhr.onabort = () => reject(new Error('上传已中断'))
-    xhr.onload = () => {
-      if (xhr.status === 401) {
-        window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT)); reject(new AuthError('登录已过期')); return
+/** 上传空闲超时和服务器处理超时分别计时；仅限流且未受理时安全重试。 */
+export async function uploadPdf<T>(url: string, userId: number, file: File, progress?: UploadProgress, signal?: AbortSignal): Promise<T> {
+  const epoch = adminAccountEpoch()
+  for (let attempt = 0; ; attempt++) {
+    if (signal?.aborted) throw new DOMException('上传已中断', 'AbortError')
+    if (epoch !== adminAccountEpoch()) throw new AuthError('登录账号已变化，请刷新后重试')
+    const result = await new Promise<{ data?: T; retryAfter?: number }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      let phaseTimer: ReturnType<typeof setTimeout>
+      const overallTimer = setTimeout(() => timeout('上传与处理总耗时过长，请先检查是否已创建草稿'), 600000)
+      const cleanup = () => { clearTimeout(phaseTimer); clearTimeout(overallTimer); signal?.removeEventListener('abort', abort) }
+      const fail = (cause: Error) => { cleanup(); reject(cause) }
+      const timeout = (message: string) => { fail(new ApiError(message, 0, 'timeout')); xhr.abort?.() }
+      const arm = (ms: number, message: string) => { clearTimeout(phaseTimer); phaseTimer = setTimeout(() => timeout(message), ms) }
+      const abort = () => { fail(new DOMException('上传已中断', 'AbortError')); xhr.abort?.() }
+      xhr.open('POST', url)
+      xhr.timeout = 0
+      xhr.setRequestHeader('Content-Type', 'application/pdf')
+      xhr.setRequestHeader('X-Workspace-User', String(userId))
+      xhr.upload.onprogress = event => { arm(120000, '上传长时间没有进展，请检查网络'); if (event.lengthComputable) progress?.(Math.round(event.loaded / event.total * 100)) }
+      xhr.upload.onload = () => { progress?.(100); arm(240000, '文件处理超时，请先检查是否已创建草稿，再重试') }
+      xhr.onerror = () => fail(new ApiError('网络异常，请检查连接；重试前可检查是否已创建草稿'))
+      xhr.ontimeout = () => fail(new ApiError('处理超时，请先检查是否已创建草稿，再重试'))
+      xhr.onabort = () => fail(new DOMException('上传已中断', 'AbortError'))
+      xhr.onload = () => {
+        cleanup()
+        if (epoch !== adminAccountEpoch()) { reject(new AuthError('登录账号已变化，请刷新后重试')); return }
+        let data: unknown
+        try { data = JSON.parse(xhr.responseText) } catch { data = null }
+        const detail = parseErrorDetail(data, `请求失败（${xhr.status}）`)
+        if (xhr.status === 401) { window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail })); reject(new AuthError('请重新登录后重试，导入清单已保留')); return }
+        if (xhr.status === 403) { window.dispatchEvent(new CustomEvent(FORBIDDEN_EVENT)); reject(new ForbiddenError('没有管理员权限')); return }
+        if (detail.code === 'account_changed') { accountChanged(); reject(new AuthError('登录账号已变化，请刷新后重试')); return }
+        if (xhr.status === 429 && attempt < 1) {
+          const header = xhr.getResponseHeader?.('Retry-After') || '1'
+          const seconds = /^\d+$/.test(header) ? Number(header) : Math.max(0, (Date.parse(header) - Date.now()) / 1000)
+          if (Number.isFinite(seconds) && seconds <= 30) { resolve({ retryAfter: Math.max(500, seconds * 1000) }); return }
+        }
+        if (xhr.status < 200 || xhr.status >= 300) { reject(new ApiError(detail.message, xhr.status, detail.code, detail.requestId)); return }
+        if (!data) { reject(new ApiError('服务响应无效，请检查是否已创建草稿')); return }
+        resolve({ data: data as T })
       }
-      if (xhr.status === 403) { reject(new AuthError('没有管理员权限')); return }
-      let data: any
-      try { data = JSON.parse(xhr.responseText) } catch { reject(new Error('服务响应无效，请检查是否已创建草稿')); return }
-      if (xhr.status < 200 || xhr.status >= 300) {
-        const detail = data?.detail
-        if (detail?.code === 'account_changed') { accountChanged(); reject(new AuthError('登录账号已变化，请刷新后重试')); return }
-        reject(new Error(typeof detail === 'string' ? detail : detail?.error || `HTTP ${xhr.status}`)); return
-      }
-      resolve(data as T)
-    }
-    xhr.send(file)
-  })
+      signal?.addEventListener('abort', abort, { once: true })
+      arm(120000, '上传长时间没有进展，请检查网络')
+      xhr.send(file)
+    })
+    if (result.retryAfter !== undefined) { await backoff(result.retryAfter); continue }
+    return result.data as T
+  }
 }
 /** 手动导入外部 PDF：服务端渲染预览页并直接创建草稿 */
 export function importPublication(userId: number, file: File, meta: CatalogImportMeta, progress?: UploadProgress) {
@@ -86,7 +108,7 @@ export function importPublication(userId: number, file: File, meta: CatalogImpor
 export function attachImportedEdition(userId: number, catalogId: string, revision: number, kind: 'student' | 'answers', file: File, progress?: UploadProgress, confirmPublication = false) {
   return uploadPdf<{ revision: number; editions: NonNullable<CatalogDetail['editions']> }>(base + '/papers/' + encodeURIComponent(catalogId) + '/editions/import?kind=' + kind + '&revision=' + revision + '&confirm_publication=' + confirmPublication, userId, file, progress)
 }
-export function updatePublication(userId: number, id: string, body: PublicationEdit) {
+export function updatePublication(userId: number, id: string, body: ApiSchemas["CatalogUpdate"]) {
   return request<CatalogDetail>(base + '/papers/' + encodeURIComponent(id), mutation('PUT', userId, body))
 }
 export function deletePublication(userId: number, item: CatalogPaper) {

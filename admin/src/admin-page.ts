@@ -23,3 +23,13 @@ export function useAdminPage(loader: (valid: () => boolean) => Promise<void>, cl
   onMounted(activate); onActivated(activate); onDeactivated(deactivate); onBeforeUnmount(deactivate)
   return { loading, busy, error, notice, load, act, ticket }
 }
+
+/** 首次挂载和 KeepAlive 返回时刷新，避免首次触发两次加载。 */
+export function useAdminRefresh(load: () => unknown, close: () => void = () => {}) {
+  let active = false
+  const activate = () => { if (!active) { active = true; void load() } }
+  onMounted(activate)
+  onActivated(activate)
+  onDeactivated(() => { active = false; close() })
+  onBeforeUnmount(() => { active = false; close() })
+}
