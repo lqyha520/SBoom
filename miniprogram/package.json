@@ -37,7 +37,7 @@
     "@eslint/js": "^9.39.5",
     "@iconify-json/lucide": "1.2.139",
     "@types/node": "^22.0.0",
-    "eslint": "^9.39.4",
+    "eslint": "^10.12.0",
     "eslint-plugin-vue": "^10.11.1",
     "miniprogram-api-typings": "5.2.3",
     "sass": "^1.105.1",
