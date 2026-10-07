@@ -2,6 +2,6 @@
 -r requirements.txt
 pytest
 pytest-xdist  # `pytest -n auto` 并行跑后端用例（每个 worker 各建一个 lc_test_* 一次性库）
-mypy>=1.9.0  # 类型检查
+mypy>=2.4.0  # 类型检查
 pip-audit>=2.10.1  # 依赖安全检查
 ruff
