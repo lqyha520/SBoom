@@ -66,7 +66,7 @@ function pickTemplate(id: string) {
       <p v-else-if="missingConditions" class="mb-3 text-xs text-muted">待补充：{{ missingConditions }}</p>
       <RecoveryActions />
       <GenerationTasks />
-      <p v-if="store.usage" class="mb-2 text-xs text-muted numeric">24 小时请求 {{ store.usage.requests }} / {{ store.usage.daily_limit }}</p>
+      <p v-if="store.usage && store.usage.daily_limit > 0" class="mb-2 text-xs text-muted numeric" title="按过去 24 小时发起的试卷与图片请求计数，失败请求也计入；查询原请求不重复计数。">近 24 小时已请求 {{ store.usage.requests }} 次 / 上限 {{ store.usage.daily_limit }} 次</p>
       <div class="flex gap-2">
         <UButton icon="i-lucide-sparkles" :label="store.generating ? store.generateProgress || '正在生成试卷' : '生成试卷'" :loading="store.generating" :disabled="!store.canGenerate || store.layoutMode" block class="min-h-10 whitespace-normal" @click="store.requestGeneration()" />
         <UButton class="mobile-preview" icon="i-lucide-eye" color="neutral" variant="outline" aria-label="卷面预览" @click="emit('preview')" />

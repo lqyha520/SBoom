@@ -3,6 +3,7 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test'
 import { readFile, writeFile } from 'node:fs/promises'
 import { DEFAULT_LAYOUT, TEMPLATES } from '../src/constants'
 import type { WorkspaceSnapshot } from '../src/persistence'
+import { createGenerationRun } from '../src/generation'
 
 // 真实生产构建与 IndexedDB；API 固定响应避免依赖付费模型和业务数据库。
 async function api(context: BrowserContext) {
@@ -15,7 +16,7 @@ async function api(context: BrowserContext) {
     else if (path === '/api/v1/scope/available') data = { available: { 小学三年级: ['数学'] } }
     else if (path === '/api/v1/scope') data = { allowed: ['加减法'] }
     else if (path === '/api/v1/me/templates') data = { templates: [] }
-    else if (path === '/api/v1/me/usage') data = { requests: 0 }
+    else if (path === '/api/v1/me/usage') data = { requests: 0, daily_limit: 0 }
     else throw new Error(`浏览器用例出现未声明请求：${route.request().method()} ${path}`)
     await route.fulfill({ json: data })
   })
@@ -112,7 +113,7 @@ async function seed(page: Page, snapshot: WorkspaceSnapshot) {
   }, snapshot)
   await page.reload()
   await expect(page.locator('.result-view .paper-stack .q')).toHaveCount(
-    snapshot.papers[0].sections[0].data.questions.length,
+    snapshot.papers[0].sections.reduce((total, section) => total + section.data.questions.length, 0),
   )
 }
 
@@ -131,6 +132,323 @@ async function expectContentsFit(page: Page) {
       ),
     )
     .toBe(true)
+}
+
+test('新版教材目录不显示旧知识点和随机提示', async ({ page, context }) => {
+  await api(context)
+  await context.route('**/api/v1/scope/available', route => route.fulfill({
+    json: { available: { 小学一年级: ['数学'], 小学三年级: ['数学'] } },
+  }))
+  const general = '20以内的进位加法'
+  await context.route('**/api/v1/scope?**', route => route.fulfill({
+    json: { allowed: ['认识钟表'], semesters: { 上册: ['认识钟表'] }, books: [{
+      id: '1221001101241', semester: '上册', series: '人教版数学', verified_on: '2026-10-10',
+      source_url: 'https://book.pep.com.cn/1221001101241/', units: [{ title: general, page: 88, topics: [] }],
+    }] },
+  }))
+  const snapshot = worksheet(1)
+  snapshot.grade = '小学一年级'
+  snapshot.keyword = '上册·20以内的进位加法（凑十法：9加几、8加几）'
+  await seed(page, snapshot)
+  await page.getByRole('button', { name: '返回搭建', exact: true }).click()
+  await expect(page.getByRole('link', { name: '人教版数学 · 上册' })).toHaveAttribute('href', 'https://book.pep.com.cn/1221001101241/')
+  await expect(page.getByRole('button', { name: '认识钟表', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: general, exact: true }).click()
+  await expect(page.getByRole('note')).toHaveCount(0)
+})
+
+for (const width of [1440, 390]) {
+  test(`缺题补齐保留有效题 ${width}px`, async ({ page, context }, info) => {
+    await api(context)
+    const snapshot = worksheet(2)
+    snapshot.sections = snapshot.papers[0].sections.map(section => ({
+      ...section, id: section._sid!, count: 2, status: 'ready',
+    }))
+    snapshot.sections.push({
+      id: 'oral', type: 'oral_math', count: 2, status: 'ready',
+      layout: { ...DEFAULT_LAYOUT }, data: { questions: [] },
+    })
+    await seed(page, snapshot)
+    await page.setViewportSize({ width, height: 900 })
+    await page.getByRole('button', { name: '返回搭建', exact: true }).click()
+    if (width < 900) await page.locator('.workspace-tabs').getByRole('tab', { name: '试卷结构', exact: true }).click()
+    const requests: { items: { section_id: string; game_type: string; question_count: number }[] }[] = []
+    await context.route('**/api/v1/generate-batch', async route => {
+      const body = route.request().postDataJSON()
+      requests.push(body)
+      if (requests.length === 1) {
+        await route.fulfill({ status: 422, json: { detail: {
+          code: 'generation_incomplete', error: '缺少2道题',
+          partial_sections: body.items.map((item: { section_id: string; game_type: string }) => ({
+            ...item, questions: item.game_type === 'oral_math' ? [] : snapshot.papers[0].sections[0].data.questions,
+            missing_count: item.game_type === 'oral_math' ? 2 : 0,
+          })),
+        } } })
+      } else {
+        await route.fulfill({ json: { sections: [{
+          ...body.items[0], missing_count: 0, questions: [
+            { type: 'oral_math', stem: '９＋４＝', answer: 13 },
+            { type: 'oral_math', stem: '８＋６＝', answer: 14 },
+          ],
+        }] } })
+      }
+    })
+    page.once('dialog', dialog => dialog.accept())
+    await page.getByRole('button', { name: '生成试卷', exact: true }).click()
+    await expect(page.locator('.result-view .q')).toHaveCount(2)
+    await expect(page.locator('.result-view')).toContainText('1 份试卷尚未完成')
+    await expect(page.getByRole('button', { name: '补齐 1 份', exact: true }).filter({ visible: true })).toBeVisible()
+    expect(requests).toHaveLength(1)
+    await page.screenshot({ path: info.outputPath(`incomplete-${width}.png`) })
+    await page.getByRole('button', { name: '补齐 1 份', exact: true }).filter({ visible: true }).click()
+    await page.getByRole('button', { name: '确认补齐', exact: true }).click()
+    await expect(page.locator('.result-view .q')).toHaveCount(4)
+    expect(requests).toHaveLength(2)
+    expect(requests[1].items).toEqual([{ section_id: 'oral', game_type: 'oral_math', question_count: 2 }])
+    await expect(page.locator('.result-view')).not.toContainText('尚未完成')
+    await expectContentsFit(page)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`completed-${width}.png`) })
+  })
+
+  test(`过程填空保留换行和作答空格 ${width}px`, async ({ page, context }, info) => {
+    await api(context)
+    const snapshot = worksheet(0)
+    snapshot.papers[0].sections = [{
+      type: 'fill_blank', _sid: 'process', layout: { ...DEFAULT_LAYOUT, qCols: 2 },
+      data: { questions: [
+        { _qid: 'process-one', type: 'fill_blank', stem: '8 + 7 = 8 + ____ + 5\n= 10 + ____ = ____', answer: '2，5，15' },
+        { _qid: 'ordinary', type: 'fill_blank', stem: '9 + ____ = 16', answer: 7 },
+      ] },
+    }]
+    await page.setViewportSize({ width, height: 900 })
+    await seed(page, snapshot)
+    const stem = page.locator('.result-view .paper-stack .q [data-e="stem"]').first()
+    await expect(stem).toHaveCSS('white-space', 'pre-line')
+    expect(await stem.innerText()).toContain('\n')
+    expect((await stem.innerText()).match(/___/g)).toHaveLength(3)
+    await expect(stem).not.toContainText('____')
+    await expect(page.locator('.result-view .paper-stack .q [data-e="stem"]').nth(1)).toContainText('9 + ___ = 16')
+    await expect(page.locator('.result-view .paper-stack .q-ans-inline')).toHaveCount(0)
+    await expectContentsFit(page)
+    await page.locator('.result-view .paper-stack .paper').first().screenshot({ path: info.outputPath(`process-fill-${width}.png`) })
+  })
+
+  for (const outcome of ['success', 'timeout'] as const) {
+    test(`生成等待留在搭建页 ${outcome} ${width}px`, async ({ page, context }, info) => {
+      await api(context)
+      const snapshot = worksheet(2)
+      snapshot.sections = snapshot.papers[0].sections.map(section => ({
+        ...section, id: section._sid!, count: 2, status: 'ready',
+      }))
+      await seed(page, snapshot)
+      await page.setViewportSize({ width, height: 900 })
+      await page.getByRole('button', { name: '返回搭建', exact: true }).click()
+      if (width < 900) await page.locator('.workspace-tabs').getByRole('tab', { name: '试卷结构', exact: true }).click()
+      await expect(page.locator('.generation-footer')).not.toContainText('24 小时')
+      let release!: () => void
+      const gate = new Promise<void>(resolve => { release = resolve })
+      let sent = 0
+      await context.route('**/api/v1/generate-batch', async route => {
+        sent++
+        await gate
+        if (outcome === 'timeout') {
+          await route.fulfill({ status: 504, json: { detail: { error: '上游等待超时，请查询原请求' } } })
+        } else {
+          const body = route.request().postDataJSON()
+          await route.fulfill({ json: { sections: body.items.map((item: { section_id: string; game_type: string }) => ({
+            section_id: item.section_id, game_type: item.game_type, questions: snapshot.papers[0].sections[0].data.questions,
+          })) } })
+        }
+      })
+      page.once('dialog', dialog => dialog.accept())
+      await page.getByRole('button', { name: '生成试卷', exact: true }).click()
+      try {
+        await expect.poll(() => sent).toBe(1)
+        await expect(page.getByRole('heading', { name: '试卷搭建', exact: true })).toBeVisible()
+        await expect(page.locator('.structure-panel')).toBeVisible()
+        await expect(page.locator('.generation-footer')).toContainText('正在生成')
+        await expect(page.locator('.result-view')).not.toBeVisible()
+        await expect(page.getByRole('button', { name: '生成结果', exact: true })).toBeDisabled()
+        await expect(page.getByRole('button', { name: '停止后续任务', exact: true }).filter({ visible: true })).toBeVisible()
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+        await page.screenshot({ path: info.outputPath(`generating-${outcome}-${width}.png`) })
+      } finally {
+        release()
+      }
+      if (outcome === 'success') {
+        await expect(page.getByRole('heading', { name: '生成结果', exact: true })).toBeVisible()
+        await expect(page.locator('.result-view .q')).toHaveCount(2)
+      } else {
+        await expect(page.locator('.generation-footer [role="alert"]')).toContainText('上游等待超时')
+        await expect(page.getByRole('heading', { name: '试卷搭建', exact: true })).toBeVisible()
+        await expect(page.getByRole('button', { name: '查询原请求', exact: true }).filter({ visible: true })).toBeVisible()
+        await expect(page.locator('.result-view')).not.toBeVisible()
+      }
+      expect(sent).toBe(1)
+    })
+  }
+}
+
+test('笔记本布局支持知识点搜索、折叠和专注预览', async ({ page, context }, info) => {
+  await api(context)
+  await context.route('**/api/v1/scope?**', route => route.fulfill({ json: {
+    allowed: ['加减法', '分数初步认识'],
+    semesters: { 上册: ['加减法'], 下册: ['分数初步认识'] },
+    books: ['上册', '下册'].map((semester, index) => ({
+      id: String(index), semester, series: '人教版数学', verified_on: '2026-10-10', source_url: 'https://jc.pep.com.cn/',
+      units: [{ title: index ? '分数初步认识' : '加减法', page: 1, topics: [] }],
+    })),
+  } }))
+  await page.setViewportSize({ width: 1366, height: 768 })
+  await page.goto('/')
+  await page.getByRole('button', { name: '小学三年级', exact: true }).click()
+  await page.getByRole('button', { name: '数学', exact: true }).click()
+  const search = page.getByRole('textbox', { name: '查找知识点', exact: true })
+  await expect(search).toBeVisible()
+  await expect(page.getByRole('button', { name: '分数初步认识', exact: true })).not.toBeVisible()
+  await page.getByRole('button', { name: '下册 · 1 项', exact: true }).click()
+  await expect(page.getByRole('button', { name: '分数初步认识', exact: true })).toBeVisible()
+  await search.fill('分数')
+  await expect(page.getByRole('button', { name: '加减法', exact: true })).not.toBeVisible()
+  await page.getByRole('button', { name: '分数初步认识', exact: true }).click()
+  await search.fill('')
+  await expect(page.getByRole('button', { name: '取消选择：下册·分数初步认识', exact: true })).toBeVisible()
+  await page.screenshot({ path: info.outputPath('workspace-laptop.png') })
+  await page.getByRole('button', { name: '专注预览', exact: true }).click()
+  await expect(page.locator('.conditions-panel')).not.toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: info.outputPath('workspace-focus.png') })
+  await page.getByRole('button', { name: '返回搭建面板', exact: true }).click()
+  await expect(search).toBeVisible()
+})
+
+test('标题默认只改当前试卷，全部修改可撤销且不重测题目', async ({ page, context }) => {
+  await api(context)
+  const snapshot = worksheet(2)
+  snapshot.papers.push({ ...structuredClone(snapshot.papers[0]), title: '第二份原题' })
+  snapshot.paperCount = 2
+  await seed(page, snapshot)
+  await expect(page.locator('.result-view .offscreen')).toHaveCount(0)
+  await page.evaluate(() => {
+    // 记录实际创建的测量题目，标题变更只需测卷头和卷尾。
+    const state = window as typeof window & { measuredQuestions: number }
+    state.measuredQuestions = 0
+    new MutationObserver(records => {
+      for (const record of records) for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue
+        state.measuredQuestions += node.matches('.offscreen') ? node.querySelectorAll('.q').length
+          : node.closest('.offscreen') ? node.querySelectorAll('.q').length + Number(node.matches('.q')) : 0
+      }
+    }).observe(document.querySelector('.result-view')!, { childList: true, subtree: true })
+  })
+  const title = page.locator('.result-view .paper-stack .paper-title').first()
+  await title.fill('仅修改第一份')
+  await page.getByRole('heading', { name: '生成结果', exact: true }).click()
+  await expect(page.locator('.result-view [data-pagination-pending]')).toHaveCount(0)
+  expect(await page.evaluate(() => (window as typeof window & { measuredQuestions: number }).measuredQuestions)).toBe(0)
+  await page.getByRole('combobox', { name: '选择试卷' }).click()
+  await page.getByRole('option', { name: '第 2 份试卷', exact: true }).click()
+  await expect(title).toContainText('第二份原题')
+  await page.getByRole('combobox', { name: '标题修改范围' }).click()
+  await page.getByRole('option', { name: '全部试卷', exact: true }).click()
+  await title.fill('统一试卷标题')
+  await page.getByRole('heading', { name: '生成结果', exact: true }).click()
+  await page.getByRole('combobox', { name: '选择试卷' }).click()
+  await page.getByRole('option', { name: '第 1 份试卷', exact: true }).click()
+  await expect(title).toContainText('统一试卷标题')
+  await page.getByRole('button', { name: '撤销编辑', exact: true }).click()
+  await expect(title).toContainText('仅修改第一份')
+})
+
+test('修改一道题仅重测所属大题，分页和其他大题保持完整', async ({ page, context }) => {
+  await api(context)
+  const snapshot = worksheet(2)
+  const second = structuredClone(snapshot.papers[0].sections[0])
+  second._sid = 'second'
+  second.data.questions.forEach((question, index) => { question._qid = `second-${index}` })
+  snapshot.papers[0].sections.push(second)
+  await seed(page, snapshot)
+  await expect(page.locator('.result-view .offscreen')).toHaveCount(0)
+  const pagesBefore = await page.locator('.result-view .paper-stack .paper').count()
+  await page.evaluate(() => {
+    const state = window as typeof window & { maxMeasuredQuestions: number }
+    state.maxMeasuredQuestions = 0
+    new MutationObserver(() => {
+      state.maxMeasuredQuestions = Math.max(state.maxMeasuredQuestions, document.querySelectorAll('.result-view .offscreen .q').length)
+    }).observe(document.querySelector('.result-view')!, { childList: true, subtree: true })
+  })
+  await page.locator('.result-view .paper-stack .opts [contenteditable="true"]').last().fill('检查大题增量分页的长选项。'.repeat(45))
+  await page.getByRole('heading', { name: '生成结果', exact: true }).click()
+  await expect.poll(() => page.locator('.result-view .paper-stack .paper').count()).toBeGreaterThan(pagesBefore)
+  expect(await page.evaluate(() => (window as typeof window & { maxMeasuredQuestions: number }).maxMeasuredQuestions)).toBe(2)
+  await expect(page.locator('.result-view .paper-stack .q')).toHaveCount(4)
+  await expectContentsFit(page)
+})
+
+test('批量 ZIP 包含每份学生卷、答案卷和页数正确的合并卷', async ({ page, context }, info) => {
+  await api(context)
+  const snapshot = worksheet(2)
+  snapshot.papers.push(structuredClone(snapshot.papers[0]))
+  snapshot.paperCount = 2
+  await seed(page, snapshot)
+  const pending = page.waitForEvent('download')
+  await page.getByRole('button', { name: '更多导出方式', exact: true }).click()
+  await page.getByRole('menuitem', { name: '全部试卷 ZIP', exact: true }).click()
+  const download = await pending, file = info.outputPath('worksheets.zip')
+  await download.saveAs(file)
+  const zip = await JSZip.loadAsync(await readFile(file))
+  const names = Object.keys(zip.files)
+  expect(names).toHaveLength(5)
+  expect(names.filter(name => name.endsWith('-学生卷.pdf'))).toHaveLength(2)
+  expect(names.filter(name => name.endsWith('-答案.pdf'))).toHaveLength(2)
+  for (const name of names) {
+    const pdf = await zip.files[name].async('string')
+    expect(pdf.startsWith('%PDF-')).toBe(true)
+    expect(pdf.match(/\/Type\s*\/Page\b/g)).toHaveLength(name.includes('合并') ? 2 : 1)
+  }
+})
+
+for (const width of [1280, 390]) {
+  test(`配置不编题，点击生成才请求模型 ${width}px`, async ({ page, context }, info) => {
+    await api(context)
+    await seed(page, worksheet(1))
+    await page.setViewportSize({ width, height: width === 1280 ? 800 : 844 })
+    let calls = 0
+    await context.route('**/api/v1/generate-batch', async route => {
+      calls++
+      const body = route.request().postDataJSON()
+      await route.fulfill({ json: { sections: body.items.map((item: {
+        game_type: string; section_id: string; question_count: number
+      }) => ({
+        game_type: item.game_type, section_id: item.section_id,
+        questions: Array.from({ length: item.question_count }, (_, index) => ({
+          type: 'fill_blank', stem: `模型返回的题目 ${index + 1}`, answer: '2',
+        })),
+      })) } })
+    })
+    await page.getByRole('button', { name: '返回搭建', exact: true }).click()
+    if (width < 900) await page.locator('.workspace-tabs').getByRole('tab', { name: '试卷结构', exact: true }).click()
+    const structure = page.locator('.structure-panel')
+    await structure.getByRole('button', { name: '添加题型', exact: true }).click()
+    await structure.getByRole('button', { name: '填空题', exact: true }).click()
+    await expect(structure.locator('.section-item')).toHaveCount(1)
+    await expect(structure.locator('.section-status')).toContainText('待生成')
+    const count = structure.getByRole('spinbutton', { name: '第 1 大题题目数量' })
+    await count.fill('6')
+    await count.press('Tab')
+    await expect(structure.locator('.section-status')).toContainText('待生成 6 道题')
+    await expect(page.locator('.preview-panel .paper-stack .q')).toHaveCount(0)
+    expect(calls).toBe(0)
+    await page.screenshot({ path: info.outputPath(`pending-model-${width}.png`) })
+    page.once('dialog', dialog => dialog.accept())
+    await page.getByRole('button', { name: '生成试卷', exact: true }).click()
+    await expect(page.locator('.result-view .paper-stack .q')).toHaveCount(6)
+    await expect(page.locator('.result-view .paper-stack')).toContainText('模型返回的题目 1')
+    expect(calls).toBe(1)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`model-result-${width}.png`) })
+  })
 }
 
 for (const width of [1440, 320]) {
@@ -186,7 +504,7 @@ test('末页卷尾完整，下载的 PDF 与页面数量一致', async ({ page, 
   const pages = await page.locator('.result-view .paper-stack .paper').count()
   expect(pages).toBeGreaterThan(1)
   const download = page.waitForEvent('download')
-  await page.getByRole('button', { name: '下载 PDF', exact: true }).click()
+  await page.getByRole('button', { name: '下载学生卷', exact: true }).click()
   const saved = await download
   expect(await saved.failure()).toBeNull()
   const filename = info.outputPath('worksheet.pdf')
@@ -243,7 +561,7 @@ test('连线题表格编辑、刷新和 PDF 导出保持完整结构', async ({ 
   }
   const pages = await page.locator('.result-view .paper-stack .paper').count()
   const pending = page.waitForEvent('download')
-  await page.getByRole('button', { name: '下载 PDF', exact: true }).click()
+  await page.getByRole('button', { name: '下载学生卷', exact: true }).click()
   const download = await pending, file = info.outputPath('matching.pdf')
   await download.saveAs(file)
   const pdf = (await readFile(file)).toString('latin1')
@@ -276,7 +594,7 @@ test('单题超过整页时提示调整内容并阻止裁切导出', async ({ pa
   await expect(page.getByRole('alert')).toContainText('内容超出 A4 页面')
   const downloads: string[] = []
   page.on('download', download => downloads.push(download.suggestedFilename()))
-  await page.getByRole('button', { name: '下载 PDF', exact: true }).click()
+  await page.getByRole('button', { name: '下载学生卷', exact: true }).click()
   await expect(page.locator('.result-notice')).toContainText('导出失败：内容超出 A4 页面')
   expect(downloads).toEqual([])
 })
@@ -509,6 +827,52 @@ for (const width of [1280, 390, 320]) {
 }
 
 for (const width of [1440, 320]) {
+  test(`缺题或待恢复请求不再禁用清空设置，保留原请求历史 ${width}px`, async ({ page, context }, info) => {
+    await api(context)
+    const snapshot = worksheet(2)
+    snapshot.sections = snapshot.papers[0].sections.map(section => ({
+      ...section, id: section._sid!, count: 4, status: 'error', error: '缺少 2 道题，可手动补齐',
+    }))
+    snapshot.pendingRun = createGenerationRun({ grade: snapshot.grade, subject: snapshot.subject,
+      keyword: snapshot.keyword, title: snapshot.title, difficulty: snapshot.difficulty,
+      hiddenElements: [], count: 1, sections: snapshot.sections })
+    snapshot.pendingRun.jobs[0].chunks[0].state = 'unknown'
+    snapshot.sections[0].pendingGeneration = snapshot.pendingRun
+    await seed(page, snapshot)
+    await page.setViewportSize({ width, height: width === 320 ? 568 : 1000 })
+    await page.getByRole('button', { name: '返回搭建', exact: true }).click()
+    const clear = page.getByRole('button', { name: '清空设置', exact: true })
+    await expect(clear).toBeEnabled()
+    page.once('dialog', dialog => dialog.accept())
+    await clear.click()
+    await expect(page.locator('.workspace-meta')).toContainText('0 个大题')
+    await expect(page.locator('.conditions-panel textarea')).toHaveValue('')
+    await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible()
+    const archived = await page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('learn-coach-workspaces', 2)
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error)
+      })
+      try {
+        return await new Promise<Array<{ reason: string; snapshot: WorkspaceSnapshot }>>((resolve, reject) => {
+          const request = db.transaction('history').objectStore('history').getAll()
+          request.onsuccess = () => resolve(request.result)
+          request.onerror = () => reject(request.error)
+        })
+      } finally { db.close() }
+    })
+    const saved = archived.find(entry => entry.reason === 'before-clear')!.snapshot
+    expect(saved.pendingRun).toEqual(snapshot.pendingRun)
+    expect(saved.sections[0].pendingGeneration).toEqual(snapshot.sections[0].pendingGeneration)
+    await page.screenshot({ path: info.outputPath('cleared-pending-settings.png') })
+    await page.reload()
+    await expect(page.locator('.workspace-meta')).toContainText('0 个大题')
+    await expect(page.getByRole('button', { name: /查看生成任务/ })).toHaveCount(0)
+    await page.getByRole('button', { name: /^生成结果/ }).click()
+    await expect(page.locator('.result-view .paper-stack .q')).toHaveCount(2)
+  })
+
   test(`清空试卷设置保留结果，可撤销重做并在刷新后保持 ${width}px`, async ({ page, context }, info) => {
     await api(context)
     const snapshot = worksheet(2)

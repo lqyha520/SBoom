@@ -98,8 +98,11 @@ def sources(q: str = Query("", max_length=120), limit: int = Query(20, ge=1, le=
 @admin_router.get("/papers")
 def admin_papers(q: str = Query("", max_length=120), status: Literal["", "draft", "published", "withdrawn"] = "",
                  limit: int = Query(20, ge=1, le=50), offset: int = Query(0, ge=0, le=100000),
+                 grade: str = Query("", max_length=80), subject: str = Query("", max_length=80),
+                 category: str = Query("", max_length=60), access: Literal["", "free", "vip_download", "vip_view"] = "",
                  user: CurrentUser = Depends(require_admin)):
-    return catalog.list_papers(user.id, q=q, limit=limit, offset=offset, admin=True, status=status)
+    return catalog.list_papers(user.id, q=q, grade=grade, subject=subject, category=category,
+                               limit=limit, offset=offset, admin=True, status=status, access=access)
 
 
 @admin_router.post("/papers", status_code=201)

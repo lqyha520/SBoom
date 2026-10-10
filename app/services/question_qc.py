@@ -1,6 +1,6 @@
 """题型质检 —— 对 LLM 生成的题目做内容级校验，不合格的剔除或重生成
 
-结构、选项、可确定计算答案及重复内容检查。
+结构、选项及可确定计算答案检查，不因题目内容重复而剔除。
 不替代教师对语义、知识范围与开放题答案的审核。
 """
 
@@ -9,6 +9,7 @@ import json
 import logging
 import operator
 import re
+import unicodedata
 from fractions import Fraction
 
 from pydantic import ValidationError
@@ -16,6 +17,21 @@ from pydantic import ValidationError
 from app.models import Question
 
 logger = logging.getLogger(__name__)
+
+_MATH_SYMBOLS: dict[int, int | str] = {code: code - 0xFEE0 for code in range(0xFF01, 0xFF5F)}
+_MATH_SYMBOLS.update({ord(key): value for key, value in
+                      {"×": "*", "÷": "/", "−": "-", "　": " ", "[": "(", "]": ")"}.items()})
+
+
+def math_symbols(value: str) -> str:
+    """只归一化全角 ASCII 与运算符，不把上标等其他数学记号改成数字。"""
+    return value.translate(_MATH_SYMBOLS)
+
+
+def calculation_expression(stem: str) -> str:
+    text = math_symbols(stem)
+    return re.sub(r"\s*=\s*(?:[_?\s]*|\(\s*[_?\s]*\))$", "", text).strip()
+
 
 # 「同数连加」核心模式：a + a（两项即成，为 3 项检测打基础）
 # 「加法转乘法」题：4 + 4 + 4 + 4 + 4 = 5 × ____（同数连加 ≥2 项 + 乘号）
@@ -52,9 +68,7 @@ def reject_reason(stem: str | None) -> str | None:
 
 def arithmetic_value(expression: str) -> Fraction | None:
     """Evaluate a bounded arithmetic AST only; never execute model-provided code."""
-    # dict 值类型显式写宽：str.maketrans 的重载要 dict[str, str | int | None]，而 dict 是不变的
-    translation: dict[str, str | int | None] = {"×": "*", "÷": "/", "−": "-", "（": "(", "）": ")", "[": "(", "]": ")"}
-    text = expression.translate(str.maketrans(translation)).strip()
+    text = math_symbols(expression).strip()
     text = re.sub(r"(\d+(?:\.\d+)?)%", r"(\1/100)", text)
     if not text or len(text) > 120 or not re.fullmatch(r"[0-9.\s+*/()\-]+", text):
         return None
@@ -91,7 +105,32 @@ def _number(value) -> Fraction | None:
         return None
 
 
-def question_issue(question) -> str | None:
+def filled_math_stem(question: dict) -> str:
+    """依空格顺序代入数字答案；不能明确对应时返回空字符串。"""
+    stem = _text(question.get("stem", ""))
+    blank = re.compile(r"_+|[?？]+")
+    if not blank.search(stem):
+        return stem
+    answers = re.split(r"[,，;；、\s]+", str(question.get("answer", "")).strip())
+    if len(answers) != len(blank.findall(stem)) or any(_number(answer) is None for answer in answers):
+        return ""
+    # 分数和负数作为一个数代入，避免 3 / (1/2) 被误算成 3 / 1 / 2。
+    values = iter(f"({answer})" if "/" in answer or answer.startswith("-") else answer for answer in answers)
+    return blank.sub(lambda _: next(values), stem)
+
+
+def arithmetic_statement(stem: str) -> tuple[str, str, str] | None:
+    """只识别完整数值判断式，不对文字命题猜答案。"""
+    text = re.sub(r"\(\)$", "", _text(stem)).rstrip("。.")
+    match = re.fullmatch(r"([0-9.+*/()\-]+)([=<>≤≥≠])([0-9.+*/()\-]+)", text)
+    if match and all(arithmetic_value(match[index]) is not None for index in (1, 3)):
+        return match[1], match[2], match[3]
+    return None
+
+
+def question_issue(
+    question, *, compact_fill_blank: bool = False, allow_fill_blank_steps: bool = False,
+) -> str | None:
     if not isinstance(question, dict):
         return "题目不是有效对象"
     try:
@@ -120,7 +159,7 @@ def question_issue(question) -> str | None:
         if index is None or index.denominator != 1 or not 0 <= index < len(options):
             return "选择题答案索引越界"
     if kind in ("oral_math", "vertical_calc", "recursive_calc", "smart_calc"):
-        expression = re.sub(r"\s*[=＝]\s*[_?？\s]*$", "", stem or "")
+        expression = calculation_expression(stem or "")
         expected, actual = arithmetic_value(expression), _number(answer)
         if expected is None:
             return "计算题算式格式不正确"
@@ -140,6 +179,28 @@ def question_issue(question) -> str | None:
             return "比大小题答案不正确"
     if kind == "true_false" and str(answer).strip().casefold() not in ("√", "×", "正确", "错误", "对", "错", "true", "false"):
         return "判断题答案格式不正确"
+    if kind == "true_false" and (statement := arithmetic_statement(stem or "")):
+        left_text, relation, right_text = statement
+        a, b = arithmetic_value(left_text), arithmetic_value(right_text)
+        operators = {"=": operator.eq, "<": operator.lt, ">": operator.gt,
+                     "≤": operator.le, "≥": operator.ge, "≠": operator.ne}
+        correct = str(answer).strip().casefold() in ("√", "正确", "对", "true")
+        if a is not None and b is not None and operators[relation](a, b) != correct:
+            return "判断题算式与正误答案不一致"
+    if kind == "fill_blank":
+        text = _text(stem or "")
+        numeric_fill = bool(re.fullmatch(r"[0-9.+*/()=_\-?]+", text) and re.search(r"[_?]", text) and "=" in text)
+        process_fill = allow_fill_blank_steps and numeric_fill and "\n" in (stem or "") and text.count("=") > 1
+        # 仅生成普通数学填空时限制题干长度；换行不能绕过限制。
+        if compact_fill_blank and not process_fill and len(str(stem or "").strip()) > 24:
+            return "填空题题干过长"
+        if compact_fill_blank and re.match(r"在\s*_+\s*里填", str(stem or "").strip()):
+            return "填空题含多余说明性前缀"
+        if numeric_fill:
+            filled_stem = filled_math_stem(question)
+            values = [arithmetic_value(part) for part in filled_stem.split("=")] if filled_stem else []
+            if not values or any(value is None for value in values) or len(set(values)) != 1:
+                return "填空题答案与算式不一致或多空答案不完整"
     if kind == "number_split":
         if any(key not in question for key in ("top", "left", "right")):
             return "数的分成字段缺失"
@@ -169,30 +230,124 @@ def question_issue(question) -> str | None:
     return None
 
 
+def make_ten_issue(question: dict) -> str | None:
+    """仅校验明确的凑十法数值题边界，不生成题目，也不猜测自然语言题意。"""
+    kind = question.get("type")
+    expressions: list[str] = []
+    allow_ten = kind in ("fill_blank", "true_false")
+    if kind in ("oral_math", "vertical_calc", "fill_blank"):
+        text = filled_math_stem(question)
+        # 方法填空只检查起始原式，后续拆分步骤由算术一致性检查负责。
+        first = text.split("=", 1)[0]
+        if arithmetic_value(first) is not None:
+            expressions = [first]
+    elif kind == "compare":
+        expressions = [str(question.get(key, "")) for key in ("left_expr", "right_expr")]
+    elif kind == "true_false" and (statement := arithmetic_statement(question.get("stem", ""))):
+        expressions = [statement[0], statement[2]]
+    elif kind == "number_split":
+        values = [_number(question.get(key)) for key in ("top", "left", "right")]
+        answer = _number(question.get("answer"))
+        filled = [answer if value is None else value for value in values]
+        if any(value is None or value.denominator != 1 or not 1 <= value <= 10 for value in filled):
+            return "凑十法的分成与组成应使用10以内的正整数"
+    addition_found = False
+    for expression in expressions:
+        text = _text(expression)
+        # 用 AST 识别原式，避免把括号或全角写法当成绕过边界的不同题型。
+        try:
+            tree = ast.parse(text, mode="eval").body
+        except (SyntaxError, ValueError):
+            return "凑十法算式格式不正确"
+        if isinstance(tree, ast.Constant) and type(tree.value) is int and 0 <= tree.value <= 20:
+            continue
+        if (isinstance(tree, ast.BinOp) and isinstance(tree.op, ast.Add)
+                and all(isinstance(node, ast.Constant) and type(node.value) is int and 1 <= node.value <= 9
+                        for node in (tree.left, tree.right))):
+            total = arithmetic_value(text)
+            if total is not None and (total >= 10 if allow_ten else total > 10):
+                addition_found = True
+                continue
+        return "凑十法原式应是一位数加一位数的进位加法，不能使用两位数加数或独立三项连加"
+    if expressions and not addition_found and kind != "true_false":
+        return "凑十法练习缺少两数加法原式"
+    return None
+
+
+def _text(value) -> str:
+    text = unicodedata.normalize("NFKC", str(value)).casefold()
+    return re.sub(r"\s+", "", text).translate(str.maketrans("−×÷", "-*/"))
+
+
+def _expression_key(value: str) -> str:
+    """仅归一纯数字算式的写法与加乘交换；不按答案合并不同运算。"""
+    text = _text(value)
+    if arithmetic_value(text) is None:
+        return text
+    try:
+        def key(node) -> str:
+            if isinstance(node, ast.Constant):
+                return str(Fraction(str(node.value)))
+            if isinstance(node, ast.BinOp):
+                left, right = key(node.left), key(node.right)
+                if isinstance(node.op, (ast.Add, ast.Mult)):
+                    left, right = sorted((left, right))
+                return f"{type(node.op).__name__}({left},{right})"
+            if isinstance(node, ast.UnaryOp):
+                return f"{type(node.op).__name__}({key(node.operand)})"
+            raise ValueError("非算术节点")
+        return key(ast.parse(text, mode="eval").body)
+    except (SyntaxError, ValueError):
+        return text
+
+
 def question_fingerprint(question: dict, namespace: str = "") -> str:
-    content = {key: question[key] for key in (
-        "type", "stem", "options", "left_items", "right_items", "top", "left", "right", "left_expr", "right_expr",
-    ) if question.get(key) is not None}
-    return namespace + re.sub(r"\s+", "", json.dumps(content, sort_keys=True, ensure_ascii=False)).casefold()
+    kind = question.get("type", "")
+    stem = re.sub(r"[_?]+", "_", _text(question.get("stem", "")))
+    content: list
+    expression = re.sub(r"=[_?]*$", "", stem)
+    if kind in ("oral_math", "vertical_calc", "recursive_calc", "smart_calc") or (
+        kind == "fill_blank" and expression != stem and arithmetic_value(expression) is not None
+    ):
+        content = ["calculation", _expression_key(calculation_expression(stem))]
+    elif kind == "number_split":
+        def part(value):
+            return str(_number(value)) if _number(value) is not None else "_"
+        content = [kind, part(question.get("top")), sorted(part(question.get(k)) for k in ("left", "right"))]
+    elif kind == "compare":
+        content = [kind, sorted(_expression_key(str(question.get(k, ""))) for k in ("left_expr", "right_expr"))]
+    elif kind == "true_false" and (statement := arithmetic_statement(question.get("stem", ""))):
+        left, relation, right = statement
+        expressions = [_expression_key(left), _expression_key(right)]
+        if relation in ("=", "≠"):
+            expressions.sort()
+        elif relation in (">", "≥"):
+            expressions.reverse()
+            relation = {">": "<", "≥": "≤"}[relation]
+        content = [kind, relation, expressions]
+    elif kind in ("multiple_choice", "quiz", "challenge"):
+        content = ["multiple_choice", stem, sorted(_text(value) for value in question.get("options") or [])]
+    elif kind == "match_pair":
+        content = [kind, stem, sorted(_text(value) for value in question.get("left_items") or []),
+                   sorted(_text(value) for value in question.get("right_items") or [])]
+    else:
+        content = [kind, stem]
+    # 阅读题仍以原文分隔；不同文章里的同一句提问不能合并。
+    return json.dumps([unicodedata.normalize("NFKC", namespace).strip(), content], ensure_ascii=False)
 
 
-def filter_questions(questions: list, context: str = "", seen: set | None = None, namespace: str = "") -> tuple:
+def filter_questions(questions: list, context: str = "") -> tuple:
     """拦截不合格题目。返回 (保留列表, 被拦截题目列表)。
 
     注意：被拦截的题【不删除】——由调用方决定替换重出或提示用户，
     保证试卷题数不被悄悄减少。
     """
     ok, blocked = [], []
-    seen = seen if seen is not None else set()
     for q in (questions or []):
         reason = question_issue(q)
-        fingerprint = question_fingerprint(q, namespace) if isinstance(q, dict) else ""
-        if not reason and fingerprint in seen:
-            reason = "重复题目"
         if reason:
             blocked.append(q)
             logger.info("Question rejected (%s): %s", context, reason)
             continue
-        seen.add(fingerprint)
         ok.append(q)
     return ok, blocked

@@ -25,6 +25,8 @@ export interface Question {
   right_expr?: string
   /** 前端运行时标记（稳定 uid，供排版模式回写） */
   _qid?: string
+  /** 搭建阶段的格式示例，不属于正式试题 */
+  _preview?: boolean
   /** Locked questions are retained when regenerating their section or paper. */
   _locked?: boolean
   _replacement?: import('./generation').GenerationRun
@@ -36,6 +38,8 @@ export interface Question {
 /** 一个大题的生成数据 */
 export interface GameData {
   questions: Question[]
+  missing_count?: number
+  quality_warnings?: string[]
   passage?: string
   topic?: string
   difficulty?: string
@@ -155,6 +159,15 @@ export type Difficulty = 'easy' | 'medium' | 'hard'
 export interface ScopeData {
   allowed: string[]
   semesters?: Record<'上册' | '下册', string[]>
+  catalog_revision?: string
+  books?: {
+    id: string
+    semester: string
+    series: string
+    source_url: string
+    verified_on: string
+    units: { title: string; page: number; topics: string[] }[]
+  }[]
 }
 
 /** 我保存的卷面模板 */

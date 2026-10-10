@@ -27,7 +27,7 @@ import {
   type PublicationEdit,
   type PublicationStatus,
 } from './catalog'
-import { siteCategories, siteDictionary } from './site'
+import { createCategory, siteCategories, siteDictionary } from './site'
 import { useBeforeUnload } from './unsaved'
 import { useAdminLeaveGuard } from './navigation'
 
@@ -49,6 +49,7 @@ export const publicationStatuses = [
     value,
   })),
 ]
+export type PublicationSection = 'details' | 'metadata' | 'editions' | 'revision'
 
 export function usePublicationEditor(
   userId: number,
@@ -56,12 +57,16 @@ export function usePublicationEditor(
   saved: (notice: string, revealCreated?: boolean) => Promise<void>,
 ) {
   const categories = ref<{ label: string; value: string }[]>([])
+  const filterCategories = ref<{ label: string; value: string }[]>([])
   const statuses = publicationStatuses
   const message = (cause: unknown) =>
     cause instanceof Error ? cause.message : '操作失败，请重试'
   const dialog = ref(false)
+  const section = ref<PublicationSection>('details')
   const target = ref<CatalogPaper | null>(null)
   const saving = ref(false)
+  const categoryName = ref('')
+  const categoryCreating = ref(false)
   const imageComposer = useImagePdfComposer()
   const imageFields = reactive({
     grade: '',
@@ -73,7 +78,7 @@ export function usePublicationEditor(
 
   const importQueue = useCatalogImportQueue(userId, created)
   const busy = computed(
-    () => saving.value || importQueue.busy || imageComposer.busy,
+    () => saving.value || categoryCreating.value || importQueue.busy || imageComposer.busy,
   )
   const dialogError = ref('')
   const dialogNotice = ref('')
@@ -108,6 +113,7 @@ export function usePublicationEditor(
     (value) => {
       if (value === 'vip') form.value.download_access = 'vip'
     },
+    { flush: 'sync' },
   )
   const sourceQuery = ref('')
   const sources = ref<CatalogSource[]>([])
@@ -130,6 +136,7 @@ export function usePublicationEditor(
       sourceId: sourceId.value,
       imageFields,
       imageTitle: imageComposer.title,
+      categoryName: categoryName.value,
     })
   const dirty = computed(
     () =>
@@ -146,12 +153,12 @@ export function usePublicationEditor(
   useBeforeUnload(unsaved)
   useAdminLeaveGuard(
     () =>
-      !unsaved.value ||
+      !active.value || (!saving.value && !categoryCreating.value && (!unsaved.value ||
       window.confirm(
         pendingImport.value
           ? '导入尚未完成，离开会停止队列；未保存的表单修改也会丢失。确认离开？'
           : '有未保存的修改，确认放弃并离开？',
-      ),
+      ))),
   )
   function setDialogOpen(open: boolean): boolean {
     if (busy.value) return false
@@ -173,6 +180,20 @@ export function usePublicationEditor(
   const categoryError = ref('')
   const dictionaryLoading = ref(false)
   const categoryLoading = ref(false)
+  async function addCategory() {
+    if (!categoryName.value.trim() || categoryCreating.value) return
+    categoryCreating.value = true
+    try {
+      const item = await createCategory(userId, { name: categoryName.value.trim(), description: '', icon: '', sort_order: 0, is_visible: true })
+      categories.value.push({ label: item.name, value: item.id })
+      filterCategories.value.push({ label: item.name, value: item.id })
+      form.value.category_id = item.id
+      imageFields.category_id = item.id
+      categoryName.value = ''
+      categoryError.value = ''
+    } catch (cause) { dialogError.value = message(cause) }
+    finally { categoryCreating.value = false }
+  }
   async function loadDictionaryOptions() {
     if (dictionaryLoading.value) return
     dictionaryLoading.value = true
@@ -237,7 +258,9 @@ export function usePublicationEditor(
     categoryLoading.value = true
     categoryError.value = ''
     try {
-      categories.value = (await siteCategories()).items
+      const result = (await siteCategories()).items
+      filterCategories.value = result.map(item => ({ label: item.name + (item.is_visible ? '' : '（隐藏）'), value: item.id }))
+      categories.value = result
         .filter((item) => item.is_visible)
         .map((item) => ({ label: item.name, value: item.id }))
     } catch {
@@ -280,6 +303,8 @@ export function usePublicationEditor(
       return
     }
     target.value = null
+    categoryName.value = ''
+    section.value = 'details'
     mode.value = 'source'
     sourceId.value = ''
     sourceQuery.value = ''
@@ -310,7 +335,7 @@ export function usePublicationEditor(
     void loadSources()
     void loadDictionaryOptions()
   }
-  function edit(item: CatalogPaper) {
+  function edit(item: CatalogPaper, nextSection: PublicationSection = 'details') {
     if (busy.value) return
     if (
       dirty.value &&
@@ -318,6 +343,8 @@ export function usePublicationEditor(
     )
       return
     target.value = item
+    categoryName.value = ''
+    section.value = nextSection
     dialogError.value = ''
     dialogNotice.value = ''
     editConflict.value = false
@@ -383,8 +410,14 @@ export function usePublicationEditor(
           download_access: form.value.download_access,
         })
         created(result)
-        dialog.value = false
-        await saved('已创建草稿，预览并确认后可发布', true)
+        target.value = result
+        form.value.title = result.title
+        form.value.revision = result.revision
+        form.value.status = result.status
+        form.value.confirm_publication = false
+        markSaved()
+        dialogNotice.value = '已创建草稿，可在右侧预览，并继续补充标签、打印版本或发布'
+        await saved(dialogNotice.value)
       }
     } catch (cause) {
       editConflict.value = cause instanceof ApiError && cause.status === 409
@@ -405,6 +438,23 @@ export function usePublicationEditor(
     } catch (cause) {
       dialogError.value = message(cause)
     }
+  }
+  async function refreshTarget() {
+    if (!target.value) return null
+    const id = target.value.id
+    const latest = await catalogDetail(id)
+    if (target.value?.id !== id) return null
+    // 子面板保存只更新并发版本，不覆盖主表单尚未保存的字段。
+    const baseline = initialForm.value ? JSON.parse(initialForm.value) : null
+    target.value = latest
+    form.value.revision = latest.revision
+    if (baseline) {
+      baseline.form.revision = latest.revision
+      initialForm.value = JSON.stringify(baseline)
+    }
+    created(latest, true)
+    await saved('资料已更新')
+    return latest
   }
   async function runImport(retry = false) {
     if (
@@ -471,6 +521,7 @@ export function usePublicationEditor(
   onActivated(() => {
     active.value = true
     void loadCategories()
+    void loadDictionaryOptions()
   })
   onDeactivated(() => {
     active.value = false
@@ -487,6 +538,12 @@ export function usePublicationEditor(
   })
   return reactive({
     dialog,
+    userId,
+    section,
+    refreshTarget,
+    categoryName,
+    categoryCreating,
+    addCategory,
     dirty,
     setDialogOpen,
     target,
@@ -511,6 +568,7 @@ export function usePublicationEditor(
     dictionaryLoading,
     categoryLoading,
     categories,
+    filterCategories,
     publishing,
     importing,
     valid,

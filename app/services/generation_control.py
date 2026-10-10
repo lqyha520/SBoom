@@ -122,6 +122,9 @@ def reserve_repairs(count: int) -> int:
 def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | None:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", request_id):
         raise HTTPException(400, detail={"error": "无效的请求 ID"})
+    # 空的新增可选字段不改变旧请求指纹，部署后仍能重放原请求。
+    if kind == "batch" and not payload.get("previous_request_ids"):
+        payload = {key: value for key, value in payload.items() if key != "previous_request_ids"}
     fingerprint = hashlib.sha256(json.dumps(
         {"kind": kind, "payload": payload}, sort_keys=True, ensure_ascii=False,
         separators=(",", ":"),
@@ -154,12 +157,13 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
         active = conn.execute(
             "SELECT COUNT(*) FROM generation_requests WHERE user_id = ? AND status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) >= ?", (user_id, now),
         ).fetchone()[0]
-        used = conn.execute(
-            "SELECT COUNT(*) FROM generation_requests WHERE user_id = ? AND created_at >= ?",
-            (user_id, now - 86400),
-        ).fetchone()[0]
-        if used >= settings.generation_daily_limit:
-            raise HTTPException(429, detail={"error": "已达到过去 24 小时的生成请求额度", "code": "generation_quota"})
+        if settings.generation_daily_limit > 0:
+            used = conn.execute(
+                "SELECT COUNT(*) FROM generation_requests WHERE user_id = ? AND created_at >= ?",
+                (user_id, now - 86400),
+            ).fetchone()[0]
+            if used >= settings.generation_daily_limit:
+                raise HTTPException(429, detail={"error": "已达到过去 24 小时的生成请求额度", "code": "generation_quota"})
         if total >= settings.generation_global_concurrency or active >= settings.generation_user_concurrency:
             raise HTTPException(429, detail={"error": "生成任务繁忙，请稍后再试", "code": "generation_busy"}, headers={"Retry-After": "5"})
         if kind == "image":

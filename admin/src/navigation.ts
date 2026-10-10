@@ -8,7 +8,8 @@ export type AdminTab = typeof adminTabs[number]
 const remembered = new Map<string, string>()
 const leaveGuards = new Set<() => boolean>()
 export function useAdminLeaveGuard(guard: () => boolean) { leaveGuards.add(guard); onBeforeUnmount(() => leaveGuards.delete(guard)) }
-function canLeave(tab: AdminTab) { return tab === adminRoute.tab || [...leaveGuards].every(guard => guard()) }
+export function canLeaveAdmin() { return [...leaveGuards].every(guard => guard()) }
+function canLeave(tab: AdminTab) { return tab === adminRoute.tab || canLeaveAdmin() }
 export function parseAdminRoute(hash: string) {
   const [name, query = ''] = hash.replace(/^#/, '').split('?')
   const tab: AdminTab = adminTabs.includes(name as AdminTab) ? name as AdminTab : 'overview'

@@ -134,24 +134,20 @@ function makeHolder(): HTMLElement {
   return holder
 }
 
-/* ── JPEG dataURL → PDF（增量添加，画布侧已释放；jspdf 动态加载，模块缓存命中时零开销） ── */
+/* ── 逐页写入 PDF，不在内存中额外保留整卷的 Base64 图片数组 ── */
 type jsPDF = import('jspdf').jsPDF
-async function imagesToPDF(images: string[], stampNumbers = true): Promise<jsPDF> {
-  if (!images.length) throw new Error('试卷没有可导出的页面')
+async function newPDF(): Promise<jsPDF> {
   const { jsPDF: JsPDF } = await import('jspdf')
-  const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
-  images.forEach((img, i) => {
-    if (i) doc.addPage()
-    doc.addImage(img, 'JPEG', 0, 0, 210, 297)
-  })
-  const total = images.length
+  return new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
+}
+function stampPages(doc: jsPDF) {
+  const total = doc.getNumberOfPages()
   doc.setFont('times', 'normal')
   doc.setFontSize(9)
-  for (let i = 1; stampNumbers && i <= total; i++) {
+  for (let i = 1; i <= total; i++) {
     doc.setPage(i)
     doc.text(`- ${i} / ${total} -`, 105, 292.5, { align: 'center' })
   }
-  return doc
 }
 
 function download(blob: Blob, name: string) {
@@ -174,7 +170,7 @@ export async function createArchiveBundle(snapshot: ArchiveSnapshot, progress?: 
   const { paper, template, style, export_options: options } = snapshot
   const { default: JSZip } = await import('jszip')
   const zip = new JSZip()
-  const images: string[] = []
+  const doc = await newPDF()
   await renderPages(paper, template, style, options.mode, options.addDay, async (page, index, total) => {
     progress?.(`正在处理第 ${index + 1}/${total} 页`)
     const ctx = page.getContext('2d')!
@@ -183,7 +179,8 @@ export async function createArchiveBundle(snapshot: ArchiveSnapshot, progress?: 
     ctx.font = `${9 * 25.4 / 72 * pixelsPerMm}px Times New Roman`
     ctx.textAlign = 'center'
     ctx.fillText(`- ${index + 1} / ${total} -`, page.width / 2, 292.5 * pixelsPerMm)
-    images.push(page.toDataURL('image/jpeg', 0.92))
+    if (index) doc.addPage()
+    doc.addImage(page.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, 297)
     const preview = document.createElement('canvas')
     preview.width = Math.min(1040, page.width)
     preview.height = Math.round(preview.width * 297 / 210)
@@ -192,8 +189,7 @@ export async function createArchiveBundle(snapshot: ArchiveSnapshot, progress?: 
       zip.file(`page-${index + 1}.jpg`, await canvasBlob(preview, 'image/jpeg', 0.85))
     } finally { preview.width = preview.height = 0 }
   }, control)
-  zip.file('paper.pdf', (await imagesToPDF(images, false)).output('arraybuffer'))
-  images.length = 0
+  zip.file('paper.pdf', doc.output('arraybuffer'))
   const bundle = await zip.generateAsync({ type: 'blob', compression: 'STORE' }, () => checkExportActive(control.signal, control.isActive))
   checkExportActive(control.signal, control.isActive)
   if (bundle.size > 40 * 1024 * 1024) throw new Error('文件包超过 40 MB，请减少页数后重试')
@@ -202,15 +198,20 @@ export async function createArchiveBundle(snapshot: ArchiveSnapshot, progress?: 
 function canvasBlob(canvas: HTMLCanvasElement, type = 'image/png', quality?: number): Promise<Blob> {
   return new Promise((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('图片生成失败')), type, quality))
 }
-async function paperImages(paper: PaperData, template: PaperTemplate, style: PaperStyle,
-  mode: 'student' | 'withAnswers' | 'answersOnly', addDay: boolean, signal?: AbortSignal) {
-  const images: string[] = []
-  await renderPages(paper, template, style, mode, addDay, page => { images.push(page.toDataURL('image/jpeg', 0.92)) }, { signal })
-  return images
+async function paperPDF(paper: PaperData, template: PaperTemplate, style: PaperStyle,
+  mode: 'student' | 'withAnswers' | 'answersOnly', addDay: boolean, signal?: AbortSignal, progress?: (message: string) => void) {
+  const doc = await newPDF()
+  await renderPages(paper, template, style, mode, addDay, (page, index, total) => {
+    if (index) doc.addPage()
+    doc.addImage(page.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, 297)
+    progress?.(`正在导出第 ${index + 1}/${total} 页`)
+  }, { signal })
+  stampPages(doc)
+  return doc
 }
 export async function exportPDF(paper: PaperData, template: PaperTemplate, style: PaperStyle,
-  mode: 'student' | 'withAnswers' | 'answersOnly', signal?: AbortSignal): Promise<void> {
-  const doc = await imagesToPDF(await paperImages(paper, template, style, mode, true, signal))
+  mode: 'student' | 'withAnswers' | 'answersOnly', signal?: AbortSignal, progress?: (message: string) => void): Promise<void> {
+  const doc = await paperPDF(paper, template, style, mode, true, signal, progress)
   checkExportActive(signal)
   const suffix = mode === 'answersOnly' ? '（答案）' : mode === 'withAnswers' ? '（含答案）' : ''
   doc.save(`${baseTitle(paper, template)}${suffix}.pdf`)
@@ -233,30 +234,33 @@ export async function exportPNG(paper: PaperData, template: PaperTemplate, style
 export async function exportBatch(papers: PaperData[], template: PaperTemplate, style: PaperStyle,
   opts: { addDay: boolean; mergeOnly?: boolean; signal?: AbortSignal }, onProgress?: (msg: string) => void): Promise<void> {
   if (!papers.length) throw new Error('试卷没有可导出的页面')
-  const { default: JSZip } = await import('jszip')
-  const zip = opts.mergeOnly ? null : new JSZip()
-  const { jsPDF: JsPDF } = await import('jspdf')
-  const merged = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
+  const zip = opts.mergeOnly ? null : new (await import('jszip')).default()
+  const merged = await newPDF()
   let mergedCount = 0
   const title = baseTitle(papers[0], template)
   for (const [index, paper] of papers.entries()) {
     checkExportActive(opts.signal)
     onProgress?.(`正在处理第 ${index + 1}/${papers.length} 份…`)
-    const images = await paperImages(paper, template, style, 'student', opts.addDay, opts.signal)
-    for (const image of images) {
+    const student = zip ? await newPDF() : null
+    await renderPages(paper, template, style, 'student', opts.addDay, (page, pageIndex, total) => {
+      const image = page.toDataURL('image/jpeg', 0.92)
       if (mergedCount++) merged.addPage()
       merged.addImage(image, 'JPEG', 0, 0, 210, 297)
-    }
-    if (zip) {
+      if (student) {
+        if (pageIndex) student.addPage()
+        student.addImage(image, 'JPEG', 0, 0, 210, 297)
+      }
+      onProgress?.(`正在处理第 ${index + 1}/${papers.length} 份 · 第 ${pageIndex + 1}/${total} 页`)
+    }, { signal: opts.signal })
+    if (zip && student) {
       const suffix = opts.addDay ? `-第${index + 1}天` : `-第${index + 1}份`
-      zip.file(`${title}${suffix}-学生卷.pdf`, (await imagesToPDF(images)).output('arraybuffer'))
-      images.length = 0
+      stampPages(student)
+      zip.file(`${title}${suffix}-学生卷.pdf`, student.output('arraybuffer'))
       onProgress?.(`正在生成第 ${index + 1} 份答案…`)
-      zip.file(`${title}${suffix}-答案.pdf`, (await imagesToPDF(await paperImages(paper, template, style, 'answersOnly', false, opts.signal))).output('arraybuffer'))
+      zip.file(`${title}${suffix}-答案.pdf`, (await paperPDF(paper, template, style, 'answersOnly', false, opts.signal)).output('arraybuffer'))
     }
   }
-  merged.setFont('times', 'normal'); merged.setFontSize(9)
-  for (let page = 1; page <= mergedCount; page++) { merged.setPage(page); merged.text(`- ${page} / ${mergedCount} -`, 105, 292.5, { align: 'center' }) }
+  stampPages(merged)
   checkExportActive(opts.signal)
   if (!zip) { merged.save(`${title}-全部${papers.length}份合并.pdf`); return }
   zip.file(`${title}-全部${papers.length}份合并.pdf`, merged.output('arraybuffer'))
@@ -285,7 +289,7 @@ async function preparePaper(paper: PaperData, template: PaperTemplate, style: Pa
       const pages = holder.querySelectorAll('.paper-stack .paper')
       const questions = holder.querySelectorAll('.paper-stack .q')
       const sig = `${pages.length}|${questions.length}|${(holder.firstElementChild as HTMLElement).offsetHeight}`
-      if (pages.length > 0 && questions.length >= totalQ && sig === lastSig) { if (++stableFrames >= 3) break }
+      if (!holder.querySelector('[data-pagination-pending]') && pages.length > 0 && questions.length >= totalQ && sig === lastSig) { if (++stableFrames >= 3) break }
       else { stableFrames = 0; lastSig = sig }
     }
     if (stableFrames < 3) throw new Error('试卷分页尚未完成，请稍后重试导出')

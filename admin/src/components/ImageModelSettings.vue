@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { useAdminLeaveGuard } from "../navigation"
 import { useAdminRefresh } from '../admin-page'
 import { useBeforeUnload } from '../unsaved'
-import { computed, ref } from 'vue'
+import { computed, onActivated, onDeactivated, ref } from 'vue'
 import { fetchImageConfig, saveImageConfig, clearImageConfig, type ImageModelConfig } from '../image-api'
 
 const empty = () => ({ baseUrl: '', model: '', apiKey: '', timeout: 300, size: '1024x1536', responseFormat: 'auto' as ImageModelConfig['responseFormat'] })
@@ -11,7 +12,11 @@ const loadError = ref(''), error = ref(''), message = ref('')
 const formats = [{ label: '自动（使用接口默认）', value: 'auto' }, { label: 'Base64 图片', value: 'b64_json' }, { label: '图片 URL', value: 'url' }]
 const baseline = ref('')
 const dirty = computed(() => !!baseline.value && baseline.value !== JSON.stringify(config.value))
-useBeforeUnload(dirty)
+const pageActive = ref(true)
+onActivated(() => { pageActive.value = true })
+onDeactivated(() => { pageActive.value = false })
+useBeforeUnload(computed(() => pageActive.value && dirty.value))
+useAdminLeaveGuard(() => !pageActive.value || (!busy.value && (!dirty.value || window.confirm('有未保存的生图配置，确认离开？'))))
 let loadSequence = 0
 async function load() {
   if (dirty.value) return

@@ -6,6 +6,7 @@ import { captureWorkspaceGuard, fetchScope } from '../api'
 import { TYPE_GROUPS_BY_GRADE, TYPE_GROUPS_DEFAULT, TYPE_NAME } from '../constants'
 import { gradeNumOf } from '../utils'
 import type { Difficulty, ScopeData } from '../types'
+import { textbookGroups } from '../knowledge-points'
 import { fetchImageOptions, imageWorksheetTitle, plannedImageQuestionCount, previewImagePrompt, type ImageWorksheetParams, type WorksheetImage } from '../image-generation'
 import { MAX_WORKSHEET_IMAGES, useImageBatch } from '../image-batch'
 import { publicationUrl, type ImagePublication } from '../image-publication'
@@ -37,8 +38,9 @@ const draftKey = storageKey + '_draft', publishedKey = storageKey + '_published'
 const knowledgeSearch = ref('')
 const customOpen = ref(true)
 const advancedOpen = ref(false)
-const knowledgePoints = computed(() => (scope.value?.allowed || []).filter(point => point.includes(knowledgeSearch.value.trim())))
-const suggestedKnowledge = computed(() => (scope.value?.allowed || []).slice(0, 4))
+const catalogPoints = computed(() => textbookGroups(scope.value).flatMap(group => group.items.map(item => item.value)))
+const knowledgePoints = computed(() => catalogPoints.value.filter(point => point.includes(knowledgeSearch.value.trim())))
+const suggestedKnowledge = computed(() => catalogPoints.value.slice(0, 4))
 const chosenKnowledge = computed(() => keyword.value.split('、').map(point => point.trim()).filter(Boolean))
 const activeStyle = computed(() => styles.find(item => item.value === style.value)!)
 const difficulties = [{ value: 'easy' as const, label: '基础', description: '巩固知识' }, { value: 'medium' as const, label: '标准', description: '日常练习' }, { value: 'hard' as const, label: '提升', description: '进阶挑战' }]
@@ -394,12 +396,9 @@ onBeforeUnmount(() => { alive = false; scopeVersion++; promptVersion++; batch.di
                 <p class="image-field-hint">已选 {{ selected.length }}/5 种题型 · {{ quantitySummary(params.items) }}</p>
               </div>
             </details>
-            <div class="image-select-row">
-              <label class="image-select-field">难度
-                <select v-model="difficulty" aria-label="图片难度"><option v-for="item in difficulties" :key="item.value" :value="item.value">{{ item.label }} · {{ item.description }}</option></select>
-              </label>
-              <div><label class="image-label">生成张数</label><UInputNumber v-model="imageCount" aria-label="生成张数" :min="1" :max="MAX_WORKSHEET_IMAGES" :disabled="disabled" class="w-full" /></div>
-            </div>
+            <label class="image-select-field">难度
+              <select v-model="difficulty" aria-label="图片难度"><option v-for="item in difficulties" :key="item.value" :value="item.value">{{ item.label }} · {{ item.description }}</option></select>
+            </label>
             <div>
               <label class="image-label" id="image-style-label">画面风格</label>
               <div class="image-style-grid" role="group" aria-labelledby="image-style-label">
@@ -426,7 +425,10 @@ onBeforeUnmount(() => { alive = false; scopeVersion++; promptVersion++; batch.di
             <div class="image-action-row"><span class="image-order-summary">{{ imageCount }} 张{{ plannedCount === undefined ? ' · ' + quantitySummary(params.items) : ' × ' + plannedCount + ' 题' }}</span><span v-if="draftStatus" class="image-draft-status" :title="draftStatus">{{ draftStatus.includes('未能') ? draftStatus : '设置已保存' }}</span></div>
             <p v-if="issue" class="image-field-hint">{{ issue }}</p>
             <p v-else-if="batch.state.pages.length" class="image-field-hint">{{ settingsChanged ? '设置已调整，生成后将创建新批次' : '会创建新批次，当前图片保留在历史中' }}</p>
-            <UButton type="submit" :label="batch.state.pages.length ? `按当前设置新建 ${imageCount} 张` : `生成 ${imageCount} 张图片`" icon="i-lucide-image-plus" block size="lg" :disabled="disabled || !!issue || !ready || !configured" />
+            <div class="image-generate-row">
+              <div class="image-generate-count"><label for="image-generation-count" class="image-label">生成张数</label><UInputNumber id="image-generation-count" v-model="imageCount" aria-label="生成张数" :min="1" :max="MAX_WORKSHEET_IMAGES" :disabled="disabled" size="lg" class="w-full" /></div>
+              <UButton type="submit" :label="batch.state.pages.length ? `按当前设置新建 ${imageCount} 张` : `生成 ${imageCount} 张图片`" icon="i-lucide-image-plus" class="image-generate-button" block size="lg" :disabled="disabled || !!issue || !ready || !configured" />
+            </div>
           </template>
         </div>
       </form>
@@ -556,6 +558,9 @@ summary { cursor:pointer;font-size:12px;color:var(--ui-text-toned);line-height:1
 button.selected { border-color:var(--ui-primary);background:color-mix(in srgb,var(--ui-primary) 7%,var(--ui-bg));color:var(--ui-primary); }
 .image-arrangements button:not(:disabled):hover,.image-style-grid button:not(:disabled):hover,.image-type-grid button:not(:disabled):hover,.image-suggestions button:not(:disabled):hover { border-color:var(--ui-primary); }
 .image-generate-actions { flex-shrink:0;display:flex;flex-direction:column;gap:9px;padding:12px 20px;border-top:1px solid var(--ui-border);background:var(--ui-bg);box-shadow:0 -6px 20px #163b3505; }
+.image-generate-row { display:grid;grid-template-columns:112px minmax(0,1fr);align-items:end;gap:10px; }
+.image-generate-count { min-width:0; }.image-generate-count .image-label { margin-bottom:6px; }.image-generate-count :deep(input) { min-width:0; }
+.image-generate-button { min-height:40px;white-space:normal; }
 .image-generate-actions .image-field-hint { margin-top:0; }.image-action-row { display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap; }.image-order-summary { font-size:12px;font-weight:600;color:var(--ui-text-toned); }.image-draft-status { color:var(--ui-text-muted);font-size:10px; }
 .image-preview-panel { min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--ui-bg-muted); }.image-preview-heading { background:var(--ui-bg);padding:16px 24px; }
 .image-preview-scroll { flex:1;min-height:0;overflow:auto;padding:24px;scrollbar-width:thin;background-image:radial-gradient(color-mix(in srgb,var(--ui-text-muted) 14%,transparent) .8px,transparent .8px);background-size:20px 20px; }

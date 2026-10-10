@@ -414,7 +414,7 @@ def _dictionary_row(row) -> dict:
 
 
 def list_dictionary(kind: str = "", parent: str = "") -> dict:
-    where, args = [], []
+    where, args = ["kind <> 'knowledge_point'"], []
     if kind:
         where.append("kind = ?")
         args.append(kind)
@@ -428,6 +428,8 @@ def list_dictionary(kind: str = "", parent: str = "") -> dict:
 
 
 def reorder_dictionary(body) -> dict:
+    if body.kind == "knowledge_point":
+        raise HTTPException(422, detail={"error": "知识点已改用只读人教版教材目录"})
     identifiers = [item.id for item in body.items]
     if len(set(identifiers)) != len(identifiers):
         raise HTTPException(422, detail={"error": "排序列表不能包含重复条目"})
@@ -442,6 +444,8 @@ def reorder_dictionary(body) -> dict:
 
 
 def create_dictionary(body: DictionaryInput) -> dict:
+    if body.kind == "knowledge_point":
+        raise HTTPException(422, detail={"error": "知识点已改用只读人教版教材目录"})
     now = _now()
     value = _clean(body.value)
     parent = body.parent.strip()
@@ -490,6 +494,8 @@ def update_dictionary(item_id: str, body: DictionaryUpdate) -> dict:
         row = conn.execute("SELECT kind, parent, revision FROM site_dictionary WHERE id = ?", (item_id,)).fetchone()
         if not row:
             raise _missing("字典条目不存在")
+        if row["kind"] == "knowledge_point":
+            raise HTTPException(422, detail={"error": "历史知识点已停用，请查看人教版教材目录"})
         if row["revision"] != body.revision:
             raise _conflict("字典条目已被其他操作更新，请刷新后重试")
         clash = conn.execute("SELECT id FROM site_dictionary WHERE kind = ? AND parent = ? AND value = ? AND id <> ?",

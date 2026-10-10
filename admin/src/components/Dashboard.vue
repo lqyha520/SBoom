@@ -2,7 +2,8 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { lazyComponent } from '../../../shared/async-component'
 import * as api from '../api'
-import { adminRoute, navigateAdmin, listenAdminRoute } from '../navigation'
+import { adminRoute, navigateAdmin, listenAdminRoute, canLeaveAdmin } from '../navigation'
+import { adminGroups as groups, searchAdminNavigation } from '../admin-navigation'
 
 const props = defineProps<{ user: api.UserInfo }>()
 const emit = defineEmits<{ logout: [] }>()
@@ -34,59 +35,20 @@ const views = {
   logs: lazyComponent(() => import('./LogsPage.vue')),
 }
 type Tab = keyof typeof views
-interface NavItem { id: Tab; label: string; icon: string }
-interface NavGroup { id: string; label: string; items: NavItem[] }
-const groups: NavGroup[] = [
-  {
-    id: 'authoring',
-    label: '出题管理',
-    items: [
-      { id: 'overview', label: '运行概览', icon: 'i-lucide-layout-dashboard' },
-      { id: 'papers', label: '公共习题', icon: 'i-lucide-library' },
-      { id: 'typeAccess', label: '题型权限', icon: 'i-lucide-shield-check' },
-      { id: 'users', label: '出题用户', icon: 'i-lucide-users-round' },
-      { id: 'feedback', label: '用户反馈', icon: 'i-lucide-message-square-text' },
-    ],
-  },
-  {
-    id: 'mini',
-    label: '小程序管理',
-    items: [
-      { id: 'miniUsers', label: '小程序用户', icon: 'i-lucide-contact-round' },
-      { id: 'supportCenter', label: '服务与反馈', icon: 'i-lucide-messages-square' },
-      { id: 'topics', label: '专题合集', icon: 'i-lucide-folders' },
-      { id: 'catalogTags', label: '教材与知识点', icon: 'i-lucide-tags' },
-      { id: 'resourceRequests', label: '资料需求', icon: 'i-lucide-list-plus' },
-      { id: 'accountClosures', label: '注销申请', icon: 'i-lucide-user-round-x' },
-      { id: 'delivery', label: '订阅提醒', icon: 'i-lucide-bell-ring' },
-      { id: 'categories', label: '分类管理', icon: 'i-lucide-folder-tree' },
-      { id: 'banners', label: '首页 Banner', icon: 'i-lucide-gallery-horizontal-end' },
-      { id: 'notices', label: '公告与弹窗', icon: 'i-lucide-megaphone' },
-      { id: 'documents', label: '协议与隐私页', icon: 'i-lucide-scroll-text' },
-      { id: 'dictionary', label: '年级科目字典', icon: 'i-lucide-list-tree' },
-      { id: 'miniAnalytics', label: '内容数据看板', icon: 'i-lucide-chart-column' },
-    ],
-  },
-  {
-    id: 'commerce',
-    label: '会员与支付',
-    items: [
-      { id: 'membershipPlans', label: '会员套餐', icon: 'i-lucide-badge-check' },
-      { id: 'membershipCards', label: '会员卡密', icon: 'i-lucide-key-round' },
-      { id: 'orders', label: '会员订单', icon: 'i-lucide-receipt-text' },
-      { id: 'reconciliations', label: '账单核对', icon: 'i-lucide-file-check-2' },
-    ],
-  },
-  {
-    id: 'system',
-    label: '系统设置',
-    items: [
-      { id: 'adminAccounts', label: '管理员账号', icon: 'i-lucide-shield-check' },
-      { id: 'llm', label: '模型配置', icon: 'i-lucide-cpu' },
-      { id: 'logs', label: '系统日志', icon: 'i-lucide-terminal' },
-    ],
-  },
-]
+const navSearch = ref('')
+const visibleGroups = computed(() => searchAdminNavigation(navSearch.value))
+const favoriteKey = 'lc-admin-favorites:' + props.user.id
+const favorites = ref<Tab[]>(readFavorites())
+function readFavorites(): Tab[] {
+  try { const value: unknown = JSON.parse(localStorage.getItem(favoriteKey) || 'null'); if (Array.isArray(value)) return value.filter((id): id is Tab => typeof id === 'string' && id in views).slice(0, 6) } catch { /* 不可用时使用默认入口 */ }
+  return ['papers', 'resourceRequests', 'orders']
+}
+function toggleFavorite(id: Tab) {
+  if (favorites.value.includes(id)) favorites.value = favorites.value.filter(value => value !== id)
+  else if (favorites.value.length < 6) favorites.value.push(id)
+  try { localStorage.setItem(favoriteKey, JSON.stringify(favorites.value)) } catch { /* 当前页面仍可使用 */ }
+}
+const favoriteItems = computed(() => favorites.value.flatMap(id => groups.flatMap(group => group.items).filter(item => item.id === id)))
 const flat = computed(() => groups.flatMap(group => group.items))
 const tab = computed<Tab>({ get: () => adminRoute.tab, set: value => navigateAdmin(value) })
 let stopNavigation: (() => void) | undefined
@@ -124,7 +86,7 @@ const activeGroup = computed(() => groups.find(group => group.items.some(item =>
 const loggingOut = ref(false)
 const logoutError = ref('')
 async function logout() {
-  if (loggingOut.value) return
+  if (loggingOut.value || !canLeaveAdmin()) return
   loggingOut.value = true
   logoutError.value = ''
   try { await api.logout(); emit('logout') }
@@ -149,16 +111,19 @@ async function logout() {
     <div class="admin-workspace">
       <aside class="admin-sidebar">
         <label class="mobile-nav">管理页面<select v-model="tab" aria-label="选择管理页面"><optgroup v-for="group in groups" :key="group.id" :label="group.label"><option v-for="item in group.items" :key="item.id" :value="item.id">{{ item.label }}</option></optgroup></select></label>
+        <div class="nav-search"><UInput v-model="navSearch" icon="i-lucide-search" aria-label="搜索管理菜单" placeholder="搜索菜单" class="w-full" /><UButton v-if="navSearch" label="清除搜索" size="xs" variant="ghost" @click="navSearch = ''" /></div>
         <nav aria-label="管理后台导航">
-          <div v-for="group in groups" :key="group.id" class="nav-group">
-            <button type="button" class="nav-group-caption" :aria-expanded="!isCollapsed(group.id)" :aria-controls="'nav-panel-' + group.id" :title="(isCollapsed(group.id) ? '展开' : '折叠') + '「' + group.label + '」'" @click="toggleGroup(group.id)">
+          <div v-if="!navSearch && favoriteItems.length" class="nav-group favorite-nav"><span class="nav-group-caption">常用入口</span><button v-for="item in favoriteItems" :key="item.id" class="nav-item" :aria-label="'常用：' + item.label" :class="{ active: tab === item.id }" @click="tab = item.id"><UIcon :name="item.icon" class="size-4" /><span>{{ item.label }}</span></button></div>
+          <p v-if="!visibleGroups.length" class="text-xs text-muted p-3">没有匹配菜单</p>
+          <div v-for="group in visibleGroups" :key="group.id" class="nav-group">
+            <button type="button" class="nav-group-caption" :aria-expanded="!!navSearch || !isCollapsed(group.id)" :aria-controls="'nav-panel-' + group.id" :title="(isCollapsed(group.id) ? '展开' : '折叠') + '「' + group.label + '」'" @click="toggleGroup(group.id)">
               <span>{{ group.label }}</span>
-              <UIcon name="i-lucide-chevron-down" class="size-3 nav-group-chevron" :class="{ collapsed: isCollapsed(group.id) }" />
+              <UIcon name="i-lucide-chevron-down" class="size-3 nav-group-chevron" :class="{ collapsed: !navSearch && isCollapsed(group.id) }" />
             </button>
-            <div :id="'nav-panel-' + group.id" class="nav-group-items" :class="{ collapsed: isCollapsed(group.id) }">
-              <button v-for="item in group.items" :key="item.id" class="nav-item" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" @click="tab = item.id">
+            <div :id="'nav-panel-' + group.id" class="nav-group-items" :class="{ collapsed: !navSearch && isCollapsed(group.id) }">
+              <div v-for="item in group.items" :key="item.id" class="nav-row"><button class="nav-item" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" @click="tab = item.id">
                 <UIcon :name="item.icon" class="size-4" /><span>{{ item.label }}</span>
-              </button>
+              </button><button class="nav-pin" :class="{ pinned: favorites.includes(item.id) }" :aria-label="(favorites.includes(item.id) ? '移出常用：' : '加入常用：') + item.label" :aria-pressed="favorites.includes(item.id)" :disabled="!favorites.includes(item.id) && favorites.length >= 6" @click="toggleFavorite(item.id)"><UIcon name="i-lucide-star" class="size-3.5" /></button></div>
             </div>
           </div>
         </nav>
@@ -174,6 +139,16 @@ async function logout() {
 </template>
 
 <style scoped>
+.nav-search { padding:8px 12px 12px; }
+.nav-row { display:flex;align-items:center;min-width:0; }
+.nav-row .nav-item { flex:1;min-width:0; }
+.nav-row .nav-item span { overflow:hidden;text-overflow:ellipsis; }
+.nav-pin { flex:none;width:30px;height:34px;display:grid;place-items:center;border-radius:5px;color:var(--ui-text-muted);cursor:pointer; }
+.nav-pin:hover, .nav-pin:focus-visible, .nav-pin.pinned { color:var(--ui-primary);background:var(--ui-bg-accented); }
+.nav-pin:disabled { opacity:0.3;cursor:default; }
+.favorite-nav { padding-bottom:10px;margin-bottom:8px;border-bottom:1px solid var(--ui-border); }
+@media(max-width:800px) { .nav-search { display:none; } }
+
 .mobile-nav { display:none }
 @media (max-width: 800px) { .mobile-nav { display:flex; align-items:center; gap:12px; padding:10px 16px; width:100% } .mobile-nav select { flex:1; min-width:0; padding:8px; border:1px solid var(--ui-border); border-radius:6px; background:var(--ui-bg) } .admin-sidebar nav, .sidebar-footer { display:none !important } }
 </style>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useDialogDraft } from '../dialog-draft'
 import { useRevisionConflict } from '../revision-conflict'
 import { computed, onActivated, onDeactivated, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import type { UserInfo } from '../api'
@@ -193,6 +194,7 @@ watch(dialog, open => { if (!open) { imageSequence++; checking.value = false; re
 onActivated(load)
 onDeactivated(() => { sequence++; imageSequence++; loading.value = false; checking.value = false; dialog.value = false; removeOpen.value = false; resetImage() })
 onBeforeUnmount(() => { sequence++; imageSequence++; resetImage() })
+const draft = useDialogDraft(dialog, () => [form.value, pendingFile.value?.name, pendingFile.value?.lastModified, removingImage.value], busy, '首页推荐图')
 </script>
 
 <template>
@@ -212,7 +214,7 @@ onBeforeUnmount(() => { sequence++; imageSequence++; resetImage() })
     </div>
     <div v-else class="empty-state banner-empty"><UIcon :name="loading ? 'i-lucide-loader-circle' : 'i-lucide-image-plus'" class="size-9" :class="{ 'animate-spin': loading }" /><h3>{{ loading ? '正在加载' : '用一张图片，介绍你的好内容' }}</h3><p v-if="!loading">尚未配置 Banner 时，首页展示简洁的选题入口。</p><UButton v-if="!loading" icon="i-lucide-upload" label="上传第一张 Banner" @click="create" /></div>
 
-    <UModal v-model:open="dialog" :title="target ? '编辑 Banner' : '新建 Banner'" description="先选图、看效果，再保存到首页。" :dismissible="!busy && !checking" :close="!busy && !checking" :ui="{ content: 'max-w-5xl' }">
+    <UModal v-model:open="draft.model.value" :title="target ? '编辑 Banner' : '新建 Banner'" description="先选图、看效果，再保存到首页。" :dismissible="!busy && !checking" :close="!busy && !checking" :ui="{ content: 'max-w-5xl' }">
       <template #body>
         <form id="banner-form" class="banner-editor" @submit.prevent="save">
           <div class="banner-fields">
@@ -241,7 +243,7 @@ onBeforeUnmount(() => { sequence++; imageSequence++; resetImage() })
           <aside class="preview-pane"><div class="preview-heading"><UIcon name="i-lucide-smartphone" /><strong>手机效果预览</strong><span>375 px</span></div><div class="phone-preview"><div class="phone-search"><UIcon name="i-lucide-search" /><span>搜知识点、习题名称</span><small>全部年级⌄</small></div><BannerPreview :content="form" :image-url="previewUrl" /><div class="phone-subjects"><span>语文</span><span>数学</span><span>英语</span><span>全部学科</span></div></div><p class="preview-help">图片在上、文案在下，保持图片本身的颜色。含文字的海报建议选「完整展示」，避免裁掉信息。</p><p v-if="removingImage" class="preview-pending">保存后将移除原图，改为文字卡片。</p><p v-else-if="pendingFile" class="preview-pending">当前预览为待保存图片。</p></aside>
         </form>
       </template>
-      <template #footer><div class="editor-footer"><UButton v-if="recovery.conflict.value" label="载入最新并保留我的修改" :loading="recovery.recovering.value" @click="recovery.reload" /><UAlert v-if="formError" :title="formError" color="error" variant="soft" class="editor-error" /><div class="footer-actions"><span class="save-stage" role="status">{{ saveStage || '图片、文案与展示状态将在保存后生效' }}</span><UButton label="取消" color="neutral" variant="outline" :disabled="busy || checking" @click="dialog = false" /><UButton type="submit" form="banner-form" label="保存 Banner" icon="i-lucide-check" :loading="busy" :disabled="busy || checking || !canSave" /></div></div></template>
+      <template #footer><div class="editor-footer"><UButton v-if="recovery.conflict.value" label="载入最新并保留我的修改" :loading="recovery.recovering.value" @click="recovery.reload" /><UAlert v-if="formError" :title="formError" color="error" variant="soft" class="editor-error" /><div class="footer-actions"><span class="save-stage" role="status">{{ saveStage || '图片、文案与展示状态将在保存后生效' }}</span><UButton label="取消" color="neutral" variant="outline" :disabled="busy || checking" @click="draft.setOpen(false)" /><UButton type="submit" form="banner-form" label="保存 Banner" icon="i-lucide-check" :loading="busy" :disabled="busy || checking || !canSave" /></div></div></template>
     </UModal>
 
     <UModal v-model:open="removeOpen" title="删除 Banner" :dismissible="!busy" :close="!busy"><template #body><p>确认删除「{{ removing?.title }}」？配图会一并删除。</p></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="removeOpen = false" /><UButton label="确认删除" color="error" icon="i-lucide-trash-2" :loading="busy" :disabled="busy" @click="confirmRemove" /></template></UModal>

@@ -1,23 +1,23 @@
-"""知识范围约束服务 —— 查询各年级/各科的知识范围
+"""人教版教材目录范围服务。
 
-数据来源分两层：
-- 知识点字典（site_dictionary 里 kind='knowledge_point' 的行，parent=「年级id|科目id」）：
-  后台可编辑，是「允许涉及」的权威来源；组合下有可见知识点时优先生效；
-- knowledge_scope.json：兜底与补充（组合尚无知识点时的 allowed，以及 forbidden/semesters）。
+生成范围只来自 app/data/pep_catalog.json。历史数据库字典和旧范围文件不再
+参与出题，避免把旧版或自由录入的知识点混入模型提示词。
 """
 
 import json
 from pathlib import Path
 from typing import Optional
 
-from app.models import KnowledgeScope
+from fastapi import HTTPException
+
+from app.models import KnowledgeScope, TextbookBook, TextbookUnit
 
 
 class KnowledgeScopeService:
-    """提供知识范围查询能力"""
+    """提供已核对教材册次的知识范围。"""
 
     _instance: Optional["KnowledgeScopeService"] = None
-    _data: dict = {}
+    _catalog: dict = {}
 
     def __new__(cls) -> "KnowledgeScopeService":
         if cls._instance is None:
@@ -26,61 +26,89 @@ class KnowledgeScopeService:
         return cls._instance
 
     def _load(self) -> None:
-        data_path = Path(__file__).parent.parent / "data" / "knowledge_scope.json"
-        with open(data_path, encoding="utf-8") as f:
-            self._data = json.load(f)
+        path = Path(__file__).parent.parent / "data" / "pep_catalog.json"
+        with path.open(encoding="utf-8") as handle:
+            self._catalog = json.load(handle)
 
-    def _dictionary_points(self, grade: str, subject: str) -> list[str]:
-        """后台知识点字典里该组合的可见知识点（按展示顺序）。"""
-        from app.db import db
+    def _books(self, grade: str, subject: str) -> list[dict]:
+        return [
+            book for book in self._catalog.get("books", [])
+            if book.get("grade") == grade and book.get("subject") == subject
+            and book.get("status") == "verified"
+        ]
 
-        with db() as conn:
-            rows = conn.execute(
-                "SELECT p.value FROM site_dictionary p "
-                "JOIN site_dictionary g ON g.kind = 'grade' AND g.value = ? "
-                "JOIN site_dictionary s ON s.kind = 'subject' AND s.value = ? "
-                "WHERE p.kind = 'knowledge_point' AND p.is_visible = 1 AND p.parent = g.id || '|' || s.id "
-                "ORDER BY p.sort_order, p.value", (grade, subject)).fetchall()
-        return [row["value"] for row in rows]
+    @staticmethod
+    def _book_points(book: dict) -> list[str]:
+        points: list[str] = []
+        for unit in book.get("units", []):
+            title = str(unit.get("title", "")).strip()
+            if title:
+                points.append(title)
+            for topic in unit.get("topics", []):
+                topic = str(topic).strip()
+                if topic:
+                    points.append(topic)
+        return points
 
     def get_scope(self, grade: str, subject: str) -> KnowledgeScope:
-        """获取指定年级和科目的知识范围（grade/subject 为后台字典中的字符串值）"""
-        grade_data = self._data.get(grade, {})
-        subject_data = grade_data.get(subject, {})
-        points = self._dictionary_points(grade, subject)
-
-        if not subject_data and not points:
-            return KnowledgeScope(grade=grade, subject=subject, allowed=[], forbidden=[])
-
+        """返回指定年级、科目已由官方教材目录核对的知识点。"""
+        books = self._books(grade, subject)
+        semesters: dict[str, list[str]] = {}
+        allowed: list[str] = []
+        for book in books:
+            points = self._book_points(book)
+            semester = str(book.get("semester", "")).strip()
+            semesters[semester] = list(dict.fromkeys(semesters.get(semester, []) + points))
+            allowed.extend(points)
+        allowed = list(dict.fromkeys(allowed))
         return KnowledgeScope(
             grade=grade,
             subject=subject,
-            allowed=points or subject_data.get("allowed", []),
-            forbidden=subject_data.get("forbidden", []),
-            semesters=subject_data.get("semesters") or None,
+            allowed=allowed,
+            forbidden=[],
+            semesters=semesters or None,
+            catalog_revision=self._catalog["revision"],
+            books=[TextbookBook(
+                id=book["id"], semester=book["semester"],
+                series=self._catalog["series"][subject],
+                source_url=f"https://book.pep.com.cn/{book['id']}/",
+                verified_on=book["verified_on"],
+                units=[TextbookUnit(**unit) for unit in book["units"]],
+            ) for book in books],
         )
 
-    def format_scope_for_prompt(self, scope: KnowledgeScope) -> str:
-        """将知识范围格式化为 Prompt 可用的文本"""
-        allowed_text = "、".join(scope.allowed) if scope.allowed else "（无特殊限制）"
-        forbidden_text = "、".join(scope.forbidden) if scope.forbidden else "（无明确禁止项）"
+    def is_supported(self, grade: str, subject: str) -> bool:
+        return bool(self._books(grade, subject))
 
+    def available_pairs(self) -> set[tuple[str, str]]:
+        return {
+            (book["grade"], book["subject"])
+            for book in self._catalog.get("books", [])
+            if book.get("status") == "verified"
+        }
+
+    @staticmethod
+    def require_selected_semesters(scope: KnowledgeScope, keyword: str) -> None:
+        semesters = {book.semester for book in scope.books}
+        for semester in ("上册", "下册"):
+            if semester in keyword and semester not in semesters:
+                raise HTTPException(400, detail={
+                    "code": "textbook_not_verified",
+                    "error": f"{scope.grade}{scope.subject}{semester}教材目录尚未核实，暂不能据此出题",
+                })
+
+    def format_scope_for_prompt(self, scope: KnowledgeScope) -> str:
+        """将已核对的教材范围格式化为内部提示文本。"""
+        allowed_text = "、".join(scope.allowed) if scope.allowed else "（当前册次尚未核对）"
         result = (
             f"当前学生年级：{scope.grade}\n"
             f"科目：{scope.subject}\n"
-            f"允许涉及的知识点范围：{allowed_text}\n"
-            f"严禁涉及（超纲）的知识点：{forbidden_text}"
+            f"人教版教材知识点：{allowed_text}"
         )
-
-        # 按学期划分的知识点（如上册/下册），帮助 LLM 根据关键词判断学期范围
         if scope.semesters:
-            for sem, points in scope.semesters.items():
-                if points:
-                    result += f"\n{sem}知识点：{'、'.join(points)}"
-            result += "\n请根据知识点关键词判断用户要出上册还是下册的题，只出对应学期的内容；若无法判断，则严格限定在上面列出的总范围内。"
-
+            for semester, points in scope.semesters.items():
+                result += f"\n{semester}：{'、'.join(points)}"
         return result
 
 
-# 全局单例
 knowledge_scope_service = KnowledgeScopeService()

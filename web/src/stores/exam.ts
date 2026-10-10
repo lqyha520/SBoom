@@ -11,7 +11,7 @@ import {
 } from '../constants'
 import * as api from '../api'
 import type { CustomType, GameData, PaperTemplate, PaperStyle, SecLayout, Section, PaperSection } from '../types'
-import { ensureQids, gradeNumOf, mockQuestions, uid } from '../utils'
+import { ensureQids, gradeNumOf, uid } from '../utils'
 import { beginLayout, finishLayout, captureEdit, recordEdit, undoEdit, redoEdit, type EditSnapshot } from '../workspace-history'
 import { K, safeSet, styleSaveTimers } from './exam-local'
 import { createExamState } from './exam-state'
@@ -30,9 +30,8 @@ export const useExamStore = defineStore('exam', {
         state.difficulty !== 'medium' || state.paperCount !== 1 || !state.addDayLabel)
     },
     canClearSettings(state): boolean {
-      return this.hasBuildSettings && state.persistenceReady && !state.generating &&
-        !state.accountChanged && !state.layoutMode && !state.historyBusy &&
-        !state.pendingRun && !this.hasPendingEdits && !this.hasLoading
+      return (this.hasBuildSettings || !!state.pendingRun) && state.persistenceReady &&
+        !state.generating && !state.accountChanged && !state.historyBusy
     },
     hasPendingEdits(state): boolean {
       return (
@@ -80,10 +79,7 @@ export const useExamStore = defineStore('exam', {
       return groups
     },
     totalQuestions(state): number {
-      return state.sections.reduce(
-        (s, x) => s + (x.status === 'ready' && x.data ? x.data.questions.length : x.count),
-        0,
-      )
+      return state.sections.reduce((sum, section) => sum + section.count, 0)
     },
     hasLoading(state): boolean {
       return state.sections.some((s) => s.status === 'loading')
@@ -92,6 +88,7 @@ export const useExamStore = defineStore('exam', {
       return state.sections.filter((s) => s.status === 'error').length
     },
     generationIssue(state): string {
+      if (state.keyword.length > 100) return '已选知识点超过100字，请缩小本次出题范围'
       if (state.sections.some((s) => !Number.isInteger(s.count) || s.count < 1 || s.count > MAX_QUESTIONS_PER_TYPE)) {
         return `每个大题需设置 1 至 ${MAX_QUESTIONS_PER_TYPE} 道题`
       }
@@ -151,9 +148,28 @@ export const useExamStore = defineStore('exam', {
       if (this.grade !== grade || this.subject !== subject) void this.selectSubject(this.subject)
     },
 
-    clearSettings(): boolean {
+    async clearSettings(): Promise<boolean> {
       if (!this.canClearSettings) return false
-      this.recordEdit()
+      const pending = !!this.pendingRun || this.hasPendingEdits
+      if (pending) {
+        const owner = this.ownerId
+        this.historyBusy = true
+        try {
+          if (!await this.saveHistory('before-clear')) {
+            this.generateError = this.storageError || '未完成请求保存失败，设置尚未清空，请稍后重试'
+            return false
+          }
+        } finally {
+          this.historyBusy = false
+        }
+        if (!this.canClearSettings || this.ownerId !== owner) return false
+      }
+      if (this.layoutMode) this.finishLayout()
+      // 未完成请求通过完整历史快照恢复，避免普通撤销丢失请求编号。
+      if (pending) {
+        this.undoStack = []
+        this.redoStack = []
+      } else this.recordEdit()
       this.scopeRevision++
       this.grade = ''
       this.subject = ''
@@ -169,6 +185,12 @@ export const useExamStore = defineStore('exam', {
       this.scope = null
       this.scopeLoading = false
       this.generateError = ''
+      this.generateWarn = ''
+      this.pendingRun = null
+      this.generationJobs = []
+      this.failedCount = 0
+      this.generateProgress = ''
+      this.stopRequested = false
       this.view = 'build'
       return true
     },
@@ -271,7 +293,7 @@ export const useExamStore = defineStore('exam', {
         name: customName,
         count: cnt,
         status: 'ready',
-        data: { questions: mockQuestions(type, cnt), topic: '' },
+        data: { questions: [], topic: '', missing_count: cnt },
         layout: { ...DEFAULT_LAYOUT },
       }
       this.sections.push(sec)
@@ -305,11 +327,10 @@ export const useExamStore = defineStore('exam', {
       let qs = sec.data.questions
       if (n < qs.length) {
         qs = qs.slice(0, n)
-      } else if (n > qs.length) {
-        qs = [...qs, ...mockQuestions(sec.type, n - qs.length)]
       }
       sec.count = n
       sec.data.questions = qs
+      sec.data.missing_count = Math.max(0, n - qs.length)
     },
 
     /** 卷头/卷尾元素删除切换（搭建态） */

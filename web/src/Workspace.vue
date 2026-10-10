@@ -34,9 +34,10 @@ const accountReloading = ref(false)
 const draftLabel = computed(() => ({ loading: '读取草稿', saving: '正在保存', saved: store.draftSavedAt ? '草稿已保存' : '本机草稿', error: '保存失败' })[store.draftState])
 const mobilePanel = ref('conditions')
 const sidePanel = ref('conditions')
-function clearSettings() {
-  if (!store.canClearSettings || !window.confirm('清空年级、科目、知识点、标题和全部大题，并恢复默认难度与份数？已生成的试卷、本机历史和卷面样式会保留。')) return
-  if (store.clearSettings()) {
+const focusPreview = ref(false)
+async function clearSettings() {
+  if (!store.canClearSettings || !window.confirm('清空年级、科目、知识点、标题和全部大题，并恢复默认难度与份数？已生成的试卷、本机历史和卷面样式会保留；未完成的生成请求会先保存到本机历史。')) return
+  if (await store.clearSettings()) {
     mobilePanel.value = 'conditions'
     sidePanel.value = 'conditions'
     suggestedKeyword.value = ''
@@ -133,7 +134,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-    <div v-if="auth.user" class="app-shell">
+    <div v-if="auth.user" class="app-shell" :class="{ 'focus-preview': focusPreview && !imageMode && store.view === 'build' }">
       <header class="topbar no-print">
         <div class="brand">
           <span class="brand-mark"><UIcon name="i-lucide-notebook-pen" class="size-5" /></span>
@@ -183,6 +184,7 @@ onBeforeUnmount(() => {
           <span v-if="store.generating" role="status" class="generation-state"><UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />{{ store.generateProgress || '正在生成' }}</span>
           <template v-else><span class="status-dot"></span><span>{{ store.sections.length }} 个大题</span><span class="meta-divider">/</span><span>{{ store.totalQuestions }} 道题目</span></template>
         </div>
+        <UButton v-if="store.view === 'build'" :label="focusPreview ? '返回搭建面板' : '专注预览'" :icon="focusPreview ? 'i-lucide-panels-top-left' : 'i-lucide-maximize-2'" :aria-pressed="focusPreview" color="neutral" variant="outline" size="sm" class="focus-preview-toggle" :disabled="store.layoutMode" @click="focusPreview = !focusPreview" />
         <UButton label="清空设置" icon="i-lucide-eraser" color="neutral" variant="outline" size="sm" class="workspace-clear" :disabled="!store.canClearSettings" @click="clearSettings" />
         </div>
       </div>

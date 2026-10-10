@@ -109,7 +109,7 @@ def _snapshot(raw, title):
 
 
 def list_papers(user_id, q="", grade="", subject="", category="", favorite=False, downloaded=False,
-                limit=20, offset=0, admin=False, status="", sort="featured", only_free=False, recent=False, favorite_group="", topic="", textbook="", term="", unit="", knowledge="", pagination="offset", cursor="", ungrouped=False):
+                limit=20, offset=0, admin=False, status="", sort="featured", only_free=False, recent=False, favorite_group="", topic="", textbook="", term="", unit="", knowledge="", pagination="offset", cursor="", ungrouped=False, access=""):
     if not admin and user_id is None and (favorite or downloaded or recent or favorite_group or ungrouped):
         raise HTTPException(401, detail={"error": "请先登录后查看个人记录", "code": "login_required"})
     clauses, args = ([] if admin else [VISIBLE]), []
@@ -132,6 +132,19 @@ def list_papers(user_id, q="", grade="", subject="", category="", favorite=False
     if admin and status:
         clauses.append("c.status = ?")
         args.append(status)
+    if admin and access:
+        # 在分页与计数前按最终权限筛选；与 access_map 的继承及观看限制一致。
+        def vip_policy(action):
+            policy = f"COALESCE((SELECT p.{action}_access FROM catalog_access p WHERE p.catalog_id = c.id), 'inherit')"
+            return (f"({policy} = 'vip' OR ({policy} = 'inherit' AND EXISTS (SELECT 1 FROM catalog_question_types t "
+                    f"JOIN catalog_type_rules r ON r.question_type = t.question_type WHERE t.catalog_id = c.id AND r.{action}_access = 'vip')))")
+        view_vip, download_vip = vip_policy("view"), vip_policy("download")
+        if access == "vip_view":
+            clauses.append(view_vip)
+        elif access == "vip_download":
+            clauses.extend([f"NOT {view_vip}", download_vip])
+        elif access == "free":
+            clauses.extend([f"NOT {view_vip}", f"NOT {download_vip}"])
     if only_free:
         for action in ("view", "download"):
             policy = f"COALESCE((SELECT p.{action}_access FROM catalog_access p WHERE p.catalog_id = c.id), 'inherit')"

@@ -1,5 +1,5 @@
 import { DEFAULT_LAYOUT, LS } from '../constants'
-import type { Difficulty, GameData, MyTemplate, PaperStyle } from '../types'
+import type { Difficulty, GameData, MyTemplate, PaperStyle, Question } from '../types'
 import { CIRCLED_NO } from '../utils'
 import { userPrefix } from './auth'
 
@@ -71,10 +71,11 @@ export function applyOldSnapshot(cards: { type: string; count: number; data: Gam
       if (!block) return
       const qEls = block.querySelectorAll('.q')
       qEls.forEach((qEl, qi) => {
-        const q = card.data.questions[qi]
-        if (!q) return
+        if (qi >= card.count) return
+        const existing = card.data.questions[qi]
+        const q: Question = existing || { type: card.type === 'quiz' || card.type === 'challenge' ? 'multiple_choice' : card.type }
         const stemEl = qEl.querySelector('[data-e="stem"]')
-        if (stemEl && q.stem != null) {
+        if (stemEl) {
           const t = (stemEl.textContent || '')
             .replace(CIRCLED_NO, '')
             .replace(/^\[第\d+关\]\s*/, '')
@@ -82,16 +83,17 @@ export function applyOldSnapshot(cards: { type: string; count: number; data: Gam
           if (t) q.stem = t
         }
         const optsEl = qEl.querySelector('[data-e="opts"]')
-        if (optsEl && q.options) {
+        if (optsEl) {
           const lines = Array.from(optsEl.children)
             .map((d) => (d.textContent || '').replace(/^[A-H][.、：:．]\s*/, '').trim())
             .filter(Boolean)
           if (lines.length) q.options = lines
         }
+        if (!existing && (q.stem || q.options?.length)) card.data.questions.push(q)
       })
     })
   } catch {
-    /* 解析失败保持 mock */
+    /* 无法读取的内容保持缺失，不编造题目或答案。 */
   }
 }
 

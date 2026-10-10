@@ -143,10 +143,7 @@ def _prune_dictionary_children(conn, item_id: str) -> None:
 
 
 def _seed_dictionary_scope(conn, now: int) -> None:
-    """首次启动迁移：按 knowledge_scope.json 建立年级-科目关联，并把允许的知识点导入字典。
-
-    用 app_config 标记只跑一次；之后关联与知识点完全以后台管理为准，重启不回写。
-    """
+    """首次安装从官方教材系列建立年级科目关联，不再导入旧知识点。"""
     import json
     from pathlib import Path
 
@@ -156,11 +153,14 @@ def _seed_dictionary_scope(conn, now: int) -> None:
     if markers["links"] in done and markers["points"] in done:
         return
 
-    data_path = Path(__file__).parent / "data" / "knowledge_scope.json"
+    data_path = Path(__file__).parent / "data" / "pep_catalog.json"
     if not data_path.exists():
         return
     with open(data_path, encoding="utf-8") as handle:
-        scope_data = json.load(handle)
+        catalog = json.load(handle)
+    scope_data: dict[str, dict] = {}
+    for book in catalog["books"]:
+        scope_data.setdefault(book["grade"], {})[book["subject"]] = {}
 
     grades = {row["value"]: row["id"] for row in conn.execute("SELECT id, value FROM site_dictionary WHERE kind = 'grade'")}
     subjects = {row["value"]: row["id"] for row in conn.execute("SELECT id, value FROM site_dictionary WHERE kind = 'subject'")}
@@ -179,23 +179,6 @@ def _seed_dictionary_scope(conn, now: int) -> None:
         conn.execute("INSERT INTO app_config(key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING", (markers["links"],))
 
     if markers["points"] not in done:
-        for grade_value, subject_map in scope_data.items():
-            grade_id = grades.get(grade_value)
-            if not grade_id:
-                continue
-            for subject_value, scope in subject_map.items():
-                subject_id = subjects.get(subject_value)
-                if not subject_id:
-                    continue
-                parent = f"{grade_id}|{subject_id}"
-                for index, point in enumerate(scope.get("allowed", [])):
-                    point = str(point).strip()
-                    if not point:
-                        continue
-                    conn.execute(
-                        "INSERT INTO site_dictionary(id, kind, parent, value, label, sort_order, is_visible, revision, created_at, updated_at) "
-                        "VALUES (?, 'knowledge_point', ?, ?, ?, ?, 1, 1, ?, ?) ON CONFLICT(kind, parent, value) DO NOTHING",
-                        (uuid.uuid4().hex, parent, point, point, (index + 1) * 10, now, now))
         conn.execute("INSERT INTO app_config(key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING", (markers["points"],))
 
 

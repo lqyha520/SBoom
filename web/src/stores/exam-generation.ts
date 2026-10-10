@@ -2,12 +2,13 @@
 import type { ExamWorkspace } from './exam-context'
 import * as api from '../api'
 import { deepClone } from '../utils'
-import type { Difficulty, Section } from '../types'
+import type { Difficulty, Question, Section } from '../types'
 import {
   createGenerationRun,
   runGenerationJob,
   GenerationStopped,
   RequestNotRecorded,
+  NoGenerationNeeded,
   type GenerationContext,
   type GenerationMode,
 } from '../generation'
@@ -31,6 +32,11 @@ function generationSections(sections: Section[]): GenerationContext['sections'] 
         question._locked && index < section.count ? [{ index, question: deepClone(question) }] : [],
       ) || [],
   }))
+}
+
+function preserveQuestionEdits(questions: Question[], previous: Question[] = []): Question[] {
+  const existing = new Map(previous.filter(question => question._qid).map(question => [question._qid, question]))
+  return questions.map(question => deepClone(existing.get(question._qid) || question))
 }
 
 export const generationActions = {
@@ -63,21 +69,7 @@ export const generationActions = {
       if (this.accountChanged) return
       const replacement = result.sections[0]?.data.questions[0]
       if (!replacement) throw new Error('没有生成可替换的题目，原题已保留')
-      const content = (value: typeof question) =>
-        JSON.stringify([
-          value.stem?.replace(/\s+/g, ''),
-          value.options,
-          value.top,
-          value.left,
-          value.right,
-          value.left_expr,
-          value.right_expr,
-          value.left_items,
-          value.right_items,
-        ])
       delete question._replacement
-      if (section.data?.questions.some((item) => content(item) === content(replacement)))
-        throw new Error('新题与现有题目重复，原题已保留')
       this.generating = false
       this.recordEdit()
       const index = section.data!.questions.findIndex((item) => item._qid === qid)
@@ -128,6 +120,11 @@ export const generationActions = {
       return
     }
     const run = existing || createGenerationRun(context)
+    if (!run.jobs[0].chunks.length) {
+      section.error = new NoGenerationNeeded().message
+      section.status = 'error'
+      return
+    }
     section.pendingGeneration = run
     section.status = 'loading'
     section.error = ''
@@ -138,10 +135,17 @@ export const generationActions = {
         await ensureRequestRecorded(this)
       })
       if (this.accountChanged) return
-      section.data = deepClone(paper.sections[0].data)
+      const data = deepClone(paper.sections[0].data)
+      data.questions = preserveQuestionEdits(data.questions, section.data?.questions)
+      section.data = data
       section.warn = paper.sections[0].warn
-      section.status = 'ready'
-      delete section.pendingGeneration
+      if (section.data.missing_count) {
+        section.status = 'error'
+        section.error = `缺少 ${section.data.missing_count} 道题，可手动补齐`
+      } else {
+        section.status = 'ready'
+        delete section.pendingGeneration
+      }
     } catch (error) {
       section.status = 'error'
       section.error = error instanceof Error ? error.message : '生成失败，未自动重试'
@@ -154,8 +158,6 @@ export const generationActions = {
 
   async generate(this: ExamWorkspace) {
     if (!this.canGenerate) return
-    this.undoStack = []
-    this.redoStack = []
     this.generating = true
     try {
       if (
@@ -177,9 +179,9 @@ export const generationActions = {
         count: Math.max(1, Math.min(20, Math.round(this.paperCount) || 1)),
         sections: generationSections(this.sections),
       }
-      this.pendingRun = createGenerationRun(context)
+      const run = createGenerationRun(context)
       // Each result paper has its own locks; preserve them for the corresponding next paper.
-      this.pendingRun.jobs.forEach((job) => {
+      run.jobs.forEach((job) => {
         const previous = this.papers.find((paper, index) => (paper.day || index + 1) === job.index + 1)
         if (
           !previous ||
@@ -199,7 +201,15 @@ export const generationActions = {
         job.context = perPaper
         job.chunks = createGenerationRun({ ...perPaper, count: 1 }).jobs[0].chunks
       })
-      this.view = 'result'
+      if (run.jobs.some(job => !job.chunks.length)) {
+        this.generateError = new NoGenerationNeeded().message
+        return
+      }
+      this.undoStack = []
+      this.redoStack = []
+      this.pendingRun = run
+      // 生成期间留在搭建页显示进度，取得可用试卷后再切换结果。
+      this.view = 'build'
       this.papers = []
       this.failedCount = 0
     } finally {
@@ -226,7 +236,8 @@ export const generationActions = {
     this.generateProgress = prefix + ' 0/' + total + ' 份'
     try {
       await Promise.all(
-        Array.from({ length: Math.min(2, total) }, async () => {
+        // 按份串行，控制同一工作台的在途生成请求数量。
+        Array.from({ length: Math.min(1, total) }, async () => {
           while (pending.length && !this.accountChanged && !this.stopRequested) {
             const job = pending.shift()!
             job.startedAt = Date.now()
@@ -241,9 +252,25 @@ export const generationActions = {
                 if (this.stopRequested) throw new GenerationStopped()
               })
               if (this.accountChanged) return
-              completed.add(job.index)
-              this.papers.push(paper)
-              run.jobs = run.jobs.filter((value) => value.index !== job.index)
+              const missing = paper.sections.reduce((sum, section) => sum + (section.data.missing_count || 0), 0)
+              if (!missing) {
+                completed.add(job.index)
+                run.jobs = run.jobs.filter((value) => value.index !== job.index)
+              } else {
+                job.error = `缺少 ${missing} 道题，可手动补齐`
+              }
+              const existing = this.papers.findIndex(value => (value.day || 1) === job.index + 1)
+              if (existing >= 0) {
+                const previous = this.papers[existing]
+                paper.sections.forEach(section => {
+                  const old = previous.sections.find(value => value._sid === section._sid)
+                  if (!old) return
+                  section.data.questions = preserveQuestionEdits(section.data.questions, old.data.questions)
+                  section.layout = deepClone(old.layout)
+                  section.name = old.name
+                })
+                this.papers[existing] = { ...previous, sections: paper.sections }
+              } else this.papers.push(paper)
               this.papers.sort((a, b) => (a.day || 1) - (b.day || 1))
               if (
                 !filled &&
@@ -257,8 +284,8 @@ export const generationActions = {
                   if (!section) return
                   section.data = deepClone(result.data)
                   section.warn = result.warn
-                  section.status = result.data.questions.length ? 'ready' : 'error'
-                  section.error = result.data.questions.length ? '' : '该大题没有可用题目'
+                  section.status = result.data.missing_count ? 'error' : 'ready'
+                  section.error = result.data.missing_count ? `缺少 ${result.data.missing_count} 道题，可手动补齐` : ''
                 })
               }
             } catch (error) {

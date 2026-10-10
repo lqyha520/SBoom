@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { useDialogDraft } from "../dialog-draft";
+import { computed, ref, watch } from "vue";
 import { catalogDetail, type CatalogPaper } from "../catalog";
 import { ApiError } from "../api";
 import { batchCatalog } from "../experience";
@@ -88,6 +89,7 @@ watch(
     singles.value = { textbook: "", term: "", unit: "" };
     knowledgePicked.value = [];
     knowledgeQuery.value = "";
+    draft.markSaved();
   },
 );
 watch(action, (value) => {
@@ -189,6 +191,7 @@ async function save() {
     busy.value = false;
   }
 }
+const draft = useDialogDraft(computed({ get: () => props.open, set: value => { if (!value) emit('close') } }), () => [action.value, category.value, viewAccess.value, downloadAccess.value, confirmed.value, singles.value, knowledgePicked.value], busy, '批量操作');
 </script>
 <template>
   <UModal
@@ -197,7 +200,7 @@ async function save() {
     :dismissible="!busy"
     :close="!busy"
     :ui="{ content: 'max-w-3xl' }"
-    @update:open="!$event && emit('close')"
+    @update:open="draft.setOpen($event)"
     ><template #body
       ><form id="batch-catalog" class="field-stack" @submit.prevent="save">
         <p>已选择 {{ items.length }} 份资料</p>
@@ -293,7 +296,7 @@ async function save() {
         color="neutral"
         variant="outline"
         :disabled="busy"
-        @click="emit('close')" /><UButton
+        @click="draft.setOpen(false)" /><UButton
         label="应用到所选资料"
         type="submit"
         form="batch-catalog"

@@ -172,6 +172,13 @@ async def _call_llm_and_parse(system_prompt: str, user_message: str, question_co
                           "未自动重发。请先查询原请求状态，重新生成会发起新的模型调用。",
             },
         ) from e
+    except httpx.DecodingError as e:
+        logger.error("模型响应解压失败: %s", type(e).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "模型返回的数据无法解压，未自动重发；请查询原请求状态",
+                    "code": "provider_decoding_error"},
+        ) from e
     except httpx.TransportError as e:
         logger.error("模型连接异常: %s", type(e).__name__)
         raise HTTPException(
@@ -186,6 +193,15 @@ async def _call_llm_and_parse(system_prompt: str, user_message: str, question_co
 
 
 # ─── API 端点 ───
+
+def _require_complete(sections: list[GameResult]) -> None:
+    missing = sum(section.missing_count for section in sections)
+    if missing:
+        raise HTTPException(422, detail={
+            "code": "generation_incomplete",
+            "error": f"生成未完成，缺少 {missing} 道题；有效题目已保留，可手动补齐",
+            "partial_sections": [section.model_dump(mode="json") for section in sections],
+        })
 
 @router.post(
     "/generate-batch",
@@ -218,13 +234,15 @@ async def generate_batch(request: BatchGenerateRequest, http_request: Request, u
                 detail={"error": f"{request.grade}还没有学过{it.game_type}哦"},
             )
 
-    # 3. 组装批量 Prompt
+    resolved_items = [item.model_copy(update={"section_id": item.section_id or f"section-{index + 1}"})
+                      for index, item in enumerate(request.items)]
+    # 所有题型统一由模型出题，本地只做结果校验与整理。
     system_prompt = prompt_builder.build_batch_prompt(
         grade=request.grade,
         subject=request.subject,
         keyword=request.keyword,
         difficulty=request.difficulty.value,
-        items=request.items,
+        items=resolved_items,
         scope=scope,
     )
     user_message = prompt_builder.build_batch_user_message(request.keyword)
@@ -232,7 +250,7 @@ async def generate_batch(request: BatchGenerateRequest, http_request: Request, u
     # 4. 调用 LLM（一次，配置：后台全局 > .env）
     truncated = None
     try:
-        raw = await _call_llm_and_parse(system_prompt, user_message, sum(item.question_count for item in request.items))
+        raw = await _call_llm_and_parse(system_prompt, user_message, sum(item.question_count for item in resolved_items))
     except OutputTruncated as error:
         truncated = error
         raw = {"sections": completed_sections(error.partial_text)}
@@ -242,27 +260,24 @@ async def generate_batch(request: BatchGenerateRequest, http_request: Request, u
         logger.exception("批量生成失败: %s", type(e).__name__)
         raise HTTPException(status_code=502, detail={"error": "批量生成失败", "detail": "生成链路异常，请重试；若持续失败请联系管理员"}) from e
 
-    matched = match_sections(raw, request.items)
-    seen: set[str] = set()
+    matched = match_sections(raw, resolved_items)
     sections = []
-    for index, (item, section) in enumerate(zip(request.items, matched, strict=False)):
-        resolved = item.model_copy(update={"section_id": item.section_id or f"section-{index + 1}"})
+    for item, section in zip(resolved_items, matched, strict=True):
         if truncated:
             # 残片只接受可唯一对应的大题，且不为挽救残片再发付费补题请求。
-            if not section or section.get("section_id") != resolved.section_id or section.get("game_type") != item.game_type:
+            if not section or section.get("section_id") != item.section_id or section.get("game_type") != item.game_type:
                 continue
-            candidate_seen = seen.copy()
-            result = await normalize_result(section, request, resolved, scope, _call_llm_and_parse, candidate_seen, allow_repairs=False)
+            result = await normalize_result(section, request, item, scope, _call_llm_and_parse, allow_repairs=False)
             if result.missing_count:
                 continue
-            seen = candidate_seen
         else:
-            result = await normalize_result(section, request, resolved, scope, _call_llm_and_parse, seen)
+            result = await normalize_result(section, request, item, scope, _call_llm_and_parse)
         sections.append(result)
     if truncated:
         detail = dict(truncated.detail) if isinstance(truncated.detail, dict) else {}
         detail["partial_sections"] = [section.model_dump(mode="json") for section in sections]
         raise HTTPException(truncated.status_code, detail=detail) from truncated
+    _require_complete(sections)
     return BatchGenerateResponse(sections=sections)
 
 
@@ -275,7 +290,7 @@ async def generate_batch(request: BatchGenerateRequest, http_request: Request, u
 )
 @metered("single")
 async def generate_questions(request: GenerateRequest, http_request: Request, user: CurrentUser = Depends(require_user)):
-    """生成题目（非流式）。每次都真实调用 LLM，保证每次生成的试卷都是新的。"""
+    """生成题目（非流式）；原请求重放由计量层处理。"""
     # 1. 题型-年级适配校验（低年级拦截超纲计算题型）
     from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
     g_num = _grade_num(request.grade)
@@ -306,13 +321,16 @@ async def generate_questions(request: GenerateRequest, http_request: Request, us
     user_message = prompt_builder.build_user_message(request.keyword)
 
     # 3. 调用 LLM（配置：后台全局 > .env）
+    item = BatchItem(game_type=request.game_type.value, question_count=request.question_count)
     raw_result = await _call_llm_and_parse(system_prompt, user_message, request.question_count)
 
-    return await normalize_result(
+    result = await normalize_result(
         raw_result, request,
-        BatchItem(game_type=request.game_type.value, question_count=request.question_count),
+        item,
         scope, _call_llm_and_parse,
     )
+    _require_complete([result])
+    return result
 
 
 @router.post(
@@ -414,7 +432,7 @@ def get_knowledge_scope(grade: str, subject: str, user: CurrentUser = Depends(re
 @router.get(
     "/scope/available",
     summary="获取可用年级/科目列表",
-    description="以后台字典的显式关联（site_dict_links）为唯一数据源，返回每个已关联年级下的可见科目",
+    description="返回后台启用且已有核实的人教版教材目录的年级科目组合",
 )
 def get_available_scopes(user: CurrentUser = Depends(require_user)):
     """可用年级/科目：字典决定展示什么，年级-科目关联决定组合（后台可编辑）"""
@@ -426,14 +444,14 @@ def get_available_scopes(user: CurrentUser = Depends(require_user)):
         ).fetchall()
         links = conn.execute("SELECT parent_id, child_id FROM site_dict_links").fetchall()
     grades = [row for row in rows if row["kind"] == "grade"]
-    _subject_value_by_id = {row["id"]: row["value"] for row in rows if row["kind"] == "subject"}
     linked_by_grade: dict[str, set[str]] = {}
     for row in links:
         linked_by_grade.setdefault(row["parent_id"], set()).add(row["child_id"])
     result = {}
     for grade in grades:
         subject_ids = linked_by_grade.get(grade["id"], set())
-        pairs = [row["value"] for row in rows if row["kind"] == "subject" and row["id"] in subject_ids]
+        pairs = [row["value"] for row in rows if row["kind"] == "subject" and row["id"] in subject_ids
+                 and knowledge_scope_service.is_supported(grade["value"], row["value"])]
         if pairs:
             result[grade["value"]] = pairs
     return {"available": result}

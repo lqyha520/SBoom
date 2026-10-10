@@ -1,11 +1,13 @@
 """Offline regression tests. Every database and secret file is disposable."""
 
 import asyncio
+import gzip
 import json
 import os
 import tempfile
 import time
 import unittest
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
@@ -39,6 +41,13 @@ def questions(count=2, start=1, kind="fill_blank"):
 
 def section(section_id="s1", count=2, start=1, kind="fill_blank"):
     return {"section_id": section_id, "game_type": kind, "questions": questions(count, start, kind)}
+
+
+def incomplete_sections(response):
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "generation_incomplete", detail
+    return detail["partial_sections"]
 
 
 class BackendReliability(unittest.TestCase):
@@ -91,7 +100,7 @@ class BackendReliability(unittest.TestCase):
         self.body["items"].append({"section_id": "s2", "game_type": "fill_blank", "question_count": 2})
         legacy = [{"game_type": "fill_blank", "questions": questions(2, i * 10)} for i in range(2)]
         response, _ = self.send({"sections": legacy})
-        self.assertEqual([x["missing_count"] for x in response.json()["sections"]], [2, 2])
+        self.assertEqual([x["missing_count"] for x in incomplete_sections(response)], [2, 2])
 
     def test_unique_legacy_type_remains_supported(self):
         response, _ = self.send({"sections": [{"game_type": "fill_blank", "questions": questions()}]})
@@ -103,7 +112,7 @@ class BackendReliability(unittest.TestCase):
         raw = {"sections": [{"section_id": "reading", "game_type": "reading", "passage": "春天来了。小明去公园。",
                             "questions": [{"type": "multiple_choice", "stem": "小明去了哪里？", "options": ["公园", "学校"], "answer": 0}]}]}
         response, mock = self.send(raw)
-        result = response.json()["sections"][0]
+        result = incomplete_sections(response)[0]
         self.assertEqual(result["passage"], raw["sections"][0]["passage"])
         self.assertEqual(result["missing_count"], 1)
         self.assertEqual(mock.await_count, 1)
@@ -111,7 +120,7 @@ class BackendReliability(unittest.TestCase):
     def test_reading_without_passage_is_not_accepted(self):
         self.body["items"] = [{"section_id": "s1", "game_type": "reading", "question_count": 2}]
         response, _ = self.send({"sections": [section(kind="reading")]})
-        result = response.json()["sections"][0]
+        result = incomplete_sections(response)[0]
         self.assertEqual(result["questions"], [])
         self.assertEqual(result["missing_count"], 2)
 
@@ -119,7 +128,7 @@ class BackendReliability(unittest.TestCase):
         raw = section()
         raw["questions"] = [{"answer": "2"}, None, "not a question"]
         response, _ = self.send({"sections": [raw]})
-        result = response.json()["sections"][0]
+        result = incomplete_sections(response)[0]
         self.assertEqual(result["questions"], [])
         self.assertEqual(result["missing_count"], 2)
         self.assertTrue(result["quality_warnings"])
@@ -139,12 +148,69 @@ class BackendReliability(unittest.TestCase):
         with patch.object(generate, "_call_llm_and_parse", new=AsyncMock(return_value=raw)) as mock:
             response = self.client.post("/api/v1/generate-batch", json=self.body)
         self.assertEqual(mock.await_count, 2)
-        self.assertEqual(response.json()["sections"][0]["missing_count"], 2)
+        self.assertEqual(incomplete_sections(response)[0]["missing_count"], 2)
 
-    def test_duplicate_questions_are_removed_across_sections(self):
+    def test_duplicate_questions_are_preserved_across_sections(self):
         self.body["items"].append({"section_id": "s2", "game_type": "fill_blank", "question_count": 2})
-        response, _ = self.send({"sections": [section(), section("s2")]})
-        self.assertEqual([x["missing_count"] for x in response.json()["sections"]], [0, 2])
+        response, model = self.send({"sections": [section(), section("s2")]})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([x["missing_count"] for x in response.json()["sections"]], [0, 0])
+        self.assertEqual([len(x["questions"]) for x in response.json()["sections"]], [2, 2])
+        model.assert_awaited_once()
+
+    def test_incomplete_is_failed_and_replay_preserves_questions_without_model_calls(self):
+        response, model = self.send({"sections": [section(count=1)]})
+        kept = incomplete_sections(response)
+        model.assert_awaited_once()
+        status = self.client.get("/api/v1/me/generations/job-one").json()
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["error"]["partial_sections"], kept)
+        replay, model = self.send()
+        self.assertEqual(replay.json(), response.json())
+        model.assert_not_awaited()
+        self.assertEqual(self.client.get("/api/v1/me/usage").json()["succeeded"], 0)
+
+    def test_incomplete_single_keeps_valid_questions(self):
+        body = {key: value for key, value in self.body.items() if key != "items"}
+        body.update(game_type="fill_blank", question_count=2)
+        with patch.object(generate, "_call_llm_and_parse", new=AsyncMock(return_value=section(count=1))) as model:
+            response = self.client.post("/api/v1/generate", json=body)
+        kept = incomplete_sections(response)[0]
+        self.assertEqual((len(kept["questions"]), kept["missing_count"]), (1, 1))
+        model.assert_awaited_once()
+
+    def test_fullwidth_math_survives_without_paid_repairs(self):
+        get_settings().generation_repair_limit = 3
+        self.body["items"] = [{"section_id": "s1", "game_type": "oral_math", "question_count": 2},
+                              {"section_id": "s2", "game_type": "compare", "question_count": 1}]
+        raw = {"sections": [
+            {"section_id": "s1", "game_type": "oral_math", "questions": [
+                {"type": "oral_math", "stem": "９＋４＝（　）", "answer": "13"},
+                {"type": "oral_math", "stem": "８＋６＝____", "answer": "14"},
+            ]},
+            {"section_id": "s2", "game_type": "compare", "questions": [
+                {"type": "compare", "left_expr": "９＋６", "right_expr": "１４", "answer": ">"},
+            ]},
+        ]}
+        response, model = self.send(raw)
+        self.assertEqual(response.status_code, 200, response.text)
+        model.assert_awaited_once()
+        self.assertEqual([len(s["questions"]) for s in response.json()["sections"]], [2, 1])
+
+    def test_rejection_details_include_initial_and_repair_failures(self):
+        get_settings().generation_repair_limit = 1
+        bad = {"type": "oral_math", "stem": "9+4=", "answer": "99"}
+        self.body["items"] = [{"section_id": "s1", "game_type": "oral_math", "question_count": 1}]
+        with patch.object(generate, "_call_llm_and_parse", new=AsyncMock(side_effect=[
+            {"sections": [{"section_id": "s1", "questions": [bad]}]},
+            {"questions": [{"type": "oral_math", "stem": "计算9+4", "answer": 13}]},
+        ])) as model:
+            response = self.client.post("/api/v1/generate-batch", json=self.body)
+        warnings = incomplete_sections(response)[0]["quality_warnings"]
+        self.assertIn("计算题答案不正确", warnings[0])
+        self.assertIn("补题", warnings[1])
+        self.assertIn("计算题算式格式不正确", warnings[1])
+        self.assertEqual(model.await_count, 2)
 
     def test_same_request_replays_once_and_changed_payload_conflicts(self):
         first, _ = self.send()
@@ -166,6 +232,47 @@ class BackendReliability(unittest.TestCase):
         self.assertEqual(status["status"], "unknown")
         self.assertEqual(result.json()["detail"]["request_id"], "timeout")
 
+    def test_gzip_provider_response_generates_paper_and_replays_without_new_call(self):
+        calls = []
+        body = json.dumps({
+            "choices": [{"message": {"content": json.dumps({"sections": [section()]})}}],
+            "usage": {"prompt_tokens": 123, "completion_tokens": 456},
+        }).encode()
+        def respond(request):
+            calls.append(request)
+            return httpx.Response(200, headers={"Content-Encoding": "gzip"}, content=gzip.compress(body))
+        http = httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="https://provider.invalid")
+        try:
+            with patch.object(generate.llm_client, "_get_client_for", return_value=http), \
+                    patch.object(generate, "_merged_llm_params", return_value={
+                        "base_url": "https://provider.invalid", "model": "test", "api_key": "fake",
+                        "timeout": 120, "max_tokens": 16384,
+                    }):
+                first = self.client.post("/api/v1/generate-batch", json=self.body, headers={"X-Request-ID": "gzip-paper"})
+                self.assertEqual(first.status_code, 200, first.text)
+                self.assertEqual(len(first.json()["sections"][0]["questions"]), 2)
+                replay = self.client.post("/api/v1/generate-batch", json=self.body, headers={"X-Request-ID": "gzip-paper"})
+                self.assertEqual(first.json(), replay.json())
+                self.assertEqual(len(calls), 1)
+            status = self.client.get("/api/v1/me/generations/gzip-paper").json()
+            self.assertEqual(status["status"], "succeeded")
+            self.assertEqual(status["result"]["sections"], first.json()["sections"])
+        finally:
+            asyncio.run(http.aclose())
+
+    def test_broken_provider_compression_has_specific_error_without_retry(self):
+        with patch.object(generate.llm_client, "chat", new=AsyncMock(side_effect=httpx.DecodingError("bad compression"))) as model, \
+                patch.object(generate, "_merged_llm_params", return_value={
+                    "base_url": "https://provider.invalid", "model": "test", "api_key": "fake",
+                    "timeout": 120, "max_tokens": 16384,
+                }):
+            response = self.client.post("/api/v1/generate-batch", json=self.body, headers={"X-Request-ID": "broken-gzip"})
+            self.assertEqual(response.status_code, 502)
+            self.assertEqual(response.json()["detail"]["code"], "provider_decoding_error")
+            self.assertNotIn("bad compression", response.text)
+            model.assert_awaited_once()
+            self.assertEqual(self.client.get("/api/v1/me/generations/broken-gzip").json()["status"], "unknown")
+
     def test_daily_quota_and_replay_do_not_spend_twice(self):
         get_settings().generation_daily_limit = 1
         self.assertEqual(self.send()[0].status_code, 200)
@@ -186,6 +293,36 @@ class BackendReliability(unittest.TestCase):
             statuses = list(pool.map(admit, range(12)))
         self.assertEqual(statuses.count(200), 3)
         self.assertEqual(statuses.count(429), 9)
+
+    def test_zero_daily_limit_allows_requests_beyond_default_and_preserves_replay(self):
+        get_settings().generation_daily_limit = 0
+        self.assertEqual(Settings(generation_daily_limit=0).generation_daily_limit, 0)
+        with self.assertRaises(ValidationError):
+            Settings(generation_daily_limit=-1)
+        with database.db() as conn:
+            for index in range(20):
+                conn.execute(
+                    "INSERT INTO generation_requests(user_id,request_id,kind,payload_hash,status,created_at) "
+                    "VALUES (?, ?, 'batch', 'old', 'failed', ?)",
+                    (self.user.id, f"past-{index}", int(time.time())),
+                )
+        first, model = self.send()
+        self.assertEqual(first.status_code, 200)
+        model.assert_awaited_once()
+        replay, model = self.send()
+        self.assertEqual(first.json(), replay.json())
+        model.assert_not_awaited()
+        usage = self.client.get("/api/v1/me/usage").json()
+        self.assertEqual((usage["requests"], usage["daily_limit"]), (21, 0))
+
+    def test_zero_daily_limit_keeps_concurrency_protection(self):
+        get_settings().generation_daily_limit = 0
+        for index in range(3):
+            control._begin(self.user.id, f"active-{index}", "batch", {})
+        response, model = self.send()
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.json()["detail"]["code"], "generation_busy")
+        model.assert_not_awaited()
 
     def test_running_request_is_not_started_again(self):
         control._begin(self.user.id, "running", "batch", {})
@@ -281,6 +418,19 @@ class BackendReliability(unittest.TestCase):
 
 
 class QuestionQuality(unittest.TestCase):
+    def test_fullwidth_format_is_accepted_but_wrong_answers_and_unsafe_math_are_not(self):
+        from app.services.question_qc import question_fingerprint
+
+        normal = {"type": "oral_math", "stem": "9+4=", "answer": 13}
+        for stem in ("９＋４＝", "9＋4＝____", "９＋４＝（　）", "９＋４＝（？）"):
+            question = {**normal, "stem": stem}
+            self.assertIsNone(question_issue(question), stem)
+            self.assertEqual(question_fingerprint(question), question_fingerprint(normal))
+            self.assertEqual(question_issue({**question, "answer": 99}), "计算题答案不正确")
+        for expression in ("２**１００", "2²+1", "１／０", "__import__('os')"):
+            self.assertIsNone(arithmetic_value(expression))
+        self.assertIsNotNone(question_issue({**normal, "stem": "9+4=13"}))
+
     def test_fixed_evaluation_cases(self):
         cases = json.loads((Path(__file__).parent / "fixtures" / "question-quality.json").read_text(encoding="utf-8"))
         for case in cases:
@@ -329,6 +479,40 @@ class SecurityConfiguration(unittest.TestCase):
 
 
 class ProviderRetry(unittest.IsolatedAsyncioTestCase):
+    async def test_compressed_responses_are_decoded_once_and_usage_is_preserved(self):
+        content = '{"sections":[{"topic":"加法练习"}]}'
+        body = json.dumps({
+            "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 123, "completion_tokens": 456},
+        }, ensure_ascii=False).encode()
+
+        class Chunks(httpx.AsyncByteStream):
+            def __init__(self, value):
+                self.value = value
+
+            async def __aiter__(self):
+                for index in range(0, len(self.value), 7):
+                    yield self.value[index:index + 7]
+
+        for encoding, compressor in (("identity", lambda value: value), ("gzip", gzip.compress), ("deflate", zlib.compress)):
+            with self.subTest(encoding=encoding):
+                calls = []
+                def respond(request, calls=calls, encoding=encoding, compressor=compressor):
+                    calls.append(request)
+                    return httpx.Response(200, headers={"Content-Encoding": encoding},
+                                          stream=Chunks(compressor(body)))
+                client = LLMClient()
+                usage = control.Usage()
+                token = control.current_usage.set(usage)
+                try:
+                    async with httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="https://provider.invalid") as http:
+                        with patch.object(client, "_get_client_for", return_value=http), patch("app.services.llm_client.reserve"):
+                            self.assertEqual(await client.chat([], api_key="fake"), content)
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual((usage.model_calls, usage.prompt_tokens, usage.completion_tokens), (1, 123, 456))
+                finally:
+                    control.current_usage.reset(token)
+
     async def test_lru_eviction_keeps_active_borrowers_open(self):
         client = LLMClient()
         try:
@@ -353,7 +537,7 @@ class ProviderRetry(unittest.IsolatedAsyncioTestCase):
             await client.close()
 
     async def test_uncertain_transport_failures_are_not_retried(self):
-        for error in (httpx.ReadTimeout("timeout"), httpx.ReadError("read"), httpx.WriteError("write"), httpx.RemoteProtocolError("protocol")):
+        for error in (httpx.ReadTimeout("timeout"), httpx.ReadError("read"), httpx.WriteError("write"), httpx.RemoteProtocolError("protocol"), httpx.DecodingError("decode")):
             client = LLMClient()
             fake = AsyncMock(spec=httpx.AsyncClient)
             fake.post.side_effect = error

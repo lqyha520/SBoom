@@ -13,6 +13,8 @@ import tarfile
 import tempfile
 from pathlib import Path
 
+from image_checks import verify_image
+
 
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, capture_output=True, text=True, **kwargs).stdout.strip()
@@ -32,6 +34,10 @@ def main():
         parser.error('请使用简单 SSH 主机别名和绝对目录（不含空格或 shell 字符）')
     commit = run('git', 'rev-parse', '--verify', args.ref + '^{commit}')
     output = args.output.resolve() / commit[:12]
+    images = [f'learncoach-app:{commit[:12]}', f'learncoach-ops:{commit[:12]}']
+    for image in images:
+        if run('docker', 'image', 'ls', '--quiet', '--no-trunc', image):
+            raise RuntimeError('版本镜像已存在，拒绝覆盖：' + image)
     output.mkdir(parents=True, exist_ok=False)
     with tempfile.TemporaryDirectory(prefix='lc-release-') as folder:
         root = Path(folder)
@@ -41,9 +47,11 @@ def main():
         source.mkdir()
         with tarfile.open(archive) as snapshot:
             snapshot.extractall(source, filter='data')
-        images = [f'learncoach-app:{commit[:12]}', f'learncoach-ops:{commit[:12]}']
         for target, image in zip(('runtime', 'ops'), images, strict=True):
-            subprocess.run(['docker', 'build', '--target', target, '-t', image, str(source)], check=True)
+            subprocess.run(['docker', 'build', '--target', target,
+                            '--label', 'org.opencontainers.image.revision=' + commit,
+                            '-t', image, str(source)], check=True)
+            verify_image(run('docker', 'image', 'inspect', '--format', '{{.Id}}', image))
         bundle = output / 'images.tar'
         run('docker', 'save', '-o', str(bundle), *images)
         with bundle.open('rb') as stream:

@@ -40,7 +40,7 @@ export interface DraftEntry { id: string; owner: string; updatedAt: number; titl
 const draftEntry = (record: DraftRecord): DraftEntry => ({ id: record.id, owner: record.owner, updatedAt: record.updatedAt,
   title: record.snapshot.title || record.snapshot.keyword || '未命名草稿', grade: record.snapshot.grade, subject: record.snapshot.subject })
 
-export type HistoryReason = 'manual' | 'generated' | 'before-restore' | 'before-generate'
+export type HistoryReason = 'manual' | 'generated' | 'before-restore' | 'before-generate' | 'before-clear'
 export interface HistoryEntry {
   id: string
   owner: string

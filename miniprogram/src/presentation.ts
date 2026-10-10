@@ -25,9 +25,10 @@ export function paperAccess(paper: Pick<PaperSummary, 'required_view' | 'require
   return paper.download_mode === 'external' ? '免费获取' : '免费 PDF'
 }
 
-export function downloadAccessHint(paper: Pick<PaperSummary, 'required_view' | 'required_download' | 'download_mode'>) {
+export function downloadAccessHint(paper: Pick<PaperSummary, 'required_view' | 'required_download' | 'download_mode'>, signedIn = false) {
   if (paper.required_view === 'vip') return '预览与下载均需 VIP 会员'
   if (paper.required_download === 'vip') return '可免费预览，下载需 VIP 会员'
+  if (signedIn) return paper.download_mode === 'external' ? '可免费获取网盘链接' : '可免费预览和下载'
   return paper.download_mode === 'external' ? '登录后免费获取网盘链接' : '可免费预览，登录后免费下载'
 }
 

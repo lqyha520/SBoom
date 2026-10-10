@@ -63,7 +63,7 @@ export function apiUrl(path: string) {
   return base + path
 }
 
-function networkOnce<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: unknown, scope?: RequestScope): Promise<T> {
+function networkOnce<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: unknown, scope?: RequestScope, anonymous = false): Promise<T> {
   const epoch = generation
   const loginRequest = path.startsWith('/api/v1/mini/login') || path === '/api/v1/mini/register'
   return new Promise((resolve, reject) => {
@@ -75,23 +75,23 @@ function networkOnce<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' 
     const cancel = () => { if (!settled) { settled = true; reject(new ApiError('请求已取消', 0, 'cancelled')); task?.abort(); cleanup() } }
     const cleanup = () => { unregister(); activeReads.delete(cancel) }
     if (method === 'GET' || path === '/api/v1/catalog/window') {
-      activeReads.add(cancel)
+      if (!anonymous) activeReads.add(cancel)
       unregister = scope?.onCancel(cancel) || unregister
     }
     if (settled) return
     task = uni.request({
       url, method, data: data as Record<string, unknown> | undefined,
-      header: { ...authHeaders(), 'Content-Type': 'application/json' }, timeout: 20000,
+      header: { ...(anonymous ? {} : authHeaders()), 'Content-Type': 'application/json' }, timeout: 20000,
       success(response) {
         if (settled) return
         settled = true; cleanup()
-        if (epoch !== generation) { reject(new ApiError('登录状态已变化', 409)); return }
+        if (!anonymous && epoch !== generation) { reject(new ApiError('登录状态已变化', 409)); return }
         if (response.statusCode >= 200 && response.statusCode < 300) {
           if (method !== 'GET' && path !== '/api/v1/catalog/window') invalidatePersonal()
           resolve(response.data as T); return
         }
         const { message, code, requestId } = parseErrorDetail(response.data, `请求失败 (${response.statusCode})`)
-        if (!loginRequest) handleAuthFailure(response.statusCode, code)
+        if (!anonymous && !loginRequest) handleAuthFailure(response.statusCode, code)
         if (response.statusCode >= 500) uni.$emit?.('lc-diagnostic', 'server')
         reject(new ApiError(message, response.statusCode, code, requestId || String(response.header?.['X-Correlation-ID'] || response.header?.['x-correlation-id'] || '')))
       },
@@ -100,23 +100,23 @@ function networkOnce<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' 
   })
 }
 
-async function network<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: unknown, scope?: RequestScope): Promise<T> {
+async function network<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: unknown, scope?: RequestScope, anonymous = false): Promise<T> {
   const epoch = generation
   let cancelled = false
   const unregister = scope?.onCancel(() => { cancelled = true })
   try {
-    try { return await networkOnce<T>(path, method, data, scope) }
+    try { return await networkOnce<T>(path, method, data, scope, anonymous) }
     catch (error) {
-      if (!(error instanceof ApiError) || error.code === 'cancelled' || cancelled || epoch !== generation || !retryableIdempotent(method, error.status)) throw error
+      if (!(error instanceof ApiError) || error.code === 'cancelled' || cancelled || (!anonymous && epoch !== generation) || !retryableIdempotent(method, error.status)) throw error
       await backoff()
-      if (cancelled || epoch !== generation) throw new ApiError('请求已取消', 0, 'cancelled')
-      return await networkOnce<T>(path, method, data, scope)
+      if (cancelled || (!anonymous && epoch !== generation)) throw new ApiError('请求已取消', 0, 'cancelled')
+      return await networkOnce<T>(path, method, data, scope, anonymous)
     }
   } finally { unregister?.() }
 }
 
 const activeReads = new Set<() => void>()
-export interface ReadOptions { scope?: RequestScope; force?: boolean }
+export interface ReadOptions { scope?: RequestScope; force?: boolean; anonymous?: boolean }
 const metadata = new Map<string, { expires: number; value: unknown }>()
 const pending = new Map<string, { promise: Promise<unknown>; users: number; cancel: () => void }>()
 const publicPaths = new Set(['/api/v1/site/home', '/api/v1/site/topics', '/api/v1/site/catalog-tags'])
@@ -127,6 +127,14 @@ function invalidatePersonal() {
 let metadataEpoch = 0
 export function invalidateMetadata() { metadataEpoch++; metadata.clear(); pending.clear() }
 export function request<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: unknown, options: ReadOptions = {}): Promise<T> {
+  // 冷启动公开内容独立于登录恢复；不携带 token、不复用个人缓存、不触发退出。
+  if (options.anonymous) {
+    const pathname = path.split('?')[0]
+    if (method !== 'GET' || (!publicPaths.has(pathname) && pathname !== '/api/v1/catalog/papers' && pathname !== '/api/v1/catalog/summary')) {
+      return Promise.reject(new ApiError('该接口不支持公开读取'))
+    }
+    return network<T>(path, method, data, options.scope, true)
+  }
   // 个人摘要只在同一登录代际内短暂缓存，写入前后立即失效。
   if (method !== 'GET' || (!publicPaths.has(path) && !personalPaths.has(path))) {
     if (method !== 'GET' && path !== '/api/v1/catalog/window') {

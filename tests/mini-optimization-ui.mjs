@@ -24,6 +24,8 @@ try {
   const assigned = new Map()
   let messageFailure = false, batchFailure = false
   let recentEnabled = true, homeEmpty = false
+  let sessionGate = Promise.resolve()
+  let sessionReleased = true
   let submitted = []
   const rows = Array.from({ length: 24 }, (_, i) => ({
     id: 'paper-' + i, revision: 1, title: `20 以内加减法练习 ${i + 1}`,
@@ -37,12 +39,12 @@ try {
   await context.route('**/api/v1/**', async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname
     const method = request.method(), data = request.postDataJSON?.()
-    report.requests.push({ path, method })
+    report.requests.push({ path, method, query: url.search, authorization: request.headers().authorization || '' })
     let body, status = 200
     if (path.startsWith('/api/v1/catalog/assets/')) {
       await route.fulfill({ status, contentType: 'image/png', body: image }); return
     }
-    if (path === '/api/v1/mini/me') body = user
+    if (path === '/api/v1/mini/me') { await sessionGate; body = user }
     else if (path === '/api/v1/site/home') body = { banner_mode: 'welcome', banners: [], notices: { banner: [], popup: [] }, dictionaries: { grades: ['小学一年级', '小学二年级'], subjects: ['语文', '数学', '英语'] }, categories: [] }
     else if (path === '/api/v1/catalog/summary') body = { papers: rows.length, favorites: favorites.size, downloads: 8, unread: 0, grades: ['小学一年级', '小学二年级'], subjects: ['语文', '数学', '英语'], categories: [{ id: 'daily', name: '口算练习' }] }
     else if (path === '/api/v1/site/topics' || path === '/api/v1/site/catalog-tags') body = { items: [] }
@@ -89,8 +91,21 @@ try {
   page.on('pageerror', error => report.errors.push(error.message))
   await page.goto(base + '/')
   await page.evaluate(() => localStorage.setItem('lc-consumer-session-v2', 'isolated-test-token'))
+  let releaseSession
+  sessionGate = new Promise(resolve => { releaseSession = resolve })
+  sessionReleased = false
+  const coldRequests = report.requests.length
   await page.reload()
   await expect(page.locator('.paper-card-title').first()).toBeVisible()
+  assert.equal(sessionReleased, false)
+  await page.getByRole('button', { name: '最近上新', exact: true }).click()
+  await expect.poll(() => report.requests.slice(coldRequests).some(item => item.path === '/api/v1/catalog/papers' && item.query.includes('sort=latest'))).toBe(true)
+  assert.ok(report.requests.slice(coldRequests).filter(item => item.path === '/api/v1/catalog/papers').every(item => !item.authorization), 'Cold public reads must not carry a session token')
+  sessionReleased = true
+  releaseSession()
+  await expect.poll(() => report.requests.slice(coldRequests).some(item => item.path === '/api/v1/catalog/papers' && item.authorization)).toBe(true)
+  await page.getByRole('button', { name: '为你精选', exact: true }).click()
+  report.flows.push('public home renders and sort remains usable while session recovery is pending')
   const go = async path => { await page.goto(base + '/#' + path); await page.waitForTimeout(350) }
   const screenshot = async name => {
     await page.waitForTimeout(350)
@@ -103,6 +118,7 @@ try {
     await go('/pages/home/index')
     await expect(page.locator('.paper-card-title').first()).toBeVisible()
     await page.locator('.home-search-row').scrollIntoViewIfNeeded()
+    await page.mouse.move(0, 0)
     await expect(page.locator('.home-heading')).toHaveCount(0)
     await expect(page.locator('.home-banner')).toBeInViewport()
     await expect(page.locator('.welcome-art')).toBeVisible()
@@ -118,14 +134,30 @@ try {
       const sheet = element.getBoundingClientRect(), cover = element.closest('.paper-cover').getBoundingClientRect()
       return sheet.left >= cover.left && sheet.right <= cover.right && sheet.top >= cover.top && sheet.bottom <= cover.bottom
     }), true, 'Full cover must fit without clipping')
-    const covers = await page.locator('.home-cards .paper-cover').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().top))
-    assert.equal(covers[0], covers[1], 'Cards with and without keywords must align')
+    await expect.poll(() => page.locator('.home-cards .paper-cover').evaluateAll(elements => {
+      const tops = elements.map(element => element.getBoundingClientRect().top)
+      return Math.abs(tops[0] - tops[1])
+    }), { message: 'Cards with and without keywords must align' }).toBeLessThan(1)
     await screenshot('home-' + width)
     await first.evaluate(element => element.scrollIntoView({ block: 'center' }))
     await expect(first.locator('.paper-card-meta')).toBeInViewport()
     await first.screenshot({ path: output('paper-card-' + width + '.png') })
   }
   report.flows.push('home first title, complete covers and aligned keyword rows at 320/375/430/1024')
+  await page.setViewportSize({ width: 375, height: 812 })
+  await go('/pages/home/index')
+  await page.getByRole('button', { name: '换一组习题', exact: true }).click()
+  const selectedTitle = await page.locator('.paper-card-title').first().textContent()
+  await page.locator('.paper-card-open').first().evaluate(element => element.scrollIntoView({ block: 'start' }))
+  await page.mouse.move(0, 0)
+  const cardTop = (await page.locator('.paper-card-open').first().boundingBox()).y
+  await page.locator('.paper-card-open').first().click()
+  await expect(page.locator('.detail-title')).toBeVisible()
+  await page.goBack()
+  await expect(page.locator('.paper-card-title').first()).toHaveText(selectedTitle)
+  await expect(page.locator('.paper-card-open').first()).toBeInViewport()
+  await expect.poll(async () => Math.abs((await page.locator('.paper-card-open').first().boundingBox()).y - cardTop)).toBeLessThan(3)
+  report.flows.push('home selected group and card position survive detail return')
   recentEnabled = false
   await page.setViewportSize({ width: 375, height: 812 })
   await page.reload()
@@ -179,6 +211,9 @@ try {
   assert.equal(favorites.size, 23)
   report.flows.push('batch assign, ungrouped filter, removal failure and retry')
   await go('/pages/library/index')
+  await expect(page.locator('.sort-buttons')).toBeVisible()
+  const touchSizes = await page.locator('.sort-buttons > *, .filter-free, .topic-choice').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().height))
+  assert.ok(touchSizes.length && touchSizes.every(height => height >= 44), 'Catalog touch targets must be at least 44px high')
   await page.getByRole('button', { name: '选择年级', exact: true }).click()
   await page.getByRole('button', { name: '小学一年级', exact: true }).click()
   await page.getByText('数学', { exact: true }).first().click()
@@ -194,6 +229,9 @@ try {
   await go('/pages/paper/index?id=paper-0')
   await page.getByRole('radio').filter({ hasText: '答案版' }).click()
   await expect(page.getByRole('radio').filter({ hasText: '答案版' })).toHaveAttribute('aria-checked', 'true')
+  await expect(page.locator('.preview-pill')).toContainText('原稿预览')
+  await expect(page.locator('.detail-dock')).toContainText(/下载\s*答案版/)
+  await expect(page.locator('.download-hint')).toHaveText('可免费预览和下载')
   const previewButton = await page.locator('.preview-pill').boundingBox()
   const downloadDock = await page.locator('.detail-dock').boundingBox()
   assert.ok(previewButton.y + previewButton.height <= downloadDock.y, 'Preview action must fit above the download dock')

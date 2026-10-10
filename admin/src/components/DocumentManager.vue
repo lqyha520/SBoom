@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAdminLeaveGuard } from "../navigation"
 import { computed, onActivated, onDeactivated, ref } from 'vue'
 import { ApiError, type UserInfo } from '../api'
 import { useBeforeUnload } from '../unsaved'
@@ -21,7 +22,11 @@ const anyDirty = computed(() => documents.value.some(server => {
   const draft = drafts.value[server.key]
   return !!draft && (draft.title !== server.title || draft.body !== server.body)
 }))
-useBeforeUnload(anyDirty)
+const pageActive = ref(true)
+onActivated(() => { pageActive.value = true })
+onDeactivated(() => { pageActive.value = false })
+useBeforeUnload(computed(() => pageActive.value && anyDirty.value))
+useAdminLeaveGuard(() => !pageActive.value || (!busy.value && (!anyDirty.value || window.confirm('有未保存的文档，确认离开？'))))
 let sequence = 0
 
 const labels = { agreement: '用户协议', privacy: '隐私政策' }

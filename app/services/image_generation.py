@@ -19,7 +19,7 @@ from app.metrics import observe_provider
 from app.models.image_generation import ImageWorksheetRequest
 from app.services.generation_control import record_attempt, record_usage
 from app.services.knowledge_scope import knowledge_scope_service
-from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num
+from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num, _textbook_context
 from app.services.provider_http import borrow_client
 from app.services.resource_admission import bounded_image_request, bounded_media
 
@@ -65,6 +65,7 @@ def build_prompt(request: ImageWorksheetRequest) -> str:
         "请直接生成一张完整、清晰、可打印的小学生习题图片。输出成品图片。\n\n"
         "【必须遵守的出题条件】\n"
         f"年级：{request.grade}\n科目：{request.subject}\n知识点：{keyword}\n"
+        f"{_textbook_context(scope, request.keyword)}\n"
         f"题型及题量：{items}\n难度：{difficulty}\n\n"
         f"{series}"
         "【内容要求】\n"

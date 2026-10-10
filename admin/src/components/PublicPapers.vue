@@ -27,22 +27,19 @@ import CatalogPaperTable from './CatalogPaperTable.vue'
 import PublicationEditorDialog from './PublicationEditorDialog.vue'
 import CatalogPreviewDialog from './CatalogPreviewDialog.vue'
 import CatalogBatchDialog from './CatalogBatchDialog.vue'
-import CatalogRevisionDialog from './CatalogRevisionDialog.vue'
-import PaperMetadataDialog from './PaperMetadataDialog.vue'
-import PaperEditionDialog from './PaperEditionDialog.vue'
+
 
 const props = defineProps<{ user: UserInfo }>()
 const items = ref<CatalogPaper[]>([])
 const selection = useCatalogSelection()
 const selectedIds = selection.ids
 const selectedItems = selection.selected
-const batchOpen = ref(false),
-  revisionOpen = ref(false),
-  metadataOpen = ref(false),
-  editionOpen = ref(false)
-const metadataTarget = ref<CatalogPaper | null>(null),
-  editionTarget = ref<CatalogPaper | null>(null),
-  revisionTarget = ref<CatalogPaper | null>(null)
+const batchOpen = ref(false)
+const grade = ref('all'), subject = ref('all'), category = ref('all'), access = ref('all')
+const createdExpanded = ref(false)
+const statsLoading = ref(false), statsError = ref('')
+let statsLoadedAt = 0
+let statsPending = false
 const stats = ref<CatalogStats | null>(null)
 const q = ref(''),
   status = ref('all'),
@@ -69,6 +66,7 @@ const editor = usePublicationEditor(
   rememberCreated,
   async (message, revealCreated = false) => {
     notice.value = message
+    void loadStats(true)
     await load()
     if (revealCreated) {
       await nextTick()
@@ -76,7 +74,7 @@ const editor = usePublicationEditor(
     }
   },
 )
-const { categories, statuses } = toRefs(editor)
+const { categories, filterCategories, statuses, gradeOptions, subjectOptions } = toRefs(editor)
 const busy = computed(() => saving.value || editor.busy)
 const previewState = reactive(useCatalogPreview())
 const { preview, previewOpen } = toRefs(previewState)
@@ -101,7 +99,20 @@ function batchSaved(count: number) {
   notice.value = '已更新 ' + count + ' 份资料'
   selection.clear()
   void load()
+  void loadStats(true)
 }
+async function loadStats(force = false) {
+  if (statsLoading.value) { if (force) statsPending = true; return }
+  if (!force && Date.now() - statsLoadedAt < 60000) return
+  statsLoading.value = true; statsError.value = ''
+  try { stats.value = await catalogStats(); statsLoadedAt = Date.now() }
+  catch (cause) { statsError.value = message(cause) }
+  finally {
+    statsLoading.value = false
+    if (statsPending) { statsPending = false; void loadStats(true) }
+  }
+}
+function refresh() { void load(); void loadStats(true) }
 async function load() {
   const current = ++sequence
   loading.value = true
@@ -111,6 +122,7 @@ async function load() {
       q.value.trim(),
       status.value === 'all' ? '' : status.value,
       (page.value - 1) * 20,
+      Object.fromEntries(Object.entries({ grade: grade.value, subject: subject.value, category: category.value, access: access.value }).filter(([, value]) => value !== 'all')),
     )
     if (current !== sequence) return
     items.value = result.items
@@ -119,15 +131,13 @@ async function load() {
       page.value--
       return
     }
-    const resultStats = await catalogStats()
-    if (current === sequence) stats.value = resultStats
   } catch (cause) {
     if (current === sequence) error.value = message(cause)
   } finally {
     if (current === sequence) loading.value = false
   }
 }
-const routeState = useAdminListRoute('papers', { q, status, page }, () => {
+const routeState = useAdminListRoute('papers', { q, status, grade, subject, category, access, page }, () => {
   void load()
 })
 function search() {
@@ -135,19 +145,17 @@ function search() {
   if (page.value !== 1) page.value = 1
   else void load()
 }
-watch(page, load)
-watch(status, search)
+watch(page, () => { if (!routeState.restoring) void load() })
+watch([status, grade, subject, category, access], search)
 onActivated(() => {
   void load()
+  void loadStats()
 })
 onDeactivated(() => {
   sequence++
   loading.value = false
   previewOpen.value = false
   batchOpen.value = false
-  revisionOpen.value = false
-  metadataOpen.value = false
-  editionOpen.value = false
 })
 async function openLinkedPaper() {
   const id = new URLSearchParams(adminRoute.query).get('paper')
@@ -176,13 +184,13 @@ function previewCreated(item: CatalogPaper) {
 }
 function tagCreated(item: CatalogPaper) {
   if (!editor.setDialogOpen(false)) return
-  metadataTarget.value = item
-  metadataOpen.value = true
+  editor.edit(item, 'metadata')
 }
 async function locateCreated(item: CatalogPaper) {
   highlighted.value = item.id
   q.value = item.title.slice(0, 120)
   status.value = 'all'
+  grade.value = subject.value = category.value = access.value = 'all'
   page.value = 1
   await load()
 }
@@ -206,6 +214,7 @@ async function remove() {
     await deletePublication(props.user.id, removeTarget.value)
     removeOpen.value = false
     notice.value = '公共条目已删除，原始习题仍保留'
+    void loadStats(true)
     await load()
   } catch (cause) {
     removeError.value = message(cause)
@@ -239,6 +248,7 @@ async function remove() {
         <dd>{{ stats.downloads }}</dd>
       </div>
     </dl>
+    <div v-if="statsError" class="actions-row mb-3"><span class="text-sm text-muted">统计暂不可用，仍可管理资料</span><UButton label="重试统计" size="xs" variant="outline" :loading="statsLoading" @click="loadStats(true)" /></div>
     <div class="section-toolbar catalog-toolbar">
       <form class="table-search" @submit.prevent="search">
         <UInput
@@ -268,9 +278,17 @@ async function remove() {
             variant="ghost"
             aria-label="刷新公共习题"
             :loading="loading"
-            @click="load" /></UTooltip
+            @click="refresh" /></UTooltip
         ><UButton icon="i-lucide-plus" label="添加习题" @click="create" />
       </div>
+    </div>
+    <div class="catalog-filters" aria-label="资料筛选">
+      <USelect v-model="grade" :items="[{value:'all',label:'全部年级'}, ...gradeOptions]" aria-label="年级筛选" />
+      <USelect v-model="subject" :items="[{value:'all',label:'全部学科'}, ...subjectOptions]" aria-label="学科筛选" />
+      <USelect v-model="category" :items="[{value:'all',label:'全部分类'}, ...filterCategories]" aria-label="分类筛选" />
+      <USelect v-model="access" :items="[{value:'all',label:'全部权限'},{value:'free',label:'普通用户可用'},{value:'vip_download',label:'免费预览 · VIP 下载'},{value:'vip_view',label:'VIP 专享'}]" aria-label="权限筛选" />
+      <UButton v-if="[grade,subject,category,access].some(value => value !== 'all')" label="清除条件" variant="ghost" @click="grade = subject = category = access = 'all'" />
+      <UButton v-if="editor.dictionaryError" label="重试年级与学科" variant="outline" @click="editor.loadDictionaryOptions" />
     </div>
     <UAlert
       v-if="error"
@@ -295,7 +313,7 @@ async function remove() {
       aria-label="本次新建习题"
     >
       <div class="actions-row">
-        <h2>本次新建 {{ createdItems.length }} 份习题</h2>
+        <button type="button" :aria-expanded="createdExpanded" @click="createdExpanded = !createdExpanded">本次新建 {{ createdItems.length }} 份习题 · {{ createdExpanded ? '收起' : '展开' }}</button>
         <UButton
           label="继续添加"
           size="sm"
@@ -304,8 +322,8 @@ async function remove() {
           @click="create"
         />
       </div>
-      <p class="text-sm text-muted">草稿不会自动公开；请预览核对后再发布。</p>
-      <ul>
+      <p v-if="createdExpanded" class="text-sm text-muted">草稿不会自动公开；请预览核对后再发布。</p>
+      <ul v-if="createdExpanded">
         <li v-for="item in createdItems" :key="item.id">
           <div class="actions-row"><strong>{{ item.title }}</strong><UBadge :color="item.status === 'published' ? 'success' : item.status === 'draft' ? 'warning' : 'neutral'" variant="soft">{{ labels[item.status] }}</UBadge></div>
           <div class="actions-row">
@@ -345,7 +363,7 @@ async function remove() {
     <CatalogPaperTable
       :items="items"
       :selected-ids="selectedIds"
-      :categories="categories"
+      :categories="filterCategories"
       :loading="loading"
       :error="error"
       :highlighted="highlighted"
@@ -354,18 +372,9 @@ async function remove() {
       @preview="showPreview"
       @edit="edit"
       @remove="askRemove"
-      @metadata="
-        metadataTarget = $event;
-        metadataOpen = true
-      "
-      @edition="
-        editionTarget = $event;
-        editionOpen = true
-      "
-      @revision="
-        revisionTarget = $event;
-        revisionOpen = true
-      "
+      @metadata="editor.edit($event, 'metadata')"
+      @edition="editor.edit($event, 'editions')"
+      @revision="editor.edit($event, 'revision')"
     />
     <div class="table-footer">
       <span>共 {{ total }} 份习题</span
@@ -426,31 +435,14 @@ async function remove() {
       :categories="categories"
       @close="batchOpen = false"
       @saved="batchSaved"
-    /><CatalogRevisionDialog
-      :open="revisionOpen"
-      :target="revisionTarget"
-      :admin-id="user.id"
-      @close="revisionOpen = false"
-      @saved="load"
-    />
-    <PaperMetadataDialog
-      :open="metadataOpen"
-      :target="metadataTarget"
-      :admin-id="user.id"
-      @close="metadataOpen = false"
-      @saved="load"
-    />
-    <PaperEditionDialog
-      :open="editionOpen"
-      :target="editionTarget"
-      :admin-id="user.id"
-      @close="editionOpen = false"
-      @saved="load"
     />
   </section>
 </template>
 
 <style scoped>
+.catalog-filters { display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px; }
+.catalog-filters > * { min-width:130px; }
+@media(max-width:600px) { .catalog-filters > * { flex:1; } }
 .created-results {
   padding: 16px;
   margin-bottom: 20px;
@@ -479,8 +471,8 @@ async function remove() {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   border-bottom: 1px solid var(--ui-border);
-  margin: 0 0 24px;
-  padding-bottom: 20px;
+  margin: 0 0 16px;
+  padding-bottom: 12px;
   gap: 16px;
 }
 .catalog-metrics dt {
@@ -489,7 +481,7 @@ async function remove() {
 }
 .catalog-metrics dd {
   margin: 8px 0 0;
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }

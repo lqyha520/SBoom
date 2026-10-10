@@ -488,6 +488,40 @@ class PublicCatalogContracts(unittest.TestCase):
         self.assertTrue(self.client.get(f"/api/v1/catalog/papers/{item['id']}").json()["can_download"])
         self.assertEqual(self.client.put(url, json=body).status_code, 401)
 
+    def test_admin_filters_apply_effective_permissions_before_count_and_pagination(self):
+        inherited, explicit_free, explicit_download = self.draft(), self.draft(), self.draft()
+        self.assertEqual(self.update(explicit_free, view_access="free", download_access="free").status_code, 200)
+        self.assertEqual(self.update(explicit_download, view_access="free", download_access="vip").status_code, 200)
+        rule_url = "/api/v1/admin/catalog/type-rules/quiz"
+        changed = self.client.put(rule_url, json={"revision": 0, "view_access": "free", "download_access": "vip"})
+        self.assertEqual(changed.status_code, 200, changed.text)
+        url = "/api/v1/admin/catalog/papers"
+        params = {"access": "vip_download", "status": "draft", "grade": inherited["grade"],
+                  "subject": inherited["subject"], "category": inherited["category"], "limit": 1}
+        first = self.client.get(url, params=params).json()
+        second = self.client.get(url, params={**params, "offset": 1}).json()
+        self.assertEqual(first["total"], 2)
+        self.assertTrue(first["has_more"])
+        self.assertFalse(second["has_more"])
+        self.assertEqual({first["items"][0]["id"], second["items"][0]["id"]},
+                         {inherited["id"], explicit_download["id"]})
+        self.assertEqual(self.client.get(url, params={"access": "free"}).json()["items"][0]["id"], explicit_free["id"])
+        for field in ("grade", "subject", "category"):
+            self.assertEqual(self.client.get(url, params={**params, field: "不匹配"}).json()["total"], 0)
+        # 观看继承 VIP 时，显式免费的下载仍必须归为 VIP 专享。
+        self.assertEqual(self.update(inherited, view_access="inherit", download_access="free").status_code, 200)
+        changed = self.client.put(rule_url, json={"revision": changed.json()["revision"],
+                                                 "view_access": "vip", "download_access": "vip"})
+        self.assertEqual(changed.status_code, 200)
+        result = self.client.get(url, params={"access": "vip_view"}).json()
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["items"][0]["id"], inherited["id"])
+        self.assertEqual(result["items"][0]["required_download"], "vip")
+        self.assertEqual(self.client.get(url, params={"access": "vip_download"}).json()["total"], 1)
+        self.assertEqual(self.client.get(url, params={"access": "invalid"}).status_code, 422)
+        self.sign_in(self.author)
+        self.assertEqual(self.client.get(url, params=params).status_code, 403)
+
     def test_mixed_question_types_use_strictest_rule_and_inherited_view_protects_pdf(self):
         value = snapshot()
         value["paper"]["sections"].append({**copy.deepcopy(value["paper"]["sections"][0]), "type": "reading"})

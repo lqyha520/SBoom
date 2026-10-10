@@ -168,8 +168,7 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Smoke test image
         run: |
-          docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges learn-coach:ci python -c "import app.main; from pathlib import Path; assert all((Path(p) / 'index.html').is_file() and list((Path(p) / 'assets').glob('*.js')) for p in ('web/dist', 'admin/dist'))"
-          docker run --rm --network none learn-coach:ci id -u | grep -qx 10001
+          python3 -c "import sys; sys.path.insert(0, 'scripts/release'); from image_checks import verify_image; verify_image('learn-coach:ci')"
       - name: Scan runtime image
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed learn-coach:ci
@@ -177,6 +176,7 @@ jobs:
         run: docker build --target ops -t learn-coach-ops:ci .
       - name: Verify PostgreSQL tools and encrypted restore
         run: |
+          python3 -c "import sys; sys.path.insert(0, 'scripts/release'); from image_checks import verify_image; verify_image('learn-coach-ops:ci')"
           docker run --rm --network none --entrypoint pg_dump learn-coach-ops:ci --version
           docker run --rm --network none --entrypoint pg_restore learn-coach-ops:ci --version
           docker run --rm --network none --entrypoint sh learn-coach-ops:ci -ec '

@@ -9,6 +9,7 @@ import * as vue from 'vue'
 import { parse } from 'vue/compiler-sfc'
 import { createLatestRequest } from '../src/services/latest-request'
 import { createFilePool } from '../src/services/file-pool'
+import { homeSelection } from '../src/presentation'
 
 function fixture(file: string, modules: Record<string, unknown>, expose: string, globals: Record<string, unknown>) {
   const source = parse(readFileSync(new URL('../src/' + file, import.meta.url), 'utf8')).descriptor.scriptSetup!.content
@@ -70,36 +71,36 @@ function boundedCatalog(duplicates = false) {
   return { page, session, offsets, windows, scroll, setTotal: (value: number) => { count = value }, close: () => { page.deactivate(); scope.stop() } }
 }
 
-test('超过千条的浏览保持每组最多 200 条，返回保留当前组和位置，隐藏页可释放内存', async () => {
+test('超过千条的浏览保持每组最多 60 条，返回保留当前组和位置，隐藏页可释放内存', async () => {
   const fixture = boundedCatalog(), { page } = fixture
   try {
     await page.activate(); await settle()
-    for (let group = 0; group < 6; group++) {
-      for (let batch = 1; batch < 10; batch++) await page.refresh(false)
-      assert.equal(page.items.value.length, 200)
+    for (let group = 0; group < 20; group++) {
+      for (let batch = 1; batch < 3; batch++) await page.refresh(false)
+      assert.equal(page.items.value.length, 60)
       const requests = fixture.offsets.length
       await page.refresh(false)
       assert.equal(fixture.offsets.length, requests)
-      if (group < 5) await page.turnWindow(1)
+      if (group < 19) await page.turnWindow(1)
     }
-    assert.equal(page.windowStart.value, 1000)
+    assert.equal(page.windowStart.value, 1140)
     assert.equal(page.nextOffset.value, 1200)
     page.setScroll(2500); page.deactivate()
     assert.equal(page.imagesActive.value, false)
     await page.activate(); await settle()
     assert.equal(page.imagesActive.value, true)
-    assert.equal(page.items.value[0].id, '1000')
-    assert.equal(page.items.value.length, 200)
+    assert.equal(page.items.value[0].id, '1140')
+    assert.equal(page.items.value.length, 60)
     assert.equal(page.nextOffset.value, 1200)
-    assert.deepEqual(fixture.windows, [200])
+    assert.deepEqual(fixture.windows, [60])
     assert.equal(fixture.scroll.at(-1), 2500)
-    page.memoryWarning(); assert.equal(page.items.value.length, 200)
+    page.memoryWarning(); assert.equal(page.items.value.length, 60)
     page.deactivate(); page.memoryWarning(); assert.equal(page.items.value.length, 0)
     await page.activate(); await settle()
-    assert.equal(page.items.value[0].id, '1000')
+    assert.equal(page.items.value[0].id, '1140')
     assert.equal(page.items.value.length, 20)
     await page.turnWindow(-1)
-    assert.equal(page.items.value[0].id, '800')
+    assert.equal(page.items.value[0].id, '1080')
     page.q.value = '新筛选'; await settle()
     assert.equal(page.windowStart.value, 0)
     assert.equal(fixture.offsets.at(-1), 0)
@@ -116,15 +117,58 @@ test('翻页偏移按服务端行数推进，重复行不导致重复请求，�
     await page.refresh(false); await page.refresh(false)
     assert.equal(page.items.value.length, 59)
     assert.deepEqual(fixture.offsets, [0, 20, 40])
-    for (let i = 3; i < 10; i++) await page.refresh(false)
+    await page.refresh(false)
     assert.equal(page.windowFull.value, true)
     await page.turnWindow(1)
-    assert.equal(page.items.value[0].id, '200')
-    fixture.setTotal(180)
+    assert.equal(page.items.value[0].id, '60')
+    fixture.setTotal(50)
     await page.refresh()
     assert.equal(page.windowStart.value, 0)
     assert.equal(page.items.value[0].id, '0')
   } finally { fixture.close() }
+})
+
+test('冷启动公开内容先于会话完成，恢复登录保留输入，详情返回保留推荐组和位置', async () => {
+  const hooks: Record<string, (...args: any[]) => any> = {}
+  const session = vue.reactive({ user: null as { id: string } | null, ready: false, error: '' })
+  let resolveSession!: () => void
+  const waiting = new Promise<boolean>(resolve => { resolveSession = () => { session.ready = true; session.user = { id: 'reader' }; resolve(true) } })
+  const calls: { anonymous?: boolean; grade?: string }[] = [], scrolls: number[] = []
+  const scope = vue.effectScope()
+  const page = scope.run(() => fixture('pages/home/index.vue', {
+    '@dcloudio/uni-app': Object.fromEntries(['onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage'].map(name => [name, (fn: (...args: any[]) => any) => { hooks[name] = fn }])),
+    '../../services/session': { session, ensureSession: () => waiting },
+    '../../services/latest-request': { createLatestRequest },
+    '../../services/api': { errorMessage: String, fetchCatalog: async (filters: any, options: any) => {
+      calls.push({ anonymous: options.anonymous, grade: filters.grade })
+      return { items: Array.from({ length: 12 }, (_, id) => ({ id: String(id), favorite: false })), total: 12 }
+    }, fetchCatalogSummary: async () => ({}), fetchSiteHome: async () => ({ banners: [] }) },
+    '../../services/preferences': { readPreferences: () => ({ grade: '旧偏好' }), writePreferences() {} },
+    '../../services/experience': { fetchTopics: async () => ({ items: [] }) },
+    '../../services/growth': { refreshUnread: async () => {} },
+    '../../presentation': { homeSelection, subjectTone: () => '' },
+  }, 'exports.page = { items, q, grade, offset, cards, byGrade }', {
+    uni: { stopPullDownRefresh() {}, pageScrollTo: ({ scrollTop }: { scrollTop: number }) => scrolls.push(scrollTop) },
+  }))!.page
+  try {
+    const showing = hooks.onShow()
+    await settle()
+    assert.equal(session.ready, false)
+    assert.equal(page.items.value.length, 12)
+    assert.equal(calls[0].anonymous, true)
+    page.q.value = '已输入'
+    page.byGrade('小学二年级')
+    await settle()
+    resolveSession(); await showing; await settle()
+    assert.equal(page.q.value, '已输入')
+    assert.equal(page.grade.value, '小学二年级')
+    assert.ok(calls.some(call => call.anonymous === false))
+    page.offset.value = 6
+    assert.equal(page.cards.value[0].id, '6')
+    hooks.onHide(); await hooks.onShow(); await settle()
+    assert.equal(page.cards.value[0].id, '6')
+    assert.equal(scrolls.at(-1), 600)
+  } finally { hooks.onUnload(); scope.stop() }
 })
 
 test('detail return retains metadata, cancels old reads, and withholds private content until rights refresh', async () => {

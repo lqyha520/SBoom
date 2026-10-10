@@ -2,8 +2,8 @@
 import type { ExamWorkspace } from './exam-context'
 import * as api from '../api'
 import { DEFAULT_LAYOUT, LS } from '../constants'
-import type { MyTemplate } from '../types'
-import { deepClone, mockQuestions, uid } from '../utils'
+import type { MyTemplate, Question } from '../types'
+import { deepClone, ensureQids, uid } from '../utils'
 import { K, safeSet, migrateMyTemplates, applyOldSnapshot } from './exam-local'
 
 function sameTemplate(a: MyTemplate, b: MyTemplate) {
@@ -154,15 +154,19 @@ export const templatesActions = {
         layout: { ...DEFAULT_LAYOUT, ...s.layout },
       }))
     } else {
-      // 旧格式：mock 占位 + 快照文字回填
+      // 旧格式只读取快照中的真实内容，不为缺失题目或答案编造占位题。
       const cards = tpl.cards.map((c) => ({
         type: c.type,
         name: (c as any).name,
         count: c.count,
-        data: { questions: mockQuestions(c.type, c.count) },
+        data: { questions: [] as Question[], missing_count: c.count },
         layout: { ...DEFAULT_LAYOUT, ...c.layout },
       }))
       if (tpl.paperSnapshot) applyOldSnapshot(cards, tpl.paperSnapshot)
+      cards.forEach(card => {
+        ensureQids(card.data)
+        card.data.missing_count = Math.max(0, card.count - card.data.questions.length)
+      })
       this.sections = cards.map((c) => ({
         id: uid('s'),
         type: c.type,

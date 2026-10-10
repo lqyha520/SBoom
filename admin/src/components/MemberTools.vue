@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useDialogDraft } from "../dialog-draft"
 import { computed, ref, watch } from 'vue'
 import { memberEvents, renewMember, type MemberEvent } from '../experience'
 import type { MiniUser } from '../mini'
@@ -24,7 +25,7 @@ async function load(append = false) {
   catch (cause) { if (current === sequence) error.value = message(cause) }
   finally { if (current === sequence) loading.value = false }
 }
-watch(() => props.open, value => { sequence++; loading.value = false; error.value = ''; events.value = []; note.value = ''; days.value = 30; tab.value = props.initial; if (value) void load() })
+watch(() => props.open, value => { sequence++; loading.value = false; error.value = ''; events.value = []; note.value = ''; days.value = 30; tab.value = props.initial; draft.markSaved(); if (value) void load() })
 async function save() {
   if (!props.target || busy.value || lifetime.value) return
   busy.value = true; error.value = ''
@@ -47,9 +48,10 @@ function changes(item: MemberEvent) {
   if (item.after.password_reset) details.push('重置登录密码')
   return details.join('；') || '资料更新'
 }
+const draft = useDialogDraft(computed({ get: () => props.open, set: value => { if (!value) emit('close') } }), () => [days.value, note.value], busy, '续期备注')
 </script>
 <template>
-  <UModal :open="open" :title="(target?.nickname || target?.username || '') + ' · 会员服务'" :dismissible="!busy" :close="!busy" @update:open="!$event && emit('close')"><template #body><UTabs v-model="tab" :items="[{ label: '快捷续期', value: 'renew' }, { label: '操作记录', value: 'history' }]" :content="false" /><UAlert v-if="error" :title="error" color="error" class="my-3" /><form v-if="tab === 'renew' && target" id="renew-member" class="field-stack mt-5" @submit.prevent="save"><p>当前会员：{{ target.membership === 'vip' ? date(target.vip_expires_at) : '未开通' }}</p><UAlert v-if="lifetime" title="当前为长期会员，无需续期" color="info" /><UAlert v-if="!target.is_active" title="账号当前已禁用，续期不会自动解除禁用" color="warning" /><UFormField label="增加会员天数"><USelect v-model="days" :items="[{ label: '30 天', value: 30 }, { label: '90 天', value: 90 }, { label: '365 天', value: 365 }]" :disabled="lifetime || busy" /></UFormField><p class="text-sm text-muted">有效会员从原到期时间继续增加；已过期或普通用户从现在开始计算。</p><UFormField label="续期备注"><UTextarea v-model="note" :maxlength="300" class="w-full" placeholder="例如：线下续期已确认" /></UFormField></form><div v-else class="member-events"><p v-if="!events.length">{{ loading ? '正在加载' : '暂无后台操作记录' }}</p><article v-for="item in events" :key="item.id"><strong>{{ item.admin_name || '历史管理员' }} · {{ date(item.created_at) }}</strong><p>{{ changes(item) }}</p><p v-if="item.after.note">备注：{{ item.after.note }}</p></article><UButton v-if="more" label="加载更多" :loading="loading" @click="load(true)" /></div></template><template #footer><UButton label="关闭" color="neutral" variant="outline" :disabled="busy" @click="emit('close')" /><UButton v-if="tab === 'renew'" type="submit" form="renew-member" label="确认续期" :disabled="lifetime" :loading="busy" /></template></UModal>
+  <UModal :open="open" :title="(target?.nickname || target?.username || '') + ' · 会员服务'" :dismissible="!busy" :close="!busy" @update:open="draft.setOpen($event)"><template #body><UTabs v-model="tab" :items="[{ label: '快捷续期', value: 'renew' }, { label: '操作记录', value: 'history' }]" :content="false" /><UAlert v-if="error" :title="error" color="error" class="my-3" /><form v-if="tab === 'renew' && target" id="renew-member" class="field-stack mt-5" @submit.prevent="save"><p>当前会员：{{ target.membership === 'vip' ? date(target.vip_expires_at) : '未开通' }}</p><UAlert v-if="lifetime" title="当前为长期会员，无需续期" color="info" /><UAlert v-if="!target.is_active" title="账号当前已禁用，续期不会自动解除禁用" color="warning" /><UFormField label="增加会员天数"><USelect v-model="days" :items="[{ label: '30 天', value: 30 }, { label: '90 天', value: 90 }, { label: '365 天', value: 365 }]" :disabled="lifetime || busy" /></UFormField><p class="text-sm text-muted">有效会员从原到期时间继续增加；已过期或普通用户从现在开始计算。</p><UFormField label="续期备注"><UTextarea v-model="note" :maxlength="300" class="w-full" placeholder="例如：线下续期已确认" /></UFormField></form><div v-else class="member-events"><p v-if="!events.length">{{ loading ? '正在加载' : '暂无后台操作记录' }}</p><article v-for="item in events" :key="item.id"><strong>{{ item.admin_name || '历史管理员' }} · {{ date(item.created_at) }}</strong><p>{{ changes(item) }}</p><p v-if="item.after.note">备注：{{ item.after.note }}</p></article><UButton v-if="more" label="加载更多" :loading="loading" @click="load(true)" /></div></template><template #footer><UButton label="关闭" color="neutral" variant="outline" :disabled="busy" @click="draft.setOpen(false)" /><UButton v-if="tab === 'renew'" type="submit" form="renew-member" label="确认续期" :disabled="lifetime" :loading="busy" /></template></UModal>
 </template>
 <style scoped>
 .member-events { margin-top:20px; }.member-events article { padding:14px 0;border-bottom:1px solid var(--ui-border); }.member-events strong { font-size:12px; }.member-events p { margin-top:8px;font-size:13px;line-height:1.7;overflow-wrap:anywhere; }

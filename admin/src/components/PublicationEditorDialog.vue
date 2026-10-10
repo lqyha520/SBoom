@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import { toRefs } from 'vue'
+import { computed, reactive, ref, toRefs, watch, nextTick } from 'vue'
+import { useCatalogPreview } from '../catalog-preview'
+import type { CatalogDetail } from '../catalog'
+import PaperMetadataDialog from './PaperMetadataDialog.vue'
+import PaperEditionDialog from './PaperEditionDialog.vue'
+import CatalogRevisionDialog from './CatalogRevisionDialog.vue'
+import CatalogPreviewDialog from './CatalogPreviewDialog.vue'
 import type { usePublicationEditor } from '../publication-editor'
 import type { CatalogPaper } from '../catalog'
 import CatalogImportQueue from './CatalogImportQueue.vue'
@@ -14,11 +20,12 @@ const emit = defineEmits<{
   metadata: [paper: CatalogPaper]
 }>()
 const {
+  section,
   dialog,
-  dirty,
+  dirty: mainDirty,
   setDialogOpen,
   target,
-  busy,
+  busy: editorBusy,
   saving,
   imageComposer,
   imageFields,
@@ -54,6 +61,50 @@ const {
   reloadEdited,
   runImport,
 } = toRefs(props.editor)
+const displayCategories = computed(() => {
+  const current = props.editor.filterCategories.find(item => item.value === form.value.category_id)
+  return current && !categories.value.some(item => item.value === current.value) ? [...categories.value, current] : categories.value
+})
+const previewState = reactive(useCatalogPreview())
+type Panel = { busy: boolean; dirty: boolean; canLeave: () => boolean; reconcile: (latest: CatalogDetail) => void }
+const metadataPanel = ref<Panel | null>(null), editionPanel = ref<Panel | null>(null), revisionPanel = ref<Panel | null>(null)
+const syncing = ref(false)
+const busy = computed(() => editorBusy.value || syncing.value || [metadataPanel.value, editionPanel.value, revisionPanel.value].some(panel => panel?.busy))
+const dirty = computed(() => mainDirty.value || [metadataPanel.value, editionPanel.value, revisionPanel.value].some(panel => panel?.dirty))
+const visited = ref<string[]>([])
+watch([() => props.editor.dialog, () => props.editor.target?.id], () => {
+  visited.value = []
+  if (props.editor.dialog && props.editor.target) void previewState.showPreview(props.editor.target)
+  else previewState.previewOpen = false
+}, { immediate: true })
+watch([() => props.editor.dialog, () => props.editor.section, () => props.editor.target?.id], () => {
+  if (props.editor.dialog && props.editor.target && !visited.value.includes(section.value)) visited.value.push(section.value)
+}, { immediate: true })
+watch(() => props.editor.target?.revision, () => {
+  if (props.editor.dialog && props.editor.target) {
+    void previewState.showPreview(props.editor.target, previewState.previewRole)
+    if ('assets' in props.editor.target) [metadataPanel.value, editionPanel.value, revisionPanel.value].forEach(panel => panel?.reconcile(props.editor.target as CatalogDetail))
+  }
+})
+function closeEditor(open: boolean) {
+  if (!open && busy.value) return
+  if (!open && ![metadataPanel.value, editionPanel.value, revisionPanel.value].every(panel => !panel || panel.canLeave())) return
+  setDialogOpen.value(open)
+}
+async function childSaved() {
+  syncing.value = true
+  try {
+    const latest = await props.editor.refreshTarget()
+    if (latest) [metadataPanel.value, editionPanel.value, revisionPanel.value].forEach(panel => panel?.reconcile(latest))
+  } catch (cause) { props.editor.dialogError = cause instanceof Error ? cause.message : '更新预览失败，请重试' }
+  finally { syncing.value = false }
+}
+async function publish() {
+  section.value = 'details'
+  form.value.status = 'published'
+  await nextTick()
+  document.getElementById('publication-review')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+}
 const sourceModes = [
   { label: '工作台习题', value: 'source', icon: 'i-lucide-notebook-pen' },
   { label: '导入 PDF', value: 'import', icon: 'i-lucide-file-up' },
@@ -65,7 +116,7 @@ const sourceModes = [
 <template>
   <UModal
     :open="dialog"
-    @update:open="setDialogOpen"
+    @update:open="closeEditor"
     :title="
       target
         ? '编辑公共习题'
@@ -75,11 +126,13 @@ const sourceModes = [
             ? '导入 PDF 习题'
             : '添加习题草稿'
     "
-    :ui="{ content: importing ? 'sm:max-w-5xl' : 'sm:max-w-2xl' }"
+    :ui="{ content: target ? 'sm:max-w-6xl' : importing ? 'sm:max-w-5xl' : 'sm:max-w-2xl' }"
     :dismissible="!busy"
     :close="!busy"
     ><template #body>
-      <form id="publication-form" class="field-stack" @submit.prevent="save">
+      <div class="publication-workspace" :class="{ 'with-preview': target }"><div class="publication-fields">
+      <div v-if="target" class="publication-tabs" role="tablist" aria-label="资料编辑步骤"><button v-for="tab in [{id:'details',label:'基本与发布'},{id:'metadata',label:'教学标签'},{id:'editions',label:'打印版本'},{id:'revision',label:'修订稿'}]" :key="tab.id" type="button" role="tab" :aria-selected="section === tab.id" :disabled="busy" @click="editor.section = tab.id as typeof section">{{ tab.label }}</button></div>
+      <form v-show="section === 'details'" id="publication-form" class="field-stack" @submit.prevent="save">
         <UAlert v-if="categoryError" :title="categoryError" color="error"
           ><template #actions
             ><UButton
@@ -224,6 +277,7 @@ const sourceModes = [
             /></UFormField>
           </div>
         </fieldset>
+        <details class="quick-category"><summary>新建分类</summary><div class="actions-row mt-2"><UInput v-model="editor.categoryName" aria-label="新分类名称" placeholder="输入分类名称" maxlength="60" :disabled="editor.categoryCreating" @keydown.enter.prevent="editor.addCategory" /><UButton label="创建并选中" :loading="editor.categoryCreating" :disabled="!editor.categoryName.trim() || busy" @click="editor.addCategory" /></div></details>
         <fieldset class="publication-group">
           <legend>基本信息</legend>
           <UFormField v-if="!importing" label="公开标题" required
@@ -237,10 +291,10 @@ const sourceModes = [
             v-if="!importing"
             label="分类"
             required
-            description="分类用于小程序专题与筛选，可在「小程序管理 › 分类管理」维护。"
+            description="分类用于小程序专题与筛选，也可直接在这里新建。"
             ><USelect
               v-model="form.category_id"
-              :items="categories"
+              :items="displayCategories"
               placeholder="选择分类"
               :disabled="busy"
               required
@@ -273,7 +327,7 @@ const sourceModes = [
             class="text-xs text-muted"
           >
             这份资料尚无 PDF。若要改为 PDF
-            下载，请先通过列表中的“修订”关联已就绪的原稿。
+            下载，请在“修订稿”中关联已就绪的原稿。
           </p>
         </fieldset>
         <UAlert
@@ -281,9 +335,9 @@ const sourceModes = [
           color="warning"
           variant="soft"
           title="还没有可用的分类"
-          description="请先到「小程序管理 › 分类管理」新建分类，再回来发布习题。"
+          description="请点击上方“新建分类”，填写名称后继续。"
         />
-        <fieldset class="publication-group">
+        <details class="advanced-settings" :open="publishing"><summary>高级设置：访问权限</summary><fieldset class="publication-group">
           <legend>访问权限</legend>
           <UFormField label="完整原稿观看"
             ><USelect
@@ -315,7 +369,8 @@ const sourceModes = [
             }}
           </p>
         </fieldset>
-        <fieldset v-if="target" class="publication-group">
+        </details>
+        <fieldset v-if="target" id="publication-review" class="publication-group">
           <legend>发布与复核</legend>
           <UFormField label="发布状态"
             ><USelect
@@ -358,14 +413,18 @@ const sourceModes = [
           :title="dialogError"
           color="error"
           variant="soft"
-        /></form></template
+        /></form>
+      <PaperMetadataDialog v-if="dialog && visited.includes('metadata')" v-show="section === 'metadata'" ref="metadataPanel" :open="dialog" inline :target="target" :admin-id="editor.userId" @close="section = 'details'" @saved="childSaved" />
+      <PaperEditionDialog v-if="dialog && visited.includes('editions')" v-show="section === 'editions'" ref="editionPanel" :open="dialog" inline :target="target" :admin-id="editor.userId" @close="section = 'details'" @saved="childSaved" />
+      <CatalogRevisionDialog v-if="dialog && visited.includes('revision')" v-show="section === 'revision'" ref="revisionPanel" :open="dialog" inline :target="target" :admin-id="editor.userId" @close="section = 'details'" @saved="childSaved" />
+      </div><aside v-if="target" class="publication-preview" aria-label="已保存资料预览"><div class="actions-row mb-3"><h3>已保存内容预览</h3><UButton label="刷新预览" size="xs" variant="ghost" @click="previewState.showPreview(target, previewState.previewRole)" /></div><p class="text-xs text-muted mb-3">保存后预览更新；发布前请核对文件与访问权限。</p><CatalogPreviewDialog :state="previewState" :busy="busy" inline @publish="publish" /></aside></div></template
     ><template #footer
       ><UButton
         :label="importing ? '完成并返回列表' : '关闭'"
         color="neutral"
         variant="outline"
         :disabled="busy"
-        @click="setDialogOpen(false)" /><span
+        @click="closeEditor(false)" /><span
         class="publication-save-state"
         role="status"
         >{{
@@ -390,6 +449,7 @@ const sourceModes = [
           dictionaryLoading
         "
         @click="runImport(true)" /><UButton
+        v-if="section === 'details'"
         type="submit"
         form="publication-form"
         :label="
@@ -409,6 +469,16 @@ const sourceModes = [
 </template>
 
 <style scoped>
+.publication-workspace { min-width:0; }
+.publication-workspace.with-preview { display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:24px; }
+.publication-fields { min-width:0; }
+.publication-preview { min-width:0;padding-left:20px;border-left:1px solid var(--ui-border); }
+.publication-tabs { display:flex;gap:4px;flex-wrap:wrap;margin-bottom:20px;position:sticky;top:0;background:var(--ui-bg);z-index:1;padding-bottom:8px; }
+.publication-tabs button { padding:9px 12px;border-radius:6px;font-size:13px;cursor:pointer; }
+.publication-tabs button[aria-selected="true"] { background:var(--ui-bg-accented);color:var(--ui-primary);font-weight:600; }
+.quick-category summary { cursor:pointer;font-size:13px;color:var(--ui-primary); }
+@media(max-width:800px) { .publication-workspace.with-preview { grid-template-columns:1fr; } .publication-preview { border-left:0;padding-left:0;border-top:1px solid var(--ui-border);padding-top:20px; } }
+
 .publication-group {
   display: flex;
   flex-direction: column;

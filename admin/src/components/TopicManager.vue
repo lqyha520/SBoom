@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useDialogDraft } from '../dialog-draft'
 import { computed, onActivated, onDeactivated, ref } from 'vue'
 import type { UserInfo } from '../api'
 import { catalogList, type CatalogPaper } from '../catalog'
@@ -24,6 +25,15 @@ const formError = ref('')
 const notice = ref('')
 let sequence = 0
 let searchSequence = 0
+const dragging = ref<string | null>(null)
+function dropAt(id: string) {
+  const from = selected.value.findIndex(item => item.id === dragging.value), to = selected.value.findIndex(item => item.id === id)
+  dragging.value = null
+  if (busy.value || from < 0 || to < 0 || from === to) return
+  const items = [...selected.value], [moved] = items.splice(from, 1)
+  items.splice(to, 0, moved!)
+  selected.value = items
+}
 const selectedIds = computed(() => new Set(selected.value.map(item => item.id)))
 const message = (cause: unknown) => cause instanceof Error ? cause.message : '操作失败'
 async function load() {
@@ -67,13 +77,16 @@ async function remove() {
   finally { busy.value = false }
 }
 onActivated(load); onDeactivated(() => { sequence++; searchSequence++; dialog.value = false; deleteOpen.value = false })
+const draft = useDialogDraft(dialog, () => [title.value, description.value, visible.value, order.value, selected.value], busy, '专题')
 </script>
 <template>
   <section class="admin-section"><div class="section-toolbar"><p>把多份资料编成专题，按教学顺序展示。</p><UButton label="新建专题" icon="i-lucide-plus" @click="edit()" /></div><UAlert v-if="error" :title="error" color="error" class="notice" /><UAlert v-if="notice" :title="notice" color="success" class="notice" /><div class="data-scroll"><table class="data-table"><thead><tr><th>专题</th><th>资料</th><th>首页顺序</th><th>展示</th><th>操作</th></tr></thead><tbody><tr v-for="item in topics" :key="item.id"><td><strong>{{ item.title }}</strong><p>{{ item.description }}</p></td><td>{{ item.paper_count }} 份</td><td>{{ item.sort_order }}</td><td>{{ item.is_visible ? '已展示' : '隐藏' }}</td><td><div class="actions-row"><UButton label="编辑" variant="soft" @click="edit(item)" /><UButton label="删除专题" color="error" variant="ghost" @click="deleting = item; deleteOpen = true" /></div></td></tr><tr v-if="!topics.length"><td colspan="5">暂无专题</td></tr></tbody></table></div>
-    <UModal v-model:open="dialog" :title="target ? '编辑专题' : '新建专题'" :dismissible="!busy" :close="!busy" :ui="{ content: 'max-w-3xl' }"><template #body><form id="topic-form" class="field-stack" @submit.prevent="save"><UFormField label="专题名称" required><UInput v-model="title" maxlength="80" required class="w-full" /></UFormField><UFormField label="专题介绍"><UTextarea v-model="description" maxlength="500" class="w-full" /></UFormField><div class="actions-row"><UFormField label="首页顺序（越小越靠前）"><UInput v-model="order" type="number" min="0" max="100000" /></UFormField><USwitch v-model="visible" label="在小程序展示" /></div><p class="text-sm text-muted">最多 100 份。未发布或文件未就绪的资料不会显示在小程序中。</p><h3>已选资料 · {{ selected.length }}</h3><div class="selected-papers"><div v-for="(item, index) in selected" :key="item.id" class="selected-paper"><span>{{ index + 1 }}. {{ item.title }}</span><UButton label="上移" size="xs" variant="ghost" :disabled="index === 0" @click="move(index, -1)" /><UButton label="下移" size="xs" variant="ghost" :disabled="index === selected.length - 1" @click="move(index, 1)" /><UButton label="移除" size="xs" color="error" variant="ghost" @click="selected = selected.filter(row => row.id !== item.id)" /></div></div><h3>添加资料</h3><div class="actions-row"><UInput v-model="q" placeholder="搜索已发布资料" @keydown.enter.prevent="search()" /><UButton label="搜索" :loading="loading" @click="search()" /></div><div class="source-choices"><UCheckbox v-for="item in choices" :key="item.id" :label="item.title + ' · ' + item.grade + ' · ' + item.subject" :model-value="selectedIds.has(item.id)" :disabled="busy || (!selectedIds.has(item.id) && selected.length >= 100)" @update:model-value="toggle(item)" /></div><UButton v-if="more" label="更多资料" variant="outline" :loading="loading" @click="search(true)" /><UAlert v-if="formError" :title="formError" color="error" /></form></template><template #footer><UButton label="取消" color="neutral" :disabled="busy" @click="dialog = false" /><UButton label="保存专题" type="submit" form="topic-form" :loading="busy" /></template></UModal>
+    <UModal v-model:open="draft.model.value" :title="target ? '编辑专题' : '新建专题'" :dismissible="!busy" :close="!busy" :ui="{ content: 'max-w-3xl' }"><template #body><form id="topic-form" class="field-stack" @submit.prevent="save"><UFormField label="专题名称" required><UInput v-model="title" :disabled="busy" maxlength="80" required class="w-full" /></UFormField><UFormField label="专题介绍"><UTextarea v-model="description" :disabled="busy" maxlength="500" class="w-full" /></UFormField><div class="actions-row"><UFormField label="首页顺序（越小越靠前）"><UInput v-model="order" :disabled="busy" type="number" min="0" max="100000" /></UFormField><USwitch v-model="visible" :disabled="busy" label="在小程序展示" /></div><p class="text-sm text-muted">最多 100 份。未发布或文件未就绪的资料不会显示在小程序中。</p><h3>已选资料 · {{ selected.length }}</h3><div class="selected-papers"><div v-for="(item, index) in selected" :key="item.id" class="selected-paper" :class="{ dragging: dragging === item.id }" @dragover.prevent @drop.prevent="dropAt(item.id)"><button type="button" class="drag-handle" :draggable="!busy" :aria-label="'拖动排序：' + item.title" title="拖动调整顺序，也可使用上移和下移" @dragstart="dragging = item.id; $event.dataTransfer?.setData('text/plain', item.id)" @dragend="dragging = null"><UIcon name="i-lucide-grip-vertical" /></button><span>{{ index + 1 }}. {{ item.title }}</span><UButton label="上移" size="xs" variant="ghost" :disabled="busy || index === 0" @click="move(index, -1)" /><UButton label="下移" size="xs" variant="ghost" :disabled="busy || index === selected.length - 1" @click="move(index, 1)" /><UButton label="移除" :disabled="busy" size="xs" color="error" variant="ghost" @click="selected = selected.filter(row => row.id !== item.id)" /></div></div><h3>添加资料</h3><div class="actions-row"><UInput v-model="q" placeholder="搜索已发布资料" @keydown.enter.prevent="search()" /><UButton label="搜索" :loading="loading" @click="search()" /></div><div class="source-choices"><UCheckbox v-for="item in choices" :key="item.id" :label="item.title + ' · ' + item.grade + ' · ' + item.subject" :model-value="selectedIds.has(item.id)" :disabled="busy || (!selectedIds.has(item.id) && selected.length >= 100)" @update:model-value="toggle(item)" /></div><UButton v-if="more" label="更多资料" variant="outline" :loading="loading" @click="search(true)" /><UAlert v-if="formError" :title="formError" color="error" /></form></template><template #footer><UButton label="取消" color="neutral" :disabled="busy" @click="draft.setOpen(false)" /><UButton label="保存专题" type="submit" form="topic-form" :loading="busy" /></template></UModal>
     <UModal v-model:open="deleteOpen" title="删除专题" :dismissible="!busy"><template #body><p>确认删除「{{ deleting?.title }}」？专题内的资料和用户收藏会保留。</p></template><template #footer><UButton label="取消" color="neutral" :disabled="busy" @click="deleteOpen = false" /><UButton label="删除专题" color="error" :loading="busy" @click="remove" /></template></UModal>
   </section>
 </template>
 <style scoped>
+.drag-handle { cursor:grab;min-width:32px;min-height:36px;display:grid;place-items:center;color:var(--ui-text-muted); }
+.selected-paper.dragging { opacity:0.45; }
 .selected-paper { display:flex;align-items:center;gap:4px;padding:8px 0;border-bottom:1px solid var(--ui-border); }.selected-paper span { flex:1;min-width:0;font-size:13px;overflow-wrap:anywhere; }.selected-papers { max-height:250px;overflow:auto; }.source-choices { display:grid;gap:12px;max-height:240px;overflow:auto; }.data-table p { max-width:380px;font-size:12px;white-space:normal;color:var(--ui-text-muted); }
 </style>

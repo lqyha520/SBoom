@@ -63,7 +63,7 @@ const actionLabel = computed(() => {
   if (!session.user) return paper.value.required_download === 'vip' ? '登录查看会员权益' : external.value ? '登录获取链接' : '登录后免费下载'
   if (!paper.value.can_download) return '查看会员权益'
   if (retryDownload.value) return external.value ? '重新获取链接' : '重试下载'
-  return external.value ? '获取网盘链接' : pdfLabel
+  return external.value ? '获取网盘链接' : hasEditions.value && selectedEdition.value ? pdfLabel.replace('PDF', selectedEdition.value.label) : pdfLabel
 })
 watch(() => session.user?.id, (owner, previous) => {
   actionRevision++; requests.invalidate(); paper.value = null; error.value = ''; loading.value = false
@@ -237,7 +237,7 @@ onPullDownRefresh(() => { void load() })
         <view v-if="!verified" class="preview-sheet locked-sheet"><wd-loading v-if="loading" /><text>{{ loading ? '正在核验访问权限' : '请重试加载资料' }}</text></view>
         <view v-else-if="!paper.can_view" class="preview-sheet locked-sheet"><wd-icon name="lock" size="31px" /><text>VIP 专享习题</text></view>
         <view v-else-if="external && !pages.length" class="preview-sheet locked-sheet"><wd-icon name="folder" size="31px" /><text>网盘资料</text></view><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-else class="preview-sheet preview-entry" :disabled="!pages.length" role="button" aria-label="查看完整习题预览" @click="preview"><PrivateImage :src="cover" label="习题原稿封面" /></button>
-        <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="paper.can_view && pages.length" class="preview-pill" role="button" @click="preview"><wd-icon name="fullscreen" size="16px" /><text>预览 {{ pages.length }} 页</text></button>
+        <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="paper.can_view && pages.length" class="preview-pill" role="button" @click="preview"><wd-icon name="fullscreen" size="16px" /><text>原稿预览 · {{ pages.length }} 页</text></button>
         <view v-else-if="!paper.can_view" class="preview-access access-badge"><wd-icon name="lock" size="12px" /><text>VIP 专享</text></view>
       </view>
     </view>
@@ -263,8 +263,8 @@ onPullDownRefresh(() => { void load() })
           <view v-else-if="verified && !pages.length" class="preview-empty"><wd-empty icon="file-pdf" :tip="external ? '文件由网盘提供，获取链接后可前往查看' : pdf ? '暂无预览图' : '习题文件暂未就绪'"><template #bottom><view class="empty-actions"><wd-button variant="plain" icon="refresh" role="button" @click="load">刷新状态</wd-button></view></template></wd-empty></view>
         </view>
         <view class="detail-dock">
-          <text class="download-hint">{{ downloadAccessHint(paper) }}</text>
-          <view v-if="hasEditions && paper.editions" class="edition-choice"><view class="edition-segments" role="radiogroup" aria-label="文件版本"><button v-for="item in paper.editions" :key="item.kind" role="radio" hover-class="control-pressed" :aria-checked="edition === item.kind" :class="{ selected: edition === item.kind }" :disabled="downloading || loading || !verified" @click="edition = item.kind"><text>{{ item.label }}</text><text class="edition-size">{{ fileSize(item.byte_size) }}</text></button></view></view>
+          <text class="download-hint">{{ downloadAccessHint(paper, !!session.user) }}</text>
+          <view v-if="hasEditions && paper.editions" class="edition-choice"><text class="edition-caption">选择下载版本 · 上方展示原稿</text><view class="edition-segments" role="radiogroup" aria-label="文件版本"><button v-for="item in paper.editions" :key="item.kind" role="radio" hover-class="control-pressed" :aria-checked="edition === item.kind" :class="{ selected: edition === item.kind }" :disabled="downloading || loading || !verified" @click="edition = item.kind"><text>{{ item.label }}</text><text class="edition-size">{{ fileSize(item.byte_size) }}</text></button></view></view>
           <text v-if="downloading" class="transfer-status" role="status">{{ external ? '正在获取网盘链接…' : downloadProgress === null ? '正在准备文件…' : downloadProgress < 100 ? '正在下载 ' + downloadProgress + '%' : '下载完成，正在打开 PDF…' }}</text>
           <text v-if="retryDownload && error" class="download-error" role="alert">{{ error }}</text>
           <view class="detail-actions">
@@ -315,6 +315,7 @@ onPullDownRefresh(() => { void load() })
 .link-sheet{max-width:520px;margin:0 auto}.link-tip{display:block;color:var(--lc-secondary);font-size:13px;line-height:1.8}.external-url{display:block;overflow-wrap:anywhere;word-break:break-all;padding:16px;margin:16px 0;background:var(--lc-background);border-radius:8px;color:var(--lc-primary);font-size:14px}.external-code{display:block;margin:0 0 20px;font-size:15px}
 .curriculum-tags { margin-top:14px; }.edition-choice { margin:0;font-size:13px;color:var(--lc-secondary); }.edition-picker { display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:48px;padding:10px 14px;margin-top:8px;background:var(--lc-background);border:1px solid var(--lc-border);border-radius:10px; }
 .detail-service { display:flex;gap:16px;flex-wrap:wrap;margin:14px 0; }.version-notes text { display:block;font-size:12px;color:var(--lc-muted);margin:8px 0; }
+.edition-caption { display:block;margin-bottom:6px;font-size:12px;line-height:1.5; }
 .edition-segments { display:flex;gap:6px; }.edition-segments button { flex:1;min-width:0;min-height:54px;margin:0;padding:6px;border:1px solid var(--lc-border);border-radius:6px;background:var(--lc-surface);color:var(--lc-secondary);font-size:13px;line-height:1.5;overflow-wrap:anywhere; }.edition-segments button.selected { border-color:var(--lc-primary);background:var(--lc-primary-soft);color:var(--lc-primary); }.edition-size { display:block;font-size:12px;margin-top:2px; }
 .group-create { display:flex;flex-direction:column;gap:12px;margin:14px 0; }.group-name-input { height:46px;padding:0 12px;background:var(--lc-background);border-radius:8px;font-size:14px; }.group-empty { display:block;font-size:13px;color:var(--lc-secondary);line-height:1.7;margin:12px 0; }.group-sheet { max-width:520px;margin:0 auto; }.group-options { height:32vh; }.group-option { width:100%;margin:0;padding:14px 0;background:transparent;color:var(--lc-text);font-size:15px;line-height:1.5;text-align:left;overflow-wrap:anywhere;border-bottom:1px solid var(--lc-card-line); }
 .detail-page { padding-bottom: calc(180px + env(safe-area-inset-bottom)); }
@@ -351,5 +352,5 @@ onPullDownRefresh(() => { void load() })
 .download-button { flex: 1; min-width: 0; --wot-button-height-medium: 49px; }
 @media (max-width: 359px) { .detail-title { font-size: 21px; } .detail-dock { padding-left: 17px; padding-right: 17px; } }
 @media (max-height:680px) { .preview-sheet { width:152px; }.paper-stage { min-height:0;padding-top:10px; } }
-@media (max-height:600px) { .has-editions .preview-sheet { width:128px; } }
+@media (max-height:600px) { .has-editions .preview-sheet { width:112px; } }
 </style>

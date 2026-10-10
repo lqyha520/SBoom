@@ -22,6 +22,13 @@ describe('request identity', () => {
     expect(headers.get('X-Workspace-User')).toBe('17')
   })
 
+  it('发送本卷前序请求标识供服务端读取已完成的大题', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ sections: [] })))
+    vi.stubGlobal('fetch', fetch)
+    await api.generateBatch({ ...params, previous_request_ids: ['completed-chunk'] }, 'next-chunk')
+    expect(JSON.parse(fetch.mock.calls[0][1].body).previous_request_ids).toEqual(['completed-chunk'])
+  })
+
   it('does not retry timed-out HTTP requests', async () => {
     const fetch = vi.fn().mockRejectedValue(new DOMException('Timeout', 'TimeoutError'))
     vi.stubGlobal('fetch', fetch)

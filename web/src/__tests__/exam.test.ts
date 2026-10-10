@@ -51,7 +51,9 @@ describe('generation controls', () => {
     const id = store.sections[0].id
     store.setSectionCount(id, 100)
     expect(store.sections[0].count).toBe(MAX_QUESTIONS_PER_TYPE)
-    expect(store.sections[0].data!.questions).toHaveLength(MAX_QUESTIONS_PER_TYPE)
+    expect(store.sections[0].data!.questions).toHaveLength(0)
+    expect(store.sections[0].data!.missing_count).toBe(MAX_QUESTIONS_PER_TYPE)
+    expect(store.totalQuestions).toBe(MAX_QUESTIONS_PER_TYPE)
     store.setSectionCount(id, 0)
     expect(store.sections[0].count).toBe(1)
     store.setSectionCount(id, 4.7)
@@ -75,7 +77,7 @@ describe('generation controls', () => {
   it('keeps section IDs and edited questions when sorting', () => {
     const store = readyStore()
     const first = store.sections[0]
-    first.data!.questions[0].stem = 'Edited question'
+    first.data!.questions = [{ stem: 'Edited question', answer: '2' }]
     store.addSection('quiz')
     store.moveSection(0, 1)
     expect(store.sections[1].id).toBe(first.id)
@@ -136,7 +138,7 @@ describe('clear worksheet settings', () => {
     store.papers = [{ grade: store.grade, subject: store.subject, keyword: store.keyword, difficulty: 'hard', title: '已生成', sections: [] }]
     const original = store.editSnapshot(), history = store.history
     store.undoStack = []
-    expect(store.clearSettings()).toBe(true)
+    expect(await store.clearSettings()).toBe(true)
     expect(store.editSnapshot()).toMatchObject({ grade: '', subject: '', keyword: '', selectedTags: [],
       title: '', titleHtml: '', sections: [], hiddenElements: [], difficulty: 'medium', paperCount: 1, addDayLabel: true, view: 'build' })
     expect(store.papers).toEqual(original.papers)
@@ -161,28 +163,95 @@ describe('clear worksheet settings', () => {
     expect(store.papers).toEqual(original.papers)
   })
 
-  it.each(['generating', 'accountChanged', 'layoutMode', 'historyBusy'] as const)('refuses to clear while %s', flag => {
+  it.each(['generating', 'accountChanged', 'historyBusy'] as const)('refuses to clear while %s', async flag => {
     const store = readyStore()
     store[flag] = true
     const before = store.captureSnapshot()
     expect(store.canClearSettings).toBe(false)
-    expect(store.clearSettings()).toBe(false)
+    expect(await store.clearSettings()).toBe(false)
     expect(store.captureSnapshot()).toEqual(before)
   })
 
-  it('waits for draft restoration and pending generation recovery', () => {
+  it('waits for draft restoration but permits clearing a pending generation', async () => {
     const store = readyStore()
     store.persistenceReady = false
-    expect(store.clearSettings()).toBe(false)
+    expect(await store.clearSettings()).toBe(false)
     store.persistenceReady = true
     store.pendingRun = createGenerationRun({ grade: store.grade, subject: store.subject, keyword: store.keyword,
       title: '', difficulty: store.difficulty, hiddenElements: [], count: 1, sections: [] })
-    expect(store.clearSettings()).toBe(false)
-    store.sections[0].pendingGeneration = store.pendingRun
-    store.pendingRun = null
-    expect(store.clearSettings()).toBe(false)
-    delete store.sections[0].pendingGeneration
-    expect(store.clearSettings()).toBe(true)
+    store.generationJobs = store.pendingRun.jobs
+    store.failedCount = 1; store.generateWarn = '缺少 2 道题'; store.generateError = '上次请求失败'
+    expect(store.canClearSettings).toBe(true)
+    expect(await store.clearSettings()).toBe(true)
+    expect(store.saveHistory).toHaveBeenCalledWith('before-clear')
+    expect(store.pendingRun).toBeNull()
+    expect(store.generationJobs).toEqual([])
+    expect(store.failedCount).toBe(0)
+    expect(store.generateWarn).toBe('')
+    expect(store.generateError).toBe('')
+    expect(store.sections).toEqual([])
+    expect(store.undoStack).toEqual([])
+    expect(api.generateBatch).not.toHaveBeenCalled()
+  })
+
+  it.each(['section', 'replacement'] as const)('archives an unfinished %s request before clearing', async kind => {
+    const store = readyStore()
+    const run = createGenerationRun({ grade: store.grade, subject: store.subject, keyword: store.keyword,
+      title: '', difficulty: store.difficulty, hiddenElements: [], count: 1, sections: store.sections })
+    if (kind === 'section') store.sections[0].pendingGeneration = run
+    else store.sections[0].data!.questions = [{ stem: '原题', answer: '2', _replacement: run }]
+    expect(store.hasPendingEdits).toBe(true)
+    expect(store.canClearSettings).toBe(true)
+    expect(await store.clearSettings()).toBe(true)
+    expect(store.saveHistory).toHaveBeenCalledWith('before-clear')
+    expect(store.sections).toEqual([])
+    expect(store.canUndo).toBe(false)
+  })
+
+  it('permits clearing an inactive loading section and finishes layout without reverting its style', async () => {
+    const store = readyStore()
+    store.beginLayout()
+    store.style.titleScale = 1.2
+    store.sections[0].status = 'loading'
+    expect(store.canClearSettings).toBe(true)
+    expect(await store.clearSettings()).toBe(true)
+    expect(store.layoutMode).toBe(false)
+    expect(store.style.titleScale).toBe(1.2)
+    expect(store.sections).toEqual([])
+    store.finishLayout(true)
+    expect(store.sections).toEqual([])
+  })
+
+  it('keeps pending requests when archiving fails and permits a later clear attempt', async () => {
+    const store = readyStore()
+    store.sections[0].pendingGeneration = createGenerationRun({ grade: store.grade, subject: store.subject, keyword: store.keyword,
+      title: '', difficulty: store.difficulty, hiddenElements: [], count: 1, sections: store.sections })
+    const original = store.captureSnapshot()
+    vi.mocked(store.saveHistory).mockResolvedValueOnce(false)
+    expect(await store.clearSettings()).toBe(false)
+    expect(store.sections).toEqual(original.sections)
+    expect(store.grade).toBe(original.grade)
+    expect(store.generateError).toContain('保存失败')
+    expect(store.historyBusy).toBe(false)
+    expect(store.canClearSettings).toBe(true)
+    expect(await store.clearSettings()).toBe(true)
+  })
+
+  it('does not clear after the account changes while archiving', async () => {
+    const store = readyStore()
+    store.pendingRun = createGenerationRun({ grade: store.grade, subject: store.subject, keyword: store.keyword,
+      title: '', difficulty: store.difficulty, hiddenElements: [], count: 1, sections: [] })
+    let finish!: (value: boolean) => void
+    vi.mocked(store.saveHistory).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const clearing = store.clearSettings()
+    expect(store.historyBusy).toBe(true)
+    expect(await store.clearSettings()).toBe(false)
+    store.accountChanged = true
+    finish(true)
+    expect(await clearing).toBe(false)
+    expect(store.grade).toBe('小学三年级')
+    expect(store.pendingRun).not.toBeNull()
+    expect(store.historyBusy).toBe(false)
   })
 
   it('ignores a pre-clear scope response even after selecting the same subject again', async () => {
@@ -190,7 +259,7 @@ describe('clear worksheet settings', () => {
     let resolve!: (value: ScopeData) => void
     vi.mocked(api.fetchScope).mockImplementationOnce(() => new Promise(r => { resolve = r }))
     const pending = store.selectSubject('数学')
-    expect(store.clearSettings()).toBe(true)
+    expect(await store.clearSettings()).toBe(true)
     store.selectGrade('小学三年级')
     vi.mocked(api.fetchScope).mockResolvedValueOnce({ allowed: ['新知识点'] })
     await store.selectSubject('数学')
@@ -202,10 +271,39 @@ describe('clear worksheet settings', () => {
 })
 
 describe('template round trips', () => {
+  it('只有配置的旧模板不生成模拟题，也不把空位补成正式题目', async () => {
+    const store = readyStore()
+    await store.saveMyTemplate('Legacy')
+    delete store.myTemplates[0].sections
+    expect(await store.loadMyTemplate('Legacy')).toBe(true)
+    expect(store.sections[0].count).toBe(4)
+    expect(store.sections[0].data!.questions).toEqual([])
+    expect(store.sections[0].data!.missing_count).toBe(4)
+    store.syncSections(store.sections.map(section => ({ ...section, _sid: section.id, data: section.data! })))
+    expect(store.sections[0].count).toBe(4)
+  })
+
+  it('旧模板快照只恢复存在的题干和选项，不编造答案或缺失题目', async () => {
+    const store = readyStore()
+    await store.saveMyTemplate('Legacy snapshot')
+    const template = store.myTemplates[0]
+    delete template.sections
+    template.paperSnapshot = '<div class="sec-block"><div class="q"><div data-e="stem">① 原始题目</div>'
+      + '<div data-e="opts"><div>A. 原选项甲</div><div>B. 原选项乙</div></div></div></div>'
+    expect(await store.loadMyTemplate('Legacy snapshot')).toBe(true)
+    const data = store.sections[0].data!
+    expect(data.questions).toHaveLength(1)
+    expect(data.questions[0].stem).toBe('原始题目')
+    expect(data.questions[0].options).toEqual(['原选项甲', '原选项乙'])
+    expect(data.questions[0].answer).toBeUndefined()
+    expect(data.questions[0]._qid).toBeTruthy()
+    expect(data.missing_count).toBe(3)
+  })
+
   it('preserves rich text, section layout and independent snapshots', async () => {
     const store = readyStore()
     store.title = 'Daily practice'
-    store.sections[0].data!.questions[0]._stemHtml = '<b>Edited</b>'
+    store.sections[0].data!.questions = [{ stem: 'Edited', _stemHtml: '<b>Edited</b>', answer: '2' }]
     store.sections[0].layout.qCols = 2
     expect(await store.saveMyTemplate('Saved')).toEqual({ local: true, synced: true })
     store.sections[0].data!.questions[0]._stemHtml = 'Different'

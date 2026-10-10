@@ -1,11 +1,38 @@
 <script setup lang="ts">
 import { onActivated, ref } from 'vue'
 import { fetchAdminStats, type AdminStats } from '../api'
+import { catalogList } from '../catalog'
+import { getRequests, getOrders } from '../growth'
+import { getFeedback } from '../experience'
+import { navigateAdmin } from '../navigation'
 
 defineEmits<{ configure: [] }>()
 const stats = ref<AdminStats | null>(null)
 const loading = ref(false)
 const error = ref('')
+const tasks = ref([
+  { id: 'drafts', label: '待发布草稿', count: null as number | null, loading: false, error: '' },
+  { id: 'requests', label: '待处理资料需求', count: null as number | null, loading: false, error: '' },
+  { id: 'feedback', label: '待处理小程序反馈', count: null as number | null, loading: false, error: '' },
+  { id: 'refunds', label: '待审核退款', count: null as number | null, loading: false, error: '' },
+])
+async function loadTask(id: string) {
+  const task = tasks.value.find(item => item.id === id)!
+  if (task.loading) return
+  task.loading = true; task.error = ''
+  try {
+    const result = await (id === 'drafts' ? catalogList('', 'draft', 0) : id === 'requests' ? getRequests('pending') : id === 'feedback' ? getFeedback('pending') : getOrders({ status: 'refund_requested' }))
+    task.count = result.total
+  } catch { task.error = '暂未获取' }
+  finally { task.loading = false }
+}
+function openTask(id: string) {
+  if (id === 'drafts') navigateAdmin('papers', { status: 'draft' })
+  else if (id === 'requests') navigateAdmin('resourceRequests', { status: 'pending' })
+  else if (id === 'feedback') navigateAdmin('supportCenter', { status: 'pending' })
+  else navigateAdmin('orders', { status: 'refund_requested' })
+}
+function refresh() { void load(); tasks.value.forEach(task => { void loadTask(task.id) }) }
 async function load() {
   if (loading.value) return
   loading.value = true
@@ -14,12 +41,19 @@ async function load() {
   catch (e: unknown) { error.value = e instanceof Error ? e.message : '概览加载失败' }
   finally { loading.value = false }
 }
-onActivated(load)
+onActivated(refresh)
 </script>
 
 <template>
   <section class="admin-section" aria-label="运行概览">
-    <div class="section-toolbar"><h2>平台数据</h2><UTooltip text="刷新数据"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" aria-label="刷新概览" :loading="loading" @click="load" /></UTooltip></div>
+    <div class="section-toolbar"><h2>待办事项</h2><UTooltip text="刷新数据"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" aria-label="刷新概览" :loading="loading" @click="refresh" /></UTooltip></div>
+    <div class="task-grid">
+      <article v-for="task in tasks" :key="task.id" class="task-card" :aria-busy="task.loading">
+        <button type="button" @click="openTask(task.id)"><span>{{ task.label }}</span><strong>{{ task.loading && task.count === null ? '…' : task.error ? '—' : task.count }}</strong><span class="task-link">前往处理 →</span></button>
+        <UButton v-if="task.error" :label="task.error + '，重试'" variant="link" size="xs" @click="loadTask(task.id)" />
+      </article>
+    </div>
+    <h2 class="section-title mt-6 mb-3">平台数据</h2>
     <UAlert v-if="error" :title="error" color="error" variant="soft" class="notice" role="alert" />
     <div v-if="!stats && loading" class="metric-grid" role="status" aria-label="正在加载概览"><USkeleton v-for="n in 4" :key="n" class="h-36 rounded-lg" /></div>
     <template v-if="stats">
@@ -38,7 +72,7 @@ onActivated(load)
           <div><dt>模型尝试次数</dt><dd>{{ stats.generationUsage.model_calls }}</dd></div>
           <div><dt>已上报输入 / 输出 Token</dt><dd class="token-count">{{ stats.generationUsage.reported_calls ? stats.generationUsage.prompt_tokens.toLocaleString() + ' / ' + stats.generationUsage.completion_tokens.toLocaleString() : '未上报' }}</dd></div>
         </dl>
-        <div class="usage-caption"><span>每用户请求上限 {{ stats.generationUsage.daily_limit }}</span><span>结果不确定 {{ stats.generationUsage.unknown }}</span><span>用量已上报 {{ stats.generationUsage.reported_calls }} 次</span></div>
+        <div class="usage-caption"><span>{{ stats.generationUsage.daily_limit > 0 ? '每用户 24 小时请求上限 ' + stats.generationUsage.daily_limit + ' 次' : '每用户每日请求次数不限' }}</span><span>结果不确定 {{ stats.generationUsage.unknown }}</span><span>用量已上报 {{ stats.generationUsage.reported_calls }} 次</span></div>
       </section>
       <div class="service-info"><h2 class="section-title">服务信息</h2><dl class="info-list"><dt>服务版本</dt><dd>v{{ stats.server.version }}</dd><dt>当前模型</dt><dd>{{ stats.server.model }}</dd><dt>密钥加密</dt><dd>{{ stats.server.encryption }}</dd></dl></div>
     </template>
@@ -46,6 +80,14 @@ onActivated(load)
 </template>
 
 <style scoped>
+.task-grid { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px; }
+.task-card { border:1px solid var(--ui-border);border-radius:10px;background:var(--ui-bg);overflow:hidden; }
+.task-card button { display:flex;flex-direction:column;align-items:flex-start;width:100%;padding:16px;gap:8px;text-align:left;cursor:pointer; }
+.task-card button:hover { background:var(--ui-bg-muted); }
+.task-card strong { font-size:28px;font-variant-numeric:tabular-nums; }
+.task-card span { font-size:13px; }
+.task-link { color:var(--ui-primary); }
+@media(max-width:760px) { .task-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 .usage-section { padding: 24px 0; border-bottom: 1px solid var(--ui-border); animation: fade-in 0.4s ease; }
 .usage-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; margin-top: 20px; }
 .usage-grid dt { font-size: 12px; color: var(--ui-text-muted); }

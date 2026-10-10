@@ -166,7 +166,10 @@ it('updates the configuration preview without generating an image and enforces t
 
 
 it('filters curriculum knowledge points and toggles them without losing typed content', async () => {
-  vi.mocked(fetchScope).mockResolvedValue({ allowed: ['加法', '减法'] })
+  vi.mocked(fetchScope).mockResolvedValue({ allowed: ['旧知识点'], books: [{
+    id: 'test-book', semester: '上册', series: '人教版数学', source_url: 'https://jc.pep.com.cn/',
+    verified_on: '2026-10-10', units: [{ title: '加法', page: 1, topics: [] }, { title: '减法', page: 2, topics: [] }],
+  }] })
   const store = useExamStore()
   store.available = { '小学三年级': ['数学'] }
   store.grade = '小学三年级'; store.subject = '数学'; store.keyword = '自定练习'
@@ -174,7 +177,7 @@ it('filters curriculum knowledge points and toggles them without losing typed co
   await wrapper.get('[aria-label="搜索知识点"]').setValue('加')
   expect(wrapper.findAll('.image-knowledge-list button')).toHaveLength(1)
   await wrapper.get('.image-knowledge-list button').trigger('click')
-  expect((wrapper.get('[aria-label="图片知识点"]').element as HTMLInputElement).value).toBe('自定练习、加法')
+  expect((wrapper.get('[aria-label="图片知识点"]').element as HTMLInputElement).value).toBe('自定练习、上册·加法')
   await wrapper.get('.image-knowledge-list button').trigger('click')
   expect((wrapper.get('[aria-label="图片知识点"]').element as HTMLInputElement).value).toBe('自定练习')
   await wrapper.get('[aria-label="搜索知识点"]').setValue('不存在的知识点')

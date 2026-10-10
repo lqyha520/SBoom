@@ -1,0 +1,1099 @@
+{
+  "revision": "pep-review-20261010",
+  "directory_url": "https://jc.pep.com.cn/",
+  "directory_checked_on": "2026-10-10",
+  "status": "complete",
+  "edition_note": "以人教社官方电子教材目录当前所列册次为准；书号或资源路径中的年份不作为出版版次。尚未核对的册次不提供知识点，不回退到旧清单。",
+  "series": {
+    "数学": "人教版义务教育教科书数学",
+    "语文": "统编义务教育教科书语文（人民教育出版社）",
+    "英语": "人教版PEP英语（三年级起点）"
+  },
+  "books": [
+    {
+      "id": "1221001101241", "grade": "小学一年级", "subject": "数学", "semester": "上册",
+      "status": "verified", "verified_on": "2026-10-10", "toc_image_pages": [6],
+      "units": [
+        {"title": "数学游戏", "page": 1},
+        {"title": "5以内数的认识和加、减法", "page": 12},
+        {"title": "6～10的认识和加、减法", "page": 34},
+        {"title": "认识立体图形", "page": 67},
+        {"title": "11～20的认识", "page": 73},
+        {"title": "20以内的进位加法", "page": 88},
+        {"title": "复习与关联", "page": 103}
+      ]
+    },
+    {
+      "id": "1221001102241", "grade": "小学一年级", "subject": "数学", "semester": "下册",
+      "status": "verified", "verified_on": "2026-10-10", "toc_image_pages": [6],
+      "units": [
+        {
+          "title": "认识平面图形", "page": 1,
+          "topics": ["长方形", "正方形", "平行四边形", "三角形", "圆", "平面图形的拼组"],
+          "topic_image_pages": [7, 8, 9]
+        },
+        {"title": "20以内的退位减法", "page": 8},
+        {"title": "100以内数的认识", "page": 23},
+        {"title": "100以内的口算加、减法", "page": 43},
+        {"title": "100以内的笔算加、减法", "page": 56},
+        {"title": "数量间的加减关系", "page": 69},
+        {"title": "欢乐购物街", "page": 77},
+        {"title": "复习与关联", "page": 83}
+      ]
+    },
+    {
+      "id": "1221001201251", "grade": "小学二年级", "subject": "数学", "semester": "上册",
+      "status": "verified", "verified_on": "2026-10-10", "toc_image_pages": [6],
+      "units": [
+        {
+          "title": "分类与整理", "page": 1,
+          "topics": ["按给定标准分类", "按不同标准分类", "分类结果的计数与比较", "用表格记录分类结果"],
+          "topic_image_pages": [7, 8, 9]
+        },
+        {"title": "1～6的表内乘法", "page": 10},
+        {"title": "1～6的表内除法", "page": 30},
+        {"title": "校园小导游", "page": 49},
+        {"title": "厘米和米", "page": 55},
+        {"title": "身体上的尺子", "page": 68},
+        {"title": "7～9的表内乘、除法", "page": 73},
+        {"title": "复习与关联", "page": 91}
+      ]
+    },
+    {
+      "id": "1221001202251",
+      "grade": "小学二年级",
+      "subject": "数学",
+      "semester": "下册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [
+        6
+      ],
+      "units": [
+        {
+          "title": "时间在哪里",
+          "page": 1
+        },
+        {
+          "title": "有余数的除法",
+          "page": 10
+        },
+        {
+          "title": "数量间的乘除关系",
+          "page": 24
+        },
+        {
+          "title": "万以内数的认识",
+          "page": 40
+        },
+        {
+          "title": "万以内的加法和减法",
+          "page": 63
+        },
+        {
+          "title": "数学连环画",
+          "page": 83
+        },
+        {
+          "title": "复习与关联",
+          "page": 87
+        }
+      ]
+    },
+    {
+      "id": "1221001301251",
+      "grade": "小学三年级",
+      "subject": "数学",
+      "semester": "上册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [
+        6
+      ],
+      "units": [
+        {
+          "title": "观察物体",
+          "page": 1
+        },
+        {
+          "title": "混合运算",
+          "page": 6
+        },
+        {
+          "title": "毫米、分米和千米",
+          "page": 20
+        },
+        {
+          "title": "曹冲称象的故事",
+          "page": 31
+        },
+        {
+          "title": "多位数乘一位数",
+          "page": 39
+        },
+        {
+          "title": "数字编码",
+          "page": 57
+        },
+        {
+          "title": "线和角",
+          "page": 61
+        },
+        {
+          "title": "分数的初步认识",
+          "page": 73
+        },
+        {
+          "title": "复习与关联",
+          "page": 92
+        }
+      ]
+    },
+    {
+      "id": "1221001302251",
+      "grade": "小学三年级",
+      "subject": "数学",
+      "semester": "下册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [
+        6
+      ],
+      "units": [
+        {
+          "title": "生活中的运动现象",
+          "page": 1
+        },
+        {
+          "title": "除数是一位数的除法",
+          "page": 10
+        },
+        {
+          "title": "长方形和正方形",
+          "page": 39
+        },
+        {
+          "title": "图形的面积",
+          "page": 52
+        },
+        {
+          "title": "数据的收集与整理",
+          "page": 65
+        },
+        {
+          "title": "年、月、日的秘密",
+          "page": 77
+        },
+        {
+          "title": "小数的初步认识",
+          "page": 86
+        },
+        {
+          "title": "复习与关联",
+          "page": 95
+        }
+      ]
+    },
+    {
+      "id": "1221001401261",
+      "grade": "小学四年级",
+      "subject": "数学",
+      "semester": "上册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [
+        6
+      ],
+      "units": [
+        {
+          "title": "万以上数的认识",
+          "page": 1
+        },
+        {
+          "title": "1亿有多大",
+          "page": 24
+        },
+        {
+          "title": "角的度量",
+          "page": 28
+        },
+        {
+          "title": "多位数乘两位数",
+          "page": 39
+        },
+        {
+          "title": "加法模型和乘法模型",
+          "page": 58
+        },
+        {
+          "title": "平行四边形和梯形",
+          "page": 70
+        },
+        {
+          "title": "条形统计图",
+          "page": 88
+        },
+        {
+          "title": "寻找宝藏",
+          "page": 102
+        },
+        {
+          "title": "复习与关联",
+          "page": 108
+        }
+      ]
+    },
+    {
+      "id": "1221001402131",
+      "grade": "小学四年级",
+      "subject": "数学",
+      "semester": "下册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [
+        6,
+        7
+      ],
+      "units": [
+        {
+          "title": "四则运算",
+          "page": 2
+        },
+        {
+          "title": "观察物体（二）",
+          "page": 13
+        },
+        {
+          "title": "运算律",
+          "page": 17
+        },
+        {
+          "title": "小数的意义和性质",
+          "page": 32
+        },
+        {
+          "title": "三角形",
+          "page": 57
+        },
+        {
+          "title": "小数的加法和减法",
+          "page": 69
+        },
+        {
+          "title": "图形的运动（二）",
+          "page": 79
+        },
+        {
+          "title": "平均数与条形统计图",
+          "page": 87
+        },
+        {
+          "title": "营养午餐",
+          "page": 97
+        },
+        {
+          "title": "数学广角——鸡兔同笼",
+          "page": 99
+        },
+        {
+          "title": "总复习",
+          "page": 103
+        }
+      ]
+    },
+    {
+      "id": "1221001501261",
+      "grade": "小学五年级",
+      "subject": "数学",
+      "semester": "上册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [
+        6
+      ],
+      "units": [
+        {
+          "title": "观察简单组合体",
+          "page": 1
+        },
+        {
+          "title": "小数乘法",
+          "page": 7
+        },
+        {
+          "title": "小数除法",
+          "page": 24
+        },
+        {
+          "title": "图形的运动",
+          "page": 39
+        },
+        {
+          "title": "用字母表示数和数量关系",
+          "page": 55
+        },
+        {
+          "title": "多边形的面积",
+          "page": 72
+        },
+        {
+          "title": "有趣的密铺",
+          "page": 95
+        },
+        {
+          "title": "可能性",
+          "page": 98
+        },
+        {
+          "title": "复习与关联",
+          "page": 107
+        }
+      ]
+    },
+    {
+      "id": "1221001502141",
+      "grade": "小学五年级",
+      "subject": "数学",
+      "semester": "下册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [
+        6,
+        7
+      ],
+      "units": [
+        {
+          "title": "观察物体（三）",
+          "page": 2
+        },
+        {
+          "title": "因数和倍数",
+          "page": 5
+        },
+        {
+          "title": "长方体和正方体",
+          "page": 18
+        },
+        {
+          "title": "探索图形",
+          "page": 44
+        },
+        {
+          "title": "分数的意义和性质",
+          "page": 45
+        },
+        {
+          "title": "图形的运动（三）",
+          "page": 83
+        },
+        {
+          "title": "分数的加法和减法",
+          "page": 89
+        },
+        {
+          "title": "怎样通知最快",
+          "page": 102
+        },
+        {
+          "title": "折线统计图",
+          "page": 104
+        },
+        {
+          "title": "数学广角——找次品",
+          "page": 112
+        },
+        {
+          "title": "总复习",
+          "page": 115
+        }
+      ]
+    },
+    {
+      "id": "1221001601261",
+      "grade": "小学六年级",
+      "subject": "数学",
+      "semester": "上册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [
+        6
+      ],
+      "units": [
+        {
+          "title": "确定位置",
+          "page": 1
+        },
+        {
+          "title": "分数乘法",
+          "page": 16
+        },
+        {
+          "title": "分数除法",
+          "page": 32
+        },
+        {
+          "title": "生活中的负数",
+          "page": 44
+        },
+        {
+          "title": "圆",
+          "page": 48
+        },
+        {
+          "title": "体育中的数学",
+          "page": 74
+        },
+        {
+          "title": "百分数",
+          "page": 79
+        },
+        {
+          "title": "水是生命之源",
+          "page": 101
+        },
+        {
+          "title": "复习与关联",
+          "page": 106
+        }
+      ]
+    },
+    {
+      "id": "1221001602141",
+      "grade": "小学六年级",
+      "subject": "数学",
+      "semester": "下册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [
+        6,
+        7
+      ],
+      "units": [
+        {
+          "title": "负数",
+          "page": 2
+        },
+        {
+          "title": "百分数（二）",
+          "page": 8
+        },
+        {
+          "title": "生活与百分数",
+          "page": 15
+        },
+        {
+          "title": "圆柱与圆锥",
+          "page": 16
+        },
+        {
+          "title": "比例",
+          "page": 38
+        },
+        {
+          "title": "自行车里的数学",
+          "page": 65
+        },
+        {
+          "title": "数学广角——鸽巢问题",
+          "page": 67
+        },
+        {
+          "title": "整理和复习",
+          "page": 71
+        }
+      ]
+    },
+    {
+      "id": "1211001101241",
+      "grade": "小学一年级",
+      "subject": "语文",
+      "semester": "上册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [
+        5,
+        6,
+        7
+      ],
+      "units": [
+        {
+          "title": "第一单元·识字",
+          "page": 8,
+          "topics": [
+            "天地人",
+            "金木水火土",
+            "口耳目手足",
+            "日月山川"
+          ],
+          "topic_image_pages": [
+            5,
+            6,
+            7
+          ]
+        },
+        {
+          "title": "第二单元·汉语拼音",
+          "page": 20,
+          "topics": [
+            "a o e",
+            "i u ü",
+            "b p m f",
+            "d t n l"
+          ],
+          "topic_image_pages": [
+            5,
+            6,
+            7
+          ]
+        },
+        {
+          "title": "第三单元·汉语拼音",
+          "page": 32,
+          "topics": [
+            "g k h",
+            "j q x",
+            "z c s",
+            "zh ch sh r",
+            "y w"
+          ],
+          "topic_image_pages": [
+            5,
+            6,
+            7
+          ]
+        },
+        {
+          "title": "第四单元·汉语拼音",
+          "page": 45,
+          "topics": [
+            "ai ei ui",
+            "ao ou iu",
+            "ie üe er",
+            "an en in un ün",
+            "ang eng ing ong"
+          ],
+          "topic_image_pages": [
+            5,
+            6,
+            7
+          ]
+        },
+        {
+          "title": "第五单元·阅读",
+          "page": 60,
+          "topics": [
+            "秋天",
+            "江南",
+            "雪地里的小画家",
+            "四季"
+          ],
+          "topic_image_pages": [
+            5,
+            6,
+            7
+          ]
+        },
+        {
+          "title": "第六单元·识字",
+          "page": 73,
+          "topics": [
+            "对韵歌",
+            "日月明",
+            "小书包",
+            "升国旗"
+          ],
+          "topic_image_pages": [
+            5,
+            6,
+            7
+          ]
+        },
+        {
+          "title": "第七单元·阅读",
+          "page": 84,
+          "topics": [
+            "小小的船",
+            "影子",
+            "两件宝"
+          ],
+          "topic_image_pages": [
+            5,
+            6,
+            7
+          ]
+        },
+        {
+          "title": "第八单元·阅读",
+          "page": 95,
+          "topics": [
+            "比尾巴",
+            "乌鸦喝水",
+            "雨点儿"
+          ],
+          "topic_image_pages": [
+            5,
+            6,
+            7
+          ]
+        }
+      ]
+    },
+    {
+      "id": "1211001102241",
+      "grade": "小学一年级",
+      "subject": "语文",
+      "semester": "下册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [5, 6],
+      "units": [
+        {"title": "第一单元·识字", "page": 2, "topics": ["春夏秋冬", "姓氏歌", "小青蛙", "猜字谜", "语文园地一", "快乐读书吧：读读童谣和儿歌"], "topic_image_pages": [5]},
+        {"title": "第二单元·阅读", "page": 16, "topics": ["吃水不忘挖井人", "我多想去看看", "一个接一个", "语文园地二"], "topic_image_pages": [5]},
+        {"title": "第三单元·阅读", "page": 26, "topics": ["小公鸡和小鸭子", "树和喜鹊", "怎么都快乐", "语文园地三"], "topic_image_pages": [5]},
+        {"title": "第四单元·阅读", "page": 39, "topics": ["静夜思", "夜色", "端午粽", "语文园地四"], "topic_image_pages": [6]},
+        {"title": "第五单元·识字", "page": 48, "topics": ["动物儿歌", "古对今", "操场上", "人之初", "语文园地五"], "topic_image_pages": [6]},
+        {"title": "第六单元·阅读", "page": 61, "topics": ["古诗二首：池上、小池", "荷叶圆圆", "要下雨了", "语文园地六"], "topic_image_pages": [6]}
+      ]
+    },
+    {
+      "id": "1211001201241",
+      "grade": "小学二年级",
+      "subject": "语文",
+      "semester": "上册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [
+        5,
+        6
+      ],
+      "units": [
+        {
+          "title": "第一单元·阅读",
+          "page": 1,
+          "topics": [
+            "小蝌蚪找妈妈",
+            "我是什么",
+            "植物妈妈有办法"
+          ],
+          "topic_image_pages": [
+            5,
+            6
+          ]
+        },
+        {
+          "title": "第二单元·识字",
+          "page": 16,
+          "topics": [
+            "场景歌",
+            "树之歌",
+            "拍手歌",
+            "田家四季歌"
+          ],
+          "topic_image_pages": [
+            5,
+            6
+          ]
+        },
+        {
+          "title": "第三单元·阅读",
+          "page": 28,
+          "topics": [
+            "彩虹",
+            "去外婆家",
+            "最爱的是我"
+          ],
+          "topic_image_pages": [
+            5,
+            6
+          ]
+        },
+        {
+          "title": "第四单元·阅读",
+          "page": 39,
+          "topics": [
+            "古诗二首：登鹳雀楼、望庐山瀑布",
+            "黄山奇石",
+            "日月潭",
+            "葡萄沟"
+          ],
+          "topic_image_pages": [
+            5,
+            6
+          ]
+        },
+        {
+          "title": "第五单元·阅读",
+          "page": 54,
+          "topics": [
+            "坐井观天",
+            "寒号鸟",
+            "我要的是葫芦"
+          ],
+          "topic_image_pages": [
+            5,
+            6
+          ]
+        },
+        {
+          "title": "第六单元·阅读",
+          "page": 67,
+          "topics": [
+            "八角楼上",
+            "朱德的扁担",
+            "难忘的泼水节",
+            "刘胡兰"
+          ],
+          "topic_image_pages": [
+            5,
+            6
+          ]
+        },
+        {
+          "title": "第七单元·阅读",
+          "page": 81,
+          "topics": [
+            "古诗二首：江雪、敕勒歌",
+            "雾在哪里",
+            "雪孩子"
+          ],
+          "topic_image_pages": [
+            5,
+            6
+          ]
+        },
+        {
+          "title": "第八单元·阅读",
+          "page": 95,
+          "topics": [
+            "称赞",
+            "纸船和风筝",
+            "快乐的小河"
+          ],
+          "topic_image_pages": [
+            5,
+            6
+          ]
+        }
+      ]
+    },
+    {
+      "id": "1211001202251",
+      "grade": "小学二年级",
+      "subject": "语文",
+      "semester": "下册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [5, 6],
+      "units": [
+        {"title": "第一单元·阅读", "page": 1, "topics": ["古诗二首：咏柳、村居", "找春天", "开满鲜花的小路", "邓小平爷爷植树", "语文园地一", "快乐读书吧：读读儿童故事"], "topic_image_pages": [5]},
+        {"title": "第二单元·阅读", "page": 15, "topics": ["雷锋叔叔，你在哪里", "千人糕", "我不是最弱小的", "语文园地二"], "topic_image_pages": [5]},
+        {"title": "第三单元·识字", "page": 29, "topics": ["神州谣", "传统节日", "“贝”的故事", "中国美食", "语文园地三"], "topic_image_pages": [5]},
+        {"title": "第四单元·阅读", "page": 42, "topics": ["彩色的梦", "一匹出色的马", "枫树上的喜鹊", "语文园地四"], "topic_image_pages": [5]},
+        {"title": "第五单元·阅读", "page": 55, "topics": ["寓言二则：亡羊补牢、揠苗助长", "画杨桃", "小马过河", "语文园地五"], "topic_image_pages": [6]},
+        {"title": "第六单元·阅读", "page": 69, "topics": ["古诗二首：绝句、晓出净慈寺送林子方", "雷雨", "要是你在野外迷了路", "太空生活趣事多", "语文园地六"], "topic_image_pages": [6]},
+        {"title": "第七单元·阅读", "page": 84, "topics": ["大象的耳朵", "蜘蛛开店", "青蛙卖泥塘", "小毛虫", "语文园地七"], "topic_image_pages": [6]},
+        {"title": "第八单元·阅读", "page": 100, "topics": ["羿射九日", "黄帝的传说", "大禹治水", "语文园地八"], "topic_image_pages": [6]}
+      ]
+    },
+    {
+      "id": "1211001301241",
+      "grade": "小学三年级",
+      "subject": "语文",
+      "semester": "上册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [5, 6],
+      "units": [
+        {
+          "title": "第一单元·阅读",
+          "page": 2,
+          "topics": ["大青树下的小学", "花的学校", "不懂就要问", "我的暑假生活", "猜猜他是谁", "语文园地"],
+          "topic_image_pages": [5]
+        },
+        {
+          "title": "第二单元·阅读",
+          "page": 14,
+          "topics": ["古诗三首：山行、赠刘景文、夜书所见", "铺满金色巴掌的水泥道", "秋天的雨", "听听，秋的声音", "写日记", "语文园地"],
+          "topic_image_pages": [5]
+        },
+        {
+          "title": "第三单元·阅读",
+          "page": 28,
+          "topics": ["卖火柴的小女孩", "那一定会很好", "在牛肚子里旅行", "名字里的故事", "我来编童话", "语文园地"],
+          "topic_image_pages": [5]
+        },
+        {
+          "title": "第四单元·阅读",
+          "page": 46,
+          "topics": ["总也倒不了的老屋", "小狗学叫", "胡萝卜先生的长胡子", "续写故事", "语文园地"],
+          "topic_image_pages": [5]
+        },
+        {
+          "title": "第五单元·阅读",
+          "page": 60,
+          "topics": ["搭船的鸟", "金色的草地", "我眼中的缤纷世界", "习作例文：我家的小狗、我爱故乡的杨梅"],
+          "topic_image_pages": [6]
+        },
+        {
+          "title": "第六单元·阅读",
+          "page": 70,
+          "topics": ["富饶的西沙群岛", "海滨小城", "美丽的小兴安岭", "香港，璀璨的明珠", "这儿真美", "语文园地"],
+          "topic_image_pages": [6]
+        },
+        {
+          "title": "第七单元·阅读",
+          "page": 84,
+          "topics": ["古诗三首：鹿柴、望天门山、饮湖上初晴后雨", "大自然的声音", "父亲、树林和鸟", "我是小小解说员", "我有一个想法", "语文园地"],
+          "topic_image_pages": [6]
+        },
+        {
+          "title": "第八单元·阅读",
+          "page": 96,
+          "topics": ["司马光", "一块奶酪", "手术台就是阵地", "灰雀", "请教", "那次玩得真高兴", "语文园地"],
+          "topic_image_pages": [6]
+        }
+      ]
+    },
+    {
+      "id": "1211001302251",
+      "grade": "小学三年级",
+      "subject": "语文",
+      "semester": "下册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [5, 6],
+      "units": [
+        {
+          "title": "第一单元·阅读",
+          "page": 2,
+          "topics": ["古诗三首：绝句、惠崇春江晚景、三衢道中", "燕子", "荷花", "昆虫备忘录", "春游去哪儿玩", "我的植物朋友", "语文园地"],
+          "topic_image_pages": [5]
+        },
+        {
+          "title": "第二单元·阅读",
+          "page": 16,
+          "topics": ["守株待兔", "会摇尾巴的狼", "鹿角和鹿腿", "池子与河流", "劝告", "看图画，写一写", "语文园地", "快乐读书吧：小故事大道理"],
+          "topic_image_pages": [5]
+        },
+        {
+          "title": "第三单元·阅读",
+          "page": 34,
+          "topics": ["海底世界", "蜜蜂", "小虾", "我做了一项小实验", "语文园地"],
+          "topic_image_pages": [5]
+        },
+        {
+          "title": "第四单元·阅读",
+          "page": 44,
+          "topics": ["古诗三首：元日、清明、九月九日忆山东兄弟", "纸的发明", "赵州桥", "一幅名扬中外的画", "专题学习活动：中华传统节日", "语文园地"],
+          "topic_image_pages": [5, 6]
+        },
+        {
+          "title": "第五单元·阅读",
+          "page": 58,
+          "topics": ["胡萝卜先生的长胡子", "我变成了一棵树", "习作例文：一支铅笔的梦想、尾巴它有一只猫", "奇妙的想象"],
+          "topic_image_pages": [6]
+        },
+        {
+          "title": "第六单元·阅读",
+          "page": 70,
+          "topics": ["童年的水墨画", "肥皂泡", "灰雀", "我不能失信", "应该怎样安排座位", "身边那些有特点的人", "语文园地"],
+          "topic_image_pages": [6]
+        },
+        {
+          "title": "第七单元·阅读",
+          "page": 84,
+          "topics": ["火烧云", "暴风雨来临之前", "我们奇妙的世界", "国宝大熊猫", "语文园地"],
+          "topic_image_pages": [6]
+        },
+        {
+          "title": "第八单元·阅读",
+          "page": 96,
+          "topics": ["慢性子裁缝和急性子顾客", "漏", "枣核", "趣味故事会", "这样想象真有趣", "语文园地"],
+          "topic_image_pages": [6]
+        }
+      ]
+    },
+    {
+      "id": "1211001401261",
+      "grade": "小学四年级",
+      "subject": "语文",
+      "semester": "上册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [5, 6],
+      "units": [
+        {"title": "第一单元·阅读", "page": 2, "topics": ["观潮", "繁星", "现代诗二首：秋晚的江上、花牛歌", "我们与环境", "推荐一个好地方", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第二单元·阅读", "page": 14, "topics": ["一个豆荚里的五粒豆", "夜间飞行的秘密", "方帽子店", "田忌赛马", "我的家人", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第三单元·阅读", "page": 34, "topics": ["古诗三首：暮江吟、题西林壁、雪梅", "爬山虎的脚", "蟋蟀的住宅", "爱护眼睛，保护视力", "写观察日记", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第四单元·阅读", "page": 48, "topics": ["盘古开天地", "精卫填海", "普罗米修斯", "女娲补天", "我和____过一天", "语文园地", "快乐读书吧：很久很久以前"], "topic_image_pages": [5, 6]},
+        {"title": "第五单元·阅读", "page": 62, "topics": ["麻雀", "爬天都峰", "生活万花筒", "习作例文：我家的杏熟了、小木船"], "topic_image_pages": [6]},
+        {"title": "第六单元·阅读", "page": 74, "topics": ["长城", "颐和园", "秦兵马俑", "我是小小讲解员", "中国的世界文化遗产", "语文园地"], "topic_image_pages": [6]},
+        {"title": "第七单元·阅读", "page": 88, "topics": ["牛和鹅", "一只窝囊的大老虎", "陀螺", "王戎不取道旁李", "安慰", "我的心儿怦怦跳", "语文园地"], "topic_image_pages": [6]},
+        {"title": "第八单元·阅读", "page": 108, "topics": ["我将无我，不负人民", "为中华之崛起而读书", "延安，我把你追寻", "古诗三首：凉州词、出塞、夏日绝句", "写信", "语文园地"], "topic_image_pages": [6]}
+      ]
+    },
+    {
+      "id": "1211001402191",
+      "grade": "小学四年级",
+      "subject": "语文",
+      "semester": "下册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [5, 6],
+      "units": [
+        {"title": "第一单元·阅读", "page": 2, "topics": ["古诗词三首：四时田园杂兴（其二十五）、宿新市徐公店、清平乐·村居", "乡下人家", "天窗", "三月桃花水", "转述", "我的乐园", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第二单元·阅读", "page": 16, "topics": ["琥珀", "飞向蓝天的恐龙", "纳米技术就在我们身边", "千年梦圆在今朝", "说新闻", "我的奇思妙想", "语文园地", "快乐读书吧：探索科学的奥秘"], "topic_image_pages": [5]},
+        {"title": "第三单元·阅读", "page": 36, "topics": ["短诗三首：繁星（七一）、繁星（一三一）、繁星（一五九）", "绿", "白桦", "在天晴了的时候", "综合性学习：轻叩诗歌大门", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第四单元·阅读", "page": 48, "topics": ["猫", "母鸡", "白鹅", "我的动物朋友", "语文园地"], "topic_image_pages": [5, 6]},
+        {"title": "第五单元·阅读", "page": 64, "topics": ["海上日出", "记金华的双龙洞", "习作例文：颐和园、七月的天山", "游____"], "topic_image_pages": [6]},
+        {"title": "第六单元·阅读", "page": 76, "topics": ["文言文二则：囊萤夜读、铁杵成针", "小英雄雨来（节选）", "我们家的男子汉", "芦花鞋", "朋友相处的秘诀", "我学会了____", "语文园地"], "topic_image_pages": [6]},
+        {"title": "第七单元·阅读", "page": 102, "topics": ["古诗三首：芙蓉楼送辛渐、塞下曲、墨梅", "黄继光", "“诺曼底号”遇难记", "挑山工", "自我介绍", "我的“自画像”", "语文园地"], "topic_image_pages": [6]},
+        {"title": "第八单元·阅读", "page": 122, "topics": ["宝葫芦的秘密（节选）", "巨人的花园", "海的女儿", "故事新编", "语文园地"], "topic_image_pages": [6]}
+      ]
+    },
+    {
+      "id": "1211001501261",
+      "grade": "小学五年级",
+      "subject": "语文",
+      "semester": "上册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [5, 6],
+      "units": [
+        {"title": "第一单元·阅读", "page": 2, "topics": ["桂花雨", "落花生", "珍珠鸟", "制定班级公约", "我的心爱之物", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第二单元·阅读", "page": 14, "topics": ["冀中的地道战", "将相和", "什么比猎豹的速度更快", "“诺曼底号”遇难记", "“漫画”老师", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第三单元·阅读", "page": 34, "topics": ["猎人海力布", "牛郎织女（一）", "牛郎织女（二）", "讲民间故事", "故事新编", "语文园地", "快乐读书吧：从前有座山"], "topic_image_pages": [5]},
+        {"title": "第四单元·阅读", "page": 52, "topics": ["古诗三首：示儿、题临安邸、己亥杂诗", "少年中国说（节选）", "圆明园的毁灭", "梅兰芳蓄须", "二十年后的家乡", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第五单元·阅读", "page": 66, "topics": ["太阳", "金字塔", "介绍一种事物", "习作例文：鲸、风向袋的制作"], "topic_image_pages": [6]},
+        {"title": "第六单元·阅读", "page": 76, "topics": ["慈母情深", "父爱之舟", "航天员写给孩子的信", "父母之爱", "我想对您说", "语文园地"], "topic_image_pages": [6]},
+        {"title": "第七单元·阅读", "page": 92, "topics": ["古诗三首：山居秋暝、枫桥夜泊、早春呈水部张十八员外", "第一场雪", "白鹭", "我最喜欢的季节", "语文园地"], "topic_image_pages": [6]},
+        {"title": "第八单元·阅读", "page": 102, "topics": ["古人谈读书", "忆读书", "走遍天下书为侣", "推荐一本书", "语文园地"], "topic_image_pages": [6]}
+      ]
+    },
+    {
+      "id": "1211001502191",
+      "grade": "小学五年级",
+      "subject": "语文",
+      "semester": "下册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [5, 6],
+      "units": [
+        {"title": "第一单元·阅读", "page": 2, "topics": ["古诗三首：四时田园杂兴（其三十一）、稚子弄冰、村晚", "祖父的园子", "月是故乡明", "梅花魂", "走进他们的童年岁月", "那一刻，我长大了", "语文园地", "快乐读书吧：读古典名著，品百味人生"], "topic_image_pages": [5]},
+        {"title": "第二单元·阅读", "page": 18, "topics": ["草船借箭", "景阳冈", "猴王出世", "红楼春趣", "怎么表演课本剧", "写读后感", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第三单元·综合性学习", "page": 42, "topics": ["遨游汉字王国", "汉字真有趣", "我爱你，汉字"], "topic_image_pages": [5]},
+        {"title": "第四单元·阅读", "page": 54, "topics": ["古诗三首：从军行、秋夜将晓出篱门迎凉有感、闻官军收河南河北", "青山处处埋忠骨", "军神", "清贫", "他____了", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第五单元·阅读", "page": 70, "topics": ["人物描写一组：摔跤、他像一棵挺脱的树、两茎灯草", "刷子李", "习作例文：我的朋友容容、小守门员和他的观众们", "形形色色的人"], "topic_image_pages": [6]},
+        {"title": "第六单元·阅读", "page": 84, "topics": ["自相矛盾", "田忌赛马", "跳水", "神奇的探险之旅", "语文园地"], "topic_image_pages": [6]},
+        {"title": "第七单元·阅读", "page": 94, "topics": ["威尼斯的小艇", "牧场之国", "金字塔", "中国的世界文化遗产", "语文园地"], "topic_image_pages": [6]},
+        {"title": "第八单元·阅读", "page": 108, "topics": ["杨氏之子", "手指", "童年的发现", "我们都来讲笑话", "漫画的启示", "语文园地"], "topic_image_pages": [6]}
+      ]
+    },
+    {
+      "id": "1211001601261",
+      "grade": "小学六年级",
+      "subject": "语文",
+      "semester": "上册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [5, 6],
+      "units": [
+        {"title": "第一单元·阅读", "page": 2, "topics": ["草原", "丁香结", "古诗词三首：宿建德江、六月二十七日望湖楼醉书、西江月·夜行黄沙道中", "变形记", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第二单元·阅读", "page": 14, "topics": ["七律·长征", "狼牙山五壮士", "开国大典", "我的战友邱少云", "演讲", "多彩的活动", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第三单元·阅读", "page": 32, "topics": ["竹节人", "宇宙生命之谜", "故宫博物院", "____让生活更美好", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第四单元·阅读", "page": 50, "topics": ["桥", "穷人", "金色的鱼钩", "请你支持我", "笔尖流出的故事", "语文园地", "快乐读书吧：笑与泪，经历与成长"], "topic_image_pages": [5]},
+        {"title": "第五单元·阅读", "page": 70, "topics": ["灯光", "盼", "围绕中心意思写", "习作例文：爸爸的计划、小站"], "topic_image_pages": [6]},
+        {"title": "第六单元·阅读", "page": 82, "topics": ["只有一个地球", "青山不老", "三黑和土地", "古诗三首：浪淘沙（其一）、江南春、书湖阴先生壁", "意见不同怎么办", "学写倡议书", "语文园地"], "topic_image_pages": [6]},
+        {"title": "第七单元·阅读", "page": 98, "topics": ["文言文二则：两小儿辩日、曹冲称象", "表里的生物", "他们那时候多有趣啊", "插上科学的翅膀飞", "语文园地"], "topic_image_pages": [6]},
+        {"title": "第八单元·阅读", "page": 110, "topics": ["少年闰土", "好的故事", "我的伯父鲁迅先生", "有的人——纪念鲁迅有感", "传承好家风", "语文园地"], "topic_image_pages": [6]}
+      ]
+    },
+    {
+      "id": "1211001602191",
+      "grade": "小学六年级",
+      "subject": "语文",
+      "semester": "下册",
+      "status": "verified",
+      "verified_on": "2026-10-10",
+      "toc_image_pages": [5, 6],
+      "units": [
+        {"title": "第一单元·阅读", "page": 2, "topics": ["北京的春节", "腊八粥", "古诗三首：寒食、迢迢牵牛星、十五夜望月", "藏戏", "即兴发言", "家乡的风俗", "语文园地", "快乐读书吧：漫步世界名著花园"], "topic_image_pages": [5]},
+        {"title": "第二单元·阅读", "page": 20, "topics": ["鲁滨逊漂流记（节选）", "骑鹅旅行记（节选）", "汤姆·索亚历险记（节选）", "同读一本书", "写作品梗概", "语文园地"], "topic_image_pages": [5]},
+        {"title": "第三单元·阅读", "page": 44, "topics": ["匆匆", "那个星期天", "习作例文：别了，语文课、阳光的两种用法", "让真情自然流露"], "topic_image_pages": [5]},
+        {"title": "第四单元·阅读", "page": 58, "topics": ["古诗三首：马诗、石灰吟、竹石", "十六年前的回忆", "为人民服务", "董存瑞舍身炸暗堡", "综合性学习：奋斗的历程", "语文园地"], "topic_image_pages": [5, 6]},
+        {"title": "第五单元·阅读", "page": 80, "topics": ["文言文二则：学弈、两小儿辩日", "真理诞生于一百个问号之后", "表里的生物", "他们那时候多有趣啊", "辩论", "插上科学的翅膀飞", "语文园地"], "topic_image_pages": [6]},
+        {"title": "第六单元·综合性学习", "page": 98, "topics": ["难忘小学生活", "回忆往事", "依依惜别", "古诗词诵读：采薇（节选）、送元二使安西、春夜喜雨、早春呈水部张十八员外、江上渔者、泊船瓜洲、游园不值、卜算子·送鲍浩然之浙东、浣溪沙、清平乐"], "topic_image_pages": [6]}
+      ]
+    },
+    {"id": "1212001301245", "grade": "小学三年级", "subject": "英语", "semester": "上册", "status": "verified", "verified_on": "2026-10-10", "toc_image_pages": [6], "units": [
+      {"title": "Making friends", "page": 2},
+      {"title": "Different families", "page": 14},
+      {"title": "Our animal friends", "page": 26},
+      {"title": "Plants around us", "page": 38},
+      {"title": "The colourful world", "page": 50},
+      {"title": "Useful numbers", "page": 62},
+      {"title": "Revision: Being a good guest", "page": 74}
+    ]},
+    {"id": "1212001302245", "grade": "小学三年级", "subject": "英语", "semester": "下册", "status": "verified", "verified_on": "2026-10-10", "toc_image_pages": [6], "units": [
+      {"title": "Meeting new people", "page": 2},
+      {"title": "My words and actions", "page": 14},
+      {"title": "Tools and senses for learning", "page": 26},
+      {"title": "Healthy food", "page": 38},
+      {"title": "Old things", "page": 50},
+      {"title": "Numbers in life", "page": 62},
+      {"title": "Revision: Going to a school fair", "page": 74}
+    ]},
+    {"id": "1212001401255", "grade": "小学四年级", "subject": "英语", "semester": "上册", "status": "verified", "verified_on": "2026-10-10", "toc_image_pages": [6], "units": [
+      {"title": "Helping at home", "page": 2},
+      {"title": "My friends", "page": 14},
+      {"title": "Places we live in", "page": 26},
+      {"title": "Helping in the community", "page": 38},
+      {"title": "The weather and us", "page": 50},
+      {"title": "Changing for the seasons", "page": 62},
+      {"title": "Revision: Let’s help!", "page": 74}
+    ]},
+    {"id": "1212001402255", "grade": "小学四年级", "subject": "英语", "semester": "下册", "status": "verified", "verified_on": "2026-10-10", "toc_image_pages": [6], "units": [
+      {"title": "Class rules", "page": 2},
+      {"title": "Family rules", "page": 14},
+      {"title": "Time for school", "page": 26},
+      {"title": "Going shopping", "page": 38},
+      {"title": "Farms and us", "page": 50},
+      {"title": "From farm to table", "page": 62},
+      {"title": "Revision: A great weekend plan", "page": 74}
+    ]},
+    {"id": "1212001501255", "grade": "小学五年级", "subject": "英语", "semester": "上册", "status": "verified", "verified_on": "2026-10-10", "toc_image_pages": [6], "units": [
+      {"title": "Different friends", "page": 2},
+      {"title": "My feelings", "page": 14},
+      {"title": "Work and play", "page": 26},
+      {"title": "Healthy habits", "page": 38},
+      {"title": "Food we eat", "page": 50},
+      {"title": "Nature and us", "page": 62},
+      {"title": "Revision: New Year’s party", "page": 74}
+    ]},
+    {"id": "1212001502255", "grade": "小学五年级", "subject": "英语", "semester": "下册", "status": "verified", "verified_on": "2026-10-10", "toc_image_pages": [6], "units": [
+      {"title": "Following the rules", "page": 2},
+      {"title": "Our community", "page": 14},
+      {"title": "Life in different seasons", "page": 26},
+      {"title": "My hometown", "page": 38},
+      {"title": "Travelling around", "page": 50},
+      {"title": "Making a travel plan", "page": 62},
+      {"title": "Revision: Travelling in China", "page": 74}
+    ]},
+    {"id": "1212001601265", "grade": "小学六年级", "subject": "英语", "semester": "上册", "status": "verified", "verified_on": "2026-10-10", "toc_image_pages": [6], "units": [
+      {"title": "Amazing places", "page": 2},
+      {"title": "Getting together", "page": 14},
+      {"title": "Healthy life", "page": 26},
+      {"title": "Managing money well", "page": 38},
+      {"title": "Exploring space", "page": 50},
+      {"title": "Energy, nature and us", "page": 62},
+      {"title": "Revision: Learning in museums", "page": 74}
+    ]},
+    {"id": "1212001602145", "grade": "小学六年级", "subject": "英语", "semester": "下册", "status": "verified", "verified_on": "2026-10-10", "toc_image_pages": [6], "units": [
+      {"title": "Unit 1 How tall are you?", "page": 2},
+      {"title": "Unit 2 Last weekend", "page": 12},
+      {"title": "Unit 3 Where did you go?", "page": 22},
+      {"title": "Unit 4 Then and now", "page": 32},
+      {"title": "Recycle Mike’s happy days", "page": 42}
+    ]}
+  ]
+}

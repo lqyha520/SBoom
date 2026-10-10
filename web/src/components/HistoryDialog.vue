@@ -14,7 +14,7 @@ const busy = ref(false)
 const error = ref('')
 const draftsOpen = ref(false)
 const entries = computed(() => store.history)
-const reasons: Record<HistoryReason, string> = { manual: '手动保存', generated: '生成完成', 'before-restore': '恢复前版本', 'before-generate': '重新生成前' }
+const reasons: Record<HistoryReason, string> = { manual: '手动保存', generated: '生成完成', 'before-restore': '恢复前版本', 'before-generate': '重新生成前', 'before-clear': '清空设置前' }
 const formatTime = (value: number) => new Date(value).toLocaleString('zh-CN', { hour12: false })
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 watch(search, value => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { void store.refreshHistory(value, 0) }, 250) })

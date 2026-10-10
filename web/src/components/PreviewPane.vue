@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
 import { useExamStore } from '../stores/exam'
 import type { PaperData } from '../types'
+import { previewSampleData } from '../preview-samples'
 import PaperView from './PaperView.vue'
 import PaperEditToolbar from './PaperEditToolbar.vue'
 import ZoomControl from './ZoomControl.vue'
@@ -9,10 +10,24 @@ import { useFitZoom } from '../useFitZoom'
 
 defineEmits<{ 'open-settings': [] }>()
 const store = useExamStore()
+const previewSections = computed(() => store.sections.map(s => {
+  const data = s.data || { questions: [] }
+  const realQuestions = data.questions || []
+  return {
+    type: s.type,
+    name: s.name,
+    data: realQuestions.length
+      ? data
+      : { ...previewSampleData(s.type, s.count, s.id), missing_count: data.missing_count, topic: data.topic },
+    layout: s.layout,
+    _sid: s.id,
+  }
+}))
+const hasFormatSamples = computed(() => store.sections.some(s => !(s.data?.questions?.length)))
 const previewPaper = computed<PaperData>(() => ({
   grade: store.grade, subject: store.subject, keyword: store.keyword, title: store.title,
   titleHtml: store.titleHtml || undefined, difficulty: store.difficulty,
-  sections: store.sections.map(s => ({ type: s.type, name: s.name, data: s.data || { questions: [] }, layout: s.layout, _sid: s.id })),
+  sections: previewSections.value,
   hiddenElements: [...store.hiddenElements],
 }))
 const previewBox = ref<HTMLElement | null>(null)
@@ -81,6 +96,10 @@ function onTitleEdited(title: string, html: string) { store.title = title; store
       </div>
     </div>
     <PaperEditToolbar :layout-mode="layoutMode" :disabled="store.generating" :can-layout="!!store.sections.length" save-template @settings="$emit('open-settings')" @layout="toggleLayout" @cancel="cancelLayout" @save="openSave" />
+    <div v-if="hasFormatSamples" class="preview-hint" role="status">
+      <UIcon name="i-lucide-info" class="size-4" />
+      <span>当前显示的是题型格式示例，点击生成后会替换为模型生成的正式题目。</span>
+    </div>
     <div ref="previewBox" class="preview-fill">
       <PaperView ref="paperViewEl" :paper="previewPaper" :template="store.template" :style="store.style" :editable="true" :layout-mode="layoutMode" :zoom="zoom"
         @toggle-element="store.toggleHiddenElement($event)" @title-edited="onTitleEdited"
@@ -107,5 +126,18 @@ function onTitleEdited(title: string, html: string) { store.title = title; store
 </template>
 
 <style scoped>
+.preview-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 16px 0;
+  padding: 7px 9px;
+  border: 1px solid var(--ui-color-primary-200, #bfdbfe);
+  border-radius: 5px;
+  color: var(--ui-color-primary-700, #1d4ed8);
+  background: var(--ui-color-primary-50, #eff6ff);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .save-notice { position: absolute; right: 20px; bottom: 50px; width: min(320px, calc(100vw - 40px)); z-index: 20; }
 </style>

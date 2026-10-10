@@ -18,8 +18,9 @@ def load(name, path):
 
 with patch.dict(sys.modules, {"backup_restore": load("backup_restore", "scripts/backup_restore.py")}):
     backup = load("ops_backup_test", "scripts/ops_backup.py")
-ops = load("release_ops_test", "scripts/release/ops.py")
-with patch.dict(sys.modules, {"ops": ops}):
+with patch.dict(sys.modules, {"ops_preflight": load("ops_preflight", "scripts/release/ops_preflight.py")}):
+    ops = load("release_ops_test", "scripts/release/ops.py")
+with patch.dict(sys.modules, {"ops": ops, "image_checks": load("image_checks", "scripts/release/image_checks.py")}):
     release = load("release_test", "scripts/release/release.py")
 
 
@@ -130,6 +131,8 @@ class OpsContracts(unittest.TestCase):
             original = "APP_IMAGE=app:old\nCOMPOSE_PROJECT_NAME=existing\n"
             env.write_text(original)
             def run(command, environment=None):
+                if command[:3] == ["docker", "image", "inspect"]:
+                    return "sha256:new-image"
                 if command[-3:] == ["ps", "-q", "app"]:
                     return "app-container"
                 if command[:2] == ["docker", "inspect"]:
@@ -138,8 +141,9 @@ class OpsContracts(unittest.TestCase):
             with patch.dict(os.environ, {"RELEASE_ENV_FILE": str(env)}), \
                     patch.object(sys, "argv", ["release.py", "--image", "app:new", "--state-dir", root]), \
                     patch.object(release, "run", side_effect=run) as execute, \
+                    patch.object(release, "verify_image"), \
                     patch.object(release.subprocess, "run"), \
-                    patch.object(release, "urlopen", side_effect=OSError("unhealthy")):
+                    patch.object(release, "health_check", side_effect=[OSError("unhealthy"), None]):
                 with self.assertRaisesRegex(RuntimeError, "已恢复"):
                     release.main()
             updates = [call for call in execute.call_args_list if "up" in call.args[0]]

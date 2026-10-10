@@ -5,12 +5,13 @@
  * - 排版模式：Sortable 拖拽排序（大题/题目可跨大题移动）、删除、表格列宽行高、
  *   题目自由移动/调整大小；退出时 DOM 顺序回写数据
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Sortable from 'sortablejs'
 import type { PaperData, PaperSection, PaperStyle, PaperTemplate } from '../types'
 import { computeScores, gradeNumOf } from '../utils'
 import PaperPage from './PaperPage.vue'
 import { paginateSections, type PageChunk, type MeasuredSection } from '../paper-pagination'
+import { createSectionSignatures, createSectionMeasurements } from '../section-measurement'
 
 const props = defineProps<{
   paper: PaperData
@@ -57,41 +58,52 @@ const kidOn = computed(() => {
 
 const scores = computed(() => computeScores(props.paper.sections))
 
-/** 测量纸用：每个大题整块一段 */
-const allChunks = computed(() => props.paper.sections.map((_, i) => ({ sec: i, qFrom: 0, qTo: Infinity, first: true })))
+/** 测量纸只挂载发生几何变化的大题；卷头、卷尾单独测量。 */
+const measurementChunks = ref<PageChunk[]>([])
 const styleForMeasure = computed(() => ({ ...props.style, titleOffsetY: 0 }))
 let measurementCache: { availH: number; headH: number; tailH: number; segments: MeasuredSection[] } | undefined
+const sectionSignature = createSectionSignatures()
+const sectionMeasurements = createSectionMeasurements()
+const sectionKeys = computed(() => props.paper.sections.map(sectionSignature))
+const geometryContext = computed(() => JSON.stringify([props.template, styleForMeasure.value, kidOn.value, props.showAnswers, measureTick.value]))
 
 /* ── 分页测量 ── */
 /** 只订阅可改变卷面高度的内容；锁定和请求状态不参与测量。 */
 const measureKey = computed(() => JSON.stringify([
-  props.paper.sections.map(s => [s.type, s.name, s.data.passage, s.data.topic,
-    (s.data.questions || []).map(q => [q._qid, q.stem, q._stemHtml, q.options, q._optsHtml,
-      q.answer, q.left_items, q.right_items, q.top, q.left, q.right, q.left_expr,
-      q.right_expr, q.difficulty_level]), s.layout]),
   props.paper.title, props.paper.titleHtml, props.paper.footerOverride,
   props.paper.hiddenElements, props.paper.grade, props.paper.subject, props.paper.keyword,
   props.paper.difficulty, props.paper.day, props.addDay, props.showAnswers,
-  props.template, styleForMeasure.value, kidOn.value, measureTick.value,
+  geometryContext.value,
 ]))
 
 /* 输入类变化（标题逐字输入、字号滑条拖动）防抖后再重分页，
    避免每个按键都做一次全卷测量；挂载时首次分页仍然立即执行 */
 let _pagTimer: ReturnType<typeof setTimeout> | undefined
-watch(measureKey, () => {
+let paginationRun = 0, suspended = false, disposed = false
+watch([measureKey, sectionKeys], () => {
+  paginationRun++
+  measured.value = false
   clearTimeout(_pagTimer)
-  _pagTimer = setTimeout(() => paginate(), 150)
+  if (!suspended) _pagTimer = setTimeout(() => { void paginate() }, 150)
 })
 onMounted(() => paginate())
+onDeactivated(() => { suspended = true; paginationRun++; clearTimeout(_pagTimer); measureVisible.value = false })
+onActivated(() => { if (suspended) { suspended = false; void paginate() } })
 // 标题拖动只用已测量的块高度重新分配页面，不再读取每道题的布局。
 watch(() => props.style.titleOffsetY, () => applyMeasurements())
 
 async function paginate() {
+  if (suspended || disposed) return
+  const run = ++paginationRun
+  const keys = [...sectionKeys.value], context = geometryContext.value
+  const dirty = sectionMeasurements.dirty(keys, context)
+  measurementChunks.value = dirty.map(sec => ({ sec, qFrom: 0, qTo: Infinity, first: true }))
   measureVisible.value = true
   await nextTick()
   await new Promise(r => requestAnimationFrame(() => r(null)))
   // 等字体加载完成再测量（否则块高度偏小，分页错乱）
-  try { await (document as any).fonts?.ready } catch { /* 老浏览器忽略 */ }
+  try { await document.fonts?.ready } catch { /* 老浏览器忽略 */ }
+  if (run !== paginationRun || suspended || disposed) return
   const mEl = measureEl.value
   if (!mEl) return
   const paper = mEl.querySelector('.paper') as HTMLElement | null
@@ -112,8 +124,9 @@ async function paginate() {
   const blocks = Array.from(paper.querySelectorAll('.sec-block')) as HTMLElement[]
 
   // ── 大题 → 段流：整块放得下就一段；超高就块内按行切 ──
-  const segments: MeasuredSection[] = []
-  blocks.forEach((b, i) => {
+  const updates = new Map<number, MeasuredSection>()
+  blocks.forEach((b, blockIndex) => {
+    const i = dirty[blockIndex]
     const qEls = Array.from(b.querySelectorAll('.q')) as HTMLElement[]
     const total = qEls.length
     const sec = props.paper.sections[i]
@@ -130,14 +143,16 @@ async function paginate() {
       }
       // 块头高度（大题标题 + 阅读短文等在第一题之前的部分）
       const headBlockH = Math.max(0, tops[0] - bTop + 4)
-      segments.push({ sec: i, total, headBlockH, rows, rowStride })
+      updates.set(i, { sec: i, total, headBlockH, rows, rowStride })
     } else {
-      segments.push({ sec: i, total: 0, headBlockH: bBottom - bTop, rows, rowStride })
+      updates.set(i, { sec: i, total: 0, headBlockH: bBottom - bTop, rows, rowStride })
     }
   })
 
+  const segments = sectionMeasurements.commit(keys, context, updates)
   measurementCache = { availH, headH, tailH, segments }
   applyMeasurements()
+  measured.value = true
   measureVisible.value = false
 }
 
@@ -150,15 +165,14 @@ function applyMeasurements() {
   paginationError.value = oversized ? '内容超出 A4 页面，请缩小字号、缩短单题或页脚后再导出' : ''
   const nextPages = paginateSections(segments, Math.max(1, cap), tailH)
   if (JSON.stringify(nextPages) !== JSON.stringify(pages.value)) pages.value = nextPages
-  measured.value = true
   // 分页会整建 DOM：表格列宽/行高手柄需要随分页结果重新注入（否则丢失）
   setupTableResize()
 }
 
-// 纸张宽度随字体加载可能变化，稍后复测一次
-let fontTimer: ReturnType<typeof setTimeout> | undefined
-onMounted(() => { fontTimer = setTimeout(() => { measureTick.value++ }, 800) })
-onBeforeUnmount(() => { clearTimeout(_pagTimer); clearTimeout(fontTimer) })
+// 首次测量已等待字体；仅实际字体变化时失效，不再固定延迟重复测量。
+function fontsChanged() { measureTick.value++ }
+onMounted(() => document.fonts?.addEventListener?.('loadingdone', fontsChanged))
+onBeforeUnmount(() => { disposed = true; paginationRun++; clearTimeout(_pagTimer); document.fonts?.removeEventListener?.('loadingdone', fontsChanged) })
 
 /* ── 表格缩放：editable 即启用（不必进排版模式）；分页重建 DOM 后由 paginate 末尾重注入 ── */
 async function setupTableResize() {
@@ -275,7 +289,10 @@ function applyLayout(): PaperSection[] | null {
 
   const paper = props.paper
   const qMap = new Map<string, any>()
-  paper.sections.forEach(s => (s.data.questions || []).forEach(q => { if (q._qid) qMap.set(q._qid, q) }))
+  paper.sections.forEach(s => (s.data.questions || []).forEach(q => {
+    // 搭建预览里的格式示例不能被排版回写到正式试卷数据。
+    if (q._qid && !q._preview) qMap.set(q._qid, q)
+  }))
 
   const newSections: PaperSection[] = []
   stack.querySelectorAll('.sec-block').forEach(block => {
@@ -490,7 +507,7 @@ onMounted(() => measureStackH())
   >
     <!-- pv-zoom 类供 @media print 强制重置缩放：zoom<100% 时打印出来的应是原尺寸而非缩小版 -->
     <div class="pv-zoom" :style="{ width: '210mm', transform: `scale(${zoom ?? 1})`, transformOrigin: 'top left' }">
-      <div ref="stackEl" class="paper-stack" :data-pagination-error="paginationError || undefined">
+      <div ref="stackEl" class="paper-stack" :data-pagination-error="paginationError || undefined" :data-pagination-pending="!measured || undefined">
       <PaperPage
         v-for="(pg, i) in pages"
         :key="visibleRevision + ':' + i"
@@ -517,7 +534,7 @@ onMounted(() => measureStackH())
     <PaperPage
       :key="'m' + measureTick"
       :paper="paper"
-      :chunks="allChunks"
+      :chunks="measurementChunks"
       :template="template"
       :style="styleForMeasure"
       :kid-on="kidOn"

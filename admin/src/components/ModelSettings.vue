@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { useAdminLeaveGuard } from "../navigation"
 import { useAdminRefresh } from '../admin-page'
 import { useBeforeUnload } from '../unsaved'
-import { computed, ref } from 'vue'
+import { computed, onActivated, onDeactivated, ref } from 'vue'
 import * as api from '../api'
 import ImageModelSettings from './ImageModelSettings.vue'
 
@@ -15,7 +16,11 @@ const ok = ref(true)
 const clearOpen = ref(false)
 const baseline = ref('')
 const dirty = computed(() => !!baseline.value && baseline.value !== JSON.stringify(config.value))
-useBeforeUnload(dirty)
+const pageActive = ref(true)
+onActivated(() => { pageActive.value = true })
+onDeactivated(() => { pageActive.value = false })
+useBeforeUnload(computed(() => pageActive.value && dirty.value))
+useAdminLeaveGuard(() => !pageActive.value || (!busy.value && (!dirty.value || window.confirm('有未保存的模型配置，确认离开？'))))
 let loadSequence = 0
 async function load() {
   if (dirty.value) return

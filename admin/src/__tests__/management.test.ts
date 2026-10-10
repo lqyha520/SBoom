@@ -79,6 +79,11 @@ describe('知识点字典', () => {
     mocks.request.mockImplementation(async (url: string) => {
       if (url.endsWith('/unlisted')) return { grade: [], subject: [] }
       if (url.endsWith('/links')) return { links: linked ? [{ parent_id: 'g1', child_id: 's1' }] : [] }
+      if (url.startsWith('/api/v1/scope?')) return { allowed: [], books: [{
+        id: '1221001101241', semester: '上册', series: '人教版数学', verified_on: '2026-10-10',
+        source_url: 'https://book.pep.com.cn/1221001101241/',
+        units: [{ title: '20以内的进位加法', page: 88, topics: [] }],
+      }] }
       return { items: [
         { id: 'g1', kind: 'grade', value: '小学一年级', parent: '', is_visible: true },
         { id: 's1', kind: 'subject', value: '数学', parent: '', is_visible: true },
@@ -86,22 +91,20 @@ describe('知识点字典', () => {
     })
     wrapper = mount(defineComponent({ setup: () => () => h(KeepAlive, () => h(DictionaryManager, { user })) }), { global: { stubs: uiStubs } })
   }
-  it('从字典表单新增知识点时携带年级和科目', async () => {
+  it('只读展示官方教材目录，不再提供旧知识点录入入口', async () => {
     dictionary(); await flushPromises()
-    await button('知识点').trigger('click')
-    await button('新建知识点').trigger('click')
-    await wrapper.get('#dict-form input').setValue('十以内加法')
-    await wrapper.get('#dict-form').trigger('submit')
+    await button('人教版目录').trigger('click')
     await flushPromises()
-    const call = mocks.request.mock.calls.find(([, init]) => init?.method === 'POST')!
-    expect(JSON.parse(call[1].body)).toMatchObject({ kind: 'knowledge_point', parent: 'g1|s1', value: '十以内加法' })
-    expect(wrapper.text()).toContain('知识点字典已更新')
+    expect(button('新建知识点')).toBeUndefined()
+    expect(wrapper.text()).toContain('20以内的进位加法')
+    expect(wrapper.get('a[href="https://book.pep.com.cn/1221001101241/"]').text()).toContain('官方教材')
+    expect(mocks.request.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
   })
   it('没有关联科目时不允许创建孤立知识点', async () => {
     dictionary(false); await flushPromises()
-    await button('知识点').trigger('click')
+    await button('人教版目录').trigger('click')
     expect(button('新建知识点')).toBeUndefined()
-    expect(wrapper.text()).toContain('先选择年级和科目')
+    expect(wrapper.text()).toContain('该教材目录尚未核实')
   })
 })
 

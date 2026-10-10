@@ -25,8 +25,8 @@ import { safeDestination } from '../services/return-route'
 const props = withDefaults(defineProps<{ view?: 'all' | 'favorites' | 'downloads' | 'recent'; topicId?: string }>(), { view: 'all', topicId: '' })
 const canBrowse = computed(() => props.view === 'all' || !!session.user)
 const items = ref<PaperSummary[]>([])
-// 每组最多 200 条，继续浏览通过显式翻组，列表始终直接渲染。
-const windowSize = 200
+// 保留三页内容，限制行组件、手势处理器和返回时的权限核验开销。
+const windowSize = 60
 const windowStart = ref(0)
 const nextOffset = ref(0)
 const imagesActive = ref(false)
@@ -145,11 +145,12 @@ watch(searchInput, value => {
 async function loadMetadata(force = false) {
   if (!active || metadataLoading.value || (!force && metadataAt && Date.now() - metadataAt < 300000)) return
   const current = metadataRequests.begin()
+  const anonymous = props.view === 'all' && !session.user && (!session.ready || !!session.error)
   metadataLoading.value = true
   const results = await Promise.allSettled([
-    fetchCatalogSummary({ scope: current, force }).then(value => { if (current()) summary.value = value }),
-    fetchTopics({ scope: current, force }).then(value => { if (current()) topics.value = value.items }),
-    fetchTags({ scope: current, force }).then(value => { if (current()) tags.value = value.items }),
+    fetchCatalogSummary({ scope: current, force, anonymous }).then(value => { if (current()) summary.value = value }),
+    fetchTopics({ scope: current, force, anonymous }).then(value => { if (current()) topics.value = value.items }),
+    fetchTags({ scope: current, force, anonymous }).then(value => { if (current()) tags.value = value.items }),
   ])
   if (!current()) return
   metadataError.value = results.flatMap((result, index) => result.status === 'rejected' ? [['分类', '专题', '教学标签'][index]] : []).join('、')
@@ -173,6 +174,7 @@ async function refresh(reset = true, preserveWindow = false) {
   if (reset) expandedRow.value = ''
   if (!reset && (loading.value || !more.value || windowFull.value)) return
   const current = requests.begin()
+  const anonymous = props.view === 'all' && !session.user && (!session.ready || !!session.error)
   const revision = favoriteRevision
   const offset = reset ? windowStart.value : nextOffset.value
   loading.value = true; appending.value = !reset; error.value = ''; appendError.value = ''
@@ -186,8 +188,8 @@ async function refresh(reset = true, preserveWindow = false) {
     // Revalidate the retained window in one bounded request, alongside its head.
     // The server returns current rights for every retained row; no private policy is cached.
     const [result, window] = await Promise.all([
-      fetchCatalog({ ...filters, offset, limit: Math.min(20, windowStart.value + windowSize - offset) }, { scope: current }),
-      preserveWindow ? fetchCatalogWindow(items.value.map(item => item.id), { scope: current }) : Promise.resolve(null),
+      fetchCatalog({ ...filters, offset, limit: Math.min(20, windowStart.value + windowSize - offset) }, { scope: current, anonymous }),
+      preserveWindow && !anonymous ? fetchCatalogWindow(items.value.map(item => item.id), { scope: current }) : Promise.resolve(null),
     ])
     if (!current()) return
     if (!result.items.length && windowStart.value && result.total <= windowStart.value) {
@@ -229,7 +231,9 @@ async function activate() {
   const run = ++activation
   active = false
   cancelSearch()
-  await ensureSession()
+  const anonymous = props.view === 'all' && !session.user && (!session.ready || !!session.error)
+  const restored = ensureSession()
+  if (!anonymous) await restored
   if (run !== activation) return
   if (canBrowse.value) {
     const previousSelection = selectionRevision
@@ -251,6 +255,7 @@ async function activate() {
     void loadMetadata()
     void refresh(true, loaded && previousSelection === catalogSelection.revision)
   } else active = true
+  if (anonymous) void restored.then(() => { if (run === activation && active && session.user) void activate() })
 }
 function deactivate() {
   endSelection()
@@ -272,6 +277,12 @@ watch([grade, subject], () => {
   if (session.user) writePreferences(session.user.id, { ...readPreferences(session.user.id), grade: grade.value, subject: subject.value })
 })
 watch(() => session.user?.id, (owner, previous) => {
+  if (props.view === 'all' && !previous && owner) {
+    // 从公开浏览恢复登录时保留搜索上下文，刷新权限和个人数据。
+    invalidateActions(); requests.invalidate(); metadataRequests.invalidate()
+    metadataAt = 0; metadataLoading.value = false; loading.value = false
+    return
+  }
   endSelection()
   windowStart.value = 0; nextOffset.value = 0
   invalidateActions(); appendError.value = ''; appending.value = false

@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field, model_validator
-from typing import Dict, List, Literal, Optional, Union
 from enum import Enum
+from typing import Annotated, Dict, List, Optional, Union
+
+from pydantic import BaseModel, Field, model_validator
 
 
 # 年级/科目不再用枚举：三端共用后台字典（site_dictionary 表）为唯一数据源，
@@ -67,6 +68,8 @@ class BatchGenerateRequest(BaseModel):
     keyword: str = Field(..., min_length=1, max_length=100)
     difficulty: Difficulty = Field(Difficulty.MEDIUM)
     items: List[BatchItem] = Field(..., min_length=1, max_length=10)
+    previous_request_ids: list[Annotated[str, Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")]] = Field(
+        default_factory=list, max_length=60, description="本卷前序已完成请求；仅从当前账号的保存结果读取避重上下文")
 
     @model_validator(mode="after")
     def unique_section_ids(self):
@@ -137,6 +140,21 @@ class ValidateResult(BaseModel):
     request_id: Optional[str] = None
 
 
+class TextbookUnit(BaseModel):
+    title: str
+    page: int
+    topics: list[str] = Field(default_factory=list)
+
+
+class TextbookBook(BaseModel):
+    id: str
+    semester: str
+    series: str
+    source_url: str
+    verified_on: str
+    units: list[TextbookUnit]
+
+
 class KnowledgeScope(BaseModel):
     """知识范围信息"""
     grade: str
@@ -144,6 +162,8 @@ class KnowledgeScope(BaseModel):
     allowed: List[str]
     forbidden: List[str]
     semesters: Optional[Dict[str, List[str]]] = None  # 按学期划分的知识点（上册/下册）
+    catalog_revision: str = ""
+    books: list[TextbookBook] = Field(default_factory=list)
 
 
 class ErrorResponse(BaseModel):

@@ -41,6 +41,8 @@ python3 scripts/release/prepare.py --ref HEAD --output /secure/releases
 python3 scripts/release/prepare.py --ref COMMIT --output /secure/another-release --host deploy@server --remote-dir /secure/incoming
 ```
 
+构建前会拒绝覆盖已有的提交标签；两个镜像都写入 Git revision 标签，并在无网络、只读文件系统、非 root 用户下检查应用导入及代码/前端文件可读性。检查失败不会导出或上传镜像包。构建失败留下的标签须先核实未发布、未被任何容器使用，再由操作者处理，不能换输出目录绕过检查覆盖原镜像。
+
 输出包含应用/运维镜像 `images.tar`、SHA-256 和 `release.json`（Git 提交与镜像 ID）。服务器校验后载入：
 
 ```bash
@@ -52,7 +54,9 @@ cd /opt/learn-coach
 python3 scripts/release/release.py --image learncoach-app:COMMIT前12位
 ```
 
-发布脚本先做加密异地备份，成功后用待发布镜像单次执行 `python -m app.migrations`，通过后只执行 app 的 `up --no-deps --no-build --wait` 并检查 `/readyz`。失败自动恢复原 app 的镜像 ID；成功更新 `release.env` 中的 APP_IMAGE，并在 `/var/lib/learn-coach/releases/current.json` 记录当前与上一版本。镜像标签应唯一、禁止覆盖复用。整个发布窗口只运行一个发布进程。
+发布脚本将目标标签解析并固定为镜像 ID，先做离线镜像检查和加密异地备份；失败时不会停止现有应用。备份成功后仅停止 app，再单次执行 `python -m app.migrations`，通过后以 `up --no-deps --no-build --pull never --wait --wait-timeout 120 app` 更新应用并检查 `/readyz`。数据库、网络和数据卷不重建。成功后原子更新 `release.env` 中的 APP_IMAGE，在 `/var/lib/learn-coach/releases/current.json` 记录当前与上一镜像 ID。含密钥的临时文件从创建起即为600权限，替换时保留现有文件属主/属组。整个发布窗口只运行一个发布进程。
+
+发布失败时先用旧镜像执行只读的 `python -m app.migrations --check`。只有旧镜像兼容当前数据库，且旧容器启动及 `/readyz` 均通过，才提示“已恢复”。数据库版本不兼容或连接不可用时不自动切回旧镜像；保留新镜像配置并尝试启动它，在 `current.json` 写入 `status=recovery_required`、`reason=compatibility_unverified`。旧镜像回滚后仍不健康则记录 `reason=rollback_unhealthy`。这些情况均返回失败，不能据此认定服务已经恢复；应检查实际容器及数据库，准备兼容版本修复。脚本绝不自动恢复数据库快照或覆盖业务数据。
 
 主动回滚使用同一发布脚本，将 `--image` 换成记录中的 previous 镜像 ID。回滚仅适用于数据库向后兼容的版本；恢复数据库是单独的事故处理流程，不会自动覆盖生产数据。
 
@@ -87,7 +91,21 @@ python3 scripts/release/ops.py restore-check
 
 backup在restic上传及check成功后原子写入 `backup.json`，字段包含completed_at、verified和offsite，供监控判断备份时效。回执失败同样算备份流程失败，不可只看远端有文件。只存在文件或手动修改过旧回执权限不算验收。
 
-先手动完成备份与恢复，再在服务器启用定时器：
+### 定时任务启用前预检
+
+先配置好实际存储、密钥文件权限、独立回执目录和通知地址，然后执行：
+
+```bash
+python3 scripts/release/ops.py check
+```
+
+该命令只读取 Compose 解析后的配置及文件权限，不启动容器、不连接存储、不发送通知，也不会创建或修改回执。输出 `scope=configuration_only` 的JSON和检查名，不回显凭据或Webhook；任一检查失败返回1。检查包括远端仓库/S3 HTTPS与凭据、备份和恢复使用同一仓库/密码文件/运维镜像、非 root 可读的只读密钥挂载、2750独立回执目录、每日/月度独立HTTPS心跳、失败通知渠道，以及无端口、无持久数据卷的tmpfs恢复数据库。
+
+`compose=false` 表示现有配置尚未能完整解析；不要把示例中的 `REPLACE`、`ACCOUNT_ID` 当作真实配置。其余失败项对应 `ops.env`、挂载或文件权限，修复后重新检查。此预检针对本文的正式三文件Compose配置；仍使用旧部署目录的环境应先按第1节核对并迁移运维配置，禁止直接套用bookworm覆盖文件去替换现有Alpine数据库。
+
+预检通过不代表异地备份已经完成、可恢复或告警已送达。仍须手动执行真实备份、隔离恢复和通知验收，再启用定时器。两个systemd任务均增加 `ExecStartPre` 预检，配置不完整时拒绝运行；尚无存储和通知凭据时保持未启用，不生成“已完成”回执。
+
+先手动完成预检、备份与恢复，再在服务器启用定时器：
 
 ```bash
 sudo install -m 644 deploy/learn-coach-backup.service deploy/learn-coach-backup.timer deploy/learn-coach-backup-alert.service deploy/learn-coach-restore.service deploy/learn-coach-restore.timer /etc/systemd/system/

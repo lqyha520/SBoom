@@ -49,6 +49,9 @@ desktop.ini
 # 多用户数据（用户库 / 服务密钥，绝不入库）
 # ============================
 data/
+!app/data/
+app/data/*
+!app/data/pep_catalog.json
 
 # ============================
 # 构建产物（只忽略三个前端子项目的产物，避免误吞其它目录里的 dist）
@@ -95,3 +98,4 @@ server.pid
 # 生产环境密钥
 artifacts/
 deploy/ops-status/
+/deploy/docker-compose.override.yml

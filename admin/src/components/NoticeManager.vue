@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useDialogDraft } from '../dialog-draft'
 import { useRevisionConflict } from '../revision-conflict'
 import { computed, onActivated, onDeactivated, ref } from 'vue'
 import type { UserInfo } from '../api'
@@ -115,6 +116,7 @@ async function confirmRemove() {
 
 onActivated(load)
 onDeactivated(() => { sequence++; loading.value = false; dialog.value = false; removeOpen.value = false })
+const draft = useDialogDraft(dialog, () => form.value, busy, '公告')
 </script>
 
 <template>
@@ -138,7 +140,7 @@ onDeactivated(() => { sequence++; loading.value = false; dialog.value = false; r
     </tbody></table></div>
     <div class="table-footer"><span>共 {{ items.length }} 条公告</span></div>
 
-    <UModal v-model:open="dialog" :title="target ? '编辑公告' : '新建公告'" :dismissible="!busy" :close="!busy"><template #body><form id="notice-form" class="field-stack" @submit.prevent="save">
+    <UModal v-model:open="draft.model.value" :title="target ? '编辑公告' : '新建公告'" :dismissible="!busy" :close="!busy"><template #body><form id="notice-form" class="field-stack" @submit.prevent="save">
       <UFormField label="标题" required><UInput v-model="form.title" maxlength="60" :disabled="busy" required class="w-full" /></UFormField>
       <UFormField label="正文" hint="换行会原样保留，弹窗内可滚动查看"><UTextarea v-model="form.body" :rows="5" maxlength="2000" :disabled="busy" class="w-full" /></UFormField>
       <div class="grid-two"><UFormField label="展示位置"><USelect v-model="form.placement" :items="placementOptions" :disabled="busy" class="w-full" /></UFormField><UFormField label="级别"><USelect v-model="form.level" :items="levelOptions" :disabled="busy" class="w-full" /></UFormField></div>
@@ -146,7 +148,7 @@ onDeactivated(() => { sequence++; loading.value = false; dialog.value = false; r
       <UAlert v-if="!windowValid" title="结束时间必须晚于开始时间。" color="warning" variant="soft" />
       <USwitch v-model="form.is_visible" label="启用该公告" :disabled="busy" />
       <UButton v-if="recovery.conflict.value" label="载入最新并保留我的修改" :loading="recovery.recovering.value" @click="recovery.reload" /><UAlert v-if="formError" :title="formError" color="error" variant="soft" />
-    </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="dialog = false" /><UButton type="submit" form="notice-form" :label="target ? '保存' : '创建'" icon="i-lucide-check" :loading="busy" :disabled="busy || !canSave" /></template></UModal>
+    </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="draft.setOpen(false)" /><UButton type="submit" form="notice-form" :label="target ? '保存' : '创建'" icon="i-lucide-check" :loading="busy" :disabled="busy || !canSave" /></template></UModal>
 
     <UModal v-model:open="removeOpen" title="删除公告" :dismissible="!busy" :close="!busy"><template #body><div class="field-stack"><p>确认删除「{{ removing?.title }}」？</p></div></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="removeOpen = false" /><UButton label="确认删除" color="error" icon="i-lucide-trash-2" :loading="busy" :disabled="busy" @click="confirmRemove" /></template></UModal>
   </section>

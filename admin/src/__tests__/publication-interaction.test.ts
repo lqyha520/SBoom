@@ -9,8 +9,8 @@ import { defaultDownloadSettings } from '../download-settings'
 import { uiStubs } from '../../../shared/test/ui-stubs'
 import { readAdminRoute } from '../navigation'
 import * as catalog from '../catalog'
-const mocks = vi.hoisted(() => ({ categories: vi.fn(), dictionary: vi.fn() }))
-vi.mock('../site', () => ({ siteCategories: mocks.categories, siteDictionary: mocks.dictionary }))
+const mocks = vi.hoisted(() => ({ categories: vi.fn(), dictionary: vi.fn(), createCategory: vi.fn() }))
+vi.mock('../site', () => ({ siteCategories: mocks.categories, siteDictionary: mocks.dictionary, createCategory: mocks.createCategory }))
 vi.mock('../catalog', async original => ({ ...await original<typeof import('../catalog')>(),
   catalogList: vi.fn().mockResolvedValue({ items: [], total: 0 }), catalogStats: vi.fn().mockResolvedValue({}),
   catalogSources: vi.fn().mockResolvedValue({ items: [], has_more: false }),
@@ -19,6 +19,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(catalog.catalogList).mockResolvedValue({ items: [], total: 0, has_more: false })
   history.replaceState(null, '', '/admin/#papers'); readAdminRoute()
+  vi.mocked(catalog.catalogDetail).mockResolvedValue({ ...paper })
   mocks.categories.mockReset(); mocks.dictionary.mockReset()
   mocks.categories.mockResolvedValue({ items: [{ id: 'category', name: '练习', is_visible: true }] })
   mocks.dictionary.mockResolvedValue({ items: [{ value: 'available', label: '可用选项' }] })
@@ -26,7 +27,7 @@ beforeEach(() => {
 
 it('required option failures show independent retry actions and retain typed form content', async () => {
   mocks.categories.mockRejectedValueOnce(new Error('offline'))
-  mocks.dictionary.mockRejectedValueOnce(new Error('offline'))
+  mocks.dictionary.mockRejectedValue(new Error('offline'))
   const wrapper = mount(defineComponent({ setup: () => () => h(KeepAlive, () => h(PublicPapers, { user: { id: 1, username: 'admin', role: 'admin' } })) }), {
     global: { stubs: { ...uiStubs,
       UAlert: defineComponent({ props: ['title'], setup: (props, { slots }) => () => h('div', [props.title, slots.actions?.()]) }),
@@ -41,6 +42,7 @@ it('required option failures show independent retry actions and retain typed for
     expect(wrapper.text()).toContain('分类加载失败')
     expect(wrapper.text()).toContain('年级与科目加载失败')
     await button('重试加载分类').trigger('click'); await flushPromises()
+    mocks.dictionary.mockResolvedValue({ items: [{ value: 'available', label: '可用选项' }] })
     await button('重试加载年级与科目').trigger('click'); await flushPromises()
     expect(wrapper.text()).not.toContain('分类加载失败')
     expect(wrapper.text()).not.toContain('年级与科目加载失败')
@@ -107,7 +109,7 @@ it('编辑可修改标题，保存后刷新列表和版本号，继续保存不�
     expect(catalog.catalogList).toHaveBeenCalledTimes(3)
   } finally { wrapper.unmount() }
 })
-it('创建后提供定位、标签与预览入口，预览后明确确认发布', async () => {
+it('创建后留在同一编辑区，右侧预览并明确确认发布', async () => {
   vi.mocked(catalog.catalogSources).mockResolvedValue({ items: [{ id: 'source', title: '来源标题', grade: '三年级', subject: '数学', version: 1, file_status: 'ready', question_count: 5 }], total: 1, has_more: false })
   vi.mocked(catalog.createPublication).mockResolvedValue(paper)
   vi.mocked(catalog.catalogDetail).mockResolvedValue(paper)
@@ -117,11 +119,8 @@ it('创建后提供定位、标签与预览入口，预览后明确确认发布'
     await flushPromises(); await button('添加习题').trigger('click'); await flushPromises()
     await wrapper.get('select[placeholder="选择习题"]').setValue('source'); await flushPromises()
     await wrapper.get('#publication-form').trigger('submit'); await flushPromises()
-    expect(wrapper.get('[aria-label="本次新建习题"]').text()).toContain('旧标题')
-    expect(button('补充教学标签').exists()).toBe(true)
-    await button('在列表中定位').trigger('click'); await flushPromises()
-    expect(vi.mocked(catalog.catalogList).mock.lastCall?.[0]).toBe('旧标题')
-    await button('预览并发布').trigger('click'); await flushPromises()
+    expect(wrapper.findComponent(PublicationEditorDialog).props('editor').dialog).toBe(true)
+    expect(wrapper.get('[aria-label="已保存资料预览"]').text()).toContain('管理员')
     await button('核对后设置发布').trigger('click'); await flushPromises()
     expect(wrapper.text()).toContain('已核对内容，确认公开发布')
     expect(button('确认发布').attributes('disabled')).toBeDefined()
@@ -154,12 +153,12 @@ it.each(['preview', 'metadata'] as const)('%s respects cancelled and accepted un
     expect(editor.form.description).toBe('Unsaved description')
     expect(beforeUnload()).toBe(true)
     expect(wrapper.findComponent(CatalogPreviewDialog).props('state').previewOpen).toBe(false)
-    expect(wrapper.findComponent(PaperMetadataDialog).props('open')).toBe(false)
+    expect(wrapper.findComponent(PaperMetadataDialog).exists()).toBe(false)
 
     confirm.mockReturnValue(true)
     dialog.vm.$emit(action, paper)
     await flushPromises()
-    expect(editor.dialog).toBe(false)
+    expect(editor.dialog).toBe(action === 'metadata')
     expect(beforeUnload()).toBe(false)
     if (action === 'preview') {
       expect(wrapper.findComponent(CatalogPreviewDialog).props('state').previewOpen).toBe(true)

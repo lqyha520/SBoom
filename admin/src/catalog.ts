@@ -27,8 +27,9 @@ export interface PublicationEdit extends DownloadSettings {
 }
 
 const base = '/api/v1/admin/catalog'
-export function catalogList(q: string, status: string, offset: number) {
-  return request<Page<CatalogPaper>>(base + '/papers?' + new URLSearchParams({ q, status, offset: String(offset), limit: '20' }))
+export interface CatalogFilters { grade?: string; subject?: string; category?: string; access?: string }
+export function catalogList(q: string, status: string, offset: number, filters: CatalogFilters = {}) {
+  return request<Page<CatalogPaper>>(base + '/papers?' + new URLSearchParams({ q, status, offset: String(offset), limit: '20', ...filters }))
 }
 export function catalogStats() { return request<CatalogStats>(base + '/summary') }
 export function catalogDetail(id: string) { return request<CatalogDetail>(base + '/papers/' + encodeURIComponent(id)) }

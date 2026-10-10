@@ -148,6 +148,7 @@ export interface BatchParams {
   keyword: string
   difficulty: Difficulty
   items: BatchItemReq[]
+  previous_request_ids?: string[]
 }
 
 export async function generateBatch(params: BatchParams, requestId: string = randomId()): Promise<BatchRespSection[]> {
@@ -157,6 +158,7 @@ export async function generateBatch(params: BatchParams, requestId: string = ran
     keyword: params.keyword,
     difficulty: params.difficulty,
     items: params.items,
+    ...(params.previous_request_ids?.length ? { previous_request_ids: params.previous_request_ids } : {}),
   }
   const d = await request<{ sections: BatchRespSection[] }>('/api/v1/generate-batch', {
     method: 'POST',

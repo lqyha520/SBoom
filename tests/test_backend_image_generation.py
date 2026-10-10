@@ -135,13 +135,13 @@ class ImageGenerationContracts(unittest.TestCase):
         self.assertIn("整张合计不超过 24 道", prompt)
         self.assertEqual(self.calls, [])
 
-    def test_automatic_topics_respect_dictionary_overrides_and_reject_unknown_scopes(self):
+    def test_automatic_topics_use_official_books_and_reject_unknown_scopes(self):
         body = {"grade": "小学一年级", "subject": "数学"}
-        with patch.object(service.knowledge_scope_service, "_dictionary_points", return_value=["自定课程知识点"]) as points:
-            response = self.client.post("/api/v1/image-generation/prompt", json=body)
-            self.assertEqual(response.status_code, 200, response.text)
-            self.assertIn("允许的知识范围：自定课程知识点", response.json()["prompt"])
-            points.assert_called_once_with(body["grade"], body["subject"])
+        response = self.client.post("/api/v1/image-generation/prompt", json=body)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("1221001101241", response.json()["prompt"])
+        self.assertIn("100以内的笔算加、减法", response.json()["prompt"])
+        self.assertNotIn("认识钟表", response.json()["prompt"])
         for index, change in enumerate([{"grade": "未知年级"}, {"subject": "未知科目"}]):
             self.assertEqual(self.send(f"unknown-auto-{index}", {**body, **change}).status_code, 400)
         scope = service.knowledge_scope_service.get_scope(body["grade"], body["subject"])

@@ -1,6 +1,6 @@
 [Unit]
 Description=Consistent Learning Coach backup
-After=network-online.target
+After=network-online.target docker.service
 OnFailure=learn-coach-backup-alert.service
 
 [Service]
@@ -8,5 +8,6 @@ Type=oneshot
 WorkingDirectory=/opt/learn-coach
 EnvironmentFile=/etc/learn-coach/release.env
 UMask=0077
+ExecStartPre=/usr/bin/python3 scripts/release/ops.py check
 ExecStart=/usr/bin/python3 scripts/release/ops.py backup
 TimeoutStartSec=1800

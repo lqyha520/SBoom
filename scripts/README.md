@@ -14,6 +14,7 @@
 | `python scripts/serve_detached.py --status` | 检查监督进程与readyz，未就绪返回非零 |
 | `python scripts/serve_detached.py --stop` | 通过随机令牌控制通道停止自己启动的子进程；不按旧PID盲目杀进程 |
 | `python scripts/generate_api_types.py` | 从后端OpenAPI生成shared/api-schema.ts；CI检查生成差异 |
+| `python scripts/check_pep_catalog.py --require-complete` | 检查人教版教材目录来源、册次、页码与核实状态；未核实完整时禁止整体替换上线，不访问业务数据库 |
 | `python scripts/admin_console_check.py --help` | 后台契约检查，先查看目标和fixture要求 |
 
 启动器输出单独写`data/logs/launcher.log`，5MiB×3份轮转；应用写`data/logs/application.log`。旧纯数字`server.pid`不会自动转换或终止对应进程，先人工确认归属。Windows启动进程保持隐藏；生产使用Compose/systemd，不使用此开发启动器。

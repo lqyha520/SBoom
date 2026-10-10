@@ -5,6 +5,7 @@ import QuestionItem from '../components/QuestionItem.vue'
 import { DEFAULT_LAYOUT } from '../constants'
 import { applyOldSnapshot } from '../stores/exam-local'
 import type { Question, SecLayout } from '../types'
+import { shortenBlankLines } from '../rich-edit'
 
 // happy-dom 下 DOMPurify 的遍历不可靠（实测会丢掉 <b>、漏掉 <script>），这里只验证标签的去留与回写；
 // 净化本身由浏览器里的 DOMPurify 负责，不在本文件的测试范围内。
@@ -59,6 +60,26 @@ describe('卷面编辑回写：选项', () => {
 })
 
 describe('卷面编辑回写：题干与连线', () => {
+  it('填空横线缩为三个下划线，预览和只聚焦不改写原题', async () => {
+    const { q, wrapper } = render({ type: 'fill_blank', stem: '____ + ______ = 10\n___ + __ = 5' })
+    const stem = wrapper.get('[data-e="stem"]')
+    expect(stem.text()).toBe('① ___ + ___ = 10\n___ + __ = 5')
+    await stem.trigger('blur')
+    expect(q.stem).toBe('____ + ______ = 10\n___ + __ = 5')
+    expect(q._stemHtml).toBeUndefined()
+  })
+
+  it('富文本填空缩短横线但保留格式、属性和其他题型', async () => {
+    const html = '<b title="____">____</b> + 2 = 5'
+    expect(shortenBlankLines(html)).toBe('<b title="____">___</b> + 2 = 5')
+    const { q, wrapper } = render({ type: 'fill_blank', stem: '____ + 2 = 5', _stemHtml: html })
+    expect(wrapper.get('[data-e="stem"] b').text()).toBe('___')
+    await wrapper.get('[data-e="stem"]').trigger('blur')
+    expect(q._stemHtml).toBe(html)
+    const other = render({ type: 'reading', stem: '____' })
+    expect(other.wrapper.get('[data-e="stem"]').text()).toBe('① ____')
+  })
+
   it('关闭题号时，开头的 □、《 不会被当成题号删掉', async () => {
     const { q, wrapper } = render({ type: 'fill_blank', stem: '□ + 5 = 12' }, 1, { showNo: false })
     const stem = wrapper.get('[data-e="stem"]')
@@ -74,12 +95,12 @@ describe('卷面编辑回写：题干与连线', () => {
   it('显示题号时只去掉题号，关卡标记留在卷面、不进纯文本', async () => {
     const { q, wrapper } = render({ type: 'fill_blank', stem: '3 + 5 = ____', difficulty_level: 2 }, 3)
     const stem = wrapper.get('[data-e="stem"]')
-    expect(stem.text()).toBe('③ [第2关] 3 + 5 = ____')
+    expect(stem.text()).toBe('③ [第2关] 3 + 5 = ___')
     stem.element.innerHTML = '③ [第2关] 3 + 6 = ____'
     await stem.trigger('blur')
     expect(q._stemHtml).toBe('[第2关] 3 + 6 = ____')
     expect(q.stem).toBe('3 + 6 = ____')
-    expect(stem.text()).toBe('③ [第2关] 3 + 6 = ____')
+    expect(stem.text()).toBe('③ [第2关] 3 + 6 = ___')
   })
 
   it('第 51 题起题号是「51.」，反复编辑不会越积越多', async () => {

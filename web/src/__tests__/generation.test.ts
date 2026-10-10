@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import * as api from '../api'
 import { useExamStore } from '../stores/exam'
+import { TYPE_NAME } from '../constants'
 
 vi.mock('../api', async importOriginal => ({
   ...await importOriginal<typeof import('../api')>(),
@@ -39,6 +40,231 @@ beforeEach(() => {
 afterEach(() => useExamStore().disposePersistence())
 
 describe('section-safe generation', () => {
+  it('保留36题试卷中的28道有效题，缺失口算不算完成，手动只补8道', async () => {
+    const store = ready()
+    store.sections = []
+    for (const [type, count] of [['oral_math', 8], ['fill_blank', 8], ['number_split', 8], ['compare', 6], ['true_false', 6]] as const)
+      store.addSection(type, count)
+    vi.mocked(api.generateBatch).mockImplementationOnce(async params => {
+      const partial = result(params)
+      partial[0].questions = []
+      partial[0].missing_count = 8
+      throw new api.ApiError('缺少8道题', 422, 'generation_incomplete', '', partial)
+    })
+    await store.generate()
+    const firstCalls = vi.mocked(api.generateBatch).mock.calls
+    expect(firstCalls).toHaveLength(2)
+    expect(firstCalls[1][0].previous_request_ids).toEqual([firstCalls[0][1]])
+    expect(store.papers[0].sections.map(section => section.data.questions.length)).toEqual([0, 8, 8, 6, 6])
+    expect(store.failedCount).toBe(1)
+    expect(store.pendingRun?.jobs).toHaveLength(1)
+    store.papers[0].sections[1].data.questions[0].stem = '用户修改的题目'
+    store.papers[0].title = '用户修改的标题'
+    const kept = JSON.stringify(store.papers[0].sections.slice(1).map(section => section.data.questions))
+    await store.recoverPending()
+    expect(api.generateBatch).toHaveBeenCalledTimes(2)
+    expect(store.failedCount).toBe(1)
+    await store.retryFailed()
+    const calls = vi.mocked(api.generateBatch).mock.calls
+    expect(calls).toHaveLength(3)
+    expect(calls[2][0].items).toEqual([{ section_id: store.sections[0].id, game_type: 'oral_math', question_count: 8 }])
+    expect(calls[2][0].previous_request_ids).toEqual([calls[0][1], calls[1][1]])
+    expect(store.papers).toHaveLength(1)
+    expect(store.papers[0].sections.map(section => section.data.questions.length)).toEqual([8, 8, 8, 6, 6])
+    expect(JSON.stringify(store.papers[0].sections.slice(1).map(section => section.data.questions))).toBe(kept)
+    expect(store.failedCount).toBe(0)
+    expect(store.pendingRun).toBeNull()
+    expect(store.papers[0].title).toBe('用户修改的标题')
+  })
+
+  it('兼容旧版成功但缺题响应，重复补齐仍不足时停止，不循环请求', async () => {
+    const store = ready()
+    vi.mocked(api.generateBatch).mockImplementation(async params => result(params).map(section =>
+      ({ ...section, questions: section.questions.slice(0, 1), missing_count: params.items[0].question_count - 1 })))
+    await store.generate()
+    expect(store.failedCount).toBe(1)
+    await store.retryFailed()
+    expect(api.generateBatch).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(api.generateBatch).mock.calls[1][0].items[0].question_count).toBe(3)
+    expect(store.papers).toHaveLength(1)
+    expect(store.papers[0].sections[0].data.questions).toHaveLength(2)
+    expect(store.pendingRun).not.toBeNull()
+    expect(store.failedCount).toBe(1)
+    expect(store.papers[0].sections[0].data.missing_count).toBe(2)
+  })
+
+  it('单大题未出齐时保留原任务，手动补齐只请求剩余题数', async () => {
+    const store = ready(), section = store.sections[0]
+    vi.mocked(api.generateBatch).mockImplementationOnce(async params => {
+      const partial = result(params).map(value => ({ ...value, questions: value.questions.slice(0, 2), missing_count: 2 }))
+      throw new api.ApiError('缺题', 422, 'generation_incomplete', '', partial)
+    })
+    await store.retrySection(section.id)
+    expect(section.status).toBe('error')
+    expect(section.data?.questions).toHaveLength(2)
+    expect(section.pendingGeneration).toBeDefined()
+    const original = section.data!.questions.map(question => question.stem)
+    await store.retrySection(section.id)
+    expect(vi.mocked(api.generateBatch).mock.calls[1][0].items[0].question_count).toBe(2)
+    expect(section.data?.questions.slice(0, 2).map(question => question.stem)).toEqual(original)
+    expect(section.status).toBe('ready')
+    expect(section.pendingGeneration).toBeUndefined()
+  })
+
+  it('查询到缺题终态后保留有效题，不自动付费补齐', async () => {
+    const store = ready()
+    vi.mocked(api.generateBatch).mockRejectedValueOnce(new api.ApiError('Network', 0))
+    await store.generate()
+    const [params, requestId] = vi.mocked(api.generateBatch).mock.calls[0]
+    vi.mocked(api.fetchGenerationStatus).mockResolvedValueOnce({
+      request_id: requestId!, status: 'failed', result: null, error_status: 422, cache_expired: false,
+      error: { code: 'generation_incomplete', partial_sections: result(params).map(value =>
+        ({ ...value, questions: value.questions.slice(0, 2), missing_count: 2 })) },
+    })
+    await store.recoverPending()
+    expect(api.generateBatch).toHaveBeenCalledOnce()
+    expect(store.papers[0].sections[0].data.questions).toHaveLength(2)
+    expect(store.failedCount).toBe(1)
+    await store.retryFailed()
+    expect(api.generateBatch).toHaveBeenCalledTimes(2)
+    expect(store.failedCount).toBe(0)
+  })
+
+  it('阅读题缺题后手动重生成整篇，不混合新旧文章', async () => {
+    const store = ready()
+    store.sections = []
+    store.addSection('reading', 4)
+    vi.mocked(api.generateBatch).mockImplementationOnce(async params => result(params).map(value =>
+      ({ ...value, passage: '旧文章', questions: value.questions.slice(0, 2), missing_count: 2 })))
+    await store.generate()
+    expect(store.papers[0].sections[0].data.passage).toBe('旧文章')
+    await store.retryFailed()
+    expect(vi.mocked(api.generateBatch).mock.calls[1][0].items[0].question_count).toBe(4)
+    expect(store.papers[0].sections[0].data.passage).toBe('Original passage')
+    expect(store.papers).toHaveLength(1)
+    expect(store.failedCount).toBe(0)
+  })
+
+  it.each(Object.keys(TYPE_NAME))('新增 %s 只设置题量，实际生成必须请求模型', async type => {
+    const store = ready()
+    store.sections = []
+    store.addSection(type, 2)
+    const section = store.sections[0]
+    expect(section.data?.questions).toEqual([])
+    store.setSectionCount(section.id, 3)
+    expect(section.data?.questions).toEqual([])
+    expect(store.totalQuestions).toBe(3)
+    expect(api.generateBatch).not.toHaveBeenCalled()
+    await store.generate()
+    expect(api.generateBatch).toHaveBeenCalledOnce()
+    expect(store.papers[0].sections[0].data.questions).toHaveLength(3)
+  })
+
+  it('已生成大题增加题数时保留旧题，新增部分不以模拟题填充', async () => {
+    const store = ready()
+    await store.generate()
+    const section = store.sections[0], questions = JSON.parse(JSON.stringify(section.data!.questions))
+    store.setSectionCount(section.id, 6)
+    expect(section.data!.questions).toEqual(questions)
+    expect(section.data!.missing_count).toBe(2)
+    expect(store.totalQuestions).toBe(6)
+    expect(api.generateBatch).toHaveBeenCalledOnce()
+    await store.retrySection(section.id)
+    expect(api.generateBatch).toHaveBeenCalledTimes(2)
+    expect(section.data!.questions).toHaveLength(6)
+  })
+
+  it('相同条件重新生成和单独生成大题都会发送新请求，不复用旧结果', async () => {
+    const store = ready()
+    await store.generate()
+    await store.regenerate()
+    await store.retrySection(store.sections[0].id)
+    await store.retrySection(store.sections[0].id)
+    const ids = vi.mocked(api.generateBatch).mock.calls.map(([, id]) => id)
+    expect(ids).toHaveLength(4)
+    expect(new Set(ids).size).toBe(4)
+    expect(api.fetchGenerationStatus).not.toHaveBeenCalled()
+  })
+
+  it('生成失败时新增大题保持空白，不显示模拟题', async () => {
+    const store = ready()
+    vi.mocked(api.generateBatch).mockRejectedValueOnce(new api.ApiError('模型不可用', 502))
+    await store.generate()
+    expect(store.sections[0].data?.questions).toEqual([])
+    expect(store.papers).toEqual([])
+    expect(store.generateError).toBe('模型不可用')
+  })
+
+  it('历史草稿的输入不被静默改写为新版目录标签', async () => {
+    const store = ready()
+    const legacy = '上册·20以内的进位加法（凑十法：9加几、8加几）'
+    store.grade = '小学一年级'
+    store.keyword = legacy
+    store.selectedTags = [legacy]
+    await store.generate()
+    expect(vi.mocked(api.generateBatch).mock.calls[0][0].keyword).toBe(legacy)
+    expect(store.selectedTags).toEqual([legacy])
+  })
+
+  it('后续分块引用本卷已完成请求，下一份试卷重新开始上下文', async () => {
+    const store = ready()
+    store.sections[0].count = 30
+    store.addSection('true_false', 6)
+    store.paperCount = 2
+    await store.generate()
+    const calls = vi.mocked(api.generateBatch).mock.calls
+    expect(calls).toHaveLength(4)
+    expect(calls[0][0].previous_request_ids).toBeUndefined()
+    expect(calls[1][0].previous_request_ids).toEqual([calls[0][1]])
+    expect(calls[2][0].previous_request_ids).toBeUndefined()
+    expect(calls[3][0].previous_request_ids).toEqual([calls[2][1]])
+  })
+
+  it('生成中留在搭建页，整批完成后再显示结果', async () => {
+    const store = ready()
+    store.paperCount = 2
+    // 从旧结果页重新生成也应先显示搭建页的进度。
+    store.view = 'result'
+    const releases: (() => void)[] = []
+    vi.mocked(api.generateBatch).mockImplementation(params => new Promise(resolve => {
+      releases.push(() => resolve(result(params)))
+    }))
+    const pending = store.generate()
+    await vi.waitFor(() => expect(releases).toHaveLength(1))
+    expect(api.generateBatch).toHaveBeenCalledTimes(1)
+    expect(store.view).toBe('build')
+    expect(store.generating).toBe(true)
+    expect(store.papers).toHaveLength(0)
+    releases[0]()
+    await vi.waitFor(() => expect(releases).toHaveLength(2))
+    expect(store.papers).toHaveLength(1)
+    expect(store.view).toBe('build')
+    expect(store.generating).toBe(true)
+    releases[1]()
+    await pending
+    expect(store.view).toBe('result')
+    expect(store.generating).toBe(false)
+    expect(store.papers).toHaveLength(2)
+  })
+
+  it('生成全部失败时留在搭建页，查询取得原结果后再切换', async () => {
+    const store = ready()
+    vi.mocked(api.generateBatch).mockRejectedValueOnce(new api.ApiError('上游超时', 504))
+    await store.generate()
+    expect(store.view).toBe('build')
+    expect(store.generateError).toBe('上游超时')
+    expect(store.failedCount).toBe(1)
+    const [params, requestId] = vi.mocked(api.generateBatch).mock.calls[0]
+    vi.mocked(api.fetchGenerationStatus).mockResolvedValueOnce({
+      request_id: requestId!, status: 'succeeded', result: { sections: result(params) },
+      error_status: 0, cache_expired: false,
+    })
+    await store.recoverPending()
+    expect(api.generateBatch).toHaveBeenCalledOnce()
+    expect(store.view).toBe('result')
+    expect(store.papers).toHaveLength(1)
+  })
+
   it.each(['whole', 'section', 'question'])('does not send %s generation when draft persistence fails', async mode => {
     const store = ready()
     const section = store.sections[0]
@@ -89,6 +315,7 @@ describe('section-safe generation', () => {
     await store.retryFailed()
     const calls = vi.mocked(api.generateBatch).mock.calls
     expect(calls.map(([params]) => params.items.map(item => item.question_count))).toEqual([[4, 6], [6]])
+    expect(calls[1][0].previous_request_ids).toEqual([calls[0][1]])
     expect(store.papers[0].sections.map(section => section.data.questions.length)).toEqual([4, 6])
   })
 

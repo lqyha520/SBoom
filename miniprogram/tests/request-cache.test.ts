@@ -37,6 +37,38 @@ test('public metadata shares requests, clones cached values, and supports force 
   reply(1, { title: 'new' }); assert.equal((await fresh).title, 'new')
 })
 
+test('公开启动读取不携带登录信息，登录恢复不会取消公开内容', async () => {
+  const { api, calls, reply } = fixture()
+  api.configureSession('old-token', 'old-owner')
+  const reading = api.fetchCatalog({ limit: 12 }, { anonymous: true })
+  assert.equal(calls[0].header.Authorization, undefined)
+  assert.equal(calls[0].header['X-Mini-User'], undefined)
+  api.configureSession('new-token', 'new-owner')
+  assert.equal(calls[0].aborted, false)
+  reply(0, { items: [{ id: 'public', favorite: false }], total: 1 })
+  assert.equal((await reading).items[0].id, 'public')
+  await assert.rejects(api.request('/api/v1/mini/me', 'GET', undefined, { anonymous: true }), /不支持公开读取/)
+  await assert.rejects(api.request('/api/v1/catalog/papers', 'POST', {}, { anonymous: true }), /不支持公开读取/)
+})
+
+test('公开读取仍可取消，失败不会注销当前账号或污染个人摘要缓存', async () => {
+  const { api, calls, reply } = fixture()
+  let loggedOut = false
+  api.unauthorizedHandler(() => { loggedOut = true })
+  const scope = createLatestRequest()
+  const pending = api.fetchSiteHome({ anonymous: true, scope: scope.begin() })
+  const cancelled = assert.rejects(pending, /取消/)
+  scope.invalidate(); await cancelled
+  assert.equal(calls[0].aborted, true)
+  const denied = api.fetchCatalogSummary({ anonymous: true })
+  calls[1].success({ statusCode: 401, data: { detail: 'unauthorized' } })
+  await assert.rejects(denied)
+  assert.equal(loggedOut, false)
+  const summary = api.fetchCatalogSummary()
+  assert.equal(calls.length, 3)
+  reply(2, { favorites: 3 }); assert.equal((await summary).favorites, 3)
+})
+
 test('only the last cancelled consumer aborts shared metadata; account changes abort private reads', async () => {
   const { api, calls, reply } = fixture()
   const a = createLatestRequest(), b = createLatestRequest()

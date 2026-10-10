@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useDialogDraft } from '../dialog-draft'
 import { useAdminListRoute } from '../navigation'
 import { computed, onActivated, onDeactivated, ref, watch } from 'vue'
 import MemberTools from './MemberTools.vue'
@@ -150,6 +151,7 @@ async function save() {
 }
 watch(dialog, open => { if (!open) deleteConfirmed.value = false })
 const routeState = useAdminListRoute('miniUsers', { q, membership, page }, () => { void load() })
+const draft = useDialogDraft(dialog, () => [username.value, password.value, level.value, active.value, lifetime.value, expires.value, profileName.value, profileAvatarKey.value], busy, '用户资料')
 </script>
 
 <template>
@@ -162,7 +164,7 @@ const routeState = useAdminListRoute('miniUsers', { q, membership, page }, () =>
       <tr v-if="!items.length"><td colspan="7"><div class="empty-state"><UIcon :name="loading ? 'i-lucide-loader-circle' : 'i-lucide-users-round'" class="size-7" :class="{ 'animate-spin': loading }" /><h3>{{ loading ? '正在加载' : error ? '用户列表暂不可用' : '暂无小程序用户' }}</h3></div></td></tr>
     </tbody></table></div>
     <div class="table-footer"><span>共 {{ total }} 位小程序用户</span><UPagination v-if="total > 20" v-model:page="page" :total="total" :items-per-page="20" :sibling-count="1" size="sm" /></div>
-    <UModal v-model:open="dialog" :title="title" :dismissible="!busy" :close="!busy"><template #body><form id="mini-user-form" class="field-stack" @submit.prevent="save">
+    <UModal v-model:open="draft.model.value" :title="title" :dismissible="!busy" :close="!busy"><template #body><form id="mini-user-form" class="field-stack" @submit.prevent="save">
       <template v-if="action === 'create'"><UFormField label="登录账号" hint="2-32 位英文字母、数字、下划线或短横线，不能使用中文" required><UInput v-model="username" minlength="2" maxlength="32" autocomplete="off" :disabled="busy" required class="w-full" /></UFormField><UFormField label="初始密码" required><UInput v-model="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" :disabled="busy" required class="w-full" /></UFormField></template>
 
       <template v-else-if="target">
@@ -188,7 +190,7 @@ const routeState = useAdminListRoute('miniUsers', { q, membership, page }, () =>
       </template>
 
       <UAlert v-if="formError" :title="formError" color="error" variant="soft" />
-    </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="dialog = false" /><UButton type="submit" form="mini-user-form" :label="submitLabel" :color="action === 'delete' ? 'error' : 'primary'" icon="i-lucide-check" :loading="busy" :disabled="busy || !valid" /></template></UModal>
+    </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="draft.setOpen(false)" /><UButton type="submit" form="mini-user-form" :label="submitLabel" :color="action === 'delete' ? 'error' : 'primary'" icon="i-lucide-check" :loading="busy" :disabled="busy || !valid" /></template></UModal>
     <MemberTools :open="toolsOpen" :target="toolsTarget" :admin-id="user.id" :initial="toolsInitial" @close="toolsOpen = false" @saved="load" />
   </section>
 </template>

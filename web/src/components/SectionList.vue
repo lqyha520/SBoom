@@ -26,6 +26,7 @@ watch(() => store.generating, value => sortable?.option('disabled', value))
 onBeforeUnmount(() => sortable?.destroy())
 function actions(section: Section, index: number) {
   return [[
+    { label: '生成 / 重新生成大题', icon: 'i-lucide-sparkles', onSelect: () => { retryTarget.value = section } },
     { label: '管理题目 / 单题替换', icon: 'i-lucide-list-checks', onSelect: () => { questionTarget.value = section.id } },
     { label: '调整版式', icon: 'i-lucide-columns-2', onSelect: () => { layoutSection.value = section } },
     { label: '上移', icon: 'i-lucide-arrow-up', disabled: index === 0, onSelect: () => store.moveSection(index, index - 1) },
@@ -64,6 +65,9 @@ async function retry() {
         <div v-if="section.status === 'loading'" class="section-status" role="status"><UIcon name="i-lucide-loader-circle" class="size-3 animate-spin" />正在生成</div>
         <div v-else-if="section.status === 'error'" class="section-status text-error" role="alert"><span>{{ section.error || '生成失败' }}</span><UButton v-if="section.pendingGeneration" label="查询" color="neutral" variant="link" size="xs" :disabled="store.generating" @click="store.retrySection(section.id, 'recover')" /><UButton label="重试" color="error" variant="link" size="xs" :disabled="store.generating" @click="retryTarget = section" /></div>
         <div v-else-if="section.warn" class="section-status text-warning"><span>{{ section.warn }}</span><UTooltip text="重新生成大题"><UButton icon="i-lucide-refresh-cw" color="warning" variant="ghost" size="xs" :disabled="store.generating" :aria-label="'重新生成第 ' + (index + 1) + ' 大题'" @click="retryTarget = section" /></UTooltip></div>
+        <div v-else-if="(section.data?.questions.length || 0) < section.count" class="section-status text-muted">
+          待生成 {{ section.count - (section.data?.questions.length || 0) }} 道题
+        </div>
       </article>
     </div>
     <UModal :open="!!layoutSection" title="大题版式" @update:open="value => { if (!value) layoutSection = null }">

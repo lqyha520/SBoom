@@ -179,52 +179,7 @@ const moreActions = (item: CatalogPaper) => [
           <td class="catalog-extra">{{ item.download_users || 0 }}</td>
           <td class="date-cell catalog-extra">{{ date(item.updated_at) }}</td>
           <td class="catalog-actions">
-            <div class="actions-row catalog-desktop-actions">
-              <UTooltip text="预览习题"
-                ><UButton
-                  icon="i-lucide-eye"
-                  color="neutral"
-                  variant="ghost"
-                  :aria-label="'预览 ' + item.title"
-                  @click="emit('preview', item)" /></UTooltip
-              ><UTooltip text="编辑与发布"
-                ><UButton
-                  icon="i-lucide-square-pen"
-                  color="neutral"
-                  variant="ghost"
-                  :aria-label="'编辑 ' + item.title"
-                  @click="emit('edit', item)" /></UTooltip
-              ><UTooltip text="教学标签"
-                ><UButton
-                  icon="i-lucide-tags"
-                  color="neutral"
-                  variant="ghost"
-                  :aria-label="'教学标签 ' + item.title"
-                  @click="emit('metadata', item)" /></UTooltip
-              ><UTooltip text="打印版本"
-                ><UButton
-                  icon="i-lucide-file-stack"
-                  color="neutral"
-                  variant="ghost"
-                  :aria-label="'打印版本 ' + item.title"
-                  @click="emit('edition', item)" /></UTooltip
-              ><UTooltip text="更新修订稿"
-                ><UButton
-                  icon="i-lucide-file-clock"
-                  color="neutral"
-                  variant="ghost"
-                  :aria-label="'修订 ' + item.title"
-                  @click="emit('revision', item)" /></UTooltip
-              ><UTooltip text="删除公共条目"
-                ><UButton
-                  icon="i-lucide-trash-2"
-                  color="error"
-                  variant="ghost"
-                  :aria-label="'删除公共条目 ' + item.title"
-                  @click="emit('remove', item)"
-              /></UTooltip>
-            </div>
-            <div class="actions-row catalog-mobile-actions">
+            <div class="actions-row catalog-row-actions">
               <UButton
                 icon="i-lucide-eye"
                 label="预览"

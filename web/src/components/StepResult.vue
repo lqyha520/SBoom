@@ -33,6 +33,8 @@ const warningSummary = computed(() => [
 const exporting = ref('')
 const exportNotice = ref('')
 const editingOpen = ref(false)
+const titleScope = ref('current')
+const titleScopes = [{ label: '仅当前试卷', value: 'current' }, { label: '全部试卷', value: 'all' }]
 let exportController: AbortController | undefined
 function leave() { exportController?.abort(); if (store.layoutMode) store.finishLayout(true) }
 onBeforeUnmount(leave)
@@ -41,9 +43,14 @@ const busy = computed(() => !!exporting.value || archiving.value)
 const exportError = ref('')
 watch(() => store.papers, () => { selected.value = 0 })
 function onTitleEdited(title: string, html: string) {
-  store.title = title
-  store.titleHtml = html
-  store.papers.forEach(p => { p.title = title; p.titleHtml = html })
+  if (titleScope.value === 'all') {
+    store.title = title
+    store.titleHtml = html
+    store.papers.forEach(p => { p.title = title; p.titleHtml = html })
+  } else if (paper.value) {
+    paper.value.title = title
+    paper.value.titleHtml = html
+  }
 }
 async function run(label: string, job: (signal: AbortSignal) => Promise<void>) {
   if (busy.value) return
@@ -56,7 +63,7 @@ async function run(label: string, job: (signal: AbortSignal) => Promise<void>) {
   finally { exporting.value = ''; exportController = undefined }
 }
 function exportPdf(mode: 'student' | 'withAnswers' | 'answersOnly') {
-  if (paper.value) { const data = deepClone(paper.value), template = deepClone(store.template), style = deepClone(store.style); run('正在导出 PDF', signal => exporter.exportPDF(data, template, style, mode, signal)) }
+  if (paper.value) { const data = deepClone(paper.value), template = deepClone(store.template), style = deepClone(store.style); run('正在导出 PDF', signal => exporter.exportPDF(data, template, style, mode, signal, message => { exporting.value = message })) }
 }
 function exportPng() {
   if (paper.value) { const data = deepClone(paper.value), template = deepClone(store.template), style = deepClone(store.style); run('正在导出 PNG', signal => exporter.exportPNG(data, template, style, signal)) }
@@ -119,12 +126,18 @@ function cancelLayout() { store.finishLayout(true); paperViewEl.value?.repaginat
       <UButton class="result-secondary" icon="i-lucide-cloud-upload" label="保存到云端" color="neutral" variant="outline" :loading="archiving" :disabled="busy || store.layoutMode || store.generating || store.accountChanged" @click="showCloudSave = true" />
       <UButton class="result-edit-toggle" icon="i-lucide-sliders-horizontal" aria-label="卷面编辑工具" :aria-expanded="editingOpen" variant="outline" color="neutral" @click="editingOpen = !editingOpen" />
       <UButtonGroup>
-        <UButton icon="i-lucide-download" label="下载 PDF" :loading="!!exporting" :disabled="busy || store.layoutMode || store.generating" @click="exportPdf('student')" />
+        <UButton icon="i-lucide-download" label="下载学生卷" :loading="!!exporting" :disabled="busy || store.layoutMode || store.generating" @click="exportPdf('student')" />
         <UDropdownMenu :items="pdfMenu"><UButton icon="i-lucide-chevron-down" aria-label="PDF 导出选项" :disabled="busy || store.layoutMode || store.generating" /></UDropdownMenu>
       </UButtonGroup>
       <UDropdownMenu :items="moreExports"><UButton icon="i-lucide-ellipsis" color="neutral" variant="outline" aria-label="更多导出方式" :disabled="busy || store.layoutMode || store.generating" /></UDropdownMenu>
     </div>
     <PaperEditToolbar v-model:answers="store.showAnswers" class="result-editbar" :class="{ 'editing-open': editingOpen || store.layoutMode }" :layout-mode="store.layoutMode" :disabled="busy || store.generating" :can-layout="!!paper.sections.length" manage @settings="emit('open-settings')" @manage="manageQuestions = true" @layout="toggleLayout" @cancel="cancelLayout" />
+    <div class="result-scope no-print">
+      <label for="title-scope">标题修改范围</label>
+      <USelect id="title-scope" v-model="titleScope" :items="titleScopes" size="sm" :disabled="busy || store.generating || store.layoutMode" />
+      <span>卷面样式应用全部试卷</span>
+      <span v-if="store.showAnswers">预览已显示答案；含答案文件请在 PDF 导出选项中选择</span>
+    </div>
     <div v-if="exporting" class="px-5 py-2 text-xs text-primary bg-default no-print"><span role="status">{{ exporting }}</span><UButton label="取消导出" variant="ghost" size="xs" @click="exportController?.abort()" /></div>
     <div ref="stackEl" class="preview-scroll">
       <PaperView :key="selected" ref="paperViewEl" :paper="paper" :template="store.template" :style="store.style" :show-answers="store.showAnswers" :editable="!busy" :layout-mode="store.layoutMode" :add-day="store.addDayLabel" :zoom="zoom"

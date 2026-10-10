@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import type { Question, SecLayout } from '../types'
 import { answerOf, cirNum, escHtml, isBlankVal, spaceOps, stripOptPrefix, tfStem } from '../utils'
 import { sanitizeRich } from '../sanitize'
-import { labelPattern, optionLabel, readEdited, startsWithLabel } from '../rich-edit'
+import { labelPattern, optionLabel, readEdited, shortenBlankLines, startsWithLabel } from '../rich-edit'
 
 const props = defineProps<{
   q: Question
@@ -32,15 +32,19 @@ const stemNoQuestion = computed(() => {
 })
 
 // 算式类题干（口算/竖式/脱式…）的运算符补空格；含汉字的题干原样返回
-const stemText = computed(() => spaceOps(isTf.value ? tfStem(props.q.stem || '') : props.q.stem || ''))
+const stemText = computed(() => {
+  const text = isTf.value ? tfStem(props.q.stem || '') : props.q.stem || ''
+  return props.q.type === 'fill_blank' ? text.split('\n').map(spaceOps).join('\n') : spaceOps(text)
+})
 const noTag = computed(() => (props.layout.showNo === false ? '' : cirNum(props.no) + ' '))
 const lvTag = computed(() => (props.q.difficulty_level ? `[第${props.q.difficulty_level}关] ` : ''))
 const fs = computed(() => (props.layout.fontSize ? { fontSize: props.layout.fontSize } : {}))
 
 /* ── 富文本渲染：有编辑缓存用缓存（渲染前净化，防模板里夹带恶意 HTML），否则转义纯文本 ── */
-const stemHtml = computed(() =>
-  props.q._stemHtml ? sanitizeRich(props.q._stemHtml) : escHtml(lvTag.value + stemText.value),
-)
+const stemHtml = computed(() => {
+  const html = props.q._stemHtml ? sanitizeRich(props.q._stemHtml) : escHtml(lvTag.value + stemText.value)
+  return props.q.type === 'fill_blank' ? shortenBlankLines(html) : html
+})
 /** 选项 = 字母 + 内容；编辑缓存只存内容（早期缓存可能已带字母，此时不再重复加） */
 function optHtml(j: number): string {
   const cached = props.q._optsHtml?.[j]
@@ -119,7 +123,7 @@ function onExprBlur(e: FocusEvent, field: 'left_expr' | 'right_expr') {
 
     <!-- 常规题 -->
     <template v-else>
-      <div data-e="stem" :contenteditable="editable" spellcheck="false" @blur="onStemBlur($event)" v-html="noTag + stemHtml"></div>
+      <div data-e="stem" :class="{ 'fill-stem': q.type === 'fill_blank' }" :contenteditable="editable" spellcheck="false" @blur="onStemBlur($event)" v-html="noTag + stemHtml"></div>
       <!-- 应用题缺问句提醒（编辑态可见，打印/导出不含） -->
       <div v-if="stemNoQuestion && editable" class="wp-warn no-print">⚠ 题干缺问句（末尾应有"…多少…？"），请补全后使用</div>
       <!-- 应用题解答留白：默认 3 行，随大题排版 answerLines 配置 -->
@@ -156,6 +160,10 @@ function onExprBlur(e: FocusEvent, field: 'left_expr' | 'right_expr') {
 </template>
 
 <style scoped>
+.fill-stem {
+  white-space: pre-line;
+  line-height: 1.7;
+}
 .wp-answer-space {
   /* 解答留白：不设边框，纯空白区域供学生列式作答 */
   margin-top: 1mm;

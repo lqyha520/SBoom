@@ -37,6 +37,19 @@ export function startsWithLabel(html: string, label: RegExp): boolean {
   return label.test(html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '))
 }
 
+/** 缩短填空横线，仅修改文本节点，保留用户的富文本样式和属性。 */
+export function shortenBlankLines(html: string): string {
+  if (!/_{4,}/.test(html)) return html
+  const root = document.implementation.createHTMLDocument('').body
+  root.innerHTML = html
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text
+    node.data = node.data.replace(/_{4,}/g, '___')
+  }
+  return root.innerHTML
+}
+
 /** 读取卷面元素（或渲染用的 HTML 串）的内容，去掉最前面的标签 */
 export function readEdited(source: HTMLElement | string, label: RegExp | null): EditedContent {
   // 在惰性文档里解析和克隆：不加载图片、不执行脚本，也不改动页面上的元素

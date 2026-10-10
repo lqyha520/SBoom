@@ -158,7 +158,7 @@ class LLMClient:
         }
 
         async with self._borrow_client(url, key) as client:
-            response: httpx.Response | None = None
+            response_content: bytes | None = None
             for attempt in range(1, self.MAX_ATTEMPTS + 1):
                 try:
                     if current_usage.get() is not None:
@@ -171,7 +171,8 @@ class LLMClient:
                             raw.extend(chunk)
                             if len(raw) > settings.provider_max_response_bytes:
                                 raise HTTPException(502, detail={"code": "provider_response_too_large", "error": "模型响应超过安全上限，请减少题量"})
-                        response = httpx.Response(streamed.status_code, content=bytes(raw), headers=streamed.headers)
+                        # aiter_bytes 已解压；直接解析正文，不能携带原压缩头再次构造响应。
+                        response_content = bytes(raw)
                     break
                 except Exception as e:
                     if attempt == self.MAX_ATTEMPTS or not _should_retry(e):
@@ -182,11 +183,11 @@ class LLMClient:
                     # httpx retires broken connections; closing this shared client
                     # would interrupt other users' in-flight requests.
 
-            if response is None:
-                # 上面的循环要么 break（response 已赋值）要么抛出；这里只是让类型收窄
+            if response_content is None:
+                # 上面的循环要么 break（正文已赋值）要么抛出；这里只是让类型收窄
                 raise RuntimeError("LLM 请求未返回响应")
             try:
-                data = response.json()
+                data = json.loads(response_content)
                 record_usage(data.get("usage"))
                 if data["choices"][0].get("finish_reason") == "length":
                     content = data["choices"][0].get("message", {}).get("content")

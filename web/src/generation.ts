@@ -44,6 +44,7 @@ export interface GenerationRun {
 export type GenerationMode = 'send' | 'recover' | 'retry'
 export class RequestNotRecorded extends Error { constructor() { super('请求记录保存失败，请先恢复本地存储；未发送付费请求') } }
 export class GenerationStopped extends Error { constructor() { super('已停止后续请求，可稍后继续') } }
+export class NoGenerationNeeded extends Error { constructor() { super('没有待生成的题目，请先解锁至少一道题；原试卷已保留') } }
 
 export function createGenerationRun(context: GenerationContext): GenerationRun {
   const snapshot = deepClone(context)
@@ -87,12 +88,36 @@ function completedResults(chunk: GenerationChunk, values?: api.BatchRespSection[
 
 function retainTruncated(chunk: GenerationChunk, values?: api.BatchRespSection[]) {
   chunk.result = completedResults(chunk, values)
+  chunk.result.forEach(section => ensureQids({ questions: section.questions }))
   chunk.errorCode = 'generation_truncated'
   chunk.state = chunk.result.length === chunk.items.length ? 'succeeded' : 'failed'
+  return chunk.state === 'succeeded'
 }
 
-async function runChunk(chunk: GenerationChunk, context: GenerationContext, mode: GenerationMode, beforeSend?: () => Promise<void>) {
-  if (chunk.state === 'succeeded' && hasQuestions(chunk.result)) return
+function retainResult(chunk: GenerationChunk, values?: api.BatchRespSection[]) {
+  chunk.result = chunk.items.flatMap(item => {
+    let matches = values?.filter(value => value?.section_id === item.section_id) || []
+    if (!matches.length && chunk.items.filter(value => value.game_type === item.game_type).length === 1)
+      matches = values?.filter(value => !value?.section_id && value?.game_type === item.game_type) || []
+    const value = matches[0]
+    if (matches.length !== 1 || value.game_type !== item.game_type || !Array.isArray(value.questions)
+      || value.questions.length > item.question_count || (item.game_type === 'reading' && !value.passage?.trim())) return []
+    return [{ ...deepClone(value), section_id: item.section_id }]
+  })
+  chunk.result.forEach(section => ensureQids({ questions: section.questions }))
+  const complete = completedResults(chunk, chunk.result).length === chunk.items.length
+  chunk.state = complete ? 'succeeded' : 'failed'
+  chunk.errorCode = complete ? '' : 'generation_incomplete'
+  chunk.error = complete ? '' : '生成未完成，有效题目已保留，可手动补齐'
+}
+
+async function runChunk(chunk: GenerationChunk, context: GenerationContext, mode: GenerationMode, beforeSend?: () => Promise<void>,
+  previousRequestIds: string[] = []) {
+  if (chunk.state === 'succeeded') {
+    retainResult(chunk, chunk.result)
+    if (chunk.state === 'succeeded') return
+  }
+  if (chunk.errorCode === 'generation_incomplete') return
   if (chunk.errorCode === 'generation_truncated' && mode === 'retry') return
   if (mode !== 'send' && chunk.state !== 'new') {
     try {
@@ -103,14 +128,17 @@ async function runChunk(chunk: GenerationChunk, context: GenerationContext, mode
         throw new Error(chunk.error)
       }
       if (status.result && Array.isArray(status.result.sections)) {
-        chunk.result = deepClone(status.result.sections)
-        chunk.state = 'succeeded'
-        if (hasQuestions(chunk.result)) return
+        retainResult(chunk, status.result.sections)
+        return
+      }
+      if (status.error?.code === 'generation_incomplete') {
+        retainResult(chunk, status.error.partial_sections)
+        return
       }
       if (status.error?.code === 'generation_truncated') {
-        retainTruncated(chunk, status.error.partial_sections)
+        const complete = retainTruncated(chunk, status.error.partial_sections)
         chunk.error = status.error.error || '生成达到输出上限，已保留完整大题，请手动补齐'
-        if (chunk.state === 'succeeded' || mode === 'retry') return
+        if (complete || mode === 'retry') return
       }
       if (mode === 'recover') {
         chunk.error = status.error?.error || (status.cache_expired ? '原请求结果缓存已过期' : '原请求没有可恢复的结果')
@@ -129,16 +157,21 @@ async function runChunk(chunk: GenerationChunk, context: GenerationContext, mode
   chunk.errorCode = ''
   try {
     await beforeSend?.()
-    chunk.result = deepClone(await api.generateBatch({
+    const result = await api.generateBatch({
       grade: context.grade, subject: context.subject, keyword: context.keyword,
       difficulty: context.difficulty, items: chunk.items,
-    }, chunk.requestId))
-    chunk.state = 'succeeded'
+      ...(previousRequestIds.length ? { previous_request_ids: previousRequestIds } : {}),
+    }, chunk.requestId)
+    retainResult(chunk, result)
   } catch (error) {
+    if (error instanceof api.ApiError && error.code === 'generation_incomplete') {
+      retainResult(chunk, error.partialSections)
+      return
+    }
     if (error instanceof api.ApiError && error.code === 'generation_truncated') {
-      retainTruncated(chunk, error.partialSections)
+      const complete = retainTruncated(chunk, error.partialSections)
       chunk.error = error.message
-      if (chunk.state === 'succeeded') return
+      if (complete) return
       throw error
     }
     chunk.state = error instanceof GenerationStopped || error instanceof RequestNotRecorded ? 'new' : error instanceof api.ApiError && error.status >= 400 && error.status < 500
@@ -147,6 +180,28 @@ async function runChunk(chunk: GenerationChunk, context: GenerationContext, mode
     chunk.error = error instanceof Error ? error.message : '生成失败'
     throw error
   }
+}
+
+function splitIncomplete(chunk: GenerationChunk): GenerationChunk[] {
+  const retained: api.BatchRespSection[] = []
+  const keptItems: api.BatchItemReq[] = []
+  const pending: api.BatchItemReq[] = []
+  for (const item of chunk.items) {
+    const value = chunk.result?.find(value => value.section_id === item.section_id)
+    // 阅读题必须与同一篇文章配套；手动重试时整篇重新生成，不拼接不同文章。
+    const kept = value && (item.game_type !== 'reading' || value.questions.length === item.question_count)
+      ? value.questions.length : 0
+    if (kept && value) {
+      keptItems.push({ ...item, question_count: kept })
+      retained.push({ ...deepClone(value), missing_count: 0, quality_warnings: [] })
+    }
+    if (kept < item.question_count) pending.push({ ...item, question_count: item.question_count - kept })
+  }
+  return [
+    ...(keptItems.length ? [{ ...chunk, items: keptItems, result: retained, state: 'succeeded' as const,
+      error: '', errorCode: '' }] : []),
+    ...pending.map(item => ({ requestId: randomId(), items: [item], state: 'new' as const })),
+  ]
 }
 
 export function matchSectionResults(context: GenerationContext, responses: api.BatchRespSection[]) {
@@ -164,6 +219,7 @@ export function matchSectionResults(context: GenerationContext, responses: api.B
 }
 
 export function assemblePaper(context: GenerationContext, job: GenerationJob): PaperData {
+  if (!job.chunks.length) throw new NoGenerationNeeded()
   let responses = job.chunks.flatMap(chunk => chunk.result || [])
   // 只合并本地拆分到不同请求的大题；同一响应内的重复 ID 仍视为不明确。
   for (const section of context.sections) {
@@ -227,9 +283,19 @@ function splitTruncated(chunk: GenerationChunk): GenerationChunk[] {
 }
 
 export async function runGenerationJob(context: GenerationContext, job: GenerationJob, mode: GenerationMode, beforeSend?: () => Promise<void>) {
+  const originalRequests = new Map(job.chunks.map(chunk => [chunk, chunk.requestId]))
   for (let index = 0; index < job.chunks.length; index++) {
     const chunk = job.chunks[index]
-    await runChunk(chunk, context, mode, beforeSend)
+    const previous = [...new Set(job.chunks
+      .filter((value, otherIndex) => otherIndex !== index && hasQuestions(value.result))
+      .map(value => value.requestId))].slice(-60)
+    await runChunk(chunk, context, mode, beforeSend, previous)
+    if (mode === 'retry' && chunk.errorCode === 'generation_incomplete'
+      && originalRequests.get(chunk) === chunk.requestId) {
+      job.chunks.splice(index, 1, ...splitIncomplete(chunk))
+      index--
+      continue
+    }
     // 原请求查询也可能第一次发现截断；先保留完整结果，再准备新的小请求。
     if (mode === 'retry' && chunk.state !== 'succeeded' && chunk.errorCode === 'generation_truncated') {
       job.chunks.splice(index, 1, ...splitTruncated(chunk))

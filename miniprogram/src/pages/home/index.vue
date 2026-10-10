@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { onHide, onPullDownRefresh, onShow, onUnload, onShareAppMessage } from '@dcloudio/uni-app'
 import AppTabBar from '../../components/AppTabBar.vue'
 import PageChrome from '../../components/PageChrome.vue'
@@ -22,6 +22,7 @@ import type { CatalogSummary, PaperSummary, SiteCategory, SiteHome } from '../..
 import { refreshUnread } from '../../services/growth'
 import { categoryIcon } from '../../services/category-icons'
 import { shareCard } from '../../services/return-route'
+import { captureScroll } from '../../services/page-lifecycle'
 
 const items = ref<PaperSummary[]>([])
 const recentPaper = ref<PaperSummary | null>(null)
@@ -57,39 +58,48 @@ const paperRequests = createLatestRequest()
 const contentRequests = createLatestRequest()
 const favoriteRequests = createLatestRequest()
 let active = true
+let activation = 0
+let scrollTop = 0
+let gradeChosen = false
 const imagesActive = ref(false)
 
-async function loadPapers(reset = false) {
-  if (!active || changing.value) return
+async function loadPapers(reset = false, anonymous = !session.ready || !!session.error) {
+  if (!active) return
   const current = paperRequests.begin()
   loading.value = true; error.value = ''
   if (reset) { items.value = []; total.value = 0; offset.value = 0 }
+  const firstVisible = cards.value[0]?.id
   try {
-    const result = await fetchCatalog({ limit: 12, grade: grade.value, sort: feed.value }, { scope: current })
-    if (current()) { items.value = result.items; total.value = result.total; offset.value = 0 }
+    const result = await fetchCatalog({ limit: 12, grade: grade.value, sort: feed.value }, { scope: current, anonymous })
+    if (current()) {
+      const previous = result.items.findIndex(item => item.id === firstVisible)
+      items.value = result.items; total.value = result.total
+      offset.value = previous >= 0 ? previous : 0
+      imagesActive.value = true
+    }
   } catch (cause) { if (current()) error.value = errorMessage(cause) }
   finally { if (current()) loading.value = false }
 }
-async function loadContent(force = false) {
+async function loadContent(force = false, anonymous = !session.ready || !!session.error) {
   if (!active) return
   const current = contentRequests.begin()
   contentLoading.value = true; contentError.value = ''
   // Each result can appear immediately; an unavailable optional section must
   // not prevent the catalog, search or other home sections from being used.
   const results = await Promise.allSettled([
-    fetchSiteHome({ scope: current, force }).then(home => { if (current()) site.value = home }),
-    fetchCatalogSummary({ scope: current, force }).then(counts => { if (current()) summary.value = counts }),
-    fetchTopics({ scope: current, force }).then(curated => { if (current()) collections.value = curated.items }),
-    session.user ? fetchCatalog({ recent: true, limit: 1 }, { scope: current }).then(result => { if (current()) recentPaper.value = result.items[0] || null }).catch(() => {}) : Promise.resolve(),
+    fetchSiteHome({ scope: current, force, anonymous }).then(home => { if (current()) site.value = home }),
+    fetchCatalogSummary({ scope: current, force, anonymous }).then(counts => { if (current()) summary.value = counts }),
+    fetchTopics({ scope: current, force, anonymous }).then(curated => { if (current()) collections.value = curated.items }),
+    !anonymous && session.user ? fetchCatalog({ recent: true, limit: 1 }, { scope: current }).then(result => { if (current()) recentPaper.value = result.items[0] || null }).catch(() => {}) : Promise.resolve(),
   ])
   if (!current()) return
   const labels = ['首页推荐', '分类', '专题']
   contentError.value = results.flatMap((result, index) => result.status === 'rejected' ? [labels[index]] : []).join('、')
   contentLoading.value = false
 }
-async function load(force = false) {
+async function load(force = false, anonymous = !session.ready || !!session.error) {
   if (!active || changing.value) { uni.stopPullDownRefresh(); return }
-  await Promise.allSettled([loadPapers(), loadContent(force), session.user ? refreshUnread({ force }).catch(() => {}) : Promise.resolve()])
+  await Promise.allSettled([loadPapers(false, anonymous), loadContent(force, anonymous), !anonymous && session.user ? refreshUnread({ force }).catch(() => {}) : Promise.resolve()])
   if (active) uni.stopPullDownRefresh()
 }
 async function favorite(paper: PaperSummary) {
@@ -112,35 +122,52 @@ function search() {
   openCatalog({ q: q.value, grade: grade.value })
 }
 function byGrade(next: string) {
+  if (changing.value) return
   gradePicker.value = false
   if (grade.value === next) return
+  gradeChosen = true
   grade.value = next
   if (session.user) writePreferences(session.user.id, { ...readPreferences(session.user.id), grade: next })
-  void loadPapers(true)
+  scrollTop = 0
+  void loadPapers(true, !session.ready || !!session.error)
 }
 function selectFeed(value: 'featured' | 'latest') {
-  if (value === feed.value || loading.value || changing.value) return
-  feed.value = value; void loadPapers(true)
+  if (value === feed.value || changing.value) return
+  feed.value = value; scrollTop = 0; void loadPapers(true, !session.ready || !!session.error)
 }
 function clearGrade() { byGrade('') }
 function invalidate() { paperRequests.invalidate(); contentRequests.invalidate(); favoriteRequests.invalidate() }
 watch(() => session.user?.id, (owner, previous) => {
+  // 首次登录恢复保留用户已经输入的搜索和筛选，公开结果随后重新核验。
+  if (!previous && owner) return
   invalidate(); recentPaper.value = null; items.value = []; total.value = 0; summary.value = null; site.value = null; collections.value = []
   error.value = ''; contentError.value = ''; loading.value = false; contentLoading.value = false; changing.value = ''
   q.value = ''; grade.value = ''; gradePicker.value = false; offset.value = 0
-  if (active && previous && !owner) void load()
+  scrollTop = 0; imagesActive.value = false; gradeChosen = false
+  if (active && previous) void load()
 }, { flush: 'sync' })
 onShow(async () => {
   active = true
-  await ensureSession()
-  if (active) {
-    imagesActive.value = true
-    if (session.user) grade.value = readPreferences(session.user.id).grade
+  const run = ++activation
+  const restoring = !session.ready || !!session.error
+  const restored = ensureSession()
+  if (session.user && !gradeChosen) grade.value = readPreferences(session.user.id).grade
+  void load(false, restoring)
+  await nextTick()
+  if (active && run === activation && scrollTop) uni.pageScrollTo?.({ scrollTop, duration: 0 })
+  await restored
+  if (active && run === activation && restoring && session.user) {
+    if (!gradeChosen) grade.value = readPreferences(session.user.id).grade
+    else writePreferences(session.user.id, { ...readPreferences(session.user.id), grade: grade.value })
     void load()
   }
 })
-function leave() { active = false; imagesActive.value = false; invalidate(); loading.value = false; contentLoading.value = false; changing.value = ''; gradePicker.value = false; uni.stopPullDownRefresh() }
-onHide(leave)
+function leave() { active = false; activation++; imagesActive.value = false; invalidate(); loading.value = false; contentLoading.value = false; changing.value = ''; gradePicker.value = false; uni.stopPullDownRefresh() }
+onHide(() => {
+  leave()
+  const owner = session.user?.id, run = activation
+  captureScroll(top => { if (run === activation && owner === session.user?.id) scrollTop = top })
+})
 function reconnect() { if (active && !changing.value) void load(true) }
 uni.$on?.('lc-network-restored', reconnect)
 function memoryWarning() {
@@ -156,17 +183,16 @@ onShareAppMessage(() => shareCard('home'))
 <template>
   <view class="home-page has-tabbar">
     <PageChrome />
-    <view class="content-width home-search-row"><SearchGradeBar v-model="q" :grade="grade" placeholder="搜知识点、习题" :disabled="loading || !!changing" @search="search" @select-grade="gradePicker = true" /></view>
+    <view class="content-width home-search-row"><SearchGradeBar v-model="q" :grade="grade" placeholder="搜知识点、习题" :disabled="!!changing" @search="search" @select-grade="gradePicker = true" /></view>
     <HomeBanner :banners="banners" :mode="site?.banner_mode || 'welcome'" :grade="grade" :recent="recentPaper" :loading="contentLoading && !site" :active="imagesActive" />
     <view class="content-width home-subjects">
       <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="item in subjects" :key="item.label" class="subject-entry" role="button" :aria-label="item.subject ? item.label + '习题' : '全部习题'" @click="openCatalog({ subject: item.subject, grade })"><view class="subject-symbol" :class="item.tone"><wd-icon :name="item.icon" size="24px" /></view><text>{{ item.label }}</text></button>
     </view>
     <NoticeBar :notices="notices" />
     <view v-if="contentError" class="content-width"><view class="home-status" role="status"><text class="grow">{{ contentError }}暂时加载失败</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="section-link" :disabled="contentLoading" @click="loadContent(true)">{{ contentLoading ? '加载中' : '重试' }}</button></view></view>
-    <template v-if="session.ready">
       <view class="content-width home-feed">
         <view class="section-heading feed-heading">
-          <view class="feed-tabs"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" :class="{ active: feed === 'featured' }" :aria-pressed="feed === 'featured'" :disabled="loading || !!changing" role="button" @click="selectFeed('featured')">为你精选</button><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" :class="{ active: feed === 'latest' }" :aria-pressed="feed === 'latest'" :disabled="loading || !!changing" role="button" @click="selectFeed('latest')">最近上新</button></view>
+          <view class="feed-tabs"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" :class="{ active: feed === 'featured' }" :aria-pressed="feed === 'featured'" role="button" @click="selectFeed('featured')">为你精选</button><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" :class="{ active: feed === 'latest' }" :aria-pressed="feed === 'latest'" role="button" @click="selectFeed('latest')">最近上新</button></view>
           <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="items.length > 2" class="change-papers" :disabled="loading || !!changing" role="button" aria-label="换一组习题" @click="offset += 2"><wd-icon name="refresh" size="14px" /><text>换一组</text></button>
         </view>
         <text class="feed-caption">{{ feedCaption }}</text>
@@ -174,11 +200,11 @@ onShareAppMessage(() => shareCard('home'))
         <EnhancedSkeleton v-if="loading && !items.length" :count="2" type="card" />
         <view v-else-if="cards.length" class="home-cards">
           <PaperCard compact :active="imagesActive"
-            v-for="paper in cards" 
-            :key="paper.id" 
-            :paper="paper" 
-            :busy="loading || !!changing" 
-            @favorite="favorite(paper)" 
+            v-for="paper in cards"
+            :key="paper.id"
+            :paper="paper"
+            :busy="loading || !!changing || !session.ready"
+            @favorite="favorite(paper)"
           />
         </view>
         <view v-else-if="!loading && !error" class="home-empty"><view class="empty-symbol"><wd-icon name="book" size="28px" /></view><text class="empty-title">{{ grade ? '这个年级的练习还在准备中' : '新的练习正在准备中' }}</text><text class="empty-caption">{{ grade ? '换个年级，看看其他练习吧' : '稍后再来，或去习题库逛逛' }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="empty-link" role="button" @click="grade ? clearGrade() : openCatalog()">{{ grade ? '查看全部年级' : '进入习题库' }}<wd-icon name="arrow-right" size="14px" /></button></view>
@@ -192,7 +218,6 @@ onShareAppMessage(() => shareCard('home'))
         <scroll-view class="collection-scroll" scroll-x :show-scrollbar="false"><view class="collection-track"><TopicCard v-for="(collection, index) in collections" :key="collection.id" :topic="collection" :index="index" /></view></scroll-view>
       </view>
       <view v-if="!contentLoading || categories.length || collections.length" class="content-width home-more"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="all-papers" role="button" @click="openCatalog({ grade })"><view><text class="all-papers-title">还想练点什么？</text><text class="all-papers-caption">去习题库，找到更多好练习</text></view><view class="all-papers-arrow"><wd-icon name="arrow-right" size="20px" /></view></button></view>
-    </template>
     <AppTabBar current="home" />
     <NoticePopup :notices="popups" />
     <GradePicker :open="gradePicker" :value="grade" :options="grades" @close="gradePicker = false" @select="byGrade" />

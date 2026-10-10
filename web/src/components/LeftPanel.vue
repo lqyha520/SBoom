@@ -1,22 +1,22 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useExamStore } from '../stores/exam'
 import { DIFF_NAME } from '../constants'
 import type { Difficulty } from '../types'
+import { textbookGroups } from '../knowledge-points'
 
 const store = useExamStore()
+const knowledgeSearch = ref('')
+const expandedGroups = ref<Record<string, boolean>>({ '上册': true, '知识范围': true })
+watch(() => [store.grade, store.subject], () => {
+  knowledgeSearch.value = ''
+  expandedGroups.value = { '上册': true, '知识范围': true }
+})
 const grades = computed(() => Object.keys(store.available))
-const knowledgeGroups = computed(() => {
-  if (!store.scope) return []
-  const groups: { label: string; items: { label: string; value: string }[] }[] = []
-  for (const semester of ['上册', '下册'] as const) {
-    const items = store.scope.semesters?.[semester]
-    if (items?.length) groups.push({ label: semester, items: items.map(k => ({ label: k, value: semester + '·' + k })) })
-  }
-  const semesterItems = new Set(groups.flatMap(g => g.items.map(i => i.label)))
-  const remaining = store.scope.allowed.filter(k => !semesterItems.has(k))
-  if (remaining.length) groups.push({ label: groups.length ? '其他知识点' : '知识范围', items: remaining.map(k => ({ label: k, value: k })) })
-  return groups
+const knowledgeGroups = computed(() => textbookGroups(store.scope))
+const filteredGroups = computed(() => {
+  const query = knowledgeSearch.value.trim().toLocaleLowerCase()
+  return knowledgeGroups.value.map(group => ({ ...group, items: group.items.filter(item => !query || item.label.toLocaleLowerCase().includes(query)) })).filter(group => group.items.length)
 })
 const names: Record<string, string> = { banner: '卷头横幅', title: '标题', subline: '副标题', inforow: '姓名班级栏', notice: '注意事项', reward: '奖励区', footer: '页脚' }
 </script>
@@ -54,18 +54,31 @@ const names: Record<string, string> = { banner: '卷头横幅', title: '标题',
         <UFormField label="知识点" name="keyword">
           <UTextarea :model-value="store.keyword" :rows="2" :maxrows="4" autoresize maxlength="100" placeholder="例如：分数初步认识" :disabled="!store.subject" @update:model-value="store.setKeyword(String($event))" />
         </UFormField>
+        <p v-for="book in store.scope?.books || []" :key="book.id" class="section-caption mt-2">
+          <a :href="book.source_url" target="_blank" rel="noopener noreferrer">{{ book.series }} · {{ book.semester }}</a>
+        </p>
         <div v-if="store.scopeLoading" class="mt-4 space-y-3" role="status" aria-label="正在加载知识点"><USkeleton v-for="i in 5" :key="i" class="h-4 w-full" /></div>
         <template v-else-if="store.grade && store.subject">
-          <div v-for="group in knowledgeGroups" :key="group.label">
-            <p class="section-caption">{{ group.label }}</p>
-            <div class="knowledge-list" :aria-label="group.label">
+          <div v-if="knowledgeGroups.length" class="knowledge-search">
+            <UInput v-model="knowledgeSearch" icon="i-lucide-search" placeholder="查找知识点" aria-label="查找知识点" />
+            <p class="section-caption" role="status">已选 {{ store.selectedTags.length }} 个知识点</p>
+            <div v-if="store.selectedTags.length" class="knowledge-selected">
+              <UButton v-for="tag in store.selectedTags" :key="tag" :label="tag" trailing-icon="i-lucide-x" :aria-label="'取消选择：' + tag" variant="soft" size="xs" @click="store.toggleTag(tag)" />
+            </div>
+          </div>
+          <UCollapsible v-for="group in filteredGroups" :key="group.label" :open="!!knowledgeSearch.trim() || !!expandedGroups[group.label]" :disabled="!!knowledgeSearch.trim()" @update:open="expandedGroups[group.label] = $event">
+            <button class="knowledge-group-toggle">
+              <span>{{ group.label }} · {{ group.items.length }} 项</span><UIcon :name="knowledgeSearch.trim() || expandedGroups[group.label] ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" class="size-3.5" />
+            </button>
+            <template #content><div class="knowledge-list" :aria-label="group.label">
               <button v-for="item in group.items" :key="item.value" class="knowledge-option" :class="{ selected: store.selectedTags.includes(item.value) }" :aria-pressed="store.selectedTags.includes(item.value)" @click="store.toggleTag(item.value)">
                 <span aria-hidden="true"><UIcon v-if="store.selectedTags.includes(item.value)" name="i-lucide-check" class="size-3" /></span>
                 <span>{{ item.label }}</span>
               </button>
-            </div>
-          </div>
-          <p v-if="!knowledgeGroups.length" class="section-caption">暂无知识点清单</p>
+            </div></template>
+          </UCollapsible>
+          <p v-if="knowledgeGroups.length && !filteredGroups.length" class="section-caption">没有匹配的知识点，试试更短的关键词</p>
+          <p v-if="!knowledgeGroups.length" class="section-caption">该教材目录尚未核实</p>
         </template>
       </div>
       <div v-if="store.hiddenElements.length" class="field-section border-t border-default pt-4">
@@ -77,3 +90,10 @@ const names: Record<string, string> = { banner: '卷头横幅', title: '标题',
     </fieldset>
   </section>
 </template>
+
+<style scoped>
+.knowledge-search { margin-top: 12px; }
+.knowledge-selected { display: flex; flex-wrap: wrap; gap: 6px; }
+.knowledge-selected button { white-space: normal; text-align: left; }
+.knowledge-group-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 40px; margin-top: 8px; padding: 6px 0; font-size: 12px; color: var(--ui-text-toned); }
+</style>

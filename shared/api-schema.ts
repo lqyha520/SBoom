@@ -8,7 +8,7 @@ export interface ApiSchemas {
   "AuthCapabilities": { "registration_enabled": boolean }
   "BannerInput": { "action_label"?: string; "image_fit"?: "contain" | "cover"; "is_visible"?: boolean; "kicker"?: string; "sort_order"?: number; "subtitle"?: string; "target_type"?: "none" | "keyword" | "category" | "subject" | "paper"; "target_value"?: string; "title": string }
   "BannerUpdate": { "action_label"?: string; "image_fit"?: "contain" | "cover"; "is_visible"?: boolean; "kicker"?: string; "revision": number; "sort_order"?: number; "subtitle"?: string; "target_type"?: "none" | "keyword" | "category" | "subject" | "paper"; "target_value"?: string; "title": string }
-  "BatchGenerateRequest": { "difficulty"?: ApiSchemas["Difficulty"]; "grade": string; "items": Array<ApiSchemas["BatchItem"]>; "keyword": string; "subject": string }
+  "BatchGenerateRequest": { "difficulty"?: ApiSchemas["Difficulty"]; "grade": string; "items": Array<ApiSchemas["BatchItem"]>; "keyword": string; "previous_request_ids"?: Array<string>; "subject": string }
   "BatchGenerateResponse": { "request_id"?: (string | null); "sections"?: Array<ApiSchemas["GameResult"]> }
   "BatchItem": { "game_type": string; "question_count"?: number; "section_id"?: (string | null) }
   "BillInput": { "bill_date": string }
@@ -53,7 +53,7 @@ export interface ApiSchemas {
   "ImageModelConfig": { "apiKey"?: string; "baseUrl": string; "model": string; "responseFormat"?: "auto" | "b64_json" | "url"; "size"?: string; "timeout"?: number }
   "ImageWorksheetItem": { "game_type": ApiSchemas["GameType"]; "question_count"?: (number | null) }
   "ImageWorksheetRequest": { "difficulty"?: ApiSchemas["Difficulty"]; "grade": string; "image_count"?: number; "image_index"?: number; "items"?: Array<ApiSchemas["ImageWorksheetItem"]>; "keyword"?: string; "requirements"?: string; "style"?: "playful" | "clean" | "black_white"; "subject": string }
-  "KnowledgeScope": { "allowed": Array<string>; "forbidden": Array<string>; "grade": string; "semesters"?: ({ [key: string]: Array<string> } | null); "subject": string }
+  "KnowledgeScope": { "allowed": Array<string>; "books"?: Array<ApiSchemas["TextbookBook"]>; "catalog_revision"?: string; "forbidden": Array<string>; "grade": string; "semesters"?: ({ [key: string]: Array<string> } | null); "subject": string }
   "MembershipUpdate": { "is_active": boolean; "membership": "regular" | "vip"; "revision": number; "vip_expires_at"?: (number | null) }
   "MiniCredentials": { "password": string; "username": string }
   "MiniPasswordUpdate": { "current_password"?: string; "new_password": string }
@@ -76,6 +76,8 @@ export interface ApiSchemas {
   "SupportSettings": { "benefits"?: string; "email"?: string; "hours"?: string; "phone"?: string; "qr_url"?: string; "revision"?: number; "wechat"?: string }
   "TagInput": { "is_visible"?: boolean; "kind": "textbook" | "term" | "unit" | "knowledge"; "name": string; "revision"?: number; "sort_order"?: number }
   "TemplateIn": { "expected_revision"?: (number | null); "template": { [key: string]: unknown } }
+  "TextbookBook": { "id": string; "semester": string; "series": string; "source_url": string; "units": Array<ApiSchemas["TextbookUnit"]>; "verified_on": string }
+  "TextbookUnit": { "page": number; "title": string; "topics"?: Array<string> }
   "TopicInput": { "description"?: string; "is_visible"?: boolean; "paper_ids"?: Array<string>; "revision"?: number; "sort_order"?: number; "title": string }
   "TypeAccessUpdate": { "download_access": "free" | "vip"; "revision": number; "view_access": "free" | "vip" }
   "UsageEvent": { "catalog_id"?: (string | null); "event_id": string; "kind": "active" | "download_ok" | "download_failed" }

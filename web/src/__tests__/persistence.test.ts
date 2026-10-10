@@ -6,6 +6,7 @@ import * as persistence from '../persistence'
 import { useExamStore } from '../stores/exam'
 import { UID_KEY, useAuthStore, userPrefix } from '../stores/auth'
 import { LS } from '../constants'
+import { createGenerationRun } from '../generation'
 
 vi.mock('../api', async importOriginal => ({
   ...await importOriginal<typeof import('../api')>(),
@@ -62,7 +63,8 @@ describe('owned drafts and immutable history', () => {
     first.grade = '小学三年级'; first.subject = '语文'; first.keyword = '阅读理解'; first.title = 'Reading'
     first.addSection('reading', 3)
     first.sections[0].data!.passage = 'Saved passage'
-    first.sections[0].data!.questions[0]._stemHtml = '<b>Edited question</b>'
+    first.sections[0].data!.questions = [{ type: 'reading', stem: 'Edited question', answer: 'Saved answer',
+      _stemHtml: '<b>Edited question</b>' }]
     first.style.bg = 'grid'
     expect(await first.flushDraft()).toBe(true)
     first.disposePersistence()
@@ -109,6 +111,31 @@ describe('owned drafts and immutable history', () => {
     await expect(persistence.getHistory('2', id)).rejects.toThrow('不存在')
     await persistence.removeHistory('2', id)
     expect((await persistence.getHistory('1', id)).title).toBe('Version A')
+  })
+
+  it('archives and restores pending requests with their original IDs when clearing settings', async () => {
+    const store = account()
+    await store.initPersistence()
+    store.grade = '小学三年级'; store.subject = '数学'; store.keyword = '加法'
+    store.addSection('fill_blank', 4)
+    const run = createGenerationRun({ grade: store.grade, subject: store.subject, keyword: store.keyword,
+      title: '', difficulty: store.difficulty, hiddenElements: [], count: 1, sections: store.sections })
+    run.jobs[0].chunks[0].state = 'unknown'
+    store.pendingRun = run
+    store.sections[0].pendingGeneration = run
+    expect(await store.clearSettings()).toBe(true)
+    const entry = store.history.find(item => item.reason === 'before-clear')!
+    expect(entry).toBeTruthy()
+    expect(store.sections).toEqual([])
+    expect(store.pendingRun).toBeNull()
+    expect(await store.flushDraft()).toBe(true)
+    expect((await persistence.loadDraft(store.ownerId, store.draftId))?.snapshot.pendingRun).toBeNull()
+    const saved = await persistence.getHistory(store.ownerId, entry.id)
+    expect(saved.pendingRun).toEqual(run)
+    expect(saved.sections[0].pendingGeneration).toEqual(run)
+    expect(await store.restoreHistory(entry.id)).toBe(true)
+    expect(store.pendingRun?.jobs[0].chunks[0].requestId).toBe(run.jobs[0].chunks[0].requestId)
+    expect(store.sections[0].pendingGeneration?.jobs[0].chunks[0].state).toBe('unknown')
   })
 
   it('does not replace current work when the recovery copy cannot be saved', async () => {

@@ -1,6 +1,7 @@
 import type { WorkspaceSnapshot } from './persistence'
 import { deepClone } from './utils'
-import { markRaw, toRaw } from 'vue'
+import { markRaw } from 'vue'
+import { immutableCopy, sameSnapshot, snapshotSize } from './edit-snapshot'
 
 export type EditSnapshot = Pick<WorkspaceSnapshot, 'sections' | 'papers' | 'title' | 'titleHtml' | 'style' | 'hiddenElements' | 'templateId' | 'customTemplate' | 'grade' | 'subject' | 'keyword' | 'selectedTags' | 'difficulty' | 'view' | 'paperCount' | 'addDayLabel'>
 interface EditWorkspace extends EditSnapshot {
@@ -35,19 +36,11 @@ export function finishLayout(source: EditWorkspace, cancel = false) {
   }
   source.layoutMode = false
 }
-const snapshotEncoding = new WeakMap<object, string>()
-function encodeSnapshot(snapshot: object): string {
-  snapshot = toRaw(snapshot)
-  let value = snapshotEncoding.get(snapshot)
-  if (value === undefined) { value = JSON.stringify(snapshot); snapshotEncoding.set(snapshot, value) }
-  return value
-}
-
 export function captureEdit(source: EditSnapshot): EditSnapshot {
-  return markRaw(deepClone({ sections: toRaw(source.sections), papers: toRaw(source.papers), title: source.title, titleHtml: source.titleHtml,
-    style: toRaw(source.style), hiddenElements: toRaw(source.hiddenElements), templateId: source.templateId, customTemplate: toRaw(source.customTemplate),
-    grade: source.grade, subject: source.subject, keyword: source.keyword, selectedTags: toRaw(source.selectedTags),
-    difficulty: source.difficulty, view: source.view, paperCount: source.paperCount, addDayLabel: source.addDayLabel }))
+  return markRaw({ sections: immutableCopy(source.sections), papers: immutableCopy(source.papers), title: source.title, titleHtml: source.titleHtml,
+    style: immutableCopy(source.style), hiddenElements: immutableCopy(source.hiddenElements), templateId: source.templateId, customTemplate: immutableCopy(source.customTemplate),
+    grade: source.grade, subject: source.subject, keyword: source.keyword, selectedTags: immutableCopy(source.selectedTags),
+    difficulty: source.difficulty, view: source.view, paperCount: source.paperCount, addDayLabel: source.addDayLabel })
 }
 
 export function recordEdit(source: EditWorkspace, key = '') {
@@ -56,11 +49,10 @@ export function recordEdit(source: EditWorkspace, key = '') {
   editBursts.set(source, { key, at })
   if (key && previous?.key === key && at - previous.at < 500) return
   const snapshot = captureEdit(source)
-  const encoded = encodeSnapshot(snapshot)
   const previousSnapshot = source.undoStack[source.undoStack.length - 1]
-  if (previousSnapshot && encodeSnapshot(previousSnapshot) === encoded) return
+  if (previousSnapshot && sameSnapshot(previousSnapshot, snapshot)) return
   source.undoStack.push(snapshot); source.redoStack = []
-  while (source.undoStack.length > 20 || source.undoStack.reduce((size, item) => size + encodeSnapshot(item).length + 1, 2) > 4_000_000) source.undoStack.shift()
+  while (source.undoStack.length > 20 || (source.undoStack.length > 1 && source.undoStack.reduce((size, item) => size + snapshotSize(item), 0) > 4_000_000)) source.undoStack.shift()
 }
 
 export function undoEdit(source: EditWorkspace) {

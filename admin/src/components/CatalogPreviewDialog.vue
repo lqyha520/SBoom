@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import EditorPanel from './EditorPanel.vue'
 import { toRefs, type UnwrapNestedRefs } from 'vue'
 import type { useCatalogPreview } from '../catalog-preview'
 
 const props = defineProps<{
   state: UnwrapNestedRefs<ReturnType<typeof useCatalogPreview>>
   busy: boolean
+  inline?: boolean
 }>()
 const emit = defineEmits<{ publish: [] }>()
 const {
@@ -20,7 +22,7 @@ const {
 </script>
 
 <template>
-  <UModal
+  <EditorPanel :inline="inline"
     v-model:open="previewOpen"
     :title="preview?.title || '习题预览'"
     :ui="{ content: 'sm:max-w-3xl' }"
@@ -128,9 +130,10 @@ const {
         label="核对后设置发布"
         :disabled="previewLoading || busy"
         @click="emit('publish')" /><UButton
+        v-if="!inline"
         label="关闭"
         @click="previewOpen = false" /></template
-  ></UModal>
+  ></EditorPanel>
 </template>
 
 <style scoped>

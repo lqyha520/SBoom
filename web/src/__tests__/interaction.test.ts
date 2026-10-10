@@ -15,6 +15,9 @@ function ready(count = 3) {
   vi.spyOn(store, "saveHistory").mockResolvedValue(true)
   store.grade = '小学三年级'; store.subject = '数学'; store.keyword = '加减法'
   store.addSection('fill_blank', count)
+  store.sections[0].data = { questions: Array.from({ length: count }, (_, index) => ({
+    type: 'fill_blank', stem: `已有题目 ${index + 1}`, answer: '2',
+  })) }
   store.questionSection(store.sections[0].id)
   return store
 }
@@ -95,6 +98,19 @@ describe('编辑恢复与单题替换', () => {
     await store.replaceQuestion(section.id, qid)
     expect(api.generateBatch).not.toHaveBeenCalled()
   })
+  it('模型换题与已有题重复时仍保留结果，不在前端拒绝', async () => {
+    const store = ready(), section = store.sections[0]
+    const first = section.data!.questions[0], repeated = section.data!.questions[1]
+    const qid = first._qid!
+    vi.mocked(api.generateBatch).mockResolvedValue([{ game_type: section.type, section_id: section.id,
+      questions: [{ type: repeated.type, stem: repeated.stem, answer: repeated.answer }] }])
+    await store.replaceQuestion(section.id, qid)
+    expect(api.generateBatch).toHaveBeenCalledOnce()
+    expect(section.data!.questions).toHaveLength(3)
+    expect(section.data!.questions[0].stem).toBe(repeated.stem)
+    expect(section.data!.questions[0]._qid).toBe(qid)
+    expect(section.data!.questions[0]._replacement).toBeUndefined()
+  })
   it('换题失败保留原题和请求记录，仍在处理时不重复发送', async () => {
     const store = ready(), section = store.sections[0], question = section.data!.questions[0], stem = question.stem
     vi.mocked(api.generateBatch).mockRejectedValueOnce(new Error('网络超时'))
@@ -133,28 +149,54 @@ describe('锁定和停止生成', () => {
     expect(vi.mocked(api.generateBatch).mock.calls[0][0].items[0].question_count).toBe(2)
     expect(store.papers[0].sections[0].data.questions[1]).toEqual(locked)
   })
-  it('整道大题锁定时不发送模型请求', () => {
+  it('全部锁定不能把未调用模型的操作装配为新试卷', async () => {
     const store = ready(1), section = store.sections[0], question = section.data!.questions[0]
     question._locked = true
     const context = { grade: store.grade, subject: store.subject, keyword: store.keyword, title: '', difficulty: store.difficulty,
       hiddenElements: [], count: 1, sections: [{ ...section, lockedQuestions: [{ index: 0, question }] }] }
     const run = createGenerationRun(context)
     expect(run.jobs[0].chunks).toEqual([])
-    expect(assemblePaper(context, run.jobs[0]).sections[0].data.questions).toEqual([question])
+    expect(() => assemblePaper(context, run.jobs[0])).toThrow('没有待生成的题目')
+    const before = store.editSnapshot()
+    await store.generate()
+    expect(api.generateBatch).not.toHaveBeenCalled()
+    expect(store.generateError).toContain('没有待生成的题目')
+    expect(store.editSnapshot()).toEqual(before)
+    expect(store.pendingRun).toBeNull()
+    await store.retrySection(section.id)
+    expect(section.error).toContain('没有待生成的题目')
+    expect(section.data!.questions).toEqual([question])
+    expect(section.pendingGeneration).toBeUndefined()
   })
-  it('停止后不派发排队任务，已经发出的两份继续完成', async () => {
+  it('任一结果卷全部锁定时不覆盖原结果和未完成请求', async () => {
+    const store = ready(1); store.paperCount = 2
+    vi.mocked(api.generateBatch).mockImplementation(async params => response(params.items))
+    await store.generate()
+    store.papers[1].sections[0].data.questions[0]._locked = true
+    const before = store.editSnapshot()
+    const pending = createGenerationRun({ grade: store.grade, subject: store.subject, keyword: store.keyword,
+      title: '', difficulty: store.difficulty, hiddenElements: [], count: 1, sections: [] })
+    store.pendingRun = pending
+    vi.mocked(api.generateBatch).mockClear()
+    await store.generate()
+    expect(store.generateError).toContain('没有待生成的题目')
+    expect(store.editSnapshot()).toEqual(before)
+    expect(store.pendingRun).toEqual(pending)
+    expect(api.generateBatch).not.toHaveBeenCalled()
+  })
+  it('停止后不派发排队任务，已经发出的一份继续完成', async () => {
     const store = ready(1); store.paperCount = 5
     const releases: (() => void)[] = []
     vi.mocked(api.generateBatch).mockImplementation(params => new Promise(resolve => { releases.push(() => resolve(response(params.items))) }))
     const running = store.generate()
-    await vi.waitFor(() => expect(releases).toHaveLength(2))
+    await vi.waitFor(() => expect(releases).toHaveLength(1))
     store.stopRequested = true
     releases.forEach(release => release())
     await running
-    expect(api.generateBatch).toHaveBeenCalledTimes(2)
-    expect(store.papers).toHaveLength(2)
-    expect(store.pendingRun?.jobs).toHaveLength(3)
+    expect(api.generateBatch).toHaveBeenCalledTimes(1)
+    expect(store.papers).toHaveLength(1)
+    expect(store.pendingRun?.jobs).toHaveLength(4)
     expect(store.pendingRun?.jobs.every(job => job.chunks.every(chunk => chunk.state === 'new'))).toBe(true)
-    expect(store.generationJobs.filter(job => job.finishedAt)).toHaveLength(2)
+    expect(store.generationJobs.filter(job => job.finishedAt)).toHaveLength(1)
   })
 })

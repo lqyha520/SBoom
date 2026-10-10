@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useAdminListRoute } from "../navigation";
+import { useAdminLeaveGuard, useAdminListRoute } from "../navigation";
 import { computed, onActivated, onDeactivated, ref, watch } from "vue";
 import { ApiError, type UserInfo } from "../api";
 import { useBeforeUnload } from "../unsaved";
@@ -45,12 +45,17 @@ const feedbackBaseline = ref("");
 const feedbackValue = () => selected.value ? JSON.stringify([selected.value.status, selected.value.reply, selected.value.internal_note]) : "";
 const feedbackDirty = computed(() => feedbackValue() !== feedbackBaseline.value);
 const dirty = computed(() => settingsDirty.value || feedbackDirty.value);
-useBeforeUnload(dirty);
+const active = ref(true);
+useBeforeUnload(computed(() => active.value && dirty.value));
+useAdminLeaveGuard(() => !active.value || (!busy.value && (!dirty.value || window.confirm('有未保存的服务设置或反馈回复，确认离开？'))));
 function closeFeedback() {
   if (busy.value || (feedbackDirty.value && !window.confirm("放弃尚未保存的反馈回复？"))) return;
   selected.value = null;
   feedbackBaseline.value = "";
   dialog.value = false;
+}
+function handleDialogOpenChange(value: boolean) {
+  if (!value) closeFeedback();
 }
 async function loadSettings(preserve = false) {
   const id = ++settingsSequence;
@@ -117,10 +122,12 @@ async function load() {
   }
 }
 onActivated(() => {
+  active.value = true;
   void load();
   void loadSettings();
 });
 onDeactivated(() => {
+  active.value = false;
   sequence++;
   settingsSequence++;
   dialog.value = false;
@@ -337,7 +344,7 @@ async function inspect() {
     </form>
     <UModal
       :open="dialog"
-      @update:open="value => { if (!value) closeFeedback() }"
+      @update:open="handleDialogOpenChange"
       title="处理小程序反馈"
       :dismissible="!busy"
       :close="!busy"

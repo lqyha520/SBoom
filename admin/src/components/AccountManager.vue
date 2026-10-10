@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useDialogDraft } from "../dialog-draft";
 import { useAdminRefresh } from "../admin-page";
 import { useAdminListRoute } from "../navigation";
 import { computed, onActivated, onDeactivated, ref, watch } from "vue";
@@ -186,6 +187,7 @@ const routeState = useAdminListRoute(
     void load();
   },
 );
+const draft = useDialogDraft(dialogOpen, () => form.value, busy, "账号资料");
 </script>
 
 <template>
@@ -369,7 +371,7 @@ const routeState = useAdminListRoute(
       />
     </div>
     <UModal
-      v-model:open="dialogOpen"
+      v-model:open="draft.model.value"
       :title="dialogTitle"
       :dismissible="!busy"
       :close="!busy"
@@ -474,7 +476,7 @@ const routeState = useAdminListRoute(
           color="neutral"
           variant="outline"
           :disabled="busy"
-          @click="dialogOpen = false" /><UButton
+          @click="draft.setOpen(false)" /><UButton
           type="submit"
           form="user-action-form"
           :label="action === 'create' ? dialogTitle : '确认'"

@@ -105,48 +105,6 @@ export function uid(prefix = 'u'): string {
   return `${prefix}${++_uidSeq}_${Math.random().toString(36).slice(2, 7)}`
 }
 
-/* ── 排版预览用的模拟题目 ── */
-export function mockQuestions(type: string, count: number): Question[] {
-  const qs: Question[] = []
-  for (let i = 0; i < count; i++) {
-    const n = i + 1
-    if (type === 'quiz') {
-      qs.push({ type: 'multiple_choice', stem: `${n + 2} + 3 = ？`, options: ['3', '4', '5', '6'], answer: 2, analysis: '' })
-    } else if (type === 'fill_blank') {
-      qs.push({ type: 'fill_blank', stem: `${n} + ${n} = ____`, answer: `${n * 2}`, analysis: '' })
-    } else if (type === 'oral_math') {
-      qs.push({ type: 'oral_math', stem: `${n}×${n * 7}=`, answer: `${n * n * 7}`, analysis: '' })
-    } else if (type === 'vertical_calc') {
-      qs.push({ type: 'vertical_calc', stem: `${123 + n} + ${456 - n} =`, answer: '579', analysis: '' })
-    } else if (type === 'recursive_calc') {
-      qs.push({ type: 'recursive_calc', stem: `${100 + n} − ${n * 3} + ${n * 2} =`, answer: '', analysis: '' })
-    } else if (type === 'smart_calc') {
-      qs.push({ type: 'smart_calc', stem: `${n * 25}×4 =`, answer: `${n * 100}`, analysis: '' })
-    } else if (type === 'match_pair') {
-      qs.push({ type: 'match_pair', stem: '连一连。', left_items: ['2+3', '4+1'], right_items: ['5', '5'], answer: [[0, 0], [1, 1]], analysis: '' })
-    } else if (type === 'challenge') {
-      qs.push({ type: 'challenge', stem: `第${n}关：${n * 2} + ${n} = ____`, answer: `${n * 3}`, analysis: '' })
-    } else if (type === 'reading') {
-      qs.push({ type: 'reading', stem: `${n}. 读一读，答一答。`, answer: '', analysis: '' })
-    } else if (type === 'number_split') {
-      const top = n + 8
-      if (n % 2 === 1) qs.push({ type: 'number_split', top, left: n, right: '__', answer: top - n, analysis: '' })
-      else qs.push({ type: 'number_split', top: '__', left: n, right: n + 1, answer: n + (n + 1), analysis: '' })
-    } else if (type === 'compare') {
-      const a = n + 2, b = n + 1
-      qs.push({ type: 'compare', left_expr: `${a}`, right_expr: `${b}`, answer: a > b ? '>' : a < b ? '<' : '=', analysis: '' })
-    } else if (type === 'true_false') {
-      qs.push({ type: 'true_false', stem: `${n + 5} 比 ${n} 大`, answer: '√', analysis: '' })
-    } else if (type === 'word_problem') {
-      qs.push({ type: 'word_problem', stem: `小明有${n + 3}个苹果，吃了${n}个，还剩几个？`, answer: '3', analysis: '' })
-    } else {
-      qs.push({ type, stem: `第 ${n} 题：模拟题目，排版预览用。`, answer: '', analysis: '' })
-    }
-  }
-  qs.forEach(q => { q._qid = uid('q') })
-  return qs
-}
-
 /* ── 分值：客观题每题 2 分，其余平摊，总和恒为 100 ── */
 export function computeScores(sections: PaperSection[]): Map<Question, number> {
   const score = new Map<Question, number>()
