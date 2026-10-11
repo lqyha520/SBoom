@@ -416,7 +416,7 @@ export function usePublicationEditor(
         form.value.status = result.status
         form.value.confirm_publication = false
         markSaved()
-        dialogNotice.value = '已创建草稿，可在右侧预览，并继续补充标签、打印版本或发布'
+        dialogNotice.value = '习题草稿已创建'
         await saved(dialogNotice.value)
       }
     } catch (cause) {

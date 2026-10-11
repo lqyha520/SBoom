@@ -66,6 +66,7 @@ const displayCategories = computed(() => {
   return current && !categories.value.some(item => item.value === current.value) ? [...categories.value, current] : categories.value
 })
 const previewState = reactive(useCatalogPreview())
+const previewVisible = ref(false)
 type Panel = { busy: boolean; dirty: boolean; canLeave: () => boolean; reconcile: (latest: CatalogDetail) => void }
 const metadataPanel = ref<Panel | null>(null), editionPanel = ref<Panel | null>(null), revisionPanel = ref<Panel | null>(null)
 const syncing = ref(false)
@@ -74,15 +75,18 @@ const dirty = computed(() => mainDirty.value || [metadataPanel.value, editionPan
 const visited = ref<string[]>([])
 watch([() => props.editor.dialog, () => props.editor.target?.id], () => {
   visited.value = []
-  if (props.editor.dialog && props.editor.target) void previewState.showPreview(props.editor.target)
-  else previewState.previewOpen = false
+  previewVisible.value = false
+  previewState.previewOpen = false
 }, { immediate: true })
+watch(previewVisible, visible => {
+  if (visible && props.editor.target) void previewState.showPreview(props.editor.target)
+})
 watch([() => props.editor.dialog, () => props.editor.section, () => props.editor.target?.id], () => {
   if (props.editor.dialog && props.editor.target && !visited.value.includes(section.value)) visited.value.push(section.value)
 }, { immediate: true })
 watch(() => props.editor.target?.revision, () => {
   if (props.editor.dialog && props.editor.target) {
-    void previewState.showPreview(props.editor.target, previewState.previewRole)
+    if (previewVisible.value) void previewState.showPreview(props.editor.target, previewState.previewRole)
     if ('assets' in props.editor.target) [metadataPanel.value, editionPanel.value, revisionPanel.value].forEach(panel => panel?.reconcile(props.editor.target as CatalogDetail))
   }
 })
@@ -115,6 +119,8 @@ const sourceModes = [
 
 <template>
   <UModal
+    fullscreen
+    :transition="false"
     :open="dialog"
     @update:open="closeEditor"
     :title="
@@ -126,12 +132,17 @@ const sourceModes = [
             ? '导入 PDF 习题'
             : '添加习题草稿'
     "
-    :ui="{ content: target ? 'sm:max-w-6xl' : importing ? 'sm:max-w-5xl' : 'sm:max-w-2xl' }"
+    :description="target?.title"
+    :ui="{ content: 'publication-editor', header: 'publication-editor-header', body: 'publication-editor-body', footer: 'publication-editor-footer' }"
     :dismissible="!busy"
     :close="!busy"
     ><template #body>
-      <div class="publication-workspace" :class="{ 'with-preview': target }"><div class="publication-fields">
-      <div v-if="target" class="publication-tabs" role="tablist" aria-label="资料编辑步骤"><button v-for="tab in [{id:'details',label:'基本与发布'},{id:'metadata',label:'教学标签'},{id:'editions',label:'打印版本'},{id:'revision',label:'修订稿'}]" :key="tab.id" type="button" role="tab" :aria-selected="section === tab.id" :disabled="busy" @click="editor.section = tab.id as typeof section">{{ tab.label }}</button></div>
+      <div class="publication-editor-inner">
+      <div v-if="target" class="publication-editor-toolbar">
+        <UTabs v-model="section" :items="[{value:'details',label:'基本与发布'},{value:'metadata',label:'教学标签'},{value:'editions',label:'打印版本'},{value:'revision',label:'修订稿'}].map(tab => ({ ...tab, disabled: busy }))" :content="false" variant="link" aria-label="资料编辑步骤" :ui="{ list: 'gap-5 p-0', trigger: 'px-0 pb-3' }" />
+        <UButton :icon="previewVisible ? 'i-lucide-panel-right-close' : 'i-lucide-panel-right-open'" :label="previewVisible ? '收起预览' : '展开预览'" :aria-expanded="previewVisible" aria-controls="publication-preview" color="neutral" variant="outline" size="sm" @click="previewVisible = !previewVisible" />
+      </div>
+      <div class="publication-workspace" :class="{ 'with-preview': target && previewVisible }"><div class="publication-fields">
       <form v-show="section === 'details'" id="publication-form" class="field-stack" @submit.prevent="save">
         <UAlert v-if="categoryError" :title="categoryError" color="error"
           ><template #actions
@@ -156,7 +167,7 @@ const sourceModes = [
             v-model="mode"
             :items="sourceModes.map((item) => ({ ...item, disabled: busy }))"
             :content="false"
-            :ui="{ list: 'w-full flex-wrap', trigger: 'flex-1' }"
+            :ui="{ list: 'w-full grid grid-cols-2 sm:flex', indicator: 'hidden', trigger: 'flex-1 justify-center data-[state=active]:bg-primary data-[state=active]:text-inverted', label: 'whitespace-normal' }"
           />
           <UFormField
             v-if="mode === 'source'"
@@ -417,7 +428,7 @@ const sourceModes = [
       <PaperMetadataDialog v-if="dialog && visited.includes('metadata')" v-show="section === 'metadata'" ref="metadataPanel" :open="dialog" inline :target="target" :admin-id="editor.userId" @close="section = 'details'" @saved="childSaved" />
       <PaperEditionDialog v-if="dialog && visited.includes('editions')" v-show="section === 'editions'" ref="editionPanel" :open="dialog" inline :target="target" :admin-id="editor.userId" @close="section = 'details'" @saved="childSaved" />
       <CatalogRevisionDialog v-if="dialog && visited.includes('revision')" v-show="section === 'revision'" ref="revisionPanel" :open="dialog" inline :target="target" :admin-id="editor.userId" @close="section = 'details'" @saved="childSaved" />
-      </div><aside v-if="target" class="publication-preview" aria-label="已保存资料预览"><div class="actions-row mb-3"><h3>已保存内容预览</h3><UButton label="刷新预览" size="xs" variant="ghost" @click="previewState.showPreview(target, previewState.previewRole)" /></div><p class="text-xs text-muted mb-3">保存后预览更新；发布前请核对文件与访问权限。</p><CatalogPreviewDialog :state="previewState" :busy="busy" inline @publish="publish" /></aside></div></template
+      </div><aside v-if="target && previewVisible" id="publication-preview" class="publication-preview" aria-label="已保存资料预览"><div class="row-between mb-5"><h3>已保存内容预览</h3><UTooltip text="刷新预览"><UButton icon="i-lucide-refresh-cw" aria-label="刷新预览" size="xs" color="neutral" variant="ghost" @click="previewState.showPreview(target, previewState.previewRole)" /></UTooltip></div><CatalogPreviewDialog :state="previewState" :busy="busy" inline @publish="publish" /></aside></div></div></template
     ><template #footer
       ><UButton
         :label="importing ? '完成并返回列表' : '关闭'"
@@ -469,15 +480,20 @@ const sourceModes = [
 </template>
 
 <style scoped>
-.publication-workspace { min-width:0; }
-.publication-workspace.with-preview { display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:24px; }
-.publication-fields { min-width:0; }
-.publication-preview { min-width:0;padding-left:20px;border-left:1px solid var(--ui-border); }
-.publication-tabs { display:flex;gap:4px;flex-wrap:wrap;margin-bottom:20px;position:sticky;top:0;background:var(--ui-bg);z-index:1;padding-bottom:8px; }
-.publication-tabs button { padding:9px 12px;border-radius:6px;font-size:13px;cursor:pointer; }
-.publication-tabs button[aria-selected="true"] { background:var(--ui-bg-accented);color:var(--ui-primary);font-weight:600; }
+:global(.publication-editor-header) { padding:18px 32px;min-height:76px; }
+:global(.publication-editor-body) { padding:0;background:#f8f9fb; }
+:global(.publication-editor-footer) { padding:16px 32px;gap:12px;background:#fff; }
+.publication-editor-inner { max-width:1440px;margin:0 auto;padding:0 32px 32px; }
+.publication-editor-toolbar { display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 0 0;position:sticky;top:0;z-index:2;background:#f8f9fb;border-bottom:1px solid var(--ui-border);margin-bottom:24px; }
+.publication-editor-toolbar > button { margin-bottom:12px; }
+.publication-workspace { min-width:0;padding-top:24px; }
+.publication-editor-toolbar + .publication-workspace { padding-top:0; }
+.publication-workspace.with-preview { display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:32px; }
+.publication-fields { min-width:0;max-width:840px;margin:0 auto;width:100%; }
+.publication-preview { min-width:0;padding:24px;background:#fff;border:1px solid var(--ui-border);border-radius:6px;align-self:start;position:sticky;top:90px;max-height:calc(100dvh - 270px);overflow:auto; }
+.publication-preview h3 { font-size:13px;font-weight:600; }
 .quick-category summary { cursor:pointer;font-size:13px;color:var(--ui-primary); }
-@media(max-width:800px) { .publication-workspace.with-preview { grid-template-columns:1fr; } .publication-preview { border-left:0;padding-left:0;border-top:1px solid var(--ui-border);padding-top:20px; } }
+@media(max-width:800px) { .publication-workspace.with-preview { grid-template-columns:1fr; }.publication-preview { position:static;max-height:none; }.publication-editor-toolbar { flex-wrap:wrap;gap:8px;padding-top:12px; }.publication-editor-toolbar > :first-child { width:100%; }.publication-editor-inner { padding:0 16px 24px; }:global(.publication-editor-header), :global(.publication-editor-footer) { padding:14px 16px; }.publication-save-state { min-width:90px; } }
 
 .publication-group {
   display: flex;
@@ -517,5 +533,8 @@ const sourceModes = [
 .source-search > :first-child {
   flex: 1;
   min-width: 0;
+}
+@media (max-width: 800px) {
+  .publication-preview { grid-row: 1; }
 }
 </style>

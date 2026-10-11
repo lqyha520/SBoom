@@ -109,7 +109,7 @@ it('编辑可修改标题，保存后刷新列表和版本号，继续保存不�
     expect(catalog.catalogList).toHaveBeenCalledTimes(3)
   } finally { wrapper.unmount() }
 })
-it('创建后留在同一编辑区，右侧预览并明确确认发布', async () => {
+it('创建后留在同一编辑区，按需预览保留草稿并明确确认发布', async () => {
   vi.mocked(catalog.catalogSources).mockResolvedValue({ items: [{ id: 'source', title: '来源标题', grade: '三年级', subject: '数学', version: 1, file_status: 'ready', question_count: 5 }], total: 1, has_more: false })
   vi.mocked(catalog.createPublication).mockResolvedValue(paper)
   vi.mocked(catalog.catalogDetail).mockResolvedValue(paper)
@@ -120,7 +120,14 @@ it('创建后留在同一编辑区，右侧预览并明确确认发布', async (
     await wrapper.get('select[placeholder="选择习题"]').setValue('source'); await flushPromises()
     await wrapper.get('#publication-form').trigger('submit'); await flushPromises()
     expect(wrapper.findComponent(PublicationEditorDialog).props('editor').dialog).toBe(true)
+    expect(wrapper.find('[aria-label="已保存资料预览"]').exists()).toBe(false)
+    await wrapper.get('input[maxlength="240"]').setValue('预览切换保留标题')
+    await button('展开预览').trigger('click'); await flushPromises()
     expect(wrapper.get('[aria-label="已保存资料预览"]').text()).toContain('管理员')
+    await button('收起预览').trigger('click')
+    expect(wrapper.find('[aria-label="已保存资料预览"]').exists()).toBe(false)
+    expect((wrapper.get('input[maxlength="240"]').element as HTMLInputElement).value).toBe('预览切换保留标题')
+    await button('展开预览').trigger('click'); await flushPromises()
     await button('核对后设置发布').trigger('click'); await flushPromises()
     expect(wrapper.text()).toContain('已核对内容，确认公开发布')
     expect(button('确认发布').attributes('disabled')).toBeDefined()

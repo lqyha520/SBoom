@@ -126,9 +126,7 @@ const moreActions = (item: CatalogPaper) => [
                       ? '网盘资料'
                       : item.question_count + ' 题'
                   }}
-                  · 第 {{ item.release_number || 1 }} 版 · 原稿 v{{
-                    item.version
-                  }}
+                  · 第 {{ item.release_number || 1 }} 版
                 </div>
                 <div class="catalog-mobile-meta">
                   {{ categoryText(item) }} · 收藏
@@ -180,22 +178,20 @@ const moreActions = (item: CatalogPaper) => [
           <td class="date-cell catalog-extra">{{ date(item.updated_at) }}</td>
           <td class="catalog-actions">
             <div class="actions-row catalog-row-actions">
-              <UButton
+              <UTooltip text="预览"><UButton
                 icon="i-lucide-eye"
-                label="预览"
                 color="neutral"
-                variant="outline"
+                variant="ghost"
                 :aria-label="'预览 ' + item.title"
                 @click="emit('preview', item)"
-              />
-              <UButton
+              /></UTooltip>
+              <UTooltip text="编辑"><UButton
                 icon="i-lucide-square-pen"
-                label="编辑"
                 color="neutral"
-                variant="outline"
+                variant="ghost"
                 :aria-label="'编辑 ' + item.title"
                 @click="emit('edit', item)"
-              />
+              /></UTooltip>
               <UDropdownMenu :items="moreActions(item)"
                 ><UButton
                   icon="i-lucide-ellipsis"
@@ -236,7 +232,7 @@ const moreActions = (item: CatalogPaper) => [
   background: var(--ui-bg-accented);
 }
 .catalog-table {
-  min-width: 940px;
+  min-width: 820px;
 }
 .catalog-table th {
   position: relative;

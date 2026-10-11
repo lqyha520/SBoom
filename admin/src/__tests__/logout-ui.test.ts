@@ -12,7 +12,7 @@ it('后台退出失败显示错误并允许重试，成功后才通知外壳退�
   const wrapper = mount(Dashboard, {
     props: { user: { id: 1, username: 'admin', role: 'admin' } },
     global: { stubs: { ...uiStubs,
-      UDropdownMenu: defineComponent({ props: ['items'], setup: props => () => h('button', { onClick: props.items[0].onSelect, disabled: props.items[0].disabled }, '退出登录') }),
+      UDropdownMenu: defineComponent({ props: ['items'], setup: props => () => h('div', props.items.map((item: { label: string; onSelect?: () => void; disabled?: boolean }) => h('button', { onClick: item.onSelect, disabled: item.disabled }, item.label))) }),
     } },
   })
   try {

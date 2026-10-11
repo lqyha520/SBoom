@@ -7,6 +7,7 @@ import * as api from '../api'
 import ImageModelSettings from './ImageModelSettings.vue'
 
 const config = ref({ baseUrl: '', model: '', apiKey: '', timeout: 60, maxTokens: 16384 })
+const modelTab = ref('text')
 const hasKey = ref(false)
 const loading = ref(true)
 const loadError = ref('')
@@ -68,7 +69,8 @@ useAdminRefresh(load, () => { loadSequence++; loading.value = false })
 </script>
 
 <template>
-  <section class="admin-section" aria-label="全局模型配置">
+  <UTabs v-model="modelTab" :items="[{ value: 'text', label: '文本出题', icon: 'i-lucide-file-text' }, { value: 'image', label: '图片出题', icon: 'i-lucide-image' }]" :content="false" variant="link" aria-label="模型服务类型" class="mb-7 max-w-[800px]" :ui="{ list: 'gap-6 p-0', trigger: 'px-0 pb-3' }" />
+  <section v-show="modelTab === 'text'" class="admin-section model-settings" aria-label="全局模型配置">
     <div class="section-toolbar"><h2>全局模型服务</h2><UBadge :color="hasKey ? 'success' : 'warning'" variant="subtle" :icon="hasKey ? 'i-lucide-key-round' : 'i-lucide-circle-alert'">{{ hasKey ? '密钥已保存' : '未配置密钥' }}</UBadge></div>
     <UAlert v-if="loadError" :title="loadError" color="error" variant="soft" :actions="[{ label: '重试', onClick: load }]" class="notice" />
     <div v-if="loading" class="field-stack max-w-xl" role="status" aria-label="正在加载模型配置"><USkeleton v-for="n in 4" :key="n" class="h-14" /></div>
@@ -91,5 +93,9 @@ useAdminRefresh(load, () => { loadSequence++; loading.value = false })
       <template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="!!busy" @click="clearOpen = false" /><UButton label="确认清除" color="error" :loading="busy === 'clear'" :disabled="!!busy" @click="execute('clear')" /></template>
     </UModal>
   </section>
-  <ImageModelSettings />
+  <ImageModelSettings v-show="modelTab === 'image'" />
 </template>
+
+<style scoped>
+.model-settings { max-width:800px; }
+</style>

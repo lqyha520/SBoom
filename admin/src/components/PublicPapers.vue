@@ -75,6 +75,12 @@ const editor = usePublicationEditor(
   },
 )
 const { categories, filterCategories, statuses, gradeOptions, subjectOptions } = toRefs(editor)
+const statusTabs = computed(() => statuses.value.map(item => {
+  const count = !stats.value ? null : item.value === 'all'
+    ? stats.value.published + stats.value.draft + stats.value.withdrawn
+    : stats.value[item.value as 'published' | 'draft' | 'withdrawn']
+  return { ...item, label: (item.value === 'all' ? '全部习题' : item.label) + (Number.isFinite(count) ? ` ${count}` : '') }
+}))
 const busy = computed(() => saving.value || editor.busy)
 const previewState = reactive(useCatalogPreview())
 const { preview, previewOpen } = toRefs(previewState)
@@ -226,30 +232,12 @@ async function remove() {
 
 <template>
   <section class="admin-section" aria-label="公共习题管理">
-    <dl v-if="stats" class="catalog-metrics">
-      <div>
-        <dt>已发布</dt>
-        <dd>{{ stats.published }}</dd>
-      </div>
-      <div>
-        <dt>草稿</dt>
-        <dd>{{ stats.draft }}</dd>
-      </div>
-      <div>
-        <dt>已下架</dt>
-        <dd>{{ stats.withdrawn }}</dd>
-      </div>
-      <div>
-        <dt>收藏记录</dt>
-        <dd>{{ stats.favorites }}</dd>
-      </div>
-      <div>
-        <dt>下载记录</dt>
-        <dd>{{ stats.downloads }}</dd>
-      </div>
-    </dl>
     <div v-if="statsError" class="actions-row mb-3"><span class="text-sm text-muted">统计暂不可用，仍可管理资料</span><UButton label="重试统计" size="xs" variant="outline" :loading="statsLoading" @click="loadStats(true)" /></div>
     <div class="section-toolbar catalog-toolbar">
+      <UTabs v-model="status" :items="statusTabs" :content="false" variant="link" aria-label="发布状态筛选" class="max-w-full overflow-x-auto" :ui="{ list: 'w-max p-0 gap-4', trigger: 'flex-none px-0 pb-3 text-sm' }" />
+      <div class="actions-row"><UTooltip text="刷新"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="刷新公共习题" :loading="loading" @click="refresh" /></UTooltip><UButton icon="i-lucide-plus" label="添加习题" @click="create" /></div>
+    </div>
+    <div class="catalog-filters" aria-label="资料筛选">
       <form class="table-search" @submit.prevent="search">
         <UInput
           v-model="q"
@@ -258,31 +246,13 @@ async function remove() {
           aria-label="搜索公共习题"
         /><UButton
           type="submit"
-          icon="i-lucide-arrow-right"
+          icon="i-lucide-search"
           color="neutral"
           variant="outline"
           aria-label="搜索公共习题"
           :loading="loading"
         />
       </form>
-      <div class="actions-row">
-        <USelect
-          v-model="status"
-          :items="statuses"
-          aria-label="发布状态筛选"
-          class="status-filter"
-        /><UTooltip text="刷新"
-          ><UButton
-            icon="i-lucide-refresh-cw"
-            color="neutral"
-            variant="ghost"
-            aria-label="刷新公共习题"
-            :loading="loading"
-            @click="refresh" /></UTooltip
-        ><UButton icon="i-lucide-plus" label="添加习题" @click="create" />
-      </div>
-    </div>
-    <div class="catalog-filters" aria-label="资料筛选">
       <USelect v-model="grade" :items="[{value:'all',label:'全部年级'}, ...gradeOptions]" aria-label="年级筛选" />
       <USelect v-model="subject" :items="[{value:'all',label:'全部学科'}, ...subjectOptions]" aria-label="学科筛选" />
       <USelect v-model="category" :items="[{value:'all',label:'全部分类'}, ...filterCategories]" aria-label="分类筛选" />
@@ -350,15 +320,16 @@ async function remove() {
         </li>
       </ul>
     </section>
-    <div class="actions-row mb-3">
+    <div class="catalog-selection-bar">
+      <span>{{ selectedItems.length ? '已选择 ' + selectedItems.length + ' 份' : '共 ' + total + ' 份习题' }}</span>
+      <div class="actions-row" v-if="selectedItems.length">
       <UButton
         :label="'批量管理（' + selectedItems.length + '）'"
-        :disabled="!selectedItems.length"
-        variant="outline"
+        icon="i-lucide-list-checks" size="sm" variant="soft"
         @click="batchOpen = true"
-      /><span class="text-sm text-muted"
-        >勾选资料后可批量分类、上下架或调整权限</span
-      >
+      /><UButton label="取消选择" variant="ghost" color="neutral" size="sm" @click="selection.clear()" />
+      </div>
+      <span v-else-if="stats" class="catalog-engagement">收藏 {{ stats.favorites }}<span>·</span>下载 {{ stats.downloads }}</span>
     </div>
     <CatalogPaperTable
       :items="items"
@@ -440,15 +411,19 @@ async function remove() {
 </template>
 
 <style scoped>
-.catalog-filters { display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px; }
-.catalog-filters > * { min-width:130px; }
-@media(max-width:600px) { .catalog-filters > * { flex:1; } }
+.catalog-filters { display:flex;flex-wrap:wrap;gap:10px;padding:18px 0;border-bottom:1px solid var(--ui-border); }
+.catalog-filters > :deep([role='combobox']) { min-width:0;flex:1 1 140px;width:auto; }
+.catalog-filters .table-search { flex:1 1 280px; }
+.catalog-selection-bar { display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:58px;font-size:12px;color:var(--ui-text-muted); }
+.catalog-engagement { display:flex;gap:12px; }
+.catalog-toolbar { margin-bottom:0;gap:12px; }
+.catalog-toolbar > .actions-row { margin-left:auto;flex-wrap:nowrap; }
+@media(max-width:600px) { .catalog-filters { display:grid;grid-template-columns:repeat(2,minmax(0,1fr)); }.catalog-filters > :not([role='combobox']) { grid-column:1 / -1; }.catalog-filters .table-search { width:100%; }.catalog-toolbar > :first-child { order:2;width:100%; }.catalog-selection-bar { flex-wrap:wrap;padding:10px 0; } }
 .created-results {
   padding: 16px;
   margin-bottom: 20px;
-  border: 1px solid var(--ui-border);
-  border-radius: 10px;
-  background: var(--ui-bg-muted);
+  border-left: 3px solid var(--ui-primary);
+  background: #f2f8f5;
 }
 .created-results ul {
   list-style: none;
@@ -466,43 +441,5 @@ async function remove() {
 }
 .created-results strong {
   overflow-wrap: anywhere;
-}
-.catalog-metrics {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  border-bottom: 1px solid var(--ui-border);
-  margin: 0 0 16px;
-  padding-bottom: 12px;
-  gap: 16px;
-}
-.catalog-metrics dt {
-  color: var(--ui-text-muted);
-  font-size: 12px;
-}
-.catalog-metrics dd {
-  margin: 8px 0 0;
-  font-size: 20px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.catalog-toolbar {
-  flex-wrap: wrap;
-  gap: 12px;
-}
-.catalog-toolbar > .actions-row {
-  flex-wrap: nowrap;
-}
-.status-filter {
-  width: 136px;
-  min-width: 116px;
-  flex: none;
-}
-@media (max-width: 600px) {
-  .catalog-metrics {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .catalog-toolbar .actions-row {
-    flex-wrap: wrap;
-  }
 }
 </style>
