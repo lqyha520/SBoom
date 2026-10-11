@@ -116,7 +116,7 @@ async function main() {
     await dialog().waitFor()
   }
   try {
-    await admin.goto(base + '/admin/'); await admin.getByRole('button', { name: '首页 Banner', exact: true }).click(); await settle(admin)
+    await admin.goto(base + '/admin/#banners'); await settle(admin)
     await admin.getByRole('button', { name: '新建 Banner', exact: true }).click()
     check('New banners expose image selection before the first save', await admin.getByRole('button', { name: '选择图片', exact: true }).isVisible())
     await admin.getByLabel('选择 Banner 图片', { exact: true }).setInputFiles(photo)
@@ -247,7 +247,9 @@ async function main() {
     await edit(banner.title)
     await admin.getByLabel('选择 Banner 图片', { exact: true }).setInputFiles(photo)
     await admin.locator('.phone-preview img[src^="blob:"]').waitFor()
+    admin.once('dialog', event => event.accept())
     await dialog().getByRole('button', { name: '取消', exact: true }).click()
+    await dialog().waitFor({ state: 'hidden' })
     check('Cancel discards a selected replacement without uploading it', (await list())[0].revision === banner.revision)
 
     const originalCopy = banner
@@ -265,7 +267,9 @@ async function main() {
     banner = await updateBanner(banner, { subtitle: '另一位管理员已更新文案' })
     await admin.getByRole('button', { name: '保存 Banner', exact: true }).click(); await admin.locator('.editor-error').waitFor()
     check('A stale editor cannot overwrite a newer update or upload its pending photo', (await list())[0].revision === banner.revision && await admin.locator('.phone-preview img[src^="blob:"]').count() === 1)
+    admin.once('dialog', event => event.accept())
     await dialog().getByRole('button', { name: '取消', exact: true }).click()
+    await dialog().waitFor({ state: 'hidden' })
     await admin.getByRole('button', { name: '刷新 Banner', exact: true }).click(); await settle(admin)
 
     await admin.getByRole('button', { name: '新建 Banner', exact: true }).click()

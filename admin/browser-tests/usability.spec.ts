@@ -72,10 +72,12 @@ test('菜单搜索与固定入口持久化，原有链接保持可用', async ({
   await expect(nav.getByRole('button', { name: '系统日志', exact: true })).toHaveCount(0)
   await nav.getByRole('button', { name: '加入常用：专题合集' }).click()
   await page.getByRole('button', { name: '清除搜索' }).click()
-  await page.getByRole('button', { name: '常用：专题合集', exact: true }).click()
+  await page.getByRole('button', { name: '常用入口', exact: true }).click()
+  await page.getByRole('menuitem', { name: '专题合集', exact: true }).click()
   await expect(page).toHaveURL(/#topics$/)
   await page.reload()
-  await expect(page.getByRole('button', { name: '常用：专题合集', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '常用入口', exact: true }).click()
+  await expect(page.getByRole('menuitem', { name: '专题合集', exact: true })).toBeVisible()
 })
 
 test('列表不等待统计，筛选和页码刷新后保留，翻页不重取统计', async ({ page, context }) => {
@@ -171,10 +173,10 @@ test('统一编辑保留各面板草稿并同步保存版本，可就地创建�
 test('首页待办独立于平台统计，可直接进入对应筛选列表', async ({ page, context }, info) => {
   await fixture(context)
   await page.goto('/admin/#overview')
-  await expect(page.getByRole('button', { name: '待处理资料需求 1 前往处理 →' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '待审核退款 2 前往处理 →' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '待处理资料需求 1 前往处理' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '待审核退款 2 前往处理' })).toBeVisible()
   await page.screenshot({ path: info.outputPath('admin-home.png') })
-  await page.getByRole('button', { name: '待处理资料需求 1 前往处理 →' }).click()
+  await page.getByRole('button', { name: '待处理资料需求 1 前往处理' }).click()
   await expect(page).toHaveURL(/#resourceRequests\?status=pending$/)
   await expect(page.getByRole('button', { name: '处理需求' })).toBeVisible()
 })
@@ -218,3 +220,112 @@ test('保存其他面板时保留修订和打印版本草稿，后续使用最�
   await expect(editor.getByRole('tab', { name: '基本与发布' })).toHaveAttribute('aria-selected', 'true')
   await expect(editor.getByRole('status')).not.toContainText('有未保存的修改')
 })
+
+const healthyStats = {
+  users: 128, activeUsers: 116, admins: 2, templates: 346, feedbacks: 18, feedbacksOob: 2,
+  llmConfigured: 1, server: { model: 'configured-text-model', encryption: '已启用', version: '0.3.0' },
+  generationUsage: { requests: 84, succeeded: 80, running: 3, unknown: 1, model_calls: 92,
+    reported_calls: 92, prompt_tokens: 138240, completion_tokens: 276480, daily_limit: 50 },
+}
+
+async function fitsViewport(page: Page, selector = '.admin-main') {
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  expect(await page.locator(selector).evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+}
+
+for (const width of [1440, 1024, 800, 390, 320]) {
+  test(`新版概览、筛选和全屏编辑布局 ${width}px`, async ({ page, context }, info) => {
+    const server = await fixture(context), errors: string[] = []
+    page.on('pageerror', error => errors.push(error.message))
+    await page.route('**/api/v1/admin/stats', route => route.fulfill({ json: healthyStats }))
+    await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })
+    await page.goto('/admin/#overview')
+    await expect(page.getByText('configured-text-model', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '待发布草稿 21 前往处理' })).toBeVisible()
+    await fitsViewport(page)
+    await page.screenshot({ path: info.outputPath('overview.png') })
+    await page.getByRole('button', { name: '待发布草稿 21 前往处理' }).click()
+    await expect(page.getByRole('tab', { name: '草稿 21', exact: true })).toHaveAttribute('aria-selected', 'true')
+    await page.getByRole('tab', { name: '已发布 0', exact: true }).click()
+    await expect.poll(() => server.queries.at(-1)?.get('status')).toBe('published')
+    await expect(page).toHaveURL(/status=published/)
+    await page.getByRole('checkbox', { name: '选择 三年级练习', exact: true }).check()
+    await expect(page.getByRole('button', { name: '批量管理（1）' })).toBeVisible()
+    await page.getByRole('button', { name: '取消选择', exact: true }).click()
+    await expect(page.getByRole('button', { name: '批量管理（1）' })).toBeHidden()
+    await fitsViewport(page)
+    if (width >= 1400) {
+      const filters = await page.locator('.catalog-filters > [role="combobox"]').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().top))
+      expect(new Set(filters).size).toBe(1)
+    }
+    await page.screenshot({ path: info.outputPath('catalog.png') })
+    await page.getByRole('button', { name: '编辑 三年级练习', exact: true }).click()
+    const editor = page.getByRole('dialog', { name: '编辑公共习题', exact: true })
+    const bounds = await editor.boundingBox()
+    expect(bounds?.width).toBe(width)
+    expect(bounds?.x).toBe(0)
+    await expect(editor.getByRole('complementary')).toBeHidden()
+    await editor.getByRole('textbox', { name: '公开标题' }).fill('切换预览保留编辑')
+    await expect(editor.getByRole('button', { name: '保存更改', exact: true })).toBeInViewport()
+    await fitsViewport(page, '.publication-editor-body')
+    expect(await editor.locator('[role="tab"] [data-slot="label"]').evaluateAll(elements => elements.every(element => element.scrollWidth <= element.clientWidth))).toBe(true)
+    await page.screenshot({ path: info.outputPath('editor.png') })
+    await editor.getByRole('button', { name: '展开预览', exact: true }).click()
+    await expect(editor.getByRole('complementary', { name: '已保存资料预览' })).toBeInViewport()
+    await editor.getByRole('button', { name: '收起预览', exact: true }).click()
+    await expect(editor.getByRole('textbox', { name: '公开标题' })).toHaveValue('切换预览保留编辑')
+    await editor.locator('.publication-editor-body').evaluate(element => { element.scrollTop = element.scrollHeight })
+    await expect(editor.getByRole('button', { name: '保存更改', exact: true })).toBeInViewport()
+    await fitsViewport(page, '.publication-editor-body')
+    expect(errors).toEqual([])
+  })
+}
+
+test('导航分组默认收起并保存选择，当前页面所在组始终展开', async ({ page, context }) => {
+  await fixture(context)
+  await context.route('https://**', route => route.abort())
+  await page.goto('/admin/#papers')
+  await expect(page.locator('.nav-group-caption > .iconify')).toHaveCount(12)
+  const group = (name: string) => page.getByRole('navigation').getByRole('button', { name, exact: true })
+  await expect(group('内容资料')).toHaveAttribute('aria-expanded', 'true')
+  await expect(group('系统设置')).toHaveAttribute('aria-expanded', 'false')
+  await group('系统设置').click()
+  await page.reload()
+  await expect(group('系统设置')).toHaveAttribute('aria-expanded', 'true')
+  await group('内容资料').click()
+  await page.reload()
+  await expect(group('内容资料')).toHaveAttribute('aria-expanded', 'true')
+})
+
+for (const width of [1440, 320]) {
+  test(`文本和图片模型切换保留各自草稿与离开保护 ${width}px`, async ({ page, context }, info) => {
+    const server = await fixture(context)
+    await page.route('**/api/v1/admin/llm-config', route => route.fulfill({ json: { baseUrl: 'https://text.example.test/v1', model: 'text-model', timeout: 60, maxTokens: 16384, hasKey: true } }))
+    await page.route('**/api/v1/admin/image-config', route => route.fulfill({ json: { baseUrl: 'https://image.example.test/v1', model: 'image-model', timeout: 300, size: '1024x1536', responseFormat: 'auto', hasKey: true } }))
+    await page.setViewportSize({ width, height: width === 320 ? 844 : 1000 })
+    await page.goto('/admin/#llm')
+    const textModel = page.getByRole('textbox', { name: '模型名称', exact: false }).first()
+    await textModel.fill('text-draft')
+    await fitsViewport(page)
+    await page.screenshot({ path: info.outputPath('text-model.png') })
+    await page.getByRole('tab', { name: '图片出题', exact: true }).click()
+    const imageModel = page.getByRole('textbox', { name: '生图模型名称', exact: false })
+    await imageModel.fill('image-draft')
+    await page.getByRole('tab', { name: '文本出题', exact: true }).click()
+    await expect(textModel).toHaveValue('text-draft')
+    await page.getByRole('tab', { name: '图片出题', exact: true }).click()
+    await expect(imageModel).toHaveValue('image-draft')
+    page.once('dialog', dialog => dialog.dismiss())
+    await page.evaluate(() => { location.hash = '#papers' })
+    await expect(page).toHaveURL(/#llm$/)
+    await expect(imageModel).toHaveValue('image-draft')
+    expect(await page.evaluate(() => {
+      const event = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(event)
+      return event.defaultPrevented
+    })).toBe(true)
+    await fitsViewport(page)
+    await page.screenshot({ path: info.outputPath('image-model.png') })
+    expect(server.writes).toEqual([])
+  })
+}

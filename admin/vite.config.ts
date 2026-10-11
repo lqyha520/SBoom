@@ -9,7 +9,7 @@ const BACKEND = process.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000'
 
 export default defineConfig({
   cacheDir: 'node_modules/.vite-admin',
-  plugins: [{ name: 'stable-ui-types', closeBundle: normalizeTypes }, vue(), ui({ router: false, colorMode: false, experimental: { componentDetection: true }, ui: uiConfig, icon: { clientBundle: { scan: true } } })],
+  plugins: [{ name: 'stable-ui-types', closeBundle: normalizeTypes }, vue(), ui({ router: false, colorMode: false, experimental: { componentDetection: true }, ui: uiConfig, icon: { clientBundle: { scan: { globInclude: ['src/**/*.{vue,ts}'] } } } })],
   resolve: { dedupe: ['vue'] },
   base: '/admin/', // 部署在 FastAPI 的 /admin 路径下
   server: {

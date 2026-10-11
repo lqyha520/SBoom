@@ -48,7 +48,6 @@ useAdminRefresh(load, () => { loadSequence++; loading.value = false })
 <template>
   <section class="admin-section image-model-settings" aria-label="图片生成服务">
     <div class="section-toolbar"><h2>图片生成服务</h2><UBadge :color="hasKey ? 'success' : 'warning'" variant="subtle">{{ hasKey ? '密钥已保存' : '未配置密钥' }}</UBadge></div>
-    <p class="text-sm text-muted mb-5">配置自定义 OpenAI 兼容生图接口，供工作台「图片出题」使用。</p>
     <UAlert v-if="loadError" :title="loadError" color="error" :actions="[{ label: '重试', onClick: load }]" />
     <div v-if="loading" role="status"><USkeleton v-for="n in 4" :key="n" class="h-14 mb-3" /></div>
     <form v-else-if="!loadError" class="settings-form settings-section" @submit.prevent="save">
@@ -74,5 +73,5 @@ useAdminRefresh(load, () => { loadSequence++; loading.value = false })
 </template>
 
 <style scoped>
-.image-model-settings { margin-top:24px; }
+.image-model-settings { margin-top:0;max-width:800px; }
 </style>

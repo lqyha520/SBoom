@@ -2,6 +2,8 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import type { ImageWorksheetParams, WorksheetImage } from '../src/image-generation'
 
+const catalogKeyword = '上册·20 以内加法'
+
 // 真实浏览器、图片解码、IndexedDB 和 PDF；图片为明确标注的离线绘制素材。
 async function imageApi(page: Page, context: BrowserContext, options: { holdFirst?: boolean; unknownFirst?: boolean; rejectFirst?: boolean; configured?: boolean } = {}) {
   await page.emulateMedia({ reducedMotion: 'reduce' })
@@ -28,7 +30,11 @@ async function imageApi(page: Page, context: BrowserContext, options: { holdFirs
     let data: unknown
     if (path === '/api/v1/auth/me') data = { id: 7, username: 'teacher', role: 'user' }
     else if (path === '/api/v1/scope/available') data = { available: Object.fromEntries(['一', '二', '三', '四', '五', '六'].map(n => [`小学${n}年级`, ['数学', '语文', '英语']])) }
-    else if (path === '/api/v1/scope') data = { allowed: ['20 以内加法', '20 以内减法', '认识图形', '位置与方向', '认识钟表'] }
+    else if (path === '/api/v1/scope') data = { allowed: [], books: [{
+      id: 'offline-math', semester: '上册', series: '离线浏览器测试教材',
+      source_url: 'https://example.test/textbook', verified_on: '2026-10-11',
+      units: ['20 以内加法', '20 以内减法', '认识图形', '位置与方向', '认识钟表'].map((title, index) => ({ title, page: index + 1, topics: [] })),
+    }] }
     else if (path === '/api/v1/me/templates') data = { templates: [] }
     else if (path === '/api/v1/me/usage') data = { requests: 0 }
     else if (path === '/api/v1/image-generation/options') data = { configured: options.configured !== false }
@@ -70,7 +76,7 @@ async function openImages(page: Page) {
 async function configure(page: Page, count = 1) {
   await page.getByRole('combobox', { name: '图片年级' }).selectOption('小学一年级')
   await page.getByRole('combobox', { name: '图片科目' }).selectOption('数学')
-  await page.getByRole('button', { name: '20 以内加法', exact: true }).first().click()
+  await page.getByRole('button', { name: catalogKeyword, exact: true }).first().click()
   await page.getByRole('button', { name: /轻量练习 2 类/ }).click()
   if (count !== 1) {
     const input = page.getByRole('spinbutton', { name: '生成张数' })
@@ -98,17 +104,17 @@ test('快速设置、修改原批次设置、复用和下载 PDF，历史图片�
   await page.getByRole('button', { name: '生成 2 张图片', exact: true }).click()
   await expect(page.locator('.image-batch-status')).toContainText('本批图片已全部完成')
   expect(api.calls.map(call => call.params.image_index)).toEqual([1, 2])
-  expect(api.calls.every(call => call.params.keyword === '20 以内加法' && call.params.style === 'black_white')).toBe(true)
+  expect(api.calls.every(call => call.params.keyword === catalogKeyword && call.params.style === 'black_white')).toBe(true)
   expect(api.calls.every(call => call.params.items.every(item => item.question_count === null))).toBe(true)
   await expect(page.locator('.image-batch-title')).toContainText('题量自动安排')
   await page.getByRole('button', { name: '上一张图片' }).click()
   await expect(page.locator('.worksheet-image')).toHaveAttribute('alt', /第 1 张/)
   await expect(page.getByRole('button', { name: '上一张图片' })).toBeDisabled()
   await page.getByRole('textbox', { name: '图片知识点' }).fill('乘法练习')
-  await expect(page.locator('.image-batch-title h3')).toHaveText('20 以内加法')
+  await expect(page.locator('.image-batch-title h3')).toHaveText(catalogKeyword)
   await expect(page.locator('.image-generate-actions')).toContainText('设置已调整')
   await page.getByRole('button', { name: '复用设置' }).click()
-  await expect(page.getByRole('textbox', { name: '图片知识点' })).toHaveValue('20 以内加法')
+  await expect(page.getByRole('textbox', { name: '图片知识点' })).toHaveValue(catalogKeyword)
   expect(api.calls).toHaveLength(2)
   const download = page.waitForEvent('download')
   await page.getByRole('button', { name: '下载 PDF（2 页）' }).click()
@@ -127,11 +133,11 @@ test('快速设置、修改原批次设置、复用和下载 PDF，历史图片�
   await expect(page.locator('.image-batch-status')).toContainText('本批图片已全部完成')
   await page.getByRole('button', { name: '历史批次', exact: true }).click()
   await page.getByRole('dialog').getByRole('button', { name: /20 以内加法/ }).click()
-  await expect(page.locator('.image-batch-title h3')).toHaveText('20 以内加法')
+  await expect(page.locator('.image-batch-title h3')).toHaveText(catalogKeyword)
   await page.reload()
   await page.getByRole('button', { name: '图片出题', exact: true }).click()
   await expect(page.locator('.image-batch-status')).toContainText('本批图片已全部完成')
-  await expect(page.locator('.image-batch-title h3')).toHaveText('20 以内加法')
+  await expect(page.locator('.image-batch-title h3')).toHaveText(catalogKeyword)
   await expect(page.getByRole('textbox', { name: '图片知识点' })).toHaveValue('乘法练习')
   expect(api.calls).toHaveLength(4)
   expect(api.queries).toEqual([])
@@ -204,7 +210,7 @@ test('明确失败后提示重试费用，修改下一批条件不会改变本�
   await expect(page.locator('.image-batch-status')).toContainText('本批图片已全部完成')
   expect(api.calls).toHaveLength(2)
   expect(api.calls[0].id).not.toBe(api.calls[1].id)
-  expect(api.calls[1].params.keyword).toBe('20 以内加法')
+  expect(api.calls[1].params.keyword).toBe(catalogKeyword)
   expect(api.unexpected).toEqual([])
 })
 
@@ -353,7 +359,7 @@ for (const width of [1440, 320]) {
     await expect(clear).toBeInViewport()
     page.once('dialog', dialog => dialog.dismiss())
     await clear.click()
-    await expect(page.getByRole('textbox', { name: '图片知识点' })).toHaveValue('20 以内加法')
+    await expect(page.getByRole('textbox', { name: '图片知识点' })).toHaveValue(catalogKeyword)
     page.once('dialog', dialog => dialog.accept())
     await clear.click()
     await expect(page.getByRole('combobox', { name: '图片年级' })).toHaveValue('')
@@ -371,7 +377,7 @@ for (const width of [1440, 320]) {
     await noHorizontalOverflow(page)
     await page.reload()
     await page.getByRole('button', { name: '图片出题', exact: true }).click()
-    await expect(page.locator('.image-batch-title h3')).toHaveText('20 以内加法')
+    await expect(page.locator('.image-batch-title h3')).toHaveText(catalogKeyword)
     await expect(page.locator('.image-pages button')).toHaveCount(2)
     await expect(page.locator('.worksheet-image')).toBeVisible()
     expect(api.calls).toHaveLength(2)
