@@ -449,8 +449,6 @@ def create_dictionary(body: DictionaryInput) -> dict:
     now = _now()
     value = _clean(body.value)
     parent = body.parent.strip()
-    if body.kind == "knowledge_point":
-        _require_scope_pair(parent)
     with db(serialized=True) as conn:
         if conn.execute("SELECT 1 FROM site_dictionary WHERE kind = ? AND parent = ? AND value = ?",
                         (body.kind, parent, value)).fetchone():
