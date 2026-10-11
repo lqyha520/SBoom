@@ -168,10 +168,13 @@ async def fixture_chat(messages, **_kwargs):
     record_usage({"prompt_tokens": 120, "completion_tokens": 80})
     if '"is_oob"' in system:
         return json.dumps({"is_oob": False, "oob_points": []})
-    items = re.findall(r"section_id=([^，\n]+)，([^（\n]+)（[^\n]*?）：(\d+) 道题", system)
-    if items:
+    contract = json.loads(system.rsplit('\n', 1)[-1])
+    if "sections" in contract:
+        counts = json.loads(re.search(r"各大题题数：([^\n]+)", system)[1])
         sections = []
-        for index, (section_id, kind, count) in enumerate(items):
+        for index, section in enumerate(contract["sections"]):
+            section_id, kind = section["section_id"], section["game_type"]
+            count = counts[section_id]
             value = {"section_id": section_id, "game_type": kind,
                      "questions": [question(kind, i, generation * 100 + index * 40) for i in range(int(count))]}
             if kind == "reading":
@@ -180,10 +183,10 @@ async def fixture_chat(messages, **_kwargs):
                 value["questions"] = value["questions"][:1]
             sections.append(value)
         return json.dumps({"sections": list(reversed(sections))}, ensure_ascii=False)
-    kind = re.search(r'"game_type"\s*:\s*"([^"]+)"', system)
-    count = re.search(r"生成(\d+)道题目", system)
-    return json.dumps({"game_type": kind[1] if kind else "fill_blank", "questions": [
-        question(kind[1] if kind else "fill_blank", i, generation * 100)
+    kind = contract["game_type"]
+    count = re.search(r"题数：(\d+)", system)
+    return json.dumps({"game_type": kind, "questions": [
+        question(kind, i, generation * 100)
         for i in range(int(count[1]) if count else 1)
     ]}, ensure_ascii=False)
 
