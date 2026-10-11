@@ -438,7 +438,11 @@ for (const width of [1280, 390]) {
     await count.fill('6')
     await count.press('Tab')
     await expect(structure.locator('.section-status')).toContainText('待生成 6 道题')
-    await expect(page.locator('.preview-panel .paper-stack .q')).toHaveCount(0)
+    if (width >= 900) {
+      await expect(page.locator('.preview-panel .preview-hint')).toContainText('题型格式示例')
+      await expect(page.locator('.preview-panel .paper-stack .q')).toHaveCount(6)
+      await expect(page.locator('.preview-panel .paper-stack')).not.toContainText('模型返回的题目')
+    }
     expect(calls).toBe(0)
     await page.screenshot({ path: info.outputPath(`pending-model-${width}.png`) })
     page.once('dialog', dialog => dialog.accept())
