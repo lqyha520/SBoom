@@ -86,6 +86,14 @@ watch(tab, async value => {
 })
 const activeTab = computed(() => flat.value.find(item => item.id === tab.value)!)
 const activeGroup = computed(() => groups.find(group => group.items.some(item => item.id === tab.value))!)
+const descriptions: Partial<Record<Tab, string>> = {
+  overview: '从这里开始，掌握平台动态与今日待办。',
+  papers: '整理教学资料，让每一份好习题都被看见。',
+  llm: '管理出题模型，随时核对配置与连接状态。',
+  orders: '查看会员交易，跟进订单与退款处理。',
+  supportCenter: '及时回应用户，让每一次反馈都有着落。',
+}
+const pageDescription = computed(() => descriptions[tab.value] || `集中管理${activeTab.value.label}，让日常工作更有条理。`)
 const loggingOut = ref(false)
 const logoutError = ref('')
 async function logout() {
@@ -101,7 +109,7 @@ async function logout() {
 <template>
   <div class="admin-shell">
     <header class="admin-header">
-      <a class="brand" href="/"><span class="brand-mark"><UIcon name="i-lucide-notebook-pen" class="size-5" /></span><div class="brand-name">管理控制台</div></a>
+      <a class="brand" href="/"><span class="brand-mark"><UIcon name="i-lucide-notebook-pen" class="size-5" /></span><div><div class="brand-name">管理控制台</div><div class="brand-caption">出题工作台 · 管理中心</div></div></a>
       <div class="header-location"><span>{{ activeGroup.label }}</span><UIcon name="i-lucide-chevron-right" class="size-3" /><strong>{{ activeTab.label }}</strong></div>
       <div class="admin-header-actions">
         <UDropdownMenu :items="favoriteMenu.length ? favoriteMenu : [{ label: '暂无常用入口', disabled: true }]">
@@ -117,6 +125,7 @@ async function logout() {
     </header>
     <div class="admin-workspace">
       <aside class="admin-sidebar">
+        <div class="sidebar-intro"><span>工作空间</span><UIcon name="i-lucide-grid-2x2" class="size-3.5" /></div>
         <label class="mobile-nav">管理页面<select v-model="tab" aria-label="选择管理页面"><optgroup v-for="group in groups" :key="group.id" :label="group.label"><option v-for="item in group.items" :key="item.id" :value="item.id">{{ item.label }}</option></optgroup></select></label>
         <div class="nav-search"><UInput v-model="navSearch" icon="i-lucide-search" aria-label="搜索管理菜单" placeholder="搜索菜单" class="w-full" /><UButton v-if="navSearch" label="清除搜索" size="xs" variant="ghost" @click="navSearch = ''" /></div>
         <nav aria-label="管理后台导航">
@@ -128,6 +137,7 @@ async function logout() {
             </button>
             <div :id="'nav-panel-' + group.id" class="nav-group-items" :class="{ collapsed: !navSearch && isCollapsed(group.id) }">
               <div v-for="item in group.items" :key="item.id" class="nav-row"><button class="nav-item" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" @click="tab = item.id">
+                <UIcon :name="item.icon" class="size-4 nav-item-icon" />
                 <span>{{ item.label }}</span>
               </button><button class="nav-pin" :class="{ pinned: favorites.includes(item.id) }" :title="(favorites.includes(item.id) ? '移出常用：' : '加入常用：') + item.label" :aria-label="(favorites.includes(item.id) ? '移出常用：' : '加入常用：') + item.label" :aria-pressed="favorites.includes(item.id)" :disabled="!favorites.includes(item.id) && favorites.length >= 6" @click="toggleFavorite(item.id)"><UIcon name="i-lucide-star" class="size-3.5" /></button></div>
             </div>
@@ -137,7 +147,7 @@ async function logout() {
       </aside>
       <main class="admin-main">
         <UAlert v-if="logoutError" :title="logoutError" color="error" role="alert" />
-        <div class="admin-page-heading"><h1>{{ activeTab.label }}</h1></div>
+        <div class="admin-page-heading"><div><div class="page-eyebrow"><span></span>{{ activeGroup.label }}</div><h1>{{ activeTab.label }}</h1><p>{{ pageDescription }}</p></div><span class="page-heading-icon" aria-hidden="true"><UIcon :name="activeTab.icon" class="size-7" /></span></div>
         <KeepAlive :max="25"><component :is="views[tab]" :user="props.user" @configure="tab = 'llm'" /></KeepAlive>
       </main>
     </div>
@@ -148,13 +158,14 @@ async function logout() {
 .nav-search { padding:0 4px 20px; }
 .nav-row { display:flex;align-items:center;min-width:0; }
 .nav-row .nav-item { flex:1;min-width:0; }
-.nav-row .nav-item span { overflow:hidden;text-overflow:ellipsis; }
-.nav-pin { flex:none;width:28px;height:32px;display:grid;place-items:center;border-radius:4px;color:var(--ui-text-muted);cursor:pointer;opacity:0; }
+.nav-row .nav-item span:last-child { overflow:hidden;text-overflow:ellipsis; }
+.nav-item-icon { flex:none;opacity:.8; }
+.nav-pin { flex:none;width:28px;height:32px;display:grid;place-items:center;border-radius:6px;color:#9dbab3;cursor:pointer;opacity:0;transition:opacity .18s,background .18s; }
 .nav-row:hover .nav-pin, .nav-row:focus-within .nav-pin { opacity:1; }
-.nav-pin:hover, .nav-pin:focus-visible, .nav-pin.pinned { color:var(--ui-primary);background:var(--ui-bg-accented); }
+.nav-pin:hover, .nav-pin:focus-visible, .nav-pin.pinned { color:#b6f0d8;background:#ffffff10; }
 .nav-pin:disabled { opacity:0.3;cursor:default; }
 .sidebar-status { width:6px;height:6px;border-radius:50%;background:var(--ui-primary); }
-@media(max-width:800px) { .nav-search { display:none; } }
+@media(max-width:800px) { .nav-search, .sidebar-intro { display:none; } }
 
 .mobile-nav { display:none }
 @media (max-width: 800px) { .mobile-nav { display:flex; align-items:center; gap:12px; width:100%;font-size:12px;color:var(--ui-text-muted) } .mobile-nav select { flex:1; min-width:0; padding:8px; border:1px solid var(--ui-border); border-radius:6px; background:var(--ui-bg);color:var(--ui-text) } .admin-sidebar nav, .sidebar-footer { display:none !important } }

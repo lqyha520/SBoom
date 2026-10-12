@@ -167,7 +167,7 @@ test('统一编辑保留各面板草稿并同步保存版本，可就地创建�
   await editor.getByRole('button', { name: '保存资料标签' }).click()
   await expect.poll(() => server.writes.filter(write => write.path.endsWith('/labels')).length).toBe(2)
   expect(server.writes.at(-1)?.body.revision).toBe(3)
-  await page.screenshot({ path: info.outputPath('unified-editor.png') })
+  await page.screenshot({ animations: 'disabled', path: info.outputPath('unified-editor.png') })
 })
 
 test('首页待办独立于平台统计，可直接进入对应筛选列表', async ({ page, context }, info) => {
@@ -175,7 +175,7 @@ test('首页待办独立于平台统计，可直接进入对应筛选列表', as
   await page.goto('/admin/#overview')
   await expect(page.getByRole('button', { name: '待处理资料需求 1 前往处理' })).toBeVisible()
   await expect(page.getByRole('button', { name: '待审核退款 2 前往处理' })).toBeVisible()
-  await page.screenshot({ path: info.outputPath('admin-home.png') })
+  await page.screenshot({ animations: 'disabled', path: info.outputPath('admin-home.png') })
   await page.getByRole('button', { name: '待处理资料需求 1 前往处理' }).click()
   await expect(page).toHaveURL(/#resourceRequests\?status=pending$/)
   await expect(page.getByRole('button', { name: '处理需求' })).toBeVisible()
@@ -228,6 +228,26 @@ const healthyStats = {
     reported_calls: 92, prompt_tokens: 138240, completion_tokens: 276480, daily_limit: 50 },
 }
 
+test('概览显示真实请求分布，空数据不虚构用量，快捷入口可用', async ({ page, context }) => {
+  await fixture(context)
+  let empty = false
+  await page.route('**/api/v1/admin/stats', route => route.fulfill({ json: {
+    ...healthyStats,
+    generationUsage: empty ? { ...healthyStats.generationUsage, requests: 0, succeeded: 0, running: 0, unknown: 0, model_calls: 0, reported_calls: 0 } : healthyStats.generationUsage,
+  } }))
+  await page.goto('/admin/#overview')
+  const distribution = page.getByLabel('生成请求状态分布', { exact: true })
+  await expect(distribution).toContainText('84 次请求')
+  await expect(distribution.locator('li')).toHaveText(['已完成80', '处理中3', '待确认1', '其他结果0'])
+  empty = true
+  await page.getByRole('button', { name: '刷新概览', exact: true }).click()
+  await expect(distribution).toContainText('0 次请求')
+  await expect(distribution.locator('.usage-track > span:visible')).toHaveCount(0)
+  await page.getByRole('button', { name: '管理资料', exact: true }).click()
+  await expect(page).toHaveURL(/#papers$/)
+  await expect(page.getByRole('heading', { name: '教学资料库', exact: true })).toBeVisible()
+})
+
 async function fitsViewport(page: Page, selector = '.admin-main') {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   expect(await page.locator(selector).evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
@@ -243,7 +263,7 @@ for (const width of [1440, 1024, 800, 390, 320]) {
     await expect(page.getByText('configured-text-model', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: '待发布草稿 21 前往处理' })).toBeVisible()
     await fitsViewport(page)
-    await page.screenshot({ path: info.outputPath('overview.png') })
+    await page.screenshot({ animations: 'disabled', path: info.outputPath('overview.png') })
     await page.getByRole('button', { name: '待发布草稿 21 前往处理' }).click()
     await expect(page.getByRole('tab', { name: '草稿 21', exact: true })).toHaveAttribute('aria-selected', 'true')
     await page.getByRole('tab', { name: '已发布 0', exact: true }).click()
@@ -258,18 +278,18 @@ for (const width of [1440, 1024, 800, 390, 320]) {
       const filters = await page.locator('.catalog-filters > [role="combobox"]').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().top))
       expect(new Set(filters).size).toBe(1)
     }
-    await page.screenshot({ path: info.outputPath('catalog.png') })
+    await page.screenshot({ animations: 'disabled', path: info.outputPath('catalog.png') })
     await page.getByRole('button', { name: '编辑 三年级练习', exact: true }).click()
     const editor = page.getByRole('dialog', { name: '编辑公共习题', exact: true })
-    const bounds = await editor.boundingBox()
-    expect(bounds?.width).toBe(width)
-    expect(bounds?.x).toBe(0)
+    // 弹窗入场动画完成后再核对全屏边界。
+    await expect.poll(async () => (await editor.boundingBox())?.width).toBe(width)
+    await expect.poll(async () => (await editor.boundingBox())?.x).toBe(0)
     await expect(editor.getByRole('complementary')).toBeHidden()
     await editor.getByRole('textbox', { name: '公开标题' }).fill('切换预览保留编辑')
     await expect(editor.getByRole('button', { name: '保存更改', exact: true })).toBeInViewport()
     await fitsViewport(page, '.publication-editor-body')
     expect(await editor.locator('[role="tab"] [data-slot="label"]').evaluateAll(elements => elements.every(element => element.scrollWidth <= element.clientWidth))).toBe(true)
-    await page.screenshot({ path: info.outputPath('editor.png') })
+    await page.screenshot({ animations: 'disabled', path: info.outputPath('editor.png') })
     await editor.getByRole('button', { name: '展开预览', exact: true }).click()
     await expect(editor.getByRole('complementary', { name: '已保存资料预览' })).toBeInViewport()
     await editor.getByRole('button', { name: '收起预览', exact: true }).click()
@@ -307,7 +327,7 @@ for (const width of [1440, 320]) {
     const textModel = page.getByRole('textbox', { name: '模型名称', exact: false }).first()
     await textModel.fill('text-draft')
     await fitsViewport(page)
-    await page.screenshot({ path: info.outputPath('text-model.png') })
+    await page.screenshot({ animations: 'disabled', path: info.outputPath('text-model.png') })
     await page.getByRole('tab', { name: '图片出题', exact: true }).click()
     const imageModel = page.getByRole('textbox', { name: '生图模型名称', exact: false })
     await imageModel.fill('image-draft')
@@ -325,7 +345,7 @@ for (const width of [1440, 320]) {
       return event.defaultPrevented
     })).toBe(true)
     await fitsViewport(page)
-    await page.screenshot({ path: info.outputPath('image-model.png') })
+    await page.screenshot({ animations: 'disabled', path: info.outputPath('image-model.png') })
     expect(server.writes).toEqual([])
   })
 }

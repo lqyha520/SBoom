@@ -28,17 +28,17 @@ for (const width of [1440, 320]) {
     await page.route('**/api/v1/auth/me', route => route.fulfill({ status: 401, json: {} }))
     await page.goto('/admin/#documents')
     await expect(page.getByRole('heading', { name: '管理员登录' })).toBeVisible()
-    await expect(page.locator('.brand')).toHaveText('管理控制台')
+    await expect(page.locator('.brand-name')).toHaveText('管理控制台')
     await expect(page.locator('body')).not.toContainText(/learning\s+coach/i)
     await expect(page.locator('.auth-footer, .brand-caption')).toHaveCount(0)
-    await page.screenshot({ path: info.outputPath('admin-login.png') })
+    await page.screenshot({ animations: 'disabled', path: info.outputPath('admin-login.png') })
     await page.unroute('**/api/v1/auth/me')
     await page.reload()
     await expect(page.locator('#doc-body')).toBeVisible()
-    await expect(page.locator('.brand')).toHaveText('管理控制台')
+    await expect(page.locator('.brand-name')).toHaveText('管理控制台')
     await expect(page.locator('body')).not.toContainText(/learning\s+coach/i)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-    await page.screenshot({ path: info.outputPath('admin.png') })
+    await page.screenshot({ animations: 'disabled', path: info.outputPath('admin.png') })
   })
 }
 
@@ -115,7 +115,7 @@ test('窄屏重验证表单紧凑且键盘焦点留在弹窗内', async ({ conte
     expect(await dialog.evaluate(element => element.contains(document.activeElement))).toBe(true)
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-  await page.screenshot({ path: info.outputPath('reauth-320.png') })
+  await page.screenshot({ animations: 'disabled', path: info.outputPath('reauth-320.png') })
 })
 
 test('反馈409可核对最新回复且不丢本地草稿', async ({ context, page }) => {
