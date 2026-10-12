@@ -24,15 +24,16 @@
 .nav-group-caption.active-group { color:#fff; }
 .nav-group-chevron { flex:none; transition:transform .2s ease; color:#9fb8b0; }
 .nav-group-chevron.collapsed { transform:rotate(-90deg); }
-.nav-group-items { display:flex; flex-direction:column; gap:4px; padding:2px 0 8px 8px; margin-left:17px; border-left:1px solid #ffffff18; animation:admin-reveal .22s ease both; }
-.nav-group-items.collapsed { display:none; }
+.nav-group-items { display:flex; flex-direction:column; gap:4px; padding:2px 0 8px 8px; margin-left:17px; border-left:1px solid #ffffff18; }
+.nav-group-reveal-enter-active, .nav-group-reveal-leave-active { overflow:hidden;transition:max-height .2s ease,opacity .16s ease,padding .2s ease;max-height:290px; }
+.nav-group-reveal-enter-from, .nav-group-reveal-leave-to { max-height:0;opacity:0;padding-top:0;padding-bottom:0; }
 .admin-sidebar nav .nav-item { display:flex; align-items:center; gap:9px; min-height:38px; min-width:0; padding:9px 10px; border:0; border-radius:8px; background:transparent; color:#c0d5cd; text-align:left; font-size:12px; white-space:nowrap; transition:background .18s,color .18s,transform .18s; }
 .admin-sidebar nav .nav-item:hover { background:#ffffff10; color:#fff; transform:translateX(2px); }
 .admin-sidebar nav .nav-item.active { background:#d6f1e4; color:#174f3d; font-weight:650; box-shadow:0 3px 10px #061f2420; }
 .sidebar-footer { display:flex; align-items:center; gap:8px; margin-top:auto; padding:20px 10px 0; font-size:11px; color:#a1bfb5; }
 .sidebar-footer > :last-child { margin-left:auto; }
 .admin-main { flex:1; min-width:0; overflow-y:auto; padding:30px 32px 40px; background:#f3f6f8; scrollbar-gutter:stable; }
-.admin-page-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:32px; margin:0 auto 26px;max-width:1440px; }
+.admin-page-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:32px; margin:0 auto 26px;max-width:1440px;animation:admin-reveal .2s ease both; }
 .admin-page-heading h1 { margin:6px 0 8px; color:var(--ui-text-highlighted); font-size:27px; font-weight:650; line-height:1.35; letter-spacing:-.6px; }
 .admin-page-heading p { margin:0;color:var(--ui-text-muted);font-size:12px;line-height:1.8; }
 .page-eyebrow { display:flex;align-items:center;gap:7px;font-size:10px;letter-spacing:1px;color:#527769; }

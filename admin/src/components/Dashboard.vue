@@ -4,6 +4,7 @@ import { lazyComponent } from '../../../shared/async-component'
 import * as api from '../api'
 import { adminRoute, navigateAdmin, listenAdminRoute, canLeaveAdmin } from '../navigation'
 import { adminGroups as groups, searchAdminNavigation } from '../admin-navigation'
+import NavigationSearch from './NavigationSearch.vue'
 
 const props = defineProps<{ user: api.UserInfo }>()
 const emit = defineEmits<{ logout: [] }>()
@@ -52,6 +53,7 @@ const favoriteItems = computed(() => favorites.value.flatMap(id => groups.flatMa
 const favoriteMenu = computed(() => favoriteItems.value.map(item => ({ label: item.label, icon: item.icon, onSelect: () => navigateAdmin(item.id) })))
 const flat = computed(() => groups.flatMap(group => group.items))
 const tab = computed<Tab>({ get: () => adminRoute.tab, set: value => navigateAdmin(value) })
+const main = ref<HTMLElement | null>(null)
 let stopNavigation: (() => void) | undefined
 onMounted(() => { stopNavigation = listenAdminRoute() })
 onBeforeUnmount(() => stopNavigation?.())
@@ -82,6 +84,7 @@ watch(tab, async value => {
   const group = groups.find(item => item.items.some(entry => entry.id === value))
   if (group && isCollapsed(group.id)) { collapsed.value = collapsed.value.filter(id => id !== group.id); persistCollapsed() }
   await nextTick()
+  main.value?.scrollTo?.({ top: 0, behavior: 'instant' })
   document.querySelector('.nav-item[aria-current="page"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
 })
 const activeTab = computed(() => flat.value.find(item => item.id === tab.value)!)
@@ -112,8 +115,9 @@ async function logout() {
       <a class="brand" href="/"><span class="brand-mark"><UIcon name="i-lucide-notebook-pen" class="size-5" /></span><div><div class="brand-name">管理控制台</div><div class="brand-caption">出题工作台 · 管理中心</div></div></a>
       <div class="header-location"><span>{{ activeGroup.label }}</span><UIcon name="i-lucide-chevron-right" class="size-3" /><strong>{{ activeTab.label }}</strong></div>
       <div class="admin-header-actions">
+        <NavigationSearch :user-id="user.id" :favorites="favoriteItems" />
         <UDropdownMenu :items="favoriteMenu.length ? favoriteMenu : [{ label: '暂无常用入口', disabled: true }]">
-          <UButton icon="i-lucide-star" label="常用入口" color="neutral" variant="ghost" size="sm" />
+          <UButton icon="i-lucide-star" aria-label="常用入口" color="neutral" variant="ghost" size="sm" class="header-favorites"><span class="header-favorites-label">常用入口</span></UButton>
         </UDropdownMenu>
         <UButton href="/" icon="i-lucide-arrow-up-right" label="出题工作台" color="neutral" variant="ghost" class="workbench-link" size="sm" />
         <UDropdownMenu :items="[{ label: '退出登录', icon: 'i-lucide-log-out', disabled: loggingOut, onSelect: logout }]">
@@ -135,19 +139,21 @@ async function logout() {
               <UIcon :name="group.icon" class="size-4" /><span>{{ group.label }}</span>
               <UIcon name="i-lucide-chevron-down" class="size-3 nav-group-chevron" :class="{ collapsed: !navSearch && isCollapsed(group.id) }" />
             </button>
-            <div :id="'nav-panel-' + group.id" class="nav-group-items" :class="{ collapsed: !navSearch && isCollapsed(group.id) }">
+            <Transition name="nav-group-reveal">
+            <div v-show="navSearch || !isCollapsed(group.id)" :id="'nav-panel-' + group.id" class="nav-group-items" :inert="!navSearch && isCollapsed(group.id)">
               <div v-for="item in group.items" :key="item.id" class="nav-row"><button class="nav-item" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" @click="tab = item.id">
                 <UIcon :name="item.icon" class="size-4 nav-item-icon" />
                 <span>{{ item.label }}</span>
               </button><button class="nav-pin" :class="{ pinned: favorites.includes(item.id) }" :title="(favorites.includes(item.id) ? '移出常用：' : '加入常用：') + item.label" :aria-label="(favorites.includes(item.id) ? '移出常用：' : '加入常用：') + item.label" :aria-pressed="favorites.includes(item.id)" :disabled="!favorites.includes(item.id) && favorites.length >= 6" @click="toggleFavorite(item.id)"><UIcon name="i-lucide-star" class="size-3.5" /></button></div>
             </div>
+            </Transition>
           </div>
         </nav>
         <div class="sidebar-footer"><span class="sidebar-status"></span><span>管理员工作区</span><UIcon name="i-lucide-shield-check" class="size-4" /></div>
       </aside>
-      <main class="admin-main">
+      <main ref="main" class="admin-main">
         <UAlert v-if="logoutError" :title="logoutError" color="error" role="alert" />
-        <div class="admin-page-heading"><div><div class="page-eyebrow"><span></span>{{ activeGroup.label }}</div><h1>{{ activeTab.label }}</h1><p>{{ pageDescription }}</p></div><span class="page-heading-icon" aria-hidden="true"><UIcon :name="activeTab.icon" class="size-7" /></span></div>
+        <div :key="tab" class="admin-page-heading"><div><div class="page-eyebrow"><span></span>{{ activeGroup.label }}</div><h1>{{ activeTab.label }}</h1><p>{{ pageDescription }}</p></div><span class="page-heading-icon" aria-hidden="true"><UIcon :name="activeTab.icon" class="size-7" /></span></div>
         <KeepAlive :max="25"><component :is="views[tab]" :user="props.user" @configure="tab = 'llm'" /></KeepAlive>
       </main>
     </div>
@@ -165,6 +171,8 @@ async function logout() {
 .nav-pin:hover, .nav-pin:focus-visible, .nav-pin.pinned { color:#b6f0d8;background:#ffffff10; }
 .nav-pin:disabled { opacity:0.3;cursor:default; }
 .sidebar-status { width:6px;height:6px;border-radius:50%;background:var(--ui-primary); }
+@media(max-width:1280px) { .header-favorites-label { display:none; } }
+@media(max-width:800px) { .header-favorites { width:40px;min-height:40px;justify-content:center;padding:0; } }
 @media(max-width:800px) { .nav-search, .sidebar-intro { display:none; } }
 
 .mobile-nav { display:none }
