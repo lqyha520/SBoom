@@ -80,7 +80,7 @@ USER app
 CMD ["python", "run.py"]
 
 # 运维镜像与应用共享 Python 依赖；PG 客户端来自 PostgreSQL 16 镜像。
-FROM postgres:16-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67 AS pgtools
+FROM postgres:16-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4 AS pgtools
 FROM runtime AS ops
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends libpq5 liblz4-1 libzstd1 restic && rm -rf /var/lib/apt/lists/*
