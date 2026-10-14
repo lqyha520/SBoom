@@ -31,7 +31,7 @@ services:
     command: [postgres, -c, shared_buffers=256MB, -c, effective_cache_size=768MB, -c, work_mem=4MB, -c, max_connections=100, -c, shared_preload_libraries=pg_stat_statements, -c, log_min_duration_statement=1000, -c, log_lock_waits=on]
     # 新安装与 CI 使用 bookworm。已有 Alpine 卷保留原镜像。
     # 跨发行版须 dump/restore 到新卷，不能直接更换镜像或仅依赖 REINDEX。
-    image: postgres:16-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67
+    image: postgres:16-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4
     restart: unless-stopped
     logging: *default-logging
     # PostgreSQL 并行查询/大排序走共享内存；Docker 默认 64m 容易触发 "could not resize shared memory segment"
