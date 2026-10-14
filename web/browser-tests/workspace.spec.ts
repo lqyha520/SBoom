@@ -1080,8 +1080,15 @@ test('长卷PDF导出记录耗时和浏览器堆内存，页数完整', async ({
     await download.saveAs(file)
     const content = await readFile(file)
     expect(content.toString('latin1').match(/\/Type\s*\/Page\b/g)).toHaveLength(pages)
+    const stages = await page.evaluate(() => Object.fromEntries(['layout', 'rasterize', 'encode', 'assemble'].map(stage => {
+      const values = performance.getEntriesByName(`lc.export.${stage}`, 'measure')
+      return [stage, { count: values.length, totalMs: values.reduce((sum, value) => sum + value.duration, 0) }]
+    })))
+    expect(stages.rasterize.count).toBe(pages)
+    expect(stages.encode.count).toBe(pages)
     await writeFile(info.outputPath('performance.json'), JSON.stringify({
       pages, durationMs: Date.now() - started, pdfBytes: content.length, beforeHeapBytes: before, sampledPeakHeapBytes: peak,
+      stages,
       note: 'Local Chromium JS heap sampling; not process RSS or a production capacity claim.',
     }, null, 2))
   } finally { active = false; await sampling; await cdp.detach() }

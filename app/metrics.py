@@ -1,8 +1,10 @@
 """Bounded request labels and process-safe operational metrics."""
 import inspect
 import time
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from functools import wraps
+from typing import Literal
 
 from prometheus_client import Counter, Gauge, Histogram
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -16,6 +18,7 @@ llm_attempts_total = Counter("llm_attempts_total", "Actual provider attempts", [
 llm_request_duration = Histogram("llm_request_duration_seconds", "Provider operation duration", ["model"], buckets=(1,5,10,30,60,120,300))
 llm_tokens_total = Counter("llm_tokens_total", "Reported provider tokens", ["model", "token_type"])
 generation_requests_total = Counter("generation_requests_total", "Generation outcomes", ["kind", "status"])
+generation_stage_duration = Histogram("generation_stage_duration_seconds", "Generation stage duration including repairs", ["stage", "status"], buckets=(0.01,0.1,1,5,10,30,60,120,300))
 db_pool_connections = Gauge("db_pool_connections", "Pool connections", ["state"], multiprocess_mode="livesum")
 db_wait = Histogram("db_wait_seconds", "Database pool and lock wait", ["kind"])
 thread_wait = Histogram("thread_wait_seconds", "Wait before synchronous work starts")
@@ -24,6 +27,18 @@ app_info = Gauge("app_build_info", "Application version", ["version", "name"], m
 database_busy_total = Counter("database_busy_total", "Database admission or pool timeouts")
 thread_capacity = Gauge("thread_capacity", "Thread limiter usage", ["kind", "state"], multiprocess_mode="livesum")
 provider_model: ContextVar[str] = ContextVar("provider_model", default="unknown")
+
+
+@asynccontextmanager
+async def generation_stage(stage: Literal["generate", "validate_refill", "review"]):
+    """阶段名由代码固定；包含失败/取消耗时，不记录题干、请求 ID 或账号。"""
+    started, status = time.perf_counter(), "error"
+    try:
+        yield
+        status = "success"
+    finally:
+        generation_stage_duration.labels(stage, status).observe(time.perf_counter() - started)
+
 
 class RequestMetrics:
     def __init__(self, app: ASGIApp):

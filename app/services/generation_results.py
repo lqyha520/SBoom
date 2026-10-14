@@ -6,6 +6,7 @@ import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
 
+from app.metrics import generation_stage
 from app.models import BatchItem, GameResult, GameType, GenerateRequest, Question
 from app.services.generation_control import reserve_repairs
 from app.services.knowledge_topics import is_make_ten_practice
@@ -149,6 +150,7 @@ def _rejection_warning(rejected: Counter[str], section_id: str | None, phase: st
     return f"{phase}剔除 {sum(rejected.values())} 道题（{details}）"
 
 
+@generation_stage("validate_refill")
 async def normalize_result(
     raw, request, item: BatchItem, scope,
     call_model: Callable[..., Awaitable[dict]],
