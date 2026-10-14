@@ -131,8 +131,8 @@ async function main() {
 
     await page.getByRole('button', { name: '查看会员服务', exact: true }).click(); await settle(page)
     await page.locator('.plan-card').first().waitFor()
-    const contactBox = await page.locator('.contact-entry').boundingBox()
-    check('Customer support is visible on the first membership screen', contactBox.y > 0 && contactBox.y + contactBox.height < 600)
+    const contactBox = await page.getByRole('button', { name: '咨询开通', exact: true }).boundingBox()
+    check('Customer support is visible on the first membership screen', contactBox && contactBox.y > 0 && contactBox.y + contactBox.height <= page.viewportSize().height)
     check('All three plans appear without repeated benefit lists', await page.locator('.plan-card').count() === 3)
     await screenshot(page, '04-membership-375')
     await page.setViewportSize({ width: 320, height: 640 }); await noOverflow(page); await screenshot(page, '05-membership-320')

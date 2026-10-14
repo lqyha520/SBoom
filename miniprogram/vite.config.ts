@@ -1,8 +1,13 @@
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import uni from '@dcloudio/vite-plugin-uni'
 import { fileURLToPath, URL } from 'node:url'
+import { createRequire } from 'node:module'
 
 const uniPlugin = (uni as unknown as { default?: typeof uni }).default || uni
+const require = createRequire(import.meta.url)
+const uniRequire = createRequire(require.resolve('@dcloudio/uni-cli-shared/package.json'))
+// uni-app 内置 Vue 3.4 运行时，必须使用配套 shared；3.5 的 def 会将插槽标记改成只读，导致更新时白屏。
+const vueShared = uniRequire.resolve('@vue/shared/dist/shared.esm-bundler.js')
 
 const weixinPageStyles: Plugin = {
   name: 'weixin-page-styles',
@@ -35,7 +40,7 @@ export default defineConfig(({ mode }) => {
     plugins: [uniPlugin(), weixinPageStyles],
     optimizeDeps: { exclude: ['@wot-ui/ui'] },
     css: { preprocessorOptions: { scss: { silenceDeprecations: ['legacy-js-api', 'import', 'global-builtin'] } } },
-    resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
+    resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)), '@vue/shared': vueShared } },
     server: {
       host: '127.0.0.1',
       port: 5180,

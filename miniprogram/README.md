@@ -23,9 +23,9 @@
 
 `miniprogram/` 有独立的依赖、锁文件、Vite 配置和构建输出，仅通过 HTTP 调用 FastAPI，不导入网页 UI。
 
-- uni-app Vue 3 CLI `3.0.0-5020420260813003`，编译器 5.24。
-- Vue 3.5.42、TypeScript 6、Wot UI 2.3.2（`@wot-ui/ui`）。
-- uni-app 当前编译链要求 Vite 5.2.8 和 vue-i18n 9，不单独升级某个 `@dcloudio/*` 包。
+- uni-app Vue 3 CLI `3.0.0-5020620260917001`，编译器 5.26。
+- Vue 3.5.43、TypeScript 6、Wot UI 2.3.2（`@wot-ui/ui`），Vite 6.4.3、vue-i18n 11.4.13。
+- `@dcloudio/*` 保持同一版本；其内置运行时仍基于 Vue 3.4。Vite 将 `@vue/shared` 解析到 uni-app 配套版本，避免混用 Vue 3.5 工具函数使插槽更新报错、H5 首页白屏。升级后须运行 H5 浏览器回归，不能只检查构建成功。
 - 微信使用原生请求、临时文件、滑动/缩放组件和 PDF API。支持选择后台关联的练习版/答案版 PDF，不在小程序内重排题目。
 - 控件统一使用 Wot，主题在 `src/theme.scss`；不是复制的付费商业模板。
 - 登录页使用本地 3dicons 笔记本插画；与保留的分享照片、Lucide/Wot 图标授权一起见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。首页运营图片来自后台上传。
