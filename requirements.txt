@@ -1,15 +1,15 @@
 # 直接依赖清单；可复现安装使用 requirements.lock（包含传递依赖和哈希）。
 # 更新：uv pip compile --universal --generate-hashes requirements.txt -o requirements.lock
 fastapi==0.142.2
-anyio>=4.1,<5  # 同步任务统一使用工作线程容量限制与上下文传播
+anyio>=4.15.1,<5  # 同步任务统一使用工作线程容量限制与上下文传播
 uvicorn==0.54.0
 httpx==0.28.1
 pydantic==2.13.5
 pydantic-settings==2.15.0
 python-dotenv==1.2.4
 cryptography>=50.0.2
-psycopg[binary,pool]>=3.2  # PostgreSQL（DATABASE_URL 启用时使用；pool 提供连接池）
+psycopg[binary,pool]>=3.3.6  # PostgreSQL（DATABASE_URL 启用时使用；pool 提供连接池）
 Pillow>=12.3.0,<13  # Validate and normalize private paper preview images.
-pypdfium2>=4.30,<5  # 手动导入习题：服务端把 PDF 渲染成预览页图
+pypdfium2>=5.14.0,<6  # 手动导入习题：服务端把 PDF 渲染成预览页图
 python-json-logger>=4.2.0  # 结构化 JSON 日志
-prometheus-client>=0.20.0  # 监控指标
+prometheus-client>=0.26.0  # 监控指标

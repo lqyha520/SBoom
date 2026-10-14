@@ -201,7 +201,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [http, home, profile]
+        suite: [http, home, profile, discovery, performance]
     services:
       postgres:
         image: postgres:16-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67
@@ -254,4 +254,6 @@ jobs:
             artifacts/home-redesign
             artifacts/profile-membership
             artifacts/mini-optimization
+            artifacts/mini-discovery
+            artifacts/mini-performance
           retention-days: 7

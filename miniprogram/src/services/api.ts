@@ -25,7 +25,7 @@ export function configureSession(value: string, userId = '') {
   token = value
   owner = userId
   generation++
-  invalidateMetadata()
+  invalidatePersonal()
   for (const cancel of activeReads) cancel()
   activeReads.clear()
   return true
@@ -65,6 +65,7 @@ export function apiUrl(path: string) {
 
 function networkOnce<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: unknown, scope?: RequestScope, anonymous = false): Promise<T> {
   const epoch = generation
+  const startedAt = Date.now()
   const loginRequest = path.startsWith('/api/v1/mini/login') || path === '/api/v1/mini/register'
   return new Promise((resolve, reject) => {
     let url: string
@@ -87,6 +88,7 @@ function networkOnce<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' 
         settled = true; cleanup()
         if (!anonymous && epoch !== generation) { reject(new ApiError('登录状态已变化', 409)); return }
         if (response.statusCode >= 200 && response.statusCode < 300) {
+          uni.$emit?.('lc-performance', { kind: path.startsWith('/api/v1/catalog/papers?') ? 'catalog_api' : 'api', value: Date.now() - startedAt })
           if (method !== 'GET' && path !== '/api/v1/catalog/window') invalidatePersonal()
           resolve(response.data as T); return
         }
@@ -133,7 +135,7 @@ export function request<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELET
     if (method !== 'GET' || (!publicPaths.has(pathname) && pathname !== '/api/v1/catalog/papers' && pathname !== '/api/v1/catalog/summary')) {
       return Promise.reject(new ApiError('该接口不支持公开读取'))
     }
-    return network<T>(path, method, data, options.scope, true)
+    if (!publicPaths.has(path)) return network<T>(path, method, data, options.scope, true)
   }
   // 个人摘要只在同一登录代际内短暂缓存，写入前后立即失效。
   if (method !== 'GET' || (!publicPaths.has(path) && !personalPaths.has(path))) {
@@ -144,7 +146,9 @@ export function request<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELET
     // 个人写操作不会修改公共配置；公共摘要由过期、手动刷新和账号切换失效。
     return network<T>(path, method, data, options.scope)
   }
-  const key = generation + ':' + path
+  // 白名单内运营配置与账号无关，始终公开读取并跨登录恢复复用。
+  const publicRead = publicPaths.has(path)
+  const key = (publicRead ? 'public' : generation) + ':' + path
   if (options.force) { metadata.delete(key); pending.delete(key) }
   const cached = metadata.get(key)
   if (!options.force && cached && cached.expires > Date.now()) return Promise.resolve(JSON.parse(JSON.stringify(cached.value)) as T)
@@ -152,8 +156,8 @@ export function request<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELET
   if (!entry) {
     let cancel = () => {}
     const epoch = generation, cacheEpoch = metadataEpoch
-    const promise = network<T>(path, method, data, { onCancel(fn) { cancel = fn; return () => {} } }).then(value => {
-      if (epoch === generation && cacheEpoch === metadataEpoch && pending.get(key)?.promise === promise) metadata.set(key, { value, expires: Date.now() + (personalPaths.has(path) ? 20_000 : 60_000) })
+    const promise = network<T>(path, method, data, { onCancel(fn) { cancel = fn; return () => {} } }, publicRead).then(value => {
+      if ((publicRead || epoch === generation) && cacheEpoch === metadataEpoch && pending.get(key)?.promise === promise) metadata.set(key, { value, expires: Date.now() + (personalPaths.has(path) ? 20_000 : 60_000) })
       return value
     })
     entry = { promise, users: 0, cancel: () => cancel() }
@@ -168,7 +172,10 @@ export function request<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELET
     const release = () => { if (done) return false; done = true; unregister(); shared.users--; return true }
     unregister = options.scope?.onCancel(() => {
       if (release()) {
-        if (!shared.users) { shared.cancel(); if (pending.get(key) === shared) pending.delete(key) }
+        // 页面在同一轮更新中切换读取者时保留在途请求；真正离开仍会取消。
+        if (!shared.users) void Promise.resolve().then(() => {
+          if (!shared.users) { shared.cancel(); if (pending.get(key) === shared) pending.delete(key) }
+        })
         reject(new ApiError('请求已取消', 0, 'cancelled'))
       }
     }) || unregister

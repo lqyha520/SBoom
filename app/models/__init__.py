@@ -1,8 +1,7 @@
 from enum import Enum
-from typing import Annotated, Dict, List, Optional, Union
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
-
 
 # 年级/科目不再用枚举：三端共用后台字典（site_dictionary 表）为唯一数据源，
 # 请求侧为自由字符串，由 knowledge_scope（能力校验）拦截不支持的组合。
@@ -57,7 +56,7 @@ class ValidateRequest(BaseModel):
 class BatchItem(BaseModel):
     """批量生成里的单个题型任务"""
     game_type: str = Field(min_length=1, max_length=80)
-    section_id: Optional[str] = Field(None, min_length=1, max_length=80)
+    section_id: str | None = Field(None, min_length=1, max_length=80)
     question_count: int = Field(5, ge=1, le=30)
 
 
@@ -67,7 +66,7 @@ class BatchGenerateRequest(BaseModel):
     subject: str = Field(..., min_length=1, max_length=20)
     keyword: str = Field(..., min_length=1, max_length=100)
     difficulty: Difficulty = Field(Difficulty.MEDIUM)
-    items: List[BatchItem] = Field(..., min_length=1, max_length=10)
+    items: list[BatchItem] = Field(..., min_length=1, max_length=10)
     previous_request_ids: list[Annotated[str, Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")]] = Field(
         default_factory=list, max_length=60, description="本卷前序已完成请求；仅从当前账号的保存结果读取避重上下文")
 
@@ -83,61 +82,63 @@ class FeedbackRequest(BaseModel):
     """用户反馈请求"""
     game_id: str = Field(..., max_length=200, description="游戏/题目 ID")
     is_oob: bool = Field(False, description="是否超纲")
-    comment: Optional[str] = Field(None, max_length=2000, description="反馈备注")
+    comment: str | None = Field(None, max_length=2000, description="反馈备注")
 
 
 # ─── 响应模型 ───
 
 class Question(BaseModel):
     """单道题目"""
-    id: Optional[int] = None
+    id: int | None = None
     type: str = ""
     stem: str = ""  # 题干（数的分成/比大小等特殊题型可能无题干）
-    options: Optional[List[str]] = None       # 选择题的选项
-    left_items: Optional[List[str]] = None    # 连线配对题左栏
-    right_items: Optional[List[str]] = None   # 连线配对题右栏
-    top: Optional[Union[int, str]] = None     # 数的分成：顶部数字（__ 表示填空）
-    left: Optional[Union[int, str]] = None    # 数的分成：左下数字（__ 表示填空）
-    right: Optional[Union[int, str]] = None   # 数的分成：右下数字（__ 表示填空）
-    left_expr: Optional[str] = None           # 比大小：左边表达式
-    right_expr: Optional[str] = None          # 比大小：右边表达式
-    answer: Union[str, int, float, List[List[int]]]  # 正确答案（口算题可能是小数；配对题为索引数组）
-    acceptable_answers: Optional[List[str]] = None
+    options: list[str] | None = None       # 选择题的选项
+    left_items: list[str] | None = None    # 连线配对题左栏
+    right_items: list[str] | None = None   # 连线配对题右栏
+    top: int | str | None = None     # 数的分成：顶部数字（__ 表示填空）
+    left: int | str | None = None    # 数的分成：左下数字（__ 表示填空）
+    right: int | str | None = None   # 数的分成：右下数字（__ 表示填空）
+    left_expr: str | None = None           # 比大小：左边表达式
+    right_expr: str | None = None          # 比大小：右边表达式
+    answer: str | int | float | list[list[int]]  # 正确答案（口算题可能是小数；配对题为索引数组）
+    acceptable_answers: list[str] | None = None
     analysis: str = ""                        # 解析
-    tags: List[str] = []                      # 知识点标签
-    difficulty_level: Optional[int] = None    # 闯关题的关卡
-    expected_time_seconds: Optional[int] = None  # 口算题的建议用时（秒）
+    tags: list[str] = []                      # 知识点标签
+    difficulty_level: int | None = None    # 闯关题的关卡
+    expected_time_seconds: int | None = None  # 口算题的建议用时（秒）
+    quality_status: Literal["unchecked", "passed", "needs_review"] = "unchecked"
+    quality_issues: list[str] = Field(default_factory=list)
 
 
 class GameResult(BaseModel):
     """LLM 生成结果"""
     game_type: str
-    section_id: Optional[str] = None
-    request_id: Optional[str] = None
+    section_id: str | None = None
+    request_id: str | None = None
     topic: str
-    passage: Optional[str] = None
+    passage: str | None = None
     difficulty: str
     grade: str
     subject: str
-    questions: List[Question]
+    questions: list[Question]
     total_score: int = 100
     pass_score: int = 60
     missing_count: int = 0  # 质检拦截后补生成仍缺的题数（>0 时前端应提示重试）
-    quality_warnings: List[str] = Field(default_factory=list)
+    quality_warnings: list[str] = Field(default_factory=list)
 
 
 class BatchGenerateResponse(BaseModel):
     """批量生成结果：每项对应一个题型的一套题"""
-    sections: List[GameResult] = []
-    request_id: Optional[str] = None
+    sections: list[GameResult] = []
+    request_id: str | None = None
 
 
 class ValidateResult(BaseModel):
     """超纲校验结果"""
     is_oob: bool                               # 是否超纲
-    oob_points: List[str] = []                 # 超纲的知识点
-    suggestion: Optional[str] = None           # 修改建议
-    request_id: Optional[str] = None
+    oob_points: list[str] = []                 # 超纲的知识点
+    suggestion: str | None = None           # 修改建议
+    request_id: str | None = None
 
 
 class TextbookUnit(BaseModel):
@@ -159,9 +160,9 @@ class KnowledgeScope(BaseModel):
     """知识范围信息"""
     grade: str
     subject: str
-    allowed: List[str]
-    forbidden: List[str]
-    semesters: Optional[Dict[str, List[str]]] = None  # 按学期划分的知识点（上册/下册）
+    allowed: list[str]
+    forbidden: list[str]
+    semesters: dict[str, list[str]] | None = None  # 按学期划分的知识点（上册/下册）
     catalog_revision: str = ""
     books: list[TextbookBook] = Field(default_factory=list)
 
@@ -169,4 +170,4 @@ class KnowledgeScope(BaseModel):
 class ErrorResponse(BaseModel):
     """错误响应"""
     error: str
-    detail: Optional[str] = None
+    detail: str | None = None

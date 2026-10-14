@@ -42,7 +42,7 @@ onShow(hideNativeTabBar)
       @click="change(tab.name)"
     >
       <view class="tab-icon-wrap">
-        <image class="tab-icon" :src="'/static/tabs/' + tab.icon + (current === tab.name ? '-selected' : '') + '.png'" mode="aspectFit" aria-hidden="true" />
+        <image class="tab-icon" :src="'/static/tabs/' + tab.icon + (current === tab.name ? '-active' : '') + '.png'" mode="aspectFit" aria-hidden="true" />
         <view v-if="tab.name === 'account' && inboxState.unread" class="tab-unread" aria-hidden="true" />
       </view>
       <text class="tab-label">{{ tab.label }}</text>
@@ -54,14 +54,15 @@ onShow(hideNativeTabBar)
 .app-tabbar, .app-tab-item, .tab-unread { box-sizing: border-box; }
 .app-tabbar { position:fixed;bottom:0;left:50%;transform:translateX(-50%);z-index:50;display:flex;align-items:stretch;gap:4px;width:100%;max-width:520px;padding:6px 12px calc(6px + var(--lc-tabbar-safe-bottom, env(safe-area-inset-bottom, 0px)));border-top:1px solid #e0e9e3;background:#fff; }
 .app-tab-item { display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-width:0;min-height:56px;margin:0;padding:5px 0;border:0;border-radius:16px;background:transparent;color:var(--lc-muted);font-size:12px;font-weight:500;line-height:16px;transition:background-color .16s,color .16s,transform .16s; }
-.tab-icon-wrap { position:relative;display:flex;align-items:center;justify-content:center;flex:none;width:36px;height:26px; }
+.tab-icon-wrap { position:relative;display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:28px;border-radius:12px;transition:background-color .16s; }
 .tab-icon { display: block; width: 24px; height: 24px; }
 .tab-label { display: block; max-width: 100%; line-height: 16px; white-space: nowrap; }
-.app-tab-active { color:#fff;background:var(--lc-primary);font-weight:600;box-shadow:0 3px 8px #307e6126; }
+.app-tab-active { color:var(--lc-primary);font-weight:600; }
+.app-tab-active .tab-icon-wrap { background:var(--lc-primary-soft); }
 .app-tab-item:active,.app-tab-pressed { transform:scale(.95);background:var(--lc-primary-soft); }
-.app-tab-active:active,.app-tab-active.app-tab-pressed { background:#256a50; }
+.app-tab-active:active,.app-tab-active.app-tab-pressed { background:var(--lc-primary-soft); }
 .tab-unread { position:absolute;right:0;top:-1px;width:9px;height:9px;border:2px solid #fff;border-radius:50%;background:var(--lc-coral); }
-.app-tab-active .tab-unread { border-color:var(--lc-primary);background:#ffd49b; }
-@media (hover:hover) { .app-tab-item:hover { background:var(--lc-primary-soft); }.app-tab-active:hover { background:#256a50; } }
-@media (prefers-reduced-motion:reduce) { .app-tab-item { transition:none; }.app-tab-item:active,.app-tab-pressed { transform:none; } }
+.app-tab-active .tab-unread { border-color:var(--lc-primary-soft); }
+@media (hover:hover) { .app-tab-item:hover { background:var(--lc-primary-soft); } }
+@media (prefers-reduced-motion:reduce) { .app-tab-item, .tab-icon-wrap { transition:none; }.app-tab-item:active,.app-tab-pressed { transform:none; } }
 </style>

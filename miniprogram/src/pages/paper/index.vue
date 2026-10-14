@@ -9,10 +9,11 @@ import PaperAccessBadge from '../../components/PaperAccessBadge.vue'
 import MembershipSheet from '../../components/MembershipSheet.vue'
 import { ApiError, errorMessage, favoriteCatalogPaper, fetchCatalogPaper, requestCatalogDownload } from '../../services/api'
 import { ensureSession, requireLogin, session } from '../../services/session'
+import { rememberPaperIntent, takePaperIntent } from '../../services/paper-intent'
 import { cancelPdfDownload, clearAssetCache, openPdf } from '../../services/assets'
 import { createLatestRequest } from '../../services/latest-request'
 import { fileSize, fileStatus, formatDate } from '../../content'
-import { difficultyLabel, exerciseText, exerciseTitle, downloadAccessHint, subjectTone } from '../../presentation'
+import { answerReadinessLabel, difficultyLabel, exerciseText, exerciseTitle, downloadAccessHint, subjectTone } from '../../presentation'
 import { assignGroup, createGroup, fetchGroups, openSupport, recordEvent, recordView, type FavoriteGroup } from '../../services/experience'
 import type { ExternalDownload, PaperDetail, PrintEdition } from '../../types'
 import { captureScroll } from '../../services/page-lifecycle'
@@ -20,6 +21,8 @@ import { shareCard } from '../../services/return-route'
 
 const id = ref('')
 const edition = ref<PrintEdition['kind']>('original')
+const editionOpen = ref(false)
+const resumeAction = ref<'download' | 'favorite' | ''>('')
 const paper = ref<PaperDetail | null>(null)
 const verified = ref(false)
 let scrollTop = 0
@@ -58,16 +61,21 @@ pdfGuide = '打开后，点右上角菜单保存或转发文件'
 // #endif
 
 const hasEditions = computed(() => !external.value && (paper.value?.editions?.length || 0) > 1)
+const downloadDisabled = computed(() => !verified.value || loading.value || downloading.value || (!!session.user && !!paper.value?.can_download && !external.value && !pdf.value))
+const downloadVersion = computed(() => external.value ? '网盘资料' : selectedEdition.value?.label || '原稿 PDF')
+const downloadStatus = computed(() => !downloading.value ? '' : external.value ? '正在获取网盘链接…' : downloadProgress.value === null ? '正在准备文件…' : downloadProgress.value < 100 ? '正在下载 ' + downloadProgress.value + '%' : '下载完成，正在打开 PDF…')
 const actionLabel = computed(() => {
   if (!paper.value) return pdfLabel
   if (!session.user) return paper.value.required_download === 'vip' ? '登录查看会员权益' : external.value ? '登录获取链接' : '登录后免费下载'
   if (!paper.value.can_download) return '查看会员权益'
   if (retryDownload.value) return external.value ? '重新获取链接' : '重试下载'
+  if (resumeAction.value === 'download') return external.value ? '继续获取链接' : '继续' + (selectedEdition.value ? pdfLabel.replace('PDF', selectedEdition.value.label) : pdfLabel)
   return external.value ? '获取网盘链接' : hasEditions.value && selectedEdition.value ? pdfLabel.replace('PDF', selectedEdition.value.label) : pdfLabel
 })
 watch(() => session.user?.id, (owner, previous) => {
   actionRevision++; requests.invalidate(); paper.value = null; error.value = ''; loading.value = false
   edition.value = 'original'; retryDownload.value = false; downloadProgress.value = null
+  editionOpen.value = false; resumeAction.value = ''
   previewOpen.value = false; membershipOpen.value = false
   clearLink()
   groupOpen.value = false; groupBusy.value = false; groupError.value = ''; groupItems.value = []; groupName.value = ''
@@ -86,6 +94,8 @@ async function load() {
       if (!result.can_view || !result.can_download) clearAssetCache()
       paper.value = result
       verified.value = true
+      const intent = session.user ? takePaperIntent(id.value, session.user.id) : null
+      if (intent) { edition.value = intent.edition; resumeAction.value = intent.action }
       if (restoring) { await nextTick(); if (current()) uni.pageScrollTo?.({ scrollTop, duration: 0 }) }
       if (!result.editions?.some(item => item.kind === edition.value)) edition.value = 'original'
       if (current() && session.user && viewedBy !== session.user.id) {
@@ -99,20 +109,31 @@ async function load() {
       if (cause instanceof ApiError && [401, 403, 404].includes(cause.status)) { paper.value = null; clearAssetCache() }
     }
   } finally { if (current()) { loading.value = false; uni.stopPullDownRefresh() } }
+  if (current() && verified.value && resumeAction.value === 'favorite') {
+    if (paper.value?.favorite) { resumeAction.value = ''; uni.showToast({ title: '这份资料已在收藏中', icon: 'none' }) }
+    else void favorite()
+  }
 }
 async function favorite() {
   if (!paper.value || !verified.value || loading.value || changing.value) return
+  if (!session.user) rememberPaperIntent({ paperId: id.value, action: 'favorite', edition: edition.value })
   if (!requireLogin()) return
+  const continuing = resumeAction.value === 'favorite'
   const current = requests.begin()
   loading.value = false; changing.value = true
   try {
-    const result = await favoriteCatalogPaper(id.value, !paper.value.favorite)
-    if (current() && paper.value) paper.value.favorite = result.favorite
+    const result = await favoriteCatalogPaper(id.value, continuing || !paper.value.favorite)
+    if (current() && paper.value) {
+      paper.value.favorite = result.favorite
+      if (continuing) resumeAction.value = ''
+      uni.showToast({ title: result.favorite ? '已收藏，可在收藏页查看' : '已取消收藏', icon: 'none' })
+    }
   } catch (cause) { if (current()) { retryDownload.value = false; error.value = errorMessage(cause) } }
   finally { changing.value = false; if (active && !current()) void load() }
 }
 async function download() {
   if (!paper.value || !verified.value || loading.value || downloading.value) return
+  if (!session.user) rememberPaperIntent({ paperId: id.value, action: 'download', edition: edition.value })
   if (!requireLogin()) return
   if (!paper.value.can_download) { membershipOpen.value = true; return }
   if (!external.value && !pdf.value) return
@@ -124,8 +145,9 @@ async function download() {
     const asset = await requestCatalogDownload(id.value, edition.value)
     requested = true
     if (!active || revision !== actionRevision) return
-    if (asset.kind === 'external') { linkTarget.value = asset; linkOpen.value = true; return }
+    if (asset.kind === 'external') { resumeAction.value = ''; linkTarget.value = asset; linkOpen.value = true; return }
     await openPdf(asset, title, percent => { if (active && revision === actionRevision) downloadProgress.value = percent })
+    if (active && revision === actionRevision) resumeAction.value = ''
     if (revision === actionRevision) void recordEvent('download_ok', id.value).catch(() => {})
   } catch (cause) {
     if (!active || revision !== actionRevision) return
@@ -136,6 +158,15 @@ async function download() {
     retryDownload.value = !(cause instanceof ApiError && [401, 403, 404].includes(cause.status))
     if (cause instanceof ApiError && cause.status === 404) paper.value = null
   } finally { downloading.value = false; downloadProgress.value = null }
+}
+function downloadFromPreview() {
+  // 登录、会员和网盘需要打开另一层界面；PDF 下载可直接留在阅读器内完成。
+  if (!session.user || !paper.value?.can_download || external.value) previewOpen.value = false
+  return download()
+}
+function selectEdition(kind: PrintEdition['kind']) {
+  if (downloading.value || loading.value || !verified.value) return
+  edition.value = kind; editionOpen.value = false; retryDownload.value = false; error.value = ''
 }
 function clearLink() { linkOpen.value = false; linkTarget.value = null; linkError.value = ''; copyingLink.value = false }
 function copyLink() {
@@ -214,7 +245,7 @@ function leave() {
   active = false; groupReads.invalidate(); actionRevision++; requests.invalidate(); loading.value = false; verified.value = false
   if (paper.value) paper.value = { ...paper.value, assets: [], snapshot: null, thumbnail_url: null, editions: paper.value.editions?.map(({ url: _url, ...item }) => item) }
   cancelPdfDownload()
-  previewOpen.value = false; membershipOpen.value = false; uni.stopPullDownRefresh()
+  previewOpen.value = false; membershipOpen.value = false; editionOpen.value = false; uni.stopPullDownRefresh()
   clearLink()
   groupOpen.value = false; groupBusy.value = false; groupError.value = ''; groupItems.value = []; groupName.value = ''
 }
@@ -231,6 +262,7 @@ onPullDownRefresh(() => { void load() })
     <view v-if="paper" class="content-width detail-heading">
       <view class="detail-tags"><text>{{ paper.subject }}</text><text>{{ paper.grade }}</text><PaperAccessBadge :paper="paper" /></view>
       <text class="detail-title">{{ exerciseTitle(paper) }}</text>
+      <view class="detail-meta"><text v-if="paper.question_count">{{ paper.question_count }} 道题</text><text v-if="paper.page_count">{{ paper.page_count }} 页</text><text v-if="external">网盘资料</text><text v-if="paper.difficulty">{{ difficultyLabel(paper.difficulty) }}</text><text class="paper-answer" :class="{ available: paper.answer_readiness === 'included' || paper.answer_readiness === 'separate' }">{{ answerReadinessLabel(paper.answer_readiness) }}</text></view>
     </view>
     <view class="detail-hero" :class="subjectTone(paper?.subject || '')">
       <view v-if="paper" class="paper-stage">
@@ -247,7 +279,6 @@ onPullDownRefresh(() => { void load() })
       <template v-if="paper">
         <view class="content-width detail-content">
           <view v-if="paper.tags?.length" class="detail-tags curriculum-tags"><wd-tag v-for="tag in paper.tags" :key="tag.id" variant="light">{{ tag.name }}</wd-tag></view>
-          <view class="detail-meta"><text v-if="paper.question_count">{{ paper.question_count }} 道题</text><text v-if="paper.page_count">{{ paper.page_count }} 页</text><text v-if="external">网盘下载</text><text v-if="paper.snapshot?.paper.difficulty">{{ difficultyLabel(paper.snapshot.paper.difficulty) }}</text></view>
           <text v-if="paper.description || paper.keyword" class="detail-description">{{ exerciseText(paper.description || paper.keyword) }}</text>
           <view v-if="paper.update_note" class="notice-strip"><text>第 {{ paper.release_number }} 版 · {{ paper.update_note }}</text></view>
           <view v-if="paper.versions && paper.versions.length > 1" class="version-notes"><text v-for="version in paper.versions" :key="version.release_number">第 {{ version.release_number }} 版 · {{ formatDate(version.created_at) }} · {{ version.note || '首次发布' }}</text></view>
@@ -261,12 +292,12 @@ onPullDownRefresh(() => { void load() })
 
           <view v-if="verified && !paper.can_view" class="vip-locked"><text>完整内容仅对有效 VIP 会员开放</text><wd-button variant="text" icon="star" role="button" @click="viewMembership">{{ session.user ? '查看会员状态' : '登录查看会员权益' }}</wd-button></view>
           <view v-else-if="verified && !pages.length" class="preview-empty"><wd-empty icon="file-pdf" :tip="external ? '文件由网盘提供，获取链接后可前往查看' : pdf ? '暂无预览图' : '习题文件暂未就绪'"><template #bottom><view class="empty-actions"><wd-button variant="plain" icon="refresh" role="button" @click="load">刷新状态</wd-button></view></template></wd-empty></view>
+          <view class="file-guidance"><text>{{ downloadAccessHint(paper, !!session.user) }}</text><text v-if="!external">{{ pdfGuide }}</text></view>
         </view>
         <view class="detail-dock">
-          <text class="download-hint">{{ downloadAccessHint(paper, !!session.user) }}</text>
-          <view v-if="hasEditions && paper.editions" class="edition-choice"><text class="edition-caption">选择下载版本 · 上方展示原稿</text><view class="edition-segments" role="radiogroup" aria-label="文件版本"><button v-for="item in paper.editions" :key="item.kind" role="radio" hover-class="control-pressed" :aria-checked="edition === item.kind" :class="{ selected: edition === item.kind }" :disabled="downloading || loading || !verified" @click="edition = item.kind"><text>{{ item.label }}</text><text class="edition-size">{{ fileSize(item.byte_size) }}</text></button></view></view>
+          <button v-if="hasEditions" class="edition-summary" hover-class="control-pressed" role="button" :aria-label="'选择下载版本，当前为' + downloadVersion" :disabled="downloading || loading || !verified" @click="editionOpen = true"><text class="grow">{{ downloadVersion }}</text><text class="edition-preview-hint">预览为原稿</text><text class="edition-change">切换<wd-icon name="arrow-right" size="13px" /></text></button>
           <text v-if="downloading" class="transfer-status" role="status">{{ external ? '正在获取网盘链接…' : downloadProgress === null ? '正在准备文件…' : downloadProgress < 100 ? '正在下载 ' + downloadProgress + '%' : '下载完成，正在打开 PDF…' }}</text>
-          <text v-if="retryDownload && error" class="download-error" role="alert">{{ error }}</text>
+          <text v-if="retryDownload && error" class="download-error" role="alert">下载未完成，请重试；详细原因见上方提示。</text>
           <view class="detail-actions">
             <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="detail-utility detail-favorite" :class="{ selected: paper.favorite }" role="button" :disabled="changing || loading || !verified" :aria-pressed="paper.favorite" :aria-label="paper.favorite ? '取消收藏' : '收藏习题'" @click="favorite"><wd-icon :name="paper.favorite ? 'heart-fill' : 'heart'" size="22px" /><text>{{ paper.favorite ? '已收藏' : '收藏' }}</text></button>
             <!-- #ifdef MP-WEIXIN -->
@@ -275,15 +306,39 @@ onPullDownRefresh(() => { void load() })
             <!-- #ifdef H5 -->
             <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="detail-utility detail-share" role="button" aria-label="复制资料分享链接" @click="sharePaper"><wd-icon name="share-external" size="22px" /><text>分享</text></button>
             <!-- #endif -->
-            <view class="download-button"><wd-button role="button" block :icon="paper.can_download ? 'download' : 'lock'" :loading="downloading" :disabled="!verified || loading || (!!session.user && paper.can_download && !external && !pdf) || downloading" @click="download">{{ actionLabel }}</wd-button></view>
+            <view class="download-button"><wd-button role="button" block :icon="paper.can_download ? 'download' : 'lock'" :loading="downloading" :disabled="downloadDisabled" @click="download">{{ actionLabel }}</wd-button></view>
           </view>
-          <text v-if="!external && paper.can_download" class="download-guide">{{ pdfGuide }}</text>
         </view>
       </template>
       <view v-else-if="!loading && !error" class="state-block"><wd-empty icon="no-content" tip="未找到习题" /></view>
     </template>
+    <wd-popup v-model="editionOpen" position="bottom" :z-index="1200" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0">
+      <view class="sheet edition-sheet" role="dialog" aria-modal="true" aria-label="选择下载版本">
+        <view class="sheet-handle" />
+        <view class="sheet-head"><text class="sheet-title">选择下载版本</text><button class="bare-icon" hover-class="control-pressed" role="button" aria-label="关闭版本选择" @click="editionOpen = false"><wd-icon name="close" size="20px" /></button></view>
+        <text class="edition-help">选择后用于下载，页面预览始终展示原稿。</text>
+        <view class="edition-options" role="radiogroup" aria-label="文件版本">
+          <button v-for="item in paper?.editions || []" :key="item.kind" class="edition-option" role="radio" hover-class="control-pressed" :aria-checked="edition === item.kind" :class="{ selected: edition === item.kind }" :disabled="downloading || loading || !verified" @click="selectEdition(item.kind)"><view class="grow"><text>{{ item.label }}</text><text class="edition-size">{{ fileSize(item.byte_size) }}</text></view><wd-icon v-if="edition === item.kind" name="check" size="22px" /></button>
+        </view>
+        <text class="edition-help">{{ paper ? downloadAccessHint(paper, !!session.user) : '' }}</text><text class="edition-help">{{ pdfGuide }}</text>
+      </view>
+    </wd-popup>
     <wd-popup v-model="previewOpen" position="bottom" :z-index="1200" root-portal custom-style="width:100%;height:100%;border-radius:0">
-      <PaperPreview v-if="paper?.can_view && previewOpen" :pages="pages" :paper-id="paper.id" :release="paper.release_number || 1" @close="previewOpen = false" />
+      <PaperPreview v-if="paper?.can_view && previewOpen" :pages="pages" :paper-id="paper.id" :release="paper.release_number || 1" @close="previewOpen = false">
+        <template #download>
+          <view class="preview-download-panel">
+            <view class="preview-download-row">
+              <picker v-if="hasEditions && paper.editions" class="preview-edition-picker" :disabled="downloadDisabled" :range="paper.editions.map(item => item.label)" :value="Math.max(0, paper.editions.findIndex(item => item.kind === edition))" @change="edition = paper.editions[Number($event.detail.value)]!.kind">
+                <view class="preview-edition-choice" role="button" :aria-label="'选择下载版本：' + downloadVersion"><text>{{ downloadVersion }}</text><wd-icon name="down" size="14px" /></view>
+              </picker>
+              <text v-else class="preview-version">{{ downloadVersion }}</text>
+              <view class="preview-download-action"><wd-button role="button" block :loading="downloading" :disabled="downloadDisabled" @click="downloadFromPreview">{{ actionLabel }}</wd-button></view>
+            </view>
+            <text class="preview-download-note">{{ downloadStatus || ('将下载：' + downloadVersion + ' · 预览为原稿') }}</text>
+            <text v-if="error" class="download-error" role="alert">{{ error }}</text>
+          </view>
+        </template>
+      </PaperPreview>
     </wd-popup>
     <wd-popup v-model="groupOpen" position="bottom" :z-index="1200" :close-on-click-modal="!groupBusy" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0">
       <view class="sheet group-sheet" role="dialog" aria-modal="true" aria-label="选择收藏分组">
@@ -312,30 +367,39 @@ onPullDownRefresh(() => { void load() })
 </template>
 
 <style scoped>
+.preview-download-panel { border-top:1px solid var(--lc-card-line);padding-top:10px; }
+.preview-download-row { display:flex;align-items:center;gap:12px; }
+.preview-edition-picker,.preview-version { flex:1;min-width:0;font-size:13px;color:var(--lc-secondary);overflow-wrap:anywhere; }
+.preview-edition-choice { display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px; }
+.preview-edition-choice text { min-width:0;overflow-wrap:anywhere; }
+.preview-download-action { flex:1;min-width:0; }
+.preview-download-note { display:block;margin-top:6px;font-size:12px;line-height:1.5;color:var(--lc-secondary);overflow-wrap:anywhere; }
 .link-sheet{max-width:520px;margin:0 auto}.link-tip{display:block;color:var(--lc-secondary);font-size:13px;line-height:1.8}.external-url{display:block;overflow-wrap:anywhere;word-break:break-all;padding:16px;margin:16px 0;background:var(--lc-background);border-radius:8px;color:var(--lc-primary);font-size:14px}.external-code{display:block;margin:0 0 20px;font-size:15px}
-.curriculum-tags { margin-top:14px; }.edition-choice { margin:0;font-size:13px;color:var(--lc-secondary); }.edition-picker { display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:48px;padding:10px 14px;margin-top:8px;background:var(--lc-background);border:1px solid var(--lc-border);border-radius:10px; }
+.curriculum-tags { margin-top:0; }
 .detail-service { display:flex;gap:16px;flex-wrap:wrap;margin:14px 0; }.version-notes text { display:block;font-size:12px;color:var(--lc-muted);margin:8px 0; }
-.edition-caption { display:block;margin-bottom:6px;font-size:12px;line-height:1.5; }
-.edition-segments { display:flex;gap:6px; }.edition-segments button { flex:1;min-width:0;min-height:54px;margin:0;padding:6px;border:1px solid var(--lc-border);border-radius:6px;background:var(--lc-surface);color:var(--lc-secondary);font-size:13px;line-height:1.5;overflow-wrap:anywhere; }.edition-segments button.selected { border-color:var(--lc-primary);background:var(--lc-primary-soft);color:var(--lc-primary); }.edition-size { display:block;font-size:12px;margin-top:2px; }
+.edition-summary { display:flex;align-items:center;gap:8px;width:100%;min-height:44px;margin:0;padding:0;background:transparent;color:var(--lc-text);font-size:14px;line-height:1.5;text-align:left; }
+.edition-summary .grow { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }.edition-preview-hint { flex:none;font-size:12px;color:var(--lc-muted); }.edition-change { display:flex;align-items:center;gap:3px;flex:none;font-size:13px;color:var(--lc-primary); }
+.edition-sheet { max-width:520px;margin:0 auto;max-height:80vh;overflow-y:auto; }.edition-help { display:block;font-size:13px;line-height:1.7;color:var(--lc-secondary); }.edition-options { display:flex;flex-direction:column;gap:10px;margin:18px 0; }.edition-option { display:flex;align-items:center;gap:12px;width:100%;min-height:64px;margin:0;padding:12px 14px;border:1px solid var(--lc-card-line);border-radius:var(--lc-radius-control);background:var(--lc-surface);color:var(--lc-secondary);font-size:15px;line-height:1.5;text-align:left;overflow-wrap:anywhere; }.edition-option.selected { border-color:var(--lc-primary);background:var(--lc-primary-soft);color:var(--lc-primary); }.edition-size { display:block;font-size:12px;margin-top:2px; }
+.file-guidance { margin-top:16px;font-size:13px;line-height:1.8;color:var(--lc-secondary); }.file-guidance text { display:block; }
 .group-create { display:flex;flex-direction:column;gap:12px;margin:14px 0; }.group-name-input { height:46px;padding:0 12px;background:var(--lc-background);border-radius:8px;font-size:14px; }.group-empty { display:block;font-size:13px;color:var(--lc-secondary);line-height:1.7;margin:12px 0; }.group-sheet { max-width:520px;margin:0 auto; }.group-options { height:32vh; }.group-option { width:100%;margin:0;padding:14px 0;background:transparent;color:var(--lc-text);font-size:15px;line-height:1.5;text-align:left;overflow-wrap:anywhere;border-bottom:1px solid var(--lc-card-line); }
-.detail-page { padding-bottom: calc(180px + env(safe-area-inset-bottom)); }
-.detail-page.has-editions { padding-bottom: calc(270px + env(safe-area-inset-bottom)); }
-.detail-hero { background-color:var(--subject-tint);background-image:linear-gradient(160deg,#ffffff60,transparent);border-radius:0 0 24px 24px; }
-.paper-stage { display: flex; align-items: center; justify-content: center; position: relative; min-height: 240px; padding: 16px 24px 60px; }
-.preview-sheet { width: 192px; max-width: 72%; flex: none; box-shadow: 0 4px 16px #5261831f; border-radius: 2px; background: #fff; }
+.detail-page { padding-bottom: calc(130px + env(safe-area-inset-bottom)); }
+.detail-page.has-editions { padding-bottom: calc(174px + env(safe-area-inset-bottom)); }
+.detail-hero { background-color:var(--subject-tint);background-image:linear-gradient(160deg,#ffffff60,transparent);margin:0 var(--lc-page-gutter);border:1px solid var(--lc-card-line);border-radius:16px; }
+.paper-stage { display: flex; align-items: center; justify-content: center; position: relative; min-height: 0; padding: 14px 20px 58px; }
+.preview-sheet { width: 128px; max-width: 64%; flex: none; box-shadow: 0 4px 16px #5261831f; border-radius: 2px; background: #fff; }
 .preview-entry { display: block; padding: 0; margin: 0; line-height: 1.5; }
 .preview-entry:active { opacity:.9; }
-.locked-sheet { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 15px; height: 209px; color: var(--lc-warning); font-size: 13px; }
-.preview-pill { position: absolute; bottom: 16px; right: 22px; display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 13px; margin: 0; border-radius: 999px; background: #fff; color: var(--lc-secondary); font-size: 12px; line-height: 1.5; box-shadow: 0 2px 9px #52618308; }
+.locked-sheet { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; height: 181px; color: var(--lc-warning); font-size: 13px; }
+.preview-pill { position: absolute; bottom: 8px; left: 50%; right: auto; transform: translateX(-50%); white-space: nowrap; display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 13px; margin: 0; border-radius: 999px; background: #fff; color: var(--lc-secondary); font-size: 13px; line-height: 1.5; box-shadow: 0 2px 9px #52618308; }
 .preview-access { position: absolute; bottom: 24px; right: 22px; }
-.detail-content { padding-top: 25px; padding-bottom: 22px; }
-.detail-heading { padding-top:10px;padding-bottom:14px;background:var(--lc-surface); }.detail-heading .detail-title { margin-top:5px;font-size:21px; }
-.detail-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--lc-primary); font-size: 12px; }
+.detail-content { padding-top: 16px; padding-bottom: 22px; }
+.detail-heading { padding-top:8px;padding-bottom:16px; }.detail-heading .detail-title { margin-top:5px;font-size:21px; }
+.detail-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--lc-primary); font-size: 13px; }
 .detail-title { display: block; font-size: 23px; line-height: 1.5; font-weight: 650; margin-top: 10px; overflow-wrap: anywhere; }
-.detail-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--lc-muted); font-size: 12px; margin-top: 9px; }
-.detail-description { display: block; margin-top: 19px; color: var(--lc-secondary); font-size: 14px; line-height: 1.9; overflow-wrap: anywhere; white-space: pre-wrap; }
-.detail-facts { display:flex;flex-direction:column;gap:16px;margin-top:20px;padding:16px;border:1px solid var(--lc-card-line);border-radius:var(--lc-radius-card);background:var(--lc-surface); }
-.detail-facts > view { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--lc-muted); }
+.detail-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--lc-muted); font-size: 13px; margin-top: 10px; }
+.detail-description { display: block; margin-top: 12px; color: var(--lc-secondary); font-size: 14px; line-height: 1.9; overflow-wrap: anywhere; white-space: pre-wrap; }
+.detail-facts { display:flex;flex-direction:column;gap:14px;margin-top:16px;padding:16px;border:1px solid var(--lc-card-line);border-radius:var(--lc-radius-card);background:var(--lc-surface); }
+.detail-facts > view { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--lc-secondary); }
 .detail-facts :deep(.wd-icon) { flex: none; }
 .fact-value { margin-left: auto; min-width: 0; max-width: 70%; overflow-wrap: anywhere; color: var(--lc-text); text-align: right; }
 .vip-locked { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; color: var(--lc-muted); font-size: 12px; margin-top: 25px; }
@@ -344,13 +408,12 @@ onPullDownRefresh(() => { void load() })
 .detail-actions { display:flex;align-items:center;gap:8px; }
 .detail-utility { display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;flex:none;width:48px;min-height:49px;margin:0;padding:2px 0;background:transparent;border-radius:var(--lc-radius-control);color:var(--lc-secondary);font-size:12px;line-height:1.3; }
 .detail-utility[disabled] { opacity:.5; }
-.download-hint,.download-guide,.transfer-status,.download-error { display:block;font-size:12px;line-height:1.6;color:var(--lc-secondary); }
-.download-guide { text-align:center; }
+.transfer-status,.download-error { display:block;font-size:13px;line-height:1.6;color:var(--lc-secondary); }
 .download-error { color:#a34040; }
 .transfer-status { color:var(--lc-primary); }
 .detail-favorite.selected { color:var(--lc-coral); }
 .download-button { flex: 1; min-width: 0; --wot-button-height-medium: 49px; }
 @media (max-width: 359px) { .detail-title { font-size: 21px; } .detail-dock { padding-left: 17px; padding-right: 17px; } }
-@media (max-height:680px) { .preview-sheet { width:152px; }.paper-stage { min-height:0;padding-top:10px; } }
-@media (max-height:600px) { .has-editions .preview-sheet { width:112px; } }
+@media (max-height:680px) { .preview-sheet { width:106px; }.locked-sheet { height:150px; }.paper-stage { padding-top:10px; } }
+@media (max-height:600px) { .has-editions .preview-sheet { width:88px; }.has-editions .locked-sheet { height:125px; } }
 </style>

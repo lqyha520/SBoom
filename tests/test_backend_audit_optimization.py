@@ -23,6 +23,56 @@ class OptimizationContracts(unittest.TestCase):
     update = fixtures.PublicCatalogContracts.update
     publish = fixtures.PublicCatalogContracts.publish
 
+    def test_each_page_has_small_private_thumbnail_and_legacy_pages_are_backfilled(self):
+        source = self.source(ready=False)
+        image = io.BytesIO()
+        Image.effect_noise((1200, 1800), 64).convert("RGB").save(image, "JPEG", quality=90)
+        paper_library.publish_bundle(self.admin.id, source["id"], fixtures.bundle({
+            "paper.pdf": b"%PDF-1.4\nfixture\n%%EOF\n", "page-1.jpg": image.getvalue(), "page-2.jpg": image.getvalue(),
+        }))
+        published = self.publish(self.draft(paper_library.get_paper(self.admin.id, source["id"])))
+        self.sign_in(self.viewer)
+        detail = self.client.get(f"/api/v1/catalog/papers/{published['id']}").json()
+        self.assertEqual(detail["difficulty"], "medium")
+        self.assertNotIn("snapshot", detail)
+        pages = [asset for asset in detail["assets"] if asset["kind"] == "page"]
+        self.assertEqual(len(pages), 2)
+        self.assertNotEqual(pages[0]["thumbnail_url"], pages[1]["thumbnail_url"])
+        for page in pages:
+            response = self.client.get(page["thumbnail_url"])
+            self.assertEqual(response.status_code, 200)
+            self.assertLess(len(response.content), page["byte_size"])
+            with Image.open(io.BytesIO(response.content)) as thumb:
+                self.assertLessEqual(thumb.width, 320)
+                self.assertLessEqual(thumb.height, 480)
+        with db() as conn:
+            conn.execute("DELETE FROM paper_assets WHERE paper_id = ? AND kind = 'thumbnail' AND page_number = 2", (source["id"],))
+        maintenance.backfill_thumbnails(limit=1)
+        maintenance.backfill_thumbnails(limit=1)
+        with db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM paper_assets WHERE paper_id = ? AND kind = 'thumbnail'", (source["id"],)).fetchone()[0], 2)
+        pages = [asset for asset in self.client.get(f"/api/v1/catalog/papers/{published['id']}").json()["assets"] if asset["kind"] == "page"]
+        self.sign_in(self.admin)
+        self.assertEqual(self.update(published, view_access="vip").status_code, 200)
+        self.sign_in(self.viewer)
+        for page in pages:
+            self.assertEqual(self.client.get(page["thumbnail_url"]).status_code, 403)
+        self.assertEqual(self.client.get(f"/api/v1/catalog/papers/{published['id']}").json()["assets"], [])
+
+    def test_cursor_counts_only_when_requested_and_successful_search_is_not_a_miss(self):
+        for _ in range(3):
+            self.publish()
+        self.sign_in(self.viewer)
+        query = {"pagination": "cursor", "include_total": "true", "limit": 1, "q": "公共单元"}
+        first = self.client.get('/api/v1/catalog/papers', params=query).json()
+        self.assertEqual(first["total"], 3)
+        query.update(include_total="false", cursor=first["next_cursor"])
+        second = self.client.get('/api/v1/catalog/papers', params=query).json()
+        self.assertIsNone(second["total"])
+        self.assertNotEqual(first["items"][0]["id"], second["items"][0]["id"])
+        with db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM mini_usage_events WHERE kind = 'search_miss'").fetchone()[0], 0)
+
     def test_import_deduplicates_before_render_and_preserves_declared_metadata(self):
         raw = tiny_pdf()
         paper = catalog_import.import_paper(self.admin.id, "Metadata", "三年级", "数学", raw, "student", keyword="两位数", question_types=["quiz"], question_count=8)

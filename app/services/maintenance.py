@@ -15,16 +15,16 @@ logger = logging.getLogger(__name__)
 def backfill_thumbnails(limit=5):
     # 一轮扫描结束后隔一天重新检查低于游标的新 UUID 或失败项，避免每分钟空转。
     with db() as conn:
-        next_scan = conn.execute("SELECT value FROM app_config WHERE key = 'thumbnail_backfill_next'").fetchone()
+        next_scan = conn.execute("SELECT value FROM app_config WHERE key = 'page_thumbnail_backfill_next'").fetchone()
         if next_scan and float(next_scan[0]) > time.time():
             return
     with db() as conn:
-        cursor = conn.execute("SELECT value FROM app_config WHERE key = 'thumbnail_backfill_cursor'").fetchone()
-        rows = conn.execute("SELECT s.*, a.user_id FROM paper_assets s JOIN paper_archives a ON a.id = s.paper_id WHERE a.id > ? AND s.kind = 'page' AND s.page_number = 1 AND a.file_status = 'ready' AND NOT EXISTS (SELECT 1 FROM paper_assets t WHERE t.paper_id = s.paper_id AND t.kind = 'thumbnail') ORDER BY a.id LIMIT ?", (cursor[0] if cursor else "", limit)).fetchall()
-        conn.execute("INSERT INTO app_config(key, value) VALUES ('thumbnail_backfill_cursor', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (rows[-1]["paper_id"] if len(rows) == limit else "",))
+        cursor = conn.execute("SELECT value FROM app_config WHERE key = 'page_thumbnail_backfill_cursor'").fetchone()
+        rows = conn.execute("SELECT s.*, a.user_id FROM paper_assets s JOIN paper_archives a ON a.id = s.paper_id WHERE s.id > ? AND s.kind = 'page' AND a.file_status = 'ready' AND NOT EXISTS (SELECT 1 FROM paper_assets t WHERE t.paper_id = s.paper_id AND t.kind = 'thumbnail' AND t.page_number = s.page_number) ORDER BY s.id LIMIT ?", (cursor[0] if cursor else "", limit)).fetchall()
+        conn.execute("INSERT INTO app_config(key, value) VALUES ('page_thumbnail_backfill_cursor', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (rows[-1]["id"] if len(rows) == limit else "",))
     if len(rows) < limit:
         with db() as conn:
-            conn.execute("INSERT INTO app_config(key, value) VALUES ('thumbnail_backfill_next', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (str(int(time.time()) + 86400),))
+            conn.execute("INSERT INTO app_config(key, value) VALUES ('page_thumbnail_backfill_next', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (str(int(time.time()) + 86400),))
     for row in rows:
         try:
             _backfill_one(row)
@@ -40,15 +40,15 @@ def _backfill_one(row):
     with db(serialized=True) as conn:
         if not conn.execute("SELECT 1 FROM paper_assets WHERE id = ?", (row["id"],)).fetchone():
             return
-        if conn.execute("SELECT 1 FROM paper_assets WHERE paper_id = ? AND kind = 'thumbnail'", (row["paper_id"],)).fetchone():
+        if conn.execute("SELECT 1 FROM paper_assets WHERE paper_id = ? AND kind = 'thumbnail' AND page_number = ?", (row["paper_id"], row["page_number"])).fetchone():
             return
         used = conn.execute("SELECT COALESCE(SUM(s.byte_size), 0) FROM paper_assets s JOIN paper_archives a ON a.id = s.paper_id WHERE a.user_id = ?", (row["user_id"],)).fetchone()[0]
         reserved = conn.execute("SELECT COALESCE(SUM(upload_reserved_bytes), 0) FROM paper_archives WHERE user_id = ? AND file_status = 'uploading' AND upload_started_at > ?", (row["user_id"], int(time.time()) - UPLOAD_LEASE)).fetchone()[0]
         if used + reserved + len(raw) > get_settings().archive_storage_mb * 1024 * 1024:
             return
         storage_for().put(key, raw, "image/jpeg")
-        conn.execute("INSERT INTO paper_assets(id, paper_id, kind, page_number, storage, storage_key, mime_type, byte_size, sha256) VALUES (?, ?, 'thumbnail', 1, 'local', ?, 'image/jpeg', ?, ?)",
-                     (uuid.uuid4().hex, row["paper_id"], key, len(raw), hashlib.sha256(raw).hexdigest()))
+        conn.execute("INSERT INTO paper_assets(id, paper_id, kind, page_number, storage, storage_key, mime_type, byte_size, sha256) VALUES (?, ?, 'thumbnail', ?, 'local', ?, 'image/jpeg', ?, ?)",
+                     (uuid.uuid4().hex, row["paper_id"], row["page_number"], key, len(raw), hashlib.sha256(raw).hexdigest()))
 
 def tick():
     # Only one process does storage reconciliation. This is a separate lock domain.

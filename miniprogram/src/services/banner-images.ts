@@ -12,7 +12,8 @@ export function createBannerImages(acquire: (url: string) => FileHandle, display
     display(id, '')
   }
   return {
-    sync(banners: BannerImage[]) {
+    sync(all: BannerImage[], current = 0) {
+      const banners = all.length ? [all[current % all.length]!, all[(current + 1) % all.length]!] : []
       const sources = new Map(banners.map(banner => [banner.id, banner.image_url]))
       for (const [id, entry] of held) {
         if (sources.get(id) !== entry.source) remove(id, entry)

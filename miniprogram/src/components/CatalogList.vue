@@ -13,9 +13,10 @@ import { clearHistory, fetchTopics, type Topic } from '../services/experience'
 import { readPreferences, rememberSearch, writePreferences } from '../services/preferences'
 import { errorMessage, favoriteCatalogPaper, fetchCatalogWindow, fetchCatalog, fetchCatalogSummary } from '../services/api'
 import { ensureSession, requireLogin, session } from '../services/session'
+import { rememberPaperIntent } from '../services/paper-intent'
 import { createLatestRequest } from '../services/latest-request'
 import { catalogSelection, openCatalog, openCatalogPaper, confirmAction } from '../services/navigation'
-import { exerciseText, subjectOptions } from '../presentation'
+import { catalogCountLabel, exerciseText, subjectOptions } from '../presentation'
 import type { CatalogSummary, PaperSummary } from '../types'
 import { emptyTags, fetchTags, tagKinds, openRequests, type CatalogTag, type TagFilters } from '../services/growth'
 import GradePicker from './GradePicker.vue'
@@ -29,6 +30,10 @@ const items = ref<PaperSummary[]>([])
 const windowSize = 60
 const windowStart = ref(0)
 const nextOffset = ref(0)
+// 只保存每组的起始游标；行数据仍限制在 60 条。旧后端无游标时兼容 offset。
+const cursors = new Map<number, string>([[0, '']])
+let nextCursor: string | null | undefined
+function resetCursors() { cursors.clear(); cursors.set(0, ''); nextCursor = undefined }
 const imagesActive = ref(false)
 const instance = getCurrentInstance()
 const visibleImages = reactive(new Set<string>())
@@ -63,6 +68,17 @@ const favoriteUpdates = new Map<string, { favorite: boolean; revision: number }>
 function invalidateActions() { actionGeneration++; changing.clear(); favoriteUpdates.clear() }
 const q = ref('')
 const searchInput = ref('')
+const searchHelpOpen = ref(false)
+let searchBlurTimer: ReturnType<typeof setTimeout> | undefined
+let touchingSearchHelp = false
+function showSearchHelp() { clearTimeout(searchBlurTimer); searchHelpOpen.value = true }
+function hideSearchHelp() { clearTimeout(searchBlurTimer); searchHelpOpen.value = false; touchingSearchHelp = false }
+function blurSearch() {
+  clearTimeout(searchBlurTimer)
+  if (!touchingSearchHelp) searchBlurTimer = setTimeout(hideSearchHelp, 200)
+}
+function holdSearchHelp() { touchingSearchHelp = true; clearTimeout(searchBlurTimer) }
+function releaseSearchHelp() { touchingSearchHelp = false; blurSearch() }
 const expandedRow = ref('')
 const gradeOpen = ref(false)
 const metadataError = ref('')
@@ -109,10 +125,12 @@ const requests = createLatestRequest()
 let active = false
 let selectionRevision = -1
 let searchTimer: ReturnType<typeof setTimeout> | undefined
-let loaded = false
+const loaded = ref(false)
 let scrollTop = 0
 const filtered = computed(() => !!(q.value || grade.value || subject.value || category.value || (!props.topicId && topic.value) || onlyFree.value || favoriteGroup.value || chosenTags.value.length || sort.value !== 'featured'))
 const temporaryFilters = computed(() => !!(q.value || category.value || (!props.topicId && topic.value) || onlyFree.value || favoriteGroup.value || chosenTags.value.length || sort.value !== 'featured'))
+// 只有无筛选且成功返回空收藏时才收起工具，筛选空结果和网络错误仍保留恢复入口。
+const emptyFavorites = computed(() => props.view === 'favorites' && loaded.value && !loading.value && !error.value && !filtered.value && total.value === 0 && !items.value.length)
 function preferences() {
   const saved = readPreferences(session.user?.id || '')
   grade.value = saved.grade; subject.value = saved.subject; searches.value = saved.history
@@ -133,6 +151,7 @@ function commitSearch(value: string, explicit = false) {
   if (q.value !== next) q.value = next
 }
 function search(value = searchInput.value) {
+  hideSearchHelp()
   const retry = q.value === value.trim()
   searchInput.value = value
   commitSearch(value, true)
@@ -177,6 +196,8 @@ async function refresh(reset = true, preserveWindow = false) {
   const anonymous = props.view === 'all' && !session.user && (!session.ready || !!session.error)
   const revision = favoriteRevision
   const offset = reset ? windowStart.value : nextOffset.value
+  const cursor = reset ? cursors.get(windowStart.value) : nextCursor
+  const useCursor = props.view === 'all' && typeof cursor === 'string'
   loading.value = true; appending.value = !reset; error.value = ''; appendError.value = ''
   try {
     const record = recordNextSearch && reset
@@ -188,13 +209,13 @@ async function refresh(reset = true, preserveWindow = false) {
     // Revalidate the retained window in one bounded request, alongside its head.
     // The server returns current rights for every retained row; no private policy is cached.
     const [result, window] = await Promise.all([
-      fetchCatalog({ ...filters, offset, limit: Math.min(20, windowStart.value + windowSize - offset) }, { scope: current, anonymous }),
+      fetchCatalog({ ...filters, offset, ...(useCursor ? { pagination: 'cursor', cursor, include_total: reset } : {}), limit: Math.min(20, windowStart.value + windowSize - offset) }, { scope: current, anonymous }),
       preserveWindow && !anonymous ? fetchCatalogWindow(items.value.map(item => item.id), { scope: current }) : Promise.resolve(null),
     ])
     if (!current()) return
-    if (!result.items.length && windowStart.value && result.total <= windowStart.value) {
-      windowStart.value = Math.max(0, Math.floor((result.total - 1) / windowSize) * windowSize)
-      items.value = []; loaded = false; scrollTop = 0
+    if (!result.items.length && windowStart.value) {
+      windowStart.value = Math.max(0, windowStart.value - windowSize)
+      items.value = []; loaded.value = false; scrollTop = 0
       return await refresh()
     }
     for (const item of [...result.items, ...(window?.items || [])]) {
@@ -207,23 +228,36 @@ async function refresh(reset = true, preserveWindow = false) {
       return context && Object.prototype.hasOwnProperty.call(context, 'activity_at') ? { ...item, activity_at: context.activity_at } : item
     })
     const headUnchanged = preserveWindow && result.items.every((item, index) => item.id === items.value[index]?.id)
-      && retained.length === items.value.length && result.total === total.value
+      && retained.length === items.value.length && (result.total == null || result.total === total.value)
     const existing = new Map(items.value.map(item => [item.id, item]))
     const validWindow = headUnchanged && retained.every(item => existing.has(item.id) && existing.get(item.id)!.revision === item.revision)
     items.value = validWindow ? reconcileRows(items.value, retained) : reset ? result.items : [...items.value, ...result.items.filter(item => !existing.has(item.id))]
-    if (!validWindow) nextOffset.value = offset + result.items.length
-    total.value = result.total; more.value = nextOffset.value < result.total && (validWindow || result.has_more !== false) && result.items.length > 0
-    loaded = true
+    if (!validWindow) {
+      nextOffset.value = offset + result.items.length
+      nextCursor = result.next_cursor
+      if (reset) for (const start of cursors.keys()) if (start > windowStart.value) cursors.delete(start)
+    }
+    total.value = result.total ?? total.value
+    more.value = (validWindow ? more.value : result.has_more !== false) && result.items.length > 0
+    if (!more.value) total.value = nextOffset.value
+    loaded.value = true
     if (preserveWindow) { if (!validWindow) scrollTop = 0; await nextTick(); if (current()) uni.pageScrollTo({ scrollTop, duration: 0 }) }
 
-  } catch (cause) { if (current()) { if (reset) error.value = errorMessage(cause); else appendError.value = errorMessage(cause) } }
+  } catch (cause) {
+    if (current() && useCursor && cursor && (cause as { code?: string })?.code === 'invalid_cursor') {
+      resetCursors(); windowStart.value = 0; nextOffset.value = 0; items.value = []; scrollTop = 0
+      return await refresh()
+    }
+    if (current()) { if (reset) error.value = errorMessage(cause); else appendError.value = errorMessage(cause) }
+  }
   finally { if (current()) { loading.value = false; appending.value = false; uni.stopPullDownRefresh() } }
 }
 async function turnWindow(direction: -1 | 1) {
   if (!active || loading.value || batchBusy.value || (direction < 0 ? !windowStart.value : !windowFull.value || !more.value)) return
+  if (direction > 0 && nextCursor) cursors.set(windowStart.value + windowSize, nextCursor)
   windowStart.value = Math.max(0, windowStart.value + direction * windowSize)
   nextOffset.value = windowStart.value
-  items.value = []; loaded = false; scrollTop = 0; invalidateActions()
+  items.value = []; loaded.value = false; scrollTop = 0; invalidateActions()
   uni.pageScrollTo({ scrollTop: 0, duration: 0 })
   await refresh()
 }
@@ -253,7 +287,7 @@ async function activate() {
     imagesActive.value = true
     void groupControl.value?.refresh()
     void loadMetadata()
-    void refresh(true, loaded && previousSelection === catalogSelection.revision)
+    void refresh(true, loaded.value && previousSelection === catalogSelection.revision)
   } else active = true
   if (anonymous) void restored.then(() => { if (run === activation && active && session.user) void activate() })
 }
@@ -261,16 +295,16 @@ function deactivate() {
   endSelection()
   imagesActive.value = false
   invalidateActions()
-  active = false; activation++; cancelSearch(); requests.invalidate(); metadataRequests.invalidate()
+  active = false; activation++; cancelSearch(); hideSearchHelp(); requests.invalidate(); metadataRequests.invalidate()
   loading.value = false; metadataLoading.value = false; filterOpen.value = false; gradeOpen.value = false; expandedRow.value = ''
   uni.stopPullDownRefresh()
 }
 watch([q, grade, subject, category, topic, sort, onlyFree, favoriteGroup, () => Object.values(tagFilters).join(':')], () => {
   endSelection()
-  windowStart.value = 0; nextOffset.value = 0
+  resetCursors(); windowStart.value = 0; nextOffset.value = 0
   invalidateActions(); items.value = []; total.value = 0; appendError.value = ''
   requests.invalidate(); more.value = false
-  loaded = false; scrollTop = 0; expandedRow.value = ''
+  loaded.value = false; scrollTop = 0; expandedRow.value = ''
   if (active && canBrowse.value) { uni.pageScrollTo({ scrollTop: 0, duration: 0 }); loading.value = true; void refresh() }
 })
 watch([grade, subject], () => {
@@ -278,28 +312,31 @@ watch([grade, subject], () => {
 })
 watch(() => session.user?.id, (owner, previous) => {
   if (props.view === 'all' && !previous && owner) {
+    // 游标绑定账号；恢复登录保留筛选，分页从第一页重新核验。
+    resetCursors(); windowStart.value = 0; nextOffset.value = 0; loaded.value = false
     // 从公开浏览恢复登录时保留搜索上下文，刷新权限和个人数据。
     invalidateActions(); requests.invalidate(); metadataRequests.invalidate()
     metadataAt = 0; metadataLoading.value = false; loading.value = false
     return
   }
   endSelection()
-  windowStart.value = 0; nextOffset.value = 0
+  resetCursors(); windowStart.value = 0; nextOffset.value = 0
   invalidateActions(); appendError.value = ''; appending.value = false
   requests.invalidate(); metadataRequests.invalidate(); cancelSearch(); metadataAt = 0; metadataError.value = ''; metadataLoading.value = false; searchInput.value = ''; expandedRow.value = ''; items.value = []; summary.value = null; total.value = 0; more.value = false
   error.value = ''; loading.value = false; q.value = ''; grade.value = ''; subject.value = ''; category.value = ''
   selectionRevision = catalogSelection.revision
-  loaded = false; scrollTop = 0
+  loaded.value = false; scrollTop = 0
   topic.value = props.topicId; topics.value = []; tags.value = []; Object.assign(tagFilters, emptyTags()); favoriteGroup.value = ''; onlyFree.value = false; sort.value = 'featured'; if (!props.topicId) preferences()
   filterOpen.value = false; gradeOpen.value = false
   if (active && previous && !owner) void activate()
 }, { flush: 'sync' })
 watch(() => props.topicId, value => { topic.value = value })
-function clearConditions() { cancelSearch(); searchInput.value = ''; q.value = ''; category.value = ''; topic.value = props.topicId; onlyFree.value = false; favoriteGroup.value = ''; sort.value = 'featured'; Object.assign(tagFilters, emptyTags()) }
+function clearConditions() { cancelSearch(); hideSearchHelp(); searchInput.value = ''; q.value = ''; category.value = ''; topic.value = props.topicId; onlyFree.value = false; favoriteGroup.value = ''; sort.value = 'featured'; Object.assign(tagFilters, emptyTags()) }
 function resetFilters() { clearConditions(); grade.value = ''; subject.value = '' }
 function applyFilters(filters: { grade: string; category: string; tags: TagFilters }) { grade.value = filters.grade; category.value = filters.category; Object.assign(tagFilters, filters.tags) }
 async function favorite(paper: PaperSummary) {
   if (changing.has(paper.id)) return
+  if (!session.user) rememberPaperIntent({ paperId: paper.id, action: 'favorite', edition: 'original' })
   if (!requireLogin('/pages/paper/index?id=' + encodeURIComponent(paper.id))) return
   const generation = actionGeneration
   const current = () => active && generation === actionGeneration
@@ -332,12 +369,12 @@ function handleShare(paper: PaperSummary) {
   // #endif
 }
 defineExpose({ activate, deactivate, refresh, reload, rememberScroll: (top: number) => { scrollTop = top }, loadMore: () => refresh(false), shareTitle: computed(() => topicHeader.value?.title || '习题专题') })
-function reconnect() { if (active && !changing.size) { void refresh(true, loaded); void loadMetadata(true) } }
+function reconnect() { if (active && !changing.size) { void refresh(true, loaded.value); void loadMetadata(true) } }
 function memoryWarning() {
   // 可见页面保留当前阅读位置；隐藏页释放行数据，下次进入重新核验权限。
   if (active) return
   items.value = []; summary.value = null; topics.value = []; tags.value = []
-  metadataAt = 0; loaded = false; scrollTop = 0; nextOffset.value = windowStart.value
+  metadataAt = 0; loaded.value = false; scrollTop = 0; nextOffset.value = windowStart.value
 }
 onMounted(() => { uni.$on?.('lc-network-restored', reconnect); uni.$on?.('lc-memory-warning', memoryWarning); void activate() })
 onBeforeUnmount(() => { uni.$off?.('lc-network-restored', reconnect); uni.$off?.('lc-memory-warning', memoryWarning) })
@@ -345,10 +382,10 @@ onBeforeUnmount(deactivate)
 </script>
 
 <template>
-  <view class="catalog-page" :class="{ 'has-tabbar': hasTabbar, 'batch-mode': selecting }">
+  <view class="catalog-page" :class="{ 'has-tabbar': hasTabbar, 'batch-mode': selecting, 'empty-favorites': emptyFavorites }">
     <view class="catalog-sticky">
       <PageChrome :back="!hasTabbar" fallback="/pages/account/index" />
-      <view v-if="recordTitle && view !== 'favorites'" class="content-width record-heading">
+      <view v-if="recordTitle && (view !== 'favorites' || emptyFavorites)" class="content-width record-heading">
         <view class="record-title-row">
           <text class="page-title">{{ recordTitle }}</text>
           <button
@@ -383,7 +420,7 @@ onBeforeUnmount(deactivate)
         </button>
         <!-- #endif -->
       </view>
-      <view class="catalog-band">
+      <view v-if="!emptyFavorites" class="catalog-band">
         <view class="content-width catalog-header">
           <view v-if="selecting" class="selection-heading"><text class="section-title">整理收藏</text><button class="section-link" role="checkbox" :aria-checked="allSelected" :disabled="batchBusy" @click="selectAll">{{ allSelected ? '取消全选' : '全选已加载' }}</button></view>
           <template v-else-if="canBrowse">
@@ -392,7 +429,9 @@ onBeforeUnmount(deactivate)
               :grade="grade"
               :placeholder="view === 'favorites' ? '搜索收藏' : view === 'downloads' ? '搜索下载记录' : '搜索习题'"
               @search="search()"
-              @select-grade="gradeOpen = true"
+              @focus="showSearchHelp"
+              @blur="blurSearch"
+              @select-grade="hideSearchHelp(); gradeOpen = true"
             />
             <view class="catalog-tab-row">
               <view class="catalog-tabs">
@@ -410,7 +449,7 @@ onBeforeUnmount(deactivate)
                 role="button"
                 aria-label="更多筛选"
                 title="更多筛选"
-                @click="filterOpen = true"
+                @click="hideSearchHelp(); filterOpen = true"
               >
                 <wd-icon name="filter" size="19px" />
                 <view v-if="filterCount" class="filter-dot" />
@@ -441,8 +480,9 @@ onBeforeUnmount(deactivate)
           重试
         </button>
       </view>
-      <view v-if="!selecting && !q && searches.length" class="search-history">
-        <view class="history-heading">
+      <view v-if="!emptyFavorites && !selecting && searchHelpOpen && !searchInput.trim()" class="search-history" @touchstart="holdSearchHelp" @touchend="releaseSearchHelp" @touchcancel="releaseSearchHelp">
+        <text class="search-example">可组合搜索，例如：三年级 数学 进位</text>
+        <view v-if="searches.length" class="history-heading">
           <text>最近搜索</text>
           <button
             hover-class="control-pressed"
@@ -454,7 +494,7 @@ onBeforeUnmount(deactivate)
             清空
           </button>
         </view>
-        <scroll-view class="history-scroll" scroll-x :show-scrollbar="false">
+        <scroll-view v-if="searches.length" class="history-scroll" scroll-x :show-scrollbar="false">
           <view class="history-track">
             <button
               hover-class="control-pressed"
@@ -468,22 +508,11 @@ onBeforeUnmount(deactivate)
           </view>
         </scroll-view>
       </view>
-      <view v-if="!selecting" class="experience-toolbar">
-        <view v-if="view === 'all' && !topicId" class="sort-buttons">
-          <button
-            hover-class="control-pressed"
-            :hover-start-time="0"
-            :hover-stay-time="80"
-            role="button"
-            v-for="item in sorts"
-            :key="item.value"
-            :class="{ selected: sort === item.value }"
-            :aria-pressed="sort === item.value"
-            @click="sort = item.value"
-          >
-            {{ item.label }}
-          </button>
-        </view>
+      <view v-if="!emptyFavorites && !selecting" class="experience-toolbar">
+        <text class="result-count" role="status">{{ catalogCountLabel(total, loaded, loading && !appending, error) }}</text>
+        <picker v-if="view === 'all' && !topicId" class="sort-buttons" :range="sorts.map(item => item.label)" :value="Math.max(0, sorts.findIndex(item => item.value === sort))" @change="sort = sorts[Number($event.detail.value)]!.value">
+          <view class="sort-choice" role="button" :aria-label="'排序：' + (sorts.find(item => item.value === sort)?.label || '精选')"><text>{{ sorts.find(item => item.value === sort)?.label || '精选' }}</text><wd-icon name="down" size="12px" /></view>
+        </picker>
         <button
           hover-class="control-pressed"
           :hover-start-time="0"
@@ -518,7 +547,7 @@ onBeforeUnmount(deactivate)
       </view>
       <FavoriteGroups
         ref="groupControl"
-        v-if="view === 'favorites' && !selecting"
+        v-if="view === 'favorites' && !emptyFavorites && !selecting"
         :selected="favoriteGroup"
         @select="favoriteGroup = $event"
       />
@@ -535,41 +564,9 @@ onBeforeUnmount(deactivate)
         <text class="grow">{{ error }}</text>
         <wd-button icon="refresh" type="danger" variant="text" role="button" aria-label="重试加载" @click="refresh()" />
       </view>
-      <view class="list-caption">
-        <text class="result-count">{{ loading && !appending ? '正在检索习题' : '共 ' + total + ' 份习题' }}</text>
-        <button
-          hover-class="control-pressed"
-          :hover-start-time="0"
-          :hover-stay-time="80"
-          v-if="filtered && !selecting"
-          class="section-link"
-          role="button"
-          aria-label="全部重置"
-          @click="resetFilters"
-        >
-          <wd-icon name="close-circle" size="14px" />
-          <text>全部重置</text>
-        </button>
-        <text v-else>
-          {{
-            topicId
-              ? '专题顺序'
-              : view === 'all'
-                ? sort === 'latest'
-                  ? '最新发布'
-                  : sort === 'popular'
-                    ? '热门习题'
-                    : '精选优先'
-                : view === 'downloads'
-                  ? '最近下载'
-                  : view === 'recent'
-                    ? '最近浏览'
-                    : '最近收藏'
-          }}
-        </text>
-      </view>
-      <view v-if="!selecting && (temporaryFilters || view === 'favorites' && items.length)" class="list-tools">
-        <button v-if="temporaryFilters" class="section-link" role="button" aria-label="清除本次条件" @click="clearConditions"><wd-icon name="close" size="14px" /><text>清除本次条件</text></button>
+      <view v-if="selecting" class="list-caption"><text class="result-count">{{ catalogCountLabel(total, loaded, loading && !appending, error) }}</text></view>
+      <view v-if="!selecting && (filtered || view === 'favorites' && items.length)" class="list-tools">
+        <view v-if="temporaryFilters" class="clear-conditions"><button class="section-link" role="button" aria-label="清除其他条件" @click="clearConditions"><wd-icon name="close" size="14px" /><text>清除其他条件</text></button><text v-if="grade || subject" class="retained-filters">保留{{ [grade.replace(/^小学/, ''), subject].filter(Boolean).join('、') }}</text></view>
         <button v-if="view === 'favorites' && items.length" class="section-link" role="button" aria-label="批量整理" :disabled="loading || changing.size > 0" @click="expandedRow = ''; selecting = true"><wd-icon name="edit" size="16px" /><text>批量整理</text></button>
       </view>
       <EnhancedSkeleton v-if="loading && !items.length" :count="4" type="row" />
@@ -591,7 +588,7 @@ onBeforeUnmount(deactivate)
           />
         </view>
       </view>
-      <view v-else-if="!loading && !error" class="catalog-empty">
+      <view v-else-if="loaded && !loading && !error" class="catalog-empty">
         <wd-empty
           :icon="filtered ? 'no-result' : view === 'favorites' ? 'no-collection' : 'no-content'"
           :tip="
@@ -636,7 +633,7 @@ onBeforeUnmount(deactivate)
         <wd-loading size="18px" />
         <text>正在加载</text>
       </view>
-      <view v-if="view === 'all' && !loading && !error && !items.length" class="request-entry">
+      <view v-if="view === 'all' && loaded && !loading && !error && !items.length" class="request-entry">
         <text>没有找到需要的资料？</text>
         <wd-button variant="plain" size="small" @click="openRequests({ q, grade, subject })">提交资料需求</wd-button>
       </view>
@@ -647,7 +644,7 @@ onBeforeUnmount(deactivate)
       <view v-else-if="more && !loading && !windowFull" class="loading-line">
         <wd-button variant="text" icon="down" role="button" :disabled="batchBusy" @click="refresh(false)">加载更多</wd-button>
       </view>
-      <view v-else-if="items.length && !loading && !more" class="list-end">
+      <view v-else-if="items.length && !loading && !error && !more" class="list-end">
         {{ windowStart ? '已到最后一组' : '已显示全部 ' + total + ' 份习题' }}
       </view>
       <view v-if="windowStart || windowFull" class="loading-line window-controls">
@@ -666,6 +663,7 @@ onBeforeUnmount(deactivate)
     <CatalogFilterSheet
       :open="filterOpen"
       :grade="grade"
+      :subject="subject"
       :category="category"
       :grades="summary?.grades || []"
       :categories="summary?.categories || []"
@@ -673,6 +671,7 @@ onBeforeUnmount(deactivate)
       :tag-filters="tagFilters"
       @close="filterOpen = false"
       @apply="applyFilters"
+      @reset-all="resetFilters"
     />
     <AppTabBar v-if="hasTabbar" :current="view === 'favorites' ? 'favorites' : 'library'" />
     <FavoriteBatchActions v-if="selecting" :ids="selectedIds" @busy="batchBusy = $event" @completed="batchCompleted" @close="endSelection" @refresh="refresh()" />

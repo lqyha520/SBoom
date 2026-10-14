@@ -31,6 +31,7 @@ const settingsOpen = ref(false)
 const logoutOpen = ref(false)
 const profileOpen = ref(false)
 const passwordOpen = ref(false)
+const helpOpen = ref(false)
 useTabBarOverlay(() => settingsOpen.value || logoutOpen.value)
 const requests = usePageLifecycle(() => session.user?.id)
 requests.show()
@@ -117,7 +118,7 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
         </view>
       </view>
     </view>
-    <AuthGate v-if="!session.user" @restored="load()" />
+    <view v-if="!session.user" class="guest-login"><AuthGate @restored="load()" /></view>
     <template v-else>
       <view v-if="error" class="content-width"><view class="error-strip"><text class="grow">{{ error }}</text></view></view>
       <view v-for="section in sections" :key="section.key" class="content-width">
@@ -149,7 +150,16 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
       </view>
       <text class="account-foot">每天一点进步 · 让学习更有方向</text>
     </template>
-    <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="!session.user" class="guest-privacy section-link" role="button" @click="privacy">隐私政策</button>
+    <view v-if="!session.user" class="content-width guest-services">
+      <text class="section-title">先了解，再开始</text>
+      <view class="more-card">
+        <button hover-class="control-pressed" role="button" aria-label="使用帮助" :aria-expanded="helpOpen" @click="helpOpen = !helpOpen"><view class="more-icon"><wd-icon name="book" size="18px" /></view><text class="grow">使用帮助</text><wd-icon :name="helpOpen ? 'arrow-up' : 'arrow-down'" size="15px" /></button>
+        <view v-if="helpOpen" class="guest-help"><text>1. 选年级、学科，也可以直接搜索知识点。</text><text>2. 打开资料查看原稿，先确认是否含答案。</text><text>3. 登录后可收藏资料，按标注权限下载；下载时可选择已有的文件版本。</text></view>
+        <button hover-class="control-pressed" role="button" aria-label="联系客服" @click="openSupport()"><view class="more-icon"><wd-icon name="headset" size="18px" /></view><text class="grow">联系客服</text><wd-icon name="arrow-right" size="15px" /></button>
+        <button hover-class="control-pressed" role="button" aria-label="会员介绍" @click="membership"><view class="more-icon"><wd-icon name="star" size="18px" /></view><text class="grow">会员介绍</text><wd-icon name="arrow-right" size="15px" /></button>
+        <button hover-class="control-pressed" role="button" @click="privacy"><view class="more-icon"><wd-icon name="safe" size="18px" /></view><text class="grow">隐私与服务</text><wd-icon name="arrow-right" size="15px" /></button>
+      </view>
+    </view>
     <AppTabBar current="account" />
     <ProfileSheet :open="profileOpen" @close="profileOpen = false" @saved="profileSaved" />
     <PasswordSheet :open="passwordOpen" @close="passwordOpen = false" @saved="passwordSaved" />
@@ -179,6 +189,10 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
 </template>
 
 <style scoped>
+.guest-login :deep(.state-block) { min-height:180px;padding:22px 24px; }
+.guest-services { padding-bottom:24px; }.guest-services .section-title { margin-bottom:12px; }
+.guest-help { padding:0 16px 14px;font-size:13px;line-height:1.8;color:var(--lc-secondary); }
+.guest-help text { display:block;margin-top:8px; }
 .profile-hero { padding-bottom:34px;background:radial-gradient(ellipse at 95% 0,#cce6d5 0,transparent 65%),linear-gradient(160deg,#e8f4eb,#f3f8f4); }
 .profile-hero.guest { padding-bottom: 28px; }
 .hero-content { padding-top:20px; }
@@ -237,7 +251,7 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
 .logout-confirm { padding: 25px 22px 22px; }
 .logout-caption { display: block; margin-top: 12px; font-size: 13px; line-height: 1.8; color: var(--lc-secondary); }
 .logout-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 23px; }
-.guest-privacy { display: flex; margin: 0 auto; }
+
 @media (max-width:350px) {
   .identity-card { gap:11px; }.avatar,.avatar-button { width:58px;height:58px; }.profile-name { font-size:20px; }.edit-button { font-size: 12px; }
   .quick-card { padding-left:2px;padding-right:2px; }.service-grid { padding-right:3px;padding-left:3px; }.service-item > text { font-size: 12px; }

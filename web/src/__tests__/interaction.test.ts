@@ -98,18 +98,34 @@ describe('编辑恢复与单题替换', () => {
     await store.replaceQuestion(section.id, qid)
     expect(api.generateBatch).not.toHaveBeenCalled()
   })
-  it('模型换题与已有题重复时仍保留结果，不在前端拒绝', async () => {
+  it('模型换题与已有题重复时保留原题，并允许重新换题', async () => {
     const store = ready(), section = store.sections[0]
     const first = section.data!.questions[0], repeated = section.data!.questions[1]
     const qid = first._qid!
+    const original = JSON.parse(JSON.stringify(section.data!.questions))
     vi.mocked(api.generateBatch).mockResolvedValue([{ game_type: section.type, section_id: section.id,
       questions: [{ type: repeated.type, stem: repeated.stem, answer: repeated.answer }] }])
-    await store.replaceQuestion(section.id, qid)
+    await expect(store.replaceQuestion(section.id, qid)).rejects.toThrow('重复')
     expect(api.generateBatch).toHaveBeenCalledOnce()
     expect(section.data!.questions).toHaveLength(3)
-    expect(section.data!.questions[0].stem).toBe(repeated.stem)
+    expect(section.data!.questions).toEqual(original)
     expect(section.data!.questions[0]._qid).toBe(qid)
     expect(section.data!.questions[0]._replacement).toBeUndefined()
+    expect(store.generating).toBe(false)
+    vi.mocked(api.generateBatch).mockImplementation(async params => response(params.items))
+    await store.replaceQuestion(section.id, qid)
+    expect(api.generateBatch).toHaveBeenCalledTimes(2)
+    expect(section.data!.questions[0].stem).toContain('新题')
+  })
+  it('换题检查同卷其他大题，并识别全角和乘号的等价写法', async () => {
+    const store = ready(), section = store.sections[0], original = section.data!.questions[0].stem
+    store.addSection('fill_blank', 1)
+    const other = store.sections[1]
+    other.data = { questions: [{ type: 'fill_blank', stem: '9 × 2 = ___', answer: 18 }] }
+    vi.mocked(api.generateBatch).mockResolvedValue([{ game_type: section.type, section_id: section.id,
+      questions: [{ type: 'fill_blank', stem: '９*２＝___', answer: 18 }] }])
+    await expect(store.replaceQuestion(section.id, section.data!.questions[0]._qid!)).rejects.toThrow('重复')
+    expect(section.data!.questions[0].stem).toBe(original)
   })
   it('换题失败保留原题和请求记录，仍在处理时不重复发送', async () => {
     const store = ready(), section = store.sections[0], question = section.data!.questions[0], stem = question.stem

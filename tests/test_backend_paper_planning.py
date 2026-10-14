@@ -122,13 +122,14 @@ class PaperContracts(unittest.TestCase):
         self.assertEqual(response.json()["sections"][0]["questions"][0]["stem"], "9+9=19（　）")
         self.assertNotIn("9+9=", model.call_args.args[1])
 
-    def test_exact_question_in_previous_chunk_is_kept_without_repairs(self):
+    def test_exact_question_in_previous_chunk_is_rejected_without_unbounded_repairs(self):
         self.send(request_id="first-chunk")
         self.body["previous_request_ids"] = ["first-chunk"]
         response, model = self.send(request_id="second-chunk")
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["sections"][0]["missing_count"], 0)
-        self.assertEqual(len(response.json()["sections"][0]["questions"]), 2)
+        sections = fixtures.incomplete_sections(response)
+        self.assertEqual(sections[0]["missing_count"], 2)
+        self.assertEqual(sections[0]["questions"], [])
+        self.assertIn("完全重复", "；".join(sections[0]["quality_warnings"]))
         model.assert_awaited_once()
 
     def test_complete_sections_from_truncation_are_loaded_without_other_failed_output(self):
@@ -160,12 +161,13 @@ class PaperContracts(unittest.TestCase):
     def test_practice_preserves_process_and_inverse_questions_without_template_repairs(self):
         self.body.update(grade="小学一年级", keyword="20以内进位加法（凑十法）")
         self.body["items"] = [{"section_id": "s1", "game_type": "fill_blank", "question_count": 8}]
-        values = [question("fill_blank", f"9 + {n} = 10 + ____", n - 1) for n in range(2, 6)]
+        values = [question("fill_blank", f"9 + {n} = 10 + ____", n - 1,
+                           analysis=f"9+{n}=10+{n - 1}={n + 9}") for n in range(2, 6)]
         patch_values = [
-            question("fill_blank", "8 + 7 = 8 + ____ + 5\n= 10 + ____ = ____", "2，5，15"),
-            question("fill_blank", "____ + 8 = 12", 4),
-            question("fill_blank", "8凑成10，还差____。", 2),
-            question("fill_blank", "8 + 3 = ____", 11),
+            question("fill_blank", "8 + 7 = 8 + ____ + 5\n= 10 + ____ = ____", "2，5，15", analysis="8+7=8+2+5=10+5=15"),
+            question("fill_blank", "____ + 8 = 12", 4, analysis="12-8=4"),
+            question("fill_blank", "8凑成10，还差____。", 2, analysis="10-8=2"),
+            question("fill_blank", "8 + 3 = ____", 11, analysis="8+3=8+2+1=11"),
         ]
         get_settings().generation_repair_limit = 3
         with patch.object(generate, "_call_llm_and_parse", new=AsyncMock(side_effect=[
@@ -179,7 +181,8 @@ class PaperContracts(unittest.TestCase):
             self.assertIn(patch_values[0]["stem"], [q["stem"] for q in output["questions"]])
             self.assertFalse(output["quality_warnings"])
             self.assertEqual(model.await_count, 1)
-            self.assertNotIn("过程必须写在stem", model.call_args_list[0].args[0])
+            self.assertIn("过程必须写在stem", model.call_args_list[0].args[0])
+            self.assertNotIn("未要求过程填空时，不写解题步骤", model.call_args_list[0].args[0])
             replay = self.client.post("/api/v1/generate-batch", json=self.body, headers={"X-Request-ID": "planned"})
             self.assertEqual(response.json(), replay.json())
             self.assertEqual(model.await_count, 1)
@@ -187,7 +190,8 @@ class PaperContracts(unittest.TestCase):
     def test_valid_practice_never_triggers_paid_repairs_just_to_meet_template_quotas(self):
         self.body.update(grade="小学一年级", keyword="20以内进位加法（凑十法）")
         self.body["items"] = [{"section_id": "s1", "game_type": "fill_blank", "question_count": 8}]
-        values = [question("fill_blank", f"9 + {n} = 10 + ____", n - 1) for n in range(2, 10)]
+        values = [question("fill_blank", f"9 + {n} = 10 + ____", n - 1,
+                           analysis=f"9+{n}=10+{n - 1}={n + 9}") for n in range(2, 10)]
         raw = {"sections": [{"section_id": "s1", "game_type": "fill_blank", "questions": values}]}
         get_settings().generation_repair_limit = 1
         response, model = self.send(raw)

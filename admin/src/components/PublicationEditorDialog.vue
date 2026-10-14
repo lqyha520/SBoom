@@ -65,6 +65,20 @@ const displayCategories = computed(() => {
   const current = props.editor.filterCategories.find(item => item.value === form.value.category_id)
   return current && !categories.value.some(item => item.value === current.value) ? [...categories.value, current] : categories.value
 })
+const publicationHints = computed(() => {
+  const metadata = target.value || sources.value.find(item => item.id === sourceId.value) || imageFields.value
+  const title = form.value.title.trim()
+  const fullGrade = metadata.grade || ''
+  const subject = metadata.subject || ''
+  const grade = fullGrade.replace(/^(小学|初中|高中)/, '')
+  const hints: string[] = []
+  if (grade && !title.includes(grade)) hints.push('标题建议写明年级')
+  if (subject && !title.includes(subject)) hints.push('标题建议写明学科')
+  const theme = title.replace(fullGrade, '').replace(grade, '').replace(subject, '').replace(/[\s·・—_\-：:（）()]+/g, '')
+  if (!theme) hints.push('请补充具体主题，方便家长辨认资料')
+  if (!form.value.description.trim()) hints.push('建议补充简介，说明练习内容和适用场景')
+  return hints
+})
 const previewState = reactive(useCatalogPreview())
 const previewVisible = ref(false)
 type Panel = { busy: boolean; dirty: boolean; canLeave: () => boolean; reconcile: (latest: CatalogDetail) => void }
@@ -120,7 +134,6 @@ const sourceModes = [
 <template>
   <UModal
     fullscreen
-    :transition="false"
     :open="dialog"
     @update:open="closeEditor"
     :title="
@@ -139,7 +152,7 @@ const sourceModes = [
     ><template #body>
       <div class="publication-editor-inner">
       <div v-if="target" class="publication-editor-toolbar">
-        <UTabs v-model="section" :items="[{value:'details',label:'基本与发布'},{value:'metadata',label:'教学标签'},{value:'editions',label:'打印版本'},{value:'revision',label:'修订稿'}].map(tab => ({ ...tab, disabled: busy }))" :content="false" variant="link" aria-label="资料编辑步骤" :ui="{ list: 'gap-5 p-0', trigger: 'px-0 pb-3' }" />
+        <UTabs v-model="section" :items="[{value:'details',label:'基本与发布',icon:'i-lucide-file-pen-line'},{value:'metadata',label:'教学标签',icon:'i-lucide-tags'},{value:'editions',label:'打印版本',icon:'i-lucide-printer'},{value:'revision',label:'修订稿',icon:'i-lucide-history'}].map(tab => ({ ...tab, disabled: busy }))" :content="false" variant="link" aria-label="资料编辑步骤" :ui="{ list: 'gap-5 p-0', trigger: 'px-0 pb-3', leadingIcon: 'hidden sm:block size-4' }" />
         <UButton :icon="previewVisible ? 'i-lucide-panel-right-close' : 'i-lucide-panel-right-open'" :label="previewVisible ? '收起预览' : '展开预览'" :aria-expanded="previewVisible" aria-controls="publication-preview" color="neutral" variant="outline" size="sm" @click="previewVisible = !previewVisible" />
       </div>
       <div class="publication-workspace" :class="{ 'with-preview': target && previewVisible }"><div class="publication-fields">
@@ -291,7 +304,7 @@ const sourceModes = [
         <details class="quick-category"><summary>新建分类</summary><div class="actions-row mt-2"><UInput v-model="editor.categoryName" aria-label="新分类名称" placeholder="输入分类名称" maxlength="60" :disabled="editor.categoryCreating" @keydown.enter.prevent="editor.addCategory" /><UButton label="创建并选中" :loading="editor.categoryCreating" :disabled="!editor.categoryName.trim() || busy" @click="editor.addCategory" /></div></details>
         <fieldset class="publication-group">
           <legend>基本信息</legend>
-          <UFormField v-if="!importing" label="公开标题" required
+          <UFormField v-if="!importing" label="公开标题" required description="建议使用“年级＋学科＋主题”，例如：一年级数学 · 20 以内加减法。请以文件实际内容为准。"
             ><UInput
               v-model="form.title"
               maxlength="240"
@@ -397,6 +410,13 @@ const sourceModes = [
             variant="soft"
             title="发布后，习题、答案和文件按所设权限提供给小程序用户。请确认拥有发布权限且不含学生隐私。"
           />
+          <UAlert
+            v-if="publishing && publicationHints.length"
+            color="info"
+            variant="soft"
+            title="发布前完善资料信息"
+            :description="publicationHints.join('；') + '。这些建议不影响保存或发布。'"
+          />
           <p v-if="target" class="text-sm text-muted">
             内容复核：{{ target.reviewed_at ? '已记录人工确认' : '尚未记录' }} ·
             答案文件：{{
@@ -437,6 +457,7 @@ const sourceModes = [
         :disabled="busy"
         @click="closeEditor(false)" /><span
         class="publication-save-state"
+        :class="{ 'is-dirty': dirty }"
         role="status"
         >{{
           dirty
@@ -474,25 +495,29 @@ const sourceModes = [
                   ? '导入待处理文件（' + importQueue.pending.length + '）'
                   : '创建草稿'
         "
+        icon="i-lucide-check"
         :loading="busy"
         :disabled="busy || !valid" /></template
   ></UModal>
 </template>
 
 <style scoped>
-:global(.publication-editor-header) { padding:18px 32px;min-height:76px; }
-:global(.publication-editor-body) { padding:0;background:#f8f9fb; }
-:global(.publication-editor-footer) { padding:16px 32px;gap:12px;background:#fff; }
+:global(.publication-editor-header) { padding:18px 32px;min-height:76px;border-bottom:1px solid #e0e9e3;background:#fff; }
+:global(.publication-editor-body) { padding:0;background:#f3f6f5; }
+:global(.publication-editor-footer) { padding:16px 32px;gap:12px;background:#fff;box-shadow:0 -4px 20px #183e3208; }
 .publication-editor-inner { max-width:1440px;margin:0 auto;padding:0 32px 32px; }
-.publication-editor-toolbar { display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 0 0;position:sticky;top:0;z-index:2;background:#f8f9fb;border-bottom:1px solid var(--ui-border);margin-bottom:24px; }
+.publication-editor-toolbar { display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 0 0;position:sticky;top:0;z-index:2;background:#f3f6f5;border-bottom:1px solid #dce7df;margin-bottom:24px; }
 .publication-editor-toolbar > button { margin-bottom:12px; }
 .publication-workspace { min-width:0;padding-top:24px; }
 .publication-editor-toolbar + .publication-workspace { padding-top:0; }
 .publication-workspace.with-preview { display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:32px; }
 .publication-fields { min-width:0;max-width:840px;margin:0 auto;width:100%; }
-.publication-preview { min-width:0;padding:24px;background:#fff;border:1px solid var(--ui-border);border-radius:6px;align-self:start;position:sticky;top:90px;max-height:calc(100dvh - 270px);overflow:auto; }
+.publication-preview { min-width:0;padding:24px;background:#fff;border:1px solid var(--ui-border);border-radius:14px;box-shadow:var(--admin-shadow);align-self:start;position:sticky;top:90px;max-height:calc(100dvh - 270px);overflow:auto;animation:admin-reveal .25s ease both; }
 .publication-preview h3 { font-size:13px;font-weight:600; }
 .quick-category summary { cursor:pointer;font-size:13px;color:var(--ui-primary); }
+.quick-category { padding:12px 16px;background:#eaf3ee;border:1px dashed #bfd5c6;border-radius:10px; }
+.advanced-settings { padding:16px 20px;background:#fff;border:1px solid var(--ui-border);border-radius:12px;font-size:13px; }
+.advanced-settings[open] > summary { margin-bottom:20px;color:var(--ui-primary); }
 @media(max-width:800px) { .publication-workspace.with-preview { grid-template-columns:1fr; }.publication-preview { position:static;max-height:none; }.publication-editor-toolbar { flex-wrap:wrap;gap:8px;padding-top:12px; }.publication-editor-toolbar > :first-child { width:100%; }.publication-editor-inner { padding:0 16px 24px; }:global(.publication-editor-header), :global(.publication-editor-footer) { padding:14px 16px; }.publication-save-state { min-width:90px; } }
 
 .publication-group {
@@ -501,12 +526,15 @@ const sourceModes = [
   gap: 16px;
   min-width: 0;
   margin: 0;
-  padding: 16px 0 0;
-  border: 0;
-  border-top: 1px solid var(--ui-border);
+  padding: 22px;
+  border: 1px solid #e0e9e3;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 2px 8px #183e3204;
 }
 .publication-group legend {
-  padding-right: 12px;
+  padding: 0 8px;
+  color: #345d49;
   font-size: 14px;
   font-weight: 600;
 }
@@ -516,12 +544,17 @@ const sourceModes = [
   color: var(--ui-text-muted);
   overflow-wrap: anywhere;
 }
+.publication-save-state:not(:empty)::before { content:'';display:inline-block;width:6px;height:6px;margin-right:7px;background:#308462;border-radius:50%;vertical-align:middle; }
+.publication-save-state.is-dirty { color:#987220; }
+.publication-save-state.is-dirty::before { background:#b58c32; }
 .image-metadata {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 @media (max-width: 600px) {
+  .publication-group { padding:16px; }
+  .advanced-settings { padding:14px; }
   .image-metadata {
     grid-template-columns: 1fr;
   }

@@ -96,7 +96,7 @@ class ModelGenerationAPI(unittest.TestCase):
                                 response = self.client.post(f"/api/v1/{endpoint}", json=body)
                             self.assertEqual(response.status_code, 200, response.text)
                             model.assert_awaited_once()
-                            self.assertNotIn("难度", model.call_args.args[0][0]["content"])
+                            self.assertIn("难度", model.call_args.args[0][0]["content"])
                             actual = response.json() if endpoint == "generate" else response.json()["sections"][0]
                             self.assertEqual(actual["missing_count"], 0)
                             self.assert_model_question(actual["questions"][0], value["questions"][0])
@@ -119,11 +119,11 @@ class ModelGenerationAPI(unittest.TestCase):
                     model.assert_called_once()
                     self.assertIn("data: [DONE]", response.text)
                     self.assertIn('"token":', response.text)
-                    self.assertNotIn('"qc_warning":', response.text)
+                    self.assertIn("流式结果尚未独立复核", response.text)
                     self.assertIn("本次生成的题目不要重复。", model.call_args.args[0][0]["content"])
 
-    def test_duplicate_questions_are_kept_for_every_type_in_single_and_batch(self):
-        get_settings().generation_repair_limit = 3
+    def test_duplicate_questions_are_rejected_for_every_type_in_single_and_batch(self):
+        get_settings().generation_repair_limit = 0
         for kind, value in MODEL_SECTIONS.items():
             for endpoint in ("generate", "generate-batch"):
                 with self.subTest(kind=kind, endpoint=endpoint):
@@ -136,15 +136,14 @@ class ModelGenerationAPI(unittest.TestCase):
                         output = {"sections": [output]}
                     with patch.object(generate, "_call_llm_and_parse", new=AsyncMock(return_value=output)) as model:
                         response = self.client.post(f"/api/v1/{endpoint}", json=body)
-                    self.assertEqual(response.status_code, 200, response.text)
-                    result = response.json() if endpoint == "generate" else response.json()["sections"][0]
-                    self.assertEqual([q["id"] for q in result["questions"]], [1, 2])
-                    self.assertEqual(result["missing_count"], 0)
-                    self.assertFalse(result["quality_warnings"])
+                    result = fixtures.incomplete_sections(response)[0]
+                    self.assertEqual([q["id"] for q in result["questions"]], [1])
+                    self.assertEqual(result["missing_count"], 1)
+                    self.assertTrue(result["quality_warnings"])
                     model.assert_awaited_once()
                     self.assertIn("本次生成的题目不要重复。", model.call_args.args[0])
 
-    def test_repair_keeps_valid_repeated_questions_instead_of_creating_another_shortage(self):
+    def test_repair_does_not_reintroduce_identical_questions(self):
         get_settings().generation_repair_limit = 3
         self.body["items"] = [{"game_type": "oral_math", "section_id": "s1", "question_count": 2}]
         with patch.object(generate, "_call_llm_and_parse", new=AsyncMock(side_effect=[
@@ -152,11 +151,10 @@ class ModelGenerationAPI(unittest.TestCase):
             {"game_type": "oral_math", "questions": [QUESTIONS[0]]},
         ])) as model:
             response = self.client.post("/api/v1/generate-batch", json=self.body)
-        self.assertEqual(response.status_code, 200, response.text)
-        result = response.json()["sections"][0]
-        self.assertEqual(len(result["questions"]), 2)
-        self.assertEqual(result["missing_count"], 0)
-        self.assertFalse(result["quality_warnings"])
+        result = fixtures.incomplete_sections(response)[0]
+        self.assertEqual(len(result["questions"]), 1)
+        self.assertEqual(result["missing_count"], 1)
+        self.assertTrue(result["quality_warnings"])
         self.assertEqual(model.await_count, 2)
         self.assertIn("本次生成的题目不要重复。", model.call_args.args[0])
 
@@ -197,7 +195,7 @@ class ModelGenerationAPI(unittest.TestCase):
                 model.assert_awaited_once()
                 self.assertEqual(model.call_args.args[2], len(QUESTIONS))
                 prompt = model.call_args.args[0]
-                self.assertNotIn("难度", prompt)
+                self.assertIn("难度", prompt)
                 self.assertIn("上册·" + GENERAL_TOPIC, prompt)
                 sections = response.json()["sections"]
                 self.assertEqual(len(sections), len(QUESTIONS))
@@ -218,7 +216,7 @@ class ModelGenerationAPI(unittest.TestCase):
                         response = self.client.post("/api/v1/generate", json=self.single_body(question))
                     self.assertEqual(response.status_code, 200, response.text)
                     model.assert_awaited_once()
-                    self.assertNotIn("难度", model.call_args.args[0])
+                    self.assertIn("难度", model.call_args.args[0])
                     self.assertEqual(model.call_args.args[2], 1)
                     self.assert_model_question(response.json()["questions"][0], question)
 

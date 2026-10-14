@@ -4,6 +4,20 @@ import { createBannerImages } from '../src/services/banner-images'
 import { createFilePool } from '../src/services/file-pool'
 
 const settle = () => new Promise<void>(resolve => setImmediate(resolve))
+
+test('十张轮播只加载当前和下一张，翻到末尾预取首张，离开释放', async () => {
+  const { images, downloads } = fixture()
+  const banners = Array.from({ length: 10 }, (_, id) => ({ id: String(id), image_url: '/' + id }))
+  images.sync(banners, 0); await settle()
+  assert.deepEqual(downloads.map(item => item.url), ['/0', '/1'])
+  images.sync(banners, 1); await settle()
+  assert.deepEqual(downloads.map(item => item.url), ['/0', '/1', '/2'])
+  images.sync(banners, 9); await settle()
+  assert.deepEqual(downloads.map(item => item.url), ['/0', '/1', '/2', '/9', '/0'])
+  images.clear()
+  for (const entry of downloads) entry.resolve(entry.url)
+  await settle()
+})
 function fixture() {
   const downloads: { url: string; resolve: (path: string) => void; reject: (error: Error) => void }[] = []
   const disposed: string[] = []

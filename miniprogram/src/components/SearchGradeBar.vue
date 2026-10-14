@@ -11,13 +11,15 @@ withDefaults(defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: string]
   search: []
+  focus: []
+  blur: []
   selectGrade: []
 }>()
 </script>
 
 <template>
   <view class="search-grade-row">
-    <view class="grow"><SearchField :model-value="modelValue" :placeholder="placeholder" @update:model-value="emit('update:modelValue', $event)" @search="emit('search')" /></view>
+    <view class="grow"><SearchField :model-value="modelValue" :placeholder="placeholder" @update:model-value="emit('update:modelValue', $event)" @search="emit('search')" @focus="emit('focus')" @blur="emit('blur')" /></view>
     <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="search-grade-choice" role="button" aria-label="选择年级" :disabled="disabled" @click="emit('selectGrade')"><text>{{ grade.replace(/^小学/, '') || '全部年级' }}</text><wd-icon name="down" size="11px" /></button>
   </view>
 </template>

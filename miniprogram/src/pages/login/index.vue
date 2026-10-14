@@ -6,7 +6,8 @@ import { ref } from 'vue'
 import { onHide, onLoad, onShow, onUnload } from '@dcloudio/uni-app'
 import PageChrome from '../../components/PageChrome.vue'
 import { errorMessage, request } from '../../services/api'
-import { ensureSession, loginMini } from '../../services/session'
+import { ensureSession, loginMini, session } from '../../services/session'
+import { clearPaperIntent } from '../../services/paper-intent'
 import type { Authenticated } from '../../types'
 import { HOME, safeDestination } from '../../services/return-route'
 import { openCatalog, visitDestination } from '../../services/navigation'
@@ -93,7 +94,7 @@ function leave() {
   // #endif
 }
 onHide(leave)
-onUnload(leave)
+onUnload(() => { leave(); if (!session.user) clearPaperIntent() })
 </script>
 
 <template>
@@ -111,7 +112,7 @@ onUnload(leave)
         <!-- #ifdef MP-WEIXIN -->
         <text>{{ busy ? '正在登录' : '微信一键登录' }}</text>
         <!-- #endif -->
-        <view v-if="!busy" class="login-trail"><wd-icon name="arrow-right" size="19px" /></view>
+        <view v-if="!busy" class="login-trail" aria-hidden="true"><wd-icon name="arrow-right" size="19px" /></view>
       </wd-button>
       <view class="login-feedback" role="status" aria-live="polite">{{ error }}</view>
       <view class="consent">

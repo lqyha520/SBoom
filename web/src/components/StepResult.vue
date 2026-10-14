@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { paperQuality } from '../question-quality'
 import { computed, defineAsyncComponent, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
 import { useExamStore } from '../stores/exam'
 import PaperView from './PaperView.vue'
@@ -22,14 +23,22 @@ const paperViewEl = ref<InstanceType<typeof PaperView> | null>(null)
 const { zoom, manual, setManual } = useFitZoom(stackEl)
 const selected = ref(0)
 const paper = computed(() => store.papers[selected.value] || store.papers[0])
-const paperOptions = computed(() => store.papers.map((p, index) => ({ label: '第 ' + (p.day || index + 1) + ' 份试卷', value: index })))
+const allQuality = computed(() => store.papers.map(paperQuality))
+const paperOptions = computed(() => store.papers.map((p, index) => {
+  const missing = allQuality.value[index].reduce((sum, section) => sum + section.missing, 0)
+  const concerns = allQuality.value[index].reduce((sum, section) => sum + section.questions.length, 0)
+  const count = p.sections.reduce((sum, section) => sum + section.data.questions.length, 0)
+  return { label: '第 ' + (p.day || index + 1) + ' 份试卷' + (missing ? ` · 缺 ${missing} 题` : concerns ? ` · ${concerns} 题待核对` : count ? ' · 已复核' : ' · 暂无题目'), value: index }
+}))
 const questionCount = computed(() => paper.value?.sections.reduce((total, section) => total + section.data.questions.length, 0) || 0)
-const qualityWarnings = computed(() => paper.value?.sections.flatMap((section, index) => section.warn ? [{ index, message: section.warn }] : []) || [])
+const qualityWarnings = computed(() => (allQuality.value[selected.value] || []).filter(section => section.warning || section.questions.length || section.missing).map(section => ({ index: section.sectionIndex, sectionId: section.sectionId, message: [section.warning, section.missing ? `缺少 ${section.missing} 道题` : '', section.questions.length ? `${section.questions.length} 道题待核对` : ''].filter(Boolean).join('；') })))
+const manageSection = ref('')
+function inspectSection(sectionId: string) { manageSection.value = sectionId; manageQuestions.value = true }
 const qualityOpen = ref(false)
 const warningSummary = computed(() => [
   store.failedCount ? store.failedCount + ' 份试卷尚未完成' : '',
   qualityWarnings.value.length ? qualityWarnings.value.length + ' 个大题待核对' : '',
-].filter(Boolean).join(' · ') || store.generateWarn)
+].filter(Boolean).join(' · ') || (!store.papers.length ? store.generateWarn : ''))
 const exporting = ref('')
 const exportNotice = ref('')
 const editingOpen = ref(false)
@@ -41,7 +50,7 @@ onBeforeUnmount(leave)
 onDeactivated(leave)
 const busy = computed(() => !!exporting.value || archiving.value)
 const exportError = ref('')
-watch(() => store.papers, () => { selected.value = 0 })
+watch(() => store.papers.length, count => { if (selected.value >= count) selected.value = Math.max(0, count - 1) })
 function onTitleEdited(title: string, html: string) {
   if (titleScope.value === 'all') {
     store.title = title
@@ -102,11 +111,11 @@ function cancelLayout() { store.finishLayout(true); paperViewEl.value?.repaginat
   <section class="result-view" aria-label="生成的试卷">
     <p v-if="exportNotice" class="px-4 py-2 text-sm text-primary bg-default" role="status">{{ exportNotice }}</p>
     <GenerationTasks />
-    <QuestionManager v-if="paper && manageQuestions" :paper-index="selected" @close="manageQuestions = false" />
+    <QuestionManager v-if="paper && manageQuestions" :section-id="manageSection" :paper-index="selected" @close="manageQuestions = false" />
     <div v-if="warningSummary || store.generateError || exportError" class="result-notice no-print">
       <div v-if="warningSummary" class="quality-summary" role="status"><UIcon name="i-lucide-triangle-alert" class="size-4" /><span>{{ warningSummary }}</span><UButton v-if="qualityWarnings.length" :label="qualityOpen ? '收起' : '查看详情'" :icon="qualityOpen ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" color="warning" variant="ghost" size="sm" :aria-expanded="qualityOpen" @click="qualityOpen = !qualityOpen" /></div>
       <UCollapsible v-if="warningSummary" v-model:open="qualityOpen">
-        <template #content><ul class="quality-details"><li v-for="warning in qualityWarnings" :key="warning.index"><strong>第 {{ warning.index + 1 }} 大题</strong><p>{{ warning.message }}</p></li></ul><div class="actions-row pb-2"><UButton label="核对题目" icon="i-lucide-list-checks" variant="outline" size="sm" :disabled="busy || store.generating || store.layoutMode" @click="manageQuestions = true" /><UButton label="调整出题条件" icon="i-lucide-arrow-left" variant="ghost" size="sm" :disabled="busy || store.layoutMode" @click="store.backToBuild()" /></div></template>
+        <template #content><ul class="quality-details"><li v-for="warning in qualityWarnings" :key="warning.index"><strong>第 {{ warning.index + 1 }} 大题</strong><p>{{ warning.message }}</p><UButton label="核对此大题" size="xs" variant="ghost" :disabled="busy || store.generating || store.layoutMode" @click="inspectSection(warning.sectionId)" /></li></ul><div class="actions-row pb-2"><UButton label="核对题目" icon="i-lucide-list-checks" variant="outline" size="sm" :disabled="busy || store.generating || store.layoutMode" @click="manageQuestions = true" /><UButton label="调整出题条件" icon="i-lucide-arrow-left" variant="ghost" size="sm" :disabled="busy || store.layoutMode" @click="store.backToBuild()" /></div></template>
       </UCollapsible>
       <RecoveryActions />
       <UAlert v-if="store.generateError || exportError" color="error" variant="soft" :title="exportError || store.generateError" role="alert" />

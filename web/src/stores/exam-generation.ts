@@ -2,6 +2,7 @@
 import type { ExamWorkspace } from './exam-context'
 import * as api from '../api'
 import { deepClone } from '../utils'
+import { questionKey } from '../question-quality'
 import type { Difficulty, Question, Section } from '../types'
 import {
   createGenerationRun,
@@ -69,6 +70,11 @@ export const generationActions = {
       if (this.accountChanged) return
       const replacement = result.sections[0]?.data.questions[0]
       if (!replacement) throw new Error('没有生成可替换的题目，原题已保留')
+      if (source.sections.some(candidate => candidate.data?.questions.some(item =>
+        questionKey(item, candidate.data?.passage) === questionKey(replacement, section.data?.passage)))) {
+        delete question._replacement
+        throw new Error('新题与现有题目重复，原题已保留；可重新换题')
+      }
       delete question._replacement
       this.generating = false
       this.recordEdit()

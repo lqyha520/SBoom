@@ -231,7 +231,8 @@ async function remove() {
 </script>
 
 <template>
-  <section class="admin-section" aria-label="公共习题管理">
+  <section class="admin-section catalog-page" aria-label="公共习题管理">
+    <div class="catalog-library-heading"><span class="catalog-library-icon"><UIcon name="i-lucide-folders" class="size-5" /></span><div><h2>教学资料库</h2><p>整理、核对与发布，在一个地方完成。</p></div><span class="catalog-library-badge"><UIcon name="i-lucide-globe" class="size-3.5" />公共内容</span></div>
     <div v-if="statsError" class="actions-row mb-3"><span class="text-sm text-muted">统计暂不可用，仍可管理资料</span><UButton label="重试统计" size="xs" variant="outline" :loading="statsLoading" @click="loadStats(true)" /></div>
     <div class="section-toolbar catalog-toolbar">
       <UTabs v-model="status" :items="statusTabs" :content="false" variant="link" aria-label="发布状态筛选" class="max-w-full overflow-x-auto" :ui="{ list: 'w-max p-0 gap-4', trigger: 'flex-none px-0 pb-3 text-sm' }" />
@@ -320,7 +321,7 @@ async function remove() {
         </li>
       </ul>
     </section>
-    <div class="catalog-selection-bar">
+    <div class="catalog-selection-bar" :class="{ 'has-selection': selectedItems.length }">
       <span>{{ selectedItems.length ? '已选择 ' + selectedItems.length + ' 份' : '共 ' + total + ' 份习题' }}</span>
       <div class="actions-row" v-if="selectedItems.length">
       <UButton
@@ -411,14 +412,21 @@ async function remove() {
 </template>
 
 <style scoped>
-.catalog-filters { display:flex;flex-wrap:wrap;gap:10px;padding:18px 0;border-bottom:1px solid var(--ui-border); }
+.catalog-library-heading { display:flex;align-items:center;gap:12px;padding-bottom:24px; }
+.catalog-library-icon { display:grid;place-items:center;width:42px;height:42px;flex:none;border-radius:12px;background:#eaf4ee;color:#3f8161; }
+.catalog-library-heading h2 { font-size:15px;font-weight:650;margin:0 0 4px; }
+.catalog-library-heading p { font-size:11px;color:var(--ui-text-muted);margin:0; }
+.catalog-library-badge { display:flex;align-items:center;gap:6px;margin-left:auto;color:#6c8075;background:#f2f6f3;font-size:11px;padding:6px 10px;border-radius:6px;white-space:nowrap; }
+.catalog-filters { display:flex;flex-wrap:wrap;gap:10px;padding:16px;background:#f7f9f8;border:1px solid #e8eeea;border-radius:10px;margin-top:12px; }
 .catalog-filters > :deep([role='combobox']) { min-width:0;flex:1 1 140px;width:auto; }
 .catalog-filters .table-search { flex:1 1 280px; }
-.catalog-selection-bar { display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:58px;font-size:12px;color:var(--ui-text-muted); }
+.catalog-selection-bar { display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:58px;font-size:12px;color:var(--ui-text-muted);transition:background .2s,padding .2s; }
+.catalog-selection-bar.has-selection { padding:10px 14px;margin:12px 0;background:#edf7f1;border-radius:10px;color:#286b4d; }
 .catalog-engagement { display:flex;gap:12px; }
 .catalog-toolbar { margin-bottom:0;gap:12px; }
 .catalog-toolbar > .actions-row { margin-left:auto;flex-wrap:nowrap; }
 @media(max-width:600px) { .catalog-filters { display:grid;grid-template-columns:repeat(2,minmax(0,1fr)); }.catalog-filters > :not([role='combobox']) { grid-column:1 / -1; }.catalog-filters .table-search { width:100%; }.catalog-toolbar > :first-child { order:2;width:100%; }.catalog-selection-bar { flex-wrap:wrap;padding:10px 0; } }
+@media(max-width:600px) { .catalog-library-badge { display:none; }.catalog-filters { padding:12px; }.catalog-library-heading { padding-bottom:20px; } }
 .created-results {
   padding: 16px;
   margin-bottom: 20px;

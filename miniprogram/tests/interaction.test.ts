@@ -10,17 +10,104 @@ import { parse } from 'vue/compiler-sfc'
 import { createLatestRequest } from '../src/services/latest-request'
 import { createFilePool } from '../src/services/file-pool'
 import { homeSelection } from '../src/presentation'
+import * as paperIntents from '../src/services/paper-intent'
 
 function fixture(file: string, modules: Record<string, unknown>, expose: string, globals: Record<string, unknown>) {
   const source = parse(readFileSync(new URL('../src/' + file, import.meta.url), 'utf8')).descriptor.scriptSetup!.content
   const exports: Record<string, any> = {}
   vm.runInNewContext(ts.transpileModule(source + '\n' + expose, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
-    exports, require: (id: string) => id === 'vue' ? { ...vue, onMounted() {}, onBeforeUnmount() {} } : modules[id] || (id.endsWith('/page-lifecycle') ? { usePageLifecycle, captureScroll: (save: (top: number) => void) => save(600) } : id.endsWith('/catalog-rows') ? { reconcileRows } : id.endsWith('/page-navigation') ? { navigatePage: (options: unknown) => (globals.uni as any)?.navigateTo?.(options) } : {}),
+    exports, require: (id: string) => id === 'vue' ? { ...vue, onMounted() {}, onBeforeUnmount() {} } : modules[id] || (id.endsWith('/paper-intent') ? paperIntents : id.endsWith('/page-lifecycle') ? { usePageLifecycle, captureScroll: (save: (top: number) => void) => save(600) } : id.endsWith('/catalog-rows') ? { reconcileRows } : id.endsWith('/page-navigation') ? { navigatePage: (options: unknown) => (globals.uni as any)?.navigateTo?.(options) } : {}),
     setTimeout, clearTimeout, defineExpose() {}, defineProps: () => ({}), withDefaults: (_props: unknown, defaults: unknown) => defaults, ...globals,
   })
   return exports
 }
 async function settle() { for (let index = 0; index < 25; index++) await Promise.resolve() }
+
+test('目录游标连续翻页、换组与返回保留窗口，失效游标从首组恢复', async () => {
+  const calls: any[] = [], scope = vue.effectScope()
+  let invalid = false
+  const row = (id: number | string) => ({ id: String(id), revision: 1, favorite: false })
+  const modules = {
+    '../services/api': { errorMessage: String,
+      fetchCatalog: async (filters: any) => {
+        calls.push(filters)
+        if (invalid && filters.cursor) { invalid = false; throw Object.assign(Error('expired'), { code: 'invalid_cursor' }) }
+        const start = filters.cursor ? Number(filters.cursor.slice(5)) : 0
+        return { items: Array.from({ length: Math.min(20, 95 - start) }, (_, i) => row(start + i)), total: filters.include_total ? 95 : null, has_more: start + 20 < 95, next_cursor: start + 20 < 95 ? 'page-' + (start + 20) : null }
+      }, fetchCatalogWindow: async (ids: string[]) => ({ items: ids.map(row) }), fetchCatalogSummary: async () => ({ subjects: [], categories: [] }) },
+    '../services/session': { session: vue.reactive({ ready: true, user: { id: 'reader' } }), ensureSession: async () => true },
+    '../services/preferences': { readPreferences: () => ({ grade: '', subject: '', history: [] }), writePreferences() {} },
+    '../services/latest-request': { createLatestRequest }, '../services/navigation': { catalogSelection: vue.reactive({ revision: 0 }) },
+    '../services/experience': { fetchTopics: async () => ({ items: [] }) },
+    '../services/growth': { emptyTags: () => ({}), tagKinds: [], fetchTags: async () => ({ items: [] }) },
+  }
+  const page = scope.run(() => fixture('components/CatalogList.vue', modules,
+    'exports.page = { activate, deactivate, refresh, turnWindow, items, total, more, windowStart }',
+    { uni: { stopPullDownRefresh() {}, pageScrollTo() {} } }))!.page
+  try {
+    await page.activate(); await settle(); await page.refresh(false)
+    assert.deepEqual(calls.map(item => item.cursor), ['', 'page-20'])
+    assert.equal(calls[1].include_total, false); assert.equal(page.total.value, 95)
+    page.deactivate(); await page.activate(); await settle()
+    assert.equal(page.items.value.length, 40)
+    await page.refresh(false); assert.equal(calls.at(-1).cursor, 'page-40')
+    assert.equal(page.items.value.length, 60)
+    await page.turnWindow(1); assert.equal(calls.at(-1).cursor, 'page-60')
+    await page.refresh(false); assert.equal(page.items.value.length, 35)
+    assert.equal(page.more.value, false); assert.equal(page.total.value, 95)
+    await page.turnWindow(-1); assert.equal(calls.at(-1).cursor, '')
+    invalid = true; await page.refresh(false)
+    assert.equal(page.windowStart.value, 0); assert.equal(page.items.value[0].id, '0')
+    assert.equal(calls.at(-1).cursor, '')
+    assert.ok(calls.every(call => call.pagination === 'cursor'))
+  } finally { page.deactivate(); scope.stop() }
+})
+
+test('guest login restores the selected download version and resumes a favorite only once', async () => {
+  const session = vue.reactive<{ user: { id: string } | null }>({ user: null })
+  const callbacks: Record<string, (...args: any[]) => any> = {}, downloads: string[] = [], favorites: boolean[] = []
+  let failRead = false, saved = false
+  const scope = vue.effectScope()
+  const page = scope.run(() => fixture('pages/paper/index.vue', {
+    '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage'].map(name => [name, (fn: (...args: any[]) => any) => { callbacks[name] = fn }])),
+    '../../services/session': { session, ensureSession: async () => !!session.user, requireLogin: () => !!session.user },
+    '../../services/latest-request': { createLatestRequest },
+    '../../services/api': { ApiError: Error, errorMessage: String,
+      fetchCatalogPaper: async () => {
+        if (failRead) throw Error('offline')
+        return { id: 'paper', title: '练习', can_view: true, can_download: true, favorite: saved,
+          assets: [{ kind: 'pdf', url: '/pdf' }], editions: [{ kind: 'original', label: '练习版' }, { kind: 'answers', label: '答案版' }] }
+      },
+      favoriteCatalogPaper: async (_id: string, next: boolean) => { favorites.push(next); saved = next; return { favorite: next } },
+      requestCatalogDownload: async (_id: string, edition: string) => { downloads.push(edition); return { url: '/pdf' } },
+    },
+    '../../services/assets': { clearAssetCache() {}, cancelPdfDownload() {}, openPdf: async () => {} },
+    '../../services/experience': { recordView: async () => {}, recordEvent: async () => {} },
+    '../../presentation': { exerciseText: (value: string) => value },
+  }, 'exports.page = { load, edition, download, favorite, actionLabel, resumeAction, error }', {
+    uni: { stopPullDownRefresh() {}, pageScrollTo() {}, showToast() {} },
+  }))!.page
+  try {
+    callbacks.onLoad({ id: 'paper' }); await page.load()
+    page.edition.value = 'answers'; await page.download(); callbacks.onHide()
+    paperIntents.bindPaperIntent('reader'); session.user = { id: 'reader' }
+    failRead = true; await callbacks.onShow(); await settle()
+    assert.match(page.error.value, /offline/)
+    failRead = false; await page.load()
+    assert.equal(page.edition.value, 'answers')
+    assert.match(page.actionLabel.value, /^继续.*答案版$/)
+    assert.deepEqual(downloads, [], 'logging in must not start a download automatically')
+    await page.download(); assert.deepEqual(downloads, ['answers'])
+    assert.equal(page.resumeAction.value, '')
+    session.user = null; await settle(); await page.load()
+    await page.favorite(); callbacks.onHide()
+    paperIntents.bindPaperIntent('reader'); session.user = { id: 'reader' }
+    await callbacks.onShow(); await settle()
+    assert.deepEqual(favorites, [true])
+    await page.load(); await settle()
+    assert.deepEqual(favorites, [true], 'a refresh cannot toggle the resumed favorite off')
+  } finally { paperIntents.clearPaperIntent(); scope.stop() }
+})
 
 test('首页隐藏后关闭图片并响应内存警告，重新进入恢复加载并清理事件订阅', async () => {
   const hooks: Record<string, (...args: any[]) => any> = {}, events: Record<string, () => void> = {}
@@ -243,7 +330,7 @@ test('favorite updates a loaded row without replacing pages; returning restores 
   } finally { page.deactivate(); scope.stop() }
 })
 
-test('PDF retry retains the selected edition and exposes transfer progress', async () => {
+test('预览内下载保留所选版本，失败后可原地重试并显示进度', async () => {
   const calls: string[] = [], callbacks: Record<string, (...args: any[]) => void> = {}
   let attempt = 0
   class ApiError extends Error { status = 0; code = '' }
@@ -262,13 +349,17 @@ test('PDF retry retains the selected edition and exposes transfer progress', asy
     } },
     '../../presentation': { exerciseText: (title: string) => title },
     '../../services/experience': { recordView: async () => {}, recordEvent: async () => {} },
-  }, 'exports.page = { load, download, edition, retryDownload, downloadProgress, error }', { uni: { stopPullDownRefresh() {} } }))!.page
+  }, 'exports.page = { load, downloadFromPreview, previewOpen, edition, retryDownload, downloadProgress, error }', { uni: { stopPullDownRefresh() {} } }))!.page
   try {
     callbacks.onLoad!({ id: 'paper' }); await page.load()
     page.edition.value = 'answers'
-    await page.download(); assert.equal(page.retryDownload.value, true)
+    page.previewOpen.value = true
+    await page.downloadFromPreview(); assert.equal(page.retryDownload.value, true)
+    assert.equal(page.previewOpen.value, true)
     await page.load(); assert.equal(page.edition.value, 'answers'); assert.equal(page.retryDownload.value, false)
-    await page.download(); assert.deepEqual(calls, ['answers', 'answers'])
+    page.previewOpen.value = true
+    await page.downloadFromPreview(); assert.deepEqual(calls, ['answers', 'answers'])
+    assert.equal(page.previewOpen.value, true)
     assert.equal(page.error.value, '')
     assert.equal(page.retryDownload.value, false)
   } finally { scope.stop() }
@@ -328,12 +419,14 @@ test('网盘下载权限不足时显示会员入口，离开页面后迟到的�
     '../../services/latest-request': { createLatestRequest }, '../../services/assets': { cancelPdfDownload() {}, clearAssetCache() {} },
     '../../presentation': { exerciseText: (title: string) => title },
     '../../services/experience': { recordView: async () => {} },
-  }, 'exports.page = { load, download, membershipOpen, linkTarget, linkOpen }', { uni: { stopPullDownRefresh() {} } }))!.page
+  }, 'exports.page = { load, downloadFromPreview, previewOpen, membershipOpen, linkTarget, linkOpen }', { uni: { stopPullDownRefresh() {} } }))!.page
   try {
-    callbacks.onLoad!({ id: 'link' }); await page.load(); await page.download()
+    callbacks.onLoad!({ id: 'link' }); await page.load(); page.previewOpen.value = true; await page.downloadFromPreview()
+    assert.equal(page.previewOpen.value, false)
     assert.equal(page.membershipOpen.value, true); assert.equal(requests, 0)
     entitled = true; await page.load()
-    const pending = page.download(); callbacks.onHide!()
+    page.previewOpen.value = true
+    const pending = page.downloadFromPreview(); assert.equal(page.previewOpen.value, false); callbacks.onHide!()
     finish({ kind: 'external', url: 'https://pan.example.com/a', extraction_code: '' }); await pending
     assert.equal(page.linkOpen.value, false); assert.equal(page.linkTarget.value, null)
   } finally { scope.stop() }

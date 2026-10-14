@@ -248,8 +248,12 @@ const moreActions = (item: CatalogPaper) => [
   height: 56px;
   object-fit: cover;
   border: 1px solid var(--ui-border);
+  border-radius: 5px;
+  box-shadow: 0 3px 8px #183e3212;
+  transition: transform .2s, box-shadow .2s;
   flex: none;
 }
+.catalog-paper:hover .catalog-thumb { transform:translateY(-2px) rotate(-2deg);box-shadow:0 5px 12px #183e3220; }
 .catalog-name {
   display: flex;
   align-items: flex-start;

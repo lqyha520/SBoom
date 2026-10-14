@@ -4,6 +4,7 @@ import type { Question, SecLayout } from '../types'
 import { answerOf, cirNum, escHtml, isBlankVal, spaceOps, stripOptPrefix, tfStem } from '../utils'
 import { sanitizeRich } from '../sanitize'
 import { labelPattern, optionLabel, readEdited, shortenBlankLines, startsWithLabel } from '../rich-edit'
+import { invalidateQuestionReview, reviewText } from '../question-quality'
 
 const props = defineProps<{
   q: Question
@@ -63,7 +64,9 @@ function onStemBlur(e: FocusEvent) {
   const edited = readEdited(e.target as HTMLElement, label)
   if (edited.html === readEdited(noTag.value + stemHtml.value, label).html) return
   props.q._stemHtml = edited.html
-  props.q.stem = edited.text.replace(/^\[第\d+关\]\s*/, '')
+  const text = edited.text.replace(/^\[第\d+关\]\s*/, '')
+  if (reviewText(text) !== reviewText(props.q.stem)) invalidateQuestionReview(props.q)
+  props.q.stem = text
 }
 function onOptBlur(e: FocusEvent, j: number) {
   if (!props.editable || !props.q.options) return
@@ -72,6 +75,7 @@ function onOptBlur(e: FocusEvent, j: number) {
   if (edited.html === readEdited(optHtml(j), label).html) return
   if (!props.q._optsHtml) props.q._optsHtml = []
   props.q._optsHtml[j] = edited.html
+  if (reviewText(edited.text) !== reviewText(props.q.options[j])) invalidateQuestionReview(props.q)
   props.q.options[j] = edited.text
 }
 function onMatchBlur(e: FocusEvent, side: 'left' | 'right', i: number) {
@@ -80,16 +84,22 @@ function onMatchBlur(e: FocusEvent, side: 'left' | 'right', i: number) {
   if (!items) return
   const text = readEdited(e.target as HTMLElement, labelPattern(`（${i + 1}）`)).text
   if (text === spaceOps(items[i] ?? '').trim()) return
+  invalidateQuestionReview(props.q)
   items[i] = text || ' '
 }
 function onSplitBlur(e: FocusEvent, field: 'top' | 'left' | 'right') {
   if (!props.editable) return
   const t = (e.target as HTMLElement).innerText.trim()
-  if (t !== '' || isBlankVal((props.q as any)[field])) (props.q as any)[field] = t
+  if (t !== '' || isBlankVal(props.q[field])) {
+    if (t !== String(props.q[field] ?? '') && !(t === '' && isBlankVal(props.q[field]))) invalidateQuestionReview(props.q)
+    props.q[field] = t
+  }
 }
 function onExprBlur(e: FocusEvent, field: 'left_expr' | 'right_expr') {
   if (!props.editable) return
-  ;(props.q as any)[field] = (e.target as HTMLElement).innerText.trim()
+  const text = (e.target as HTMLElement).innerText.trim()
+  if (reviewText(text) !== reviewText(props.q[field])) invalidateQuestionReview(props.q)
+  props.q[field] = text
 }
 </script>
 

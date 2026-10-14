@@ -205,8 +205,8 @@ def publish_bundle(user_id: int, paper_id: str, data):
     if ready:
         return get_paper(user_id, paper_id)
     files = unpack_bundle(data)
-    first = next(raw for kind, page, mime, raw in files if kind == "page" and page == 1)
-    files.append(("thumbnail", 1, "image/jpeg", thumbnail(first)))
+    files.extend(("thumbnail", page, "image/jpeg", thumbnail(raw))
+                 for kind, page, mime, raw in list(files) if kind == "page")
     size = sum(len(content) for _, _, _, content in files)
     token, now = secrets.token_hex(16), int(time.time())
     with db(content_user=str(user_id)) as conn:
@@ -236,7 +236,12 @@ def publish_bundle(user_id: int, paper_id: str, data):
         storage = storage_for(backend)
         manifest = []
         for kind, page, mime, content in files:
-            filename = "paper.pdf" if kind == "pdf" else "thumbnail.jpg" if kind == "thumbnail" else f"page-{page}.jpg"
+            if kind == "pdf":
+                filename = "paper.pdf"
+            elif kind == "thumbnail":
+                filename = "thumbnail.jpg" if page == 1 else f"thumbnail-{page}.jpg"
+            else:
+                filename = f"page-{page}.jpg"
             key = f"{paper_id}/{token}/{filename}"
             written.append((backend, key))
             storage.put(key, content, mime)

@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { AVATAR_CHOICES, avatarChoice, difficultyLabel, exerciseText, exerciseTitle, membershipBadge, profileAvatar, subjectOptions } from '../src/presentation'
+import { AVATAR_CHOICES, avatarChoice, catalogCountLabel, difficultyLabel, exerciseText, exerciseTitle, membershipBadge, profileAvatar, subjectOptions } from '../src/presentation'
 import type { User } from '../src/types'
+
+test('数量只描述当前条件下的成功结果，首次失败不能冒充空库', () => {
+  assert.equal(catalogCountLabel(0, false, true, ''), '正在加载习题')
+  assert.equal(catalogCountLabel(0, false, false, '断网'), '加载失败，请重试')
+  assert.equal(catalogCountLabel(0, true, false, ''), '共 0 份习题')
+  assert.equal(catalogCountLabel(12, true, true, ''), '正在更新 · 上次共 12 份')
+  assert.equal(catalogCountLabel(12, true, false, '断网'), '更新失败 · 上次共 12 份')
+  assert.equal(catalogCountLabel(0, false, false, ''), '等待加载习题')
+})
 
 test('legacy labels are presented as exercises without changing source records', () => {
   const paper = { title: '三年级数学试卷', description: '试卷库中的原卷预览', category: '同步试卷' }

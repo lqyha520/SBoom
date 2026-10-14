@@ -43,7 +43,7 @@ test('首页隐藏时释放 Banner 图片，重新显示时重新获取，卸载
   const scope = vue.effectScope()
   const source = parse(readFileSync(new URL('../src/components/HomeBanner.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content
   scope.run(() => vm.runInNewContext(compile(source), {
-    exports: {}, defineProps: () => props, withDefaults: (value: unknown) => value,
+    exports: {}, defineProps: () => props, withDefaults: (value: unknown) => value, defineEmits: () => () => {},
     require: (id: string) => id === 'vue' ? { ...vue, onUnmounted: (fn: () => void) => { dispose = fn } }
       : id === '../services/banner-images' ? { createBannerImages }
       : id === '../services/assets' ? { acquireAsset: () => { acquired++; return { ready: Promise.resolve('/temporary'), release: () => { released++ } } } } : {},
@@ -94,6 +94,14 @@ test('runtime reconnects once, updates only with confirmation, and diagnostics n
   const diagnostic = JSON.parse(exports.diagnosticSummary())
   assert.ok(diagnostic.events.length <= 40)
   assert.equal(diagnostic.events.find((x: any) => x.kind === 'network').count, 999)
+  for (let index = 1; index <= 100; index++) exports.recordPerformance({ kind: 'api', value: index, token: 'SECRET' })
+  exports.recordPerformance({ kind: 'https://secret/SECRET', value: 1 })
+  exports.recordPerformance({ kind: 'api', value: NaN })
+  const performance = JSON.parse(exports.diagnosticSummary()).performance
+  assert.equal(performance.length, 1)
+  assert.equal(performance[0].count, 60)
+  assert.equal(performance[0].p50, 70); assert.equal(performance[0].p95, 97)
+  assert.ok(!exports.diagnosticSummary().includes('SECRET'))
 })
 
 test('lazy images release downloaded files offscreen and reacquire before reentry', async () => {

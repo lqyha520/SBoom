@@ -12,6 +12,18 @@ export function exerciseText(value: string | null | undefined) {
   return (value || '').replace(/试卷/g, '习题').replace(/原卷/g, '原稿')
 }
 
+export function answerReadinessLabel(value: PaperSummary['answer_readiness']) {
+  const labels = { included: '含答案', separate: '配套答案', missing: '暂无答案', unknown: '答案待核对' }
+  return labels[value || 'unknown'] || labels.unknown
+}
+
+/** 只有成功读取过当前条件的结果，才把数量展示为真实统计。 */
+export function catalogCountLabel(total: number, loaded: boolean, loading: boolean, error: string) {
+  if (loading) return loaded ? `正在更新 · 上次共 ${total} 份` : '正在加载习题'
+  if (error) return loaded ? `更新失败 · 上次共 ${total} 份` : '加载失败，请重试'
+  return loaded ? `共 ${total} 份习题` : '等待加载习题'
+}
+
 /** Imported originals may have pages but no counted questions. */
 export function paperExtent(paper: Pick<PaperSummary, 'question_count' | 'page_count' | 'download_mode'>, compact = false) {
   if (paper.download_mode === 'external') return '网盘资料'

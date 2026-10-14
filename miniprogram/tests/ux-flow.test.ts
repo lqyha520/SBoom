@@ -71,11 +71,12 @@ test('native sharing keeps the source button mounted; ordinary link actions stil
   } finally { app.dispose() }
 })
 
-function catalogFixture(failTags = false) {
+function catalogFixture(failTags = false, view = 'all') {
   const calls: Record<string, unknown>[] = [], scheduled = new Map<number, () => void>()
   let timerId = 0, metadataCalls = 0
+  let result = { items: [{ id: 'paper' }], total: 1, has_more: false }, failCatalog = false
   const modules = {
-    '../services/api': { errorMessage: String, fetchCatalog: async (filters: Record<string, unknown>) => { calls.push(filters); return { items: [{ id: 'paper' }], total: 1, has_more: false } }, fetchCatalogSummary: async () => { metadataCalls++; return { grades: [], subjects: [], categories: [] } } },
+    '../services/api': { errorMessage: String, fetchCatalog: async (filters: Record<string, unknown>) => { calls.push(filters); if (failCatalog) throw Error('offline'); return result }, fetchCatalogSummary: async () => { metadataCalls++; return { grades: [], subjects: [], categories: [] } } },
     '../services/session': { session: vue.reactive({ user: { id: 'reader' } }), ensureSession: async () => true, requireLogin: () => true },
     '../services/preferences': { readPreferences: () => ({ grade: '', subject: '', history: [] }), writePreferences() {}, rememberSearch: (_value: unknown, q: string) => ({ history: [q] }) },
     '../services/latest-request': { createLatestRequest },
@@ -83,12 +84,49 @@ function catalogFixture(failTags = false) {
     '../services/experience': { fetchTopics: async () => ({ items: [] }) },
     '../services/growth': { emptyTags: () => ({ textbook: '', term: '', unit: '', knowledge: '' }), tagKinds: [], fetchTags: async () => { if (failTags) throw Error('offline'); return { items: [] } } },
   }
-  const app = component('components/CatalogList.vue', modules, 'activate, deactivate, searchInput, search, q, grade, subject, category, sort, favoriteGroup, selecting, selectedIds, selectAll, clearConditions, resetFilters, applyFilters, error, metadataError, loadMetadata, items', {}, {
+  const app = component('components/CatalogList.vue', modules, 'activate, deactivate, refresh, emptyFavorites, searchInput, search, q, grade, subject, category, sort, favoriteGroup, selecting, selectedIds, selectAll, clearConditions, resetFilters, applyFilters, error, metadataError, loadMetadata, items, searchHelpOpen, showSearchHelp, blurSearch, holdSearchHelp, releaseSearchHelp', { view }, {
     uni: { stopPullDownRefresh() {}, pageScrollTo() {} },
     setTimeout: (fn: () => void) => { scheduled.set(++timerId, fn); return timerId }, clearTimeout: (id: number) => scheduled.delete(id),
   })
-  return { ...app, calls, scheduled, runTimers: () => { const tasks = [...scheduled.values()]; scheduled.clear(); tasks.forEach(fn => fn()) }, metadataCalls: () => metadataCalls, restoreTags: () => { failTags = false } }
+  return { ...app, calls, scheduled, respond: (value: typeof result, failed = false) => { result = value; failCatalog = failed }, runTimers: () => { const tasks = [...scheduled.values()]; scheduled.clear(); tasks.forEach(fn => fn()) }, metadataCalls: () => metadataCalls, restoreTags: () => { failTags = false } }
 }
+
+test('首次空收藏简化工具，筛选无结果和请求失败仍保留恢复入口', async () => {
+  const app = catalogFixture(false, 'favorites')
+  const empty = { items: [], total: 0, has_more: false }
+  try {
+    assert.equal(app.page.emptyFavorites.value, false)
+    app.respond(empty); await app.page.activate(); await settle()
+    assert.equal(app.page.emptyFavorites.value, true)
+    app.page.search('不匹配的词'); await settle()
+    assert.equal(app.page.emptyFavorites.value, false)
+    app.page.resetFilters(); await settle()
+    assert.equal(app.page.emptyFavorites.value, true)
+    app.respond(empty, true); await app.page.refresh(); await settle()
+    assert.match(app.page.error.value, /offline/)
+    assert.equal(app.page.emptyFavorites.value, false)
+    app.respond({ items: [{ id: 'saved' }], total: 1, has_more: false }); await app.page.refresh(); await settle()
+    assert.equal(app.page.items.value.length, 1)
+    assert.equal(app.page.emptyFavorites.value, false)
+  } finally { app.page.deactivate(); app.dispose() }
+})
+
+test('search history opens on focus, survives touching a suggestion, and closes after search or leaving', async () => {
+  const app = catalogFixture()
+  try {
+    await app.page.activate(); await settle()
+    assert.equal(app.page.searchHelpOpen.value, false)
+    app.page.showSearchHelp(); assert.equal(app.page.searchHelpOpen.value, true)
+    app.page.holdSearchHelp(); app.page.blurSearch(); app.runTimers()
+    assert.equal(app.page.searchHelpOpen.value, true)
+    app.page.releaseSearchHelp(); app.page.search('三年级 数学 进位'); await settle(); app.runTimers()
+    assert.equal(app.page.q.value, '三年级 数学 进位')
+    assert.equal(app.page.searchHelpOpen.value, false)
+    app.page.showSearchHelp(); app.page.blurSearch(); app.page.deactivate()
+    assert.equal(app.scheduled.size, 0)
+    assert.equal(app.page.searchHelpOpen.value, false)
+  } finally { app.page.deactivate(); app.dispose() }
+})
 
 test('typing is debounced, enter is immediate, filters are batched and leaving cancels pending input', async () => {
   const app = catalogFixture()

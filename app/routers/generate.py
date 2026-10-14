@@ -28,6 +28,7 @@ from app.services.generation_results import completed_sections, match_sections, 
 from app.services.knowledge_scope import knowledge_scope_service
 from app.services.llm_client import OutputTruncated, llm_client
 from app.services.prompt_builder import prompt_builder
+from app.services.question_review import previous_question_keys, review_results
 from app.services.rate_limit import allow
 from app.services.user_store import CurrentUser
 
@@ -203,6 +204,11 @@ def _require_complete(sections: list[GameResult]) -> None:
             "partial_sections": [section.model_dump(mode="json") for section in sections],
         })
 
+
+async def _call_quality_review(system_prompt: str, user_message: str, question_count: int) -> dict:
+    # 独立请求仍由同一计量、限流和 token 预算约束，不自动重试复核或循环重出。
+    return await _call_llm_and_parse(system_prompt, user_message, question_count)
+
 @router.post(
     "/generate-batch",
     response_model=BatchGenerateResponse,
@@ -262,21 +268,25 @@ async def generate_batch(request: BatchGenerateRequest, http_request: Request, u
 
     matched = match_sections(raw, resolved_items)
     sections = []
+    seen = await run_sync(previous_question_keys, user.id, request)
     for item, section in zip(resolved_items, matched, strict=True):
         if truncated:
             # 残片只接受可唯一对应的大题，且不为挽救残片再发付费补题请求。
             if not section or section.get("section_id") != item.section_id or section.get("game_type") != item.game_type:
                 continue
-            result = await normalize_result(section, request, item, scope, _call_llm_and_parse, allow_repairs=False)
+            candidate_seen = seen.copy()
+            result = await normalize_result(section, request, item, scope, _call_llm_and_parse, allow_repairs=False, seen=candidate_seen)
             if result.missing_count:
                 continue
+            seen = candidate_seen
         else:
-            result = await normalize_result(section, request, item, scope, _call_llm_and_parse)
+            result = await normalize_result(section, request, item, scope, _call_llm_and_parse, seen=seen)
         sections.append(result)
     if truncated:
         detail = dict(truncated.detail) if isinstance(truncated.detail, dict) else {}
         detail["partial_sections"] = [section.model_dump(mode="json") for section in sections]
         raise HTTPException(truncated.status_code, detail=detail) from truncated
+    await review_results(sections, request, _call_quality_review)
     _require_complete(sections)
     return BatchGenerateResponse(sections=sections)
 
@@ -329,6 +339,7 @@ async def generate_questions(request: GenerateRequest, http_request: Request, us
         item,
         scope, _call_llm_and_parse,
     )
+    await review_results([result], request, _call_quality_review)
     _require_complete([result])
     return result
 
@@ -386,11 +397,12 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
             try:
                 data = _extract_json("".join(buffered))
                 if isinstance(data, dict) and isinstance(data.get("questions"), list):
-                    from app.services.question_qc import filter_questions
-                    _, blocked = filter_questions(data["questions"], context="stream")
-                    if blocked:
-                        logger.warning(f"流式生成质检拦截 {len(blocked)} 道违禁题（仅告警）")
-                        yield f"data: {json.dumps({'qc_warning': f'检测到 {len(blocked)} 道题目不符合该年级要求，建议重新生成'}, ensure_ascii=False)}\n\n"
+                    result = await normalize_result(data, request, BatchItem(
+                        game_type=request.game_type.value, question_count=request.question_count,
+                    ), scope, _call_llm_and_parse, allow_repairs=False)
+                    for warning in result.quality_warnings:
+                        yield f"data: {json.dumps({'qc_warning': warning}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'qc_warning': '流式结果尚未独立复核，请核对答案、解析与教学范围'}, ensure_ascii=False)}\n\n"
                 else:
                     yield f"data: {json.dumps({'qc_warning': '模型结果结构不完整，请人工核对'}, ensure_ascii=False)}\n\n"
                 if request.game_type.value == "reading" and not data.get("passage"):

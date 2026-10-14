@@ -65,6 +65,7 @@ function pickTemplate(id: string) {
       <p v-else-if="store.generationIssue" role="alert" class="mb-3 text-xs text-warning">{{ store.generationIssue }}</p>
       <p v-else-if="missingConditions" class="mb-3 text-xs text-muted">待补充：{{ missingConditions }}</p>
       <RecoveryActions />
+      <p class="mb-2 text-xs text-muted">共 {{ store.paperCount * store.totalQuestions }} 题。生成后自动复核答案、解析与教学范围；复核会增加模型用量和等待时间。</p>
       <GenerationTasks />
       <p v-if="store.usage && store.usage.daily_limit > 0" class="mb-2 text-xs text-muted numeric" title="按过去 24 小时发起的试卷与图片请求计数，失败请求也计入；查询原请求不重复计数。">近 24 小时已请求 {{ store.usage.requests }} 次 / 上限 {{ store.usage.daily_limit }} 次</p>
       <div class="flex gap-2">
