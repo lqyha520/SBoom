@@ -83,7 +83,7 @@ export interface ApiSchemas {
   "UsageEvent": { "catalog_id"?: (string | null); "event_id": string; "kind": "active" | "download_ok" | "download_failed" }
   "ValidateRequest": { "grade": string; "question_content": string; "subject": string }
   "ValidateResult": { "is_oob": boolean; "oob_points"?: Array<string>; "request_id"?: (string | null); "suggestion"?: (string | null) }
-  "ValidationError": { "loc": Array<(string | number)>; "msg": string; "type": string }
+  "ValidationError": { "ctx"?: { [key: string]: unknown }; "input"?: unknown; "loc": Array<(string | number)>; "msg": string; "type": string }
 }
 
 export interface ApiOperations {

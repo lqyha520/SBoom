@@ -57,6 +57,9 @@ function closeFeedback() {
 function handleDialogOpenChange(value: boolean) {
   if (!value) closeFeedback();
 }
+function updateContact(field: Exclude<keyof SupportSettings, 'revision'>, value: string | number | undefined) {
+  if (settings.value) settings.value[field] = String(value ?? '');
+}
 async function loadSettings(preserve = false) {
   const id = ++settingsSequence;
   try {
@@ -304,35 +307,41 @@ async function inspect() {
     >
       <UFormField label="会员权益说明"
         ><UTextarea
-          v-model="settings.benefits"
+          :model-value="settings?.benefits"
+          @update:model-value="updateContact('benefits', $event)"
           :rows="5"
           :maxlength="2000"
           class="w-full" /></UFormField
       ><UFormField label="客服微信号"
         ><UInput
-          v-model="settings.wechat"
+          :model-value="settings?.wechat"
+          @update:model-value="updateContact('wechat', $event)"
           maxlength="80"
           class="w-full" /></UFormField
       ><UFormField label="联系电话"
         ><UInput
-          v-model="settings.phone"
+          :model-value="settings?.phone"
+          @update:model-value="updateContact('phone', $event)"
           maxlength="40"
           class="w-full" /></UFormField
       ><UFormField label="联系邮箱"
         ><UInput
-          v-model="settings.email"
+          :model-value="settings?.email"
+          @update:model-value="updateContact('email', $event)"
           type="email"
           maxlength="120"
           class="w-full" /></UFormField
       ><UFormField label="客服二维码地址"
         ><UInput
-          v-model="settings.qr_url"
+          :model-value="settings?.qr_url"
+          @update:model-value="updateContact('qr_url', $event)"
           maxlength="500"
           placeholder="https://... 或本地可访问地址"
           class="w-full" /></UFormField
       ><UFormField label="服务时间"
         ><UInput
-          v-model="settings.hours"
+          :model-value="settings?.hours"
+          @update:model-value="updateContact('hours', $event)"
           maxlength="120"
           placeholder="例如：工作日 9:00-18:00"
           class="w-full"
