@@ -52,11 +52,11 @@ export interface PaperSummary {
   favorite: boolean; file_status: 'pending' | 'uploading' | 'failed' | 'ready'; file_error: string; page_count: number
   created_at: number; updated_at: number; thumbnail_id: string | null; thumbnail_url: string | null
 }
-export interface Asset { id: string; kind: 'pdf' | 'page'; page_number: number; mime_type: string; byte_size: number; url: string }
+export interface Asset { id: string; kind: 'pdf' | 'page'; page_number: number; mime_type: string; byte_size: number; url: string; thumbnail_url?: string | null }
 export interface ExternalDownload { kind: 'external'; url: string; extraction_code: string }
 export type DownloadTarget = Asset | ExternalDownload
 export interface PrintEdition { kind: 'original' | 'student' | 'answers'; label: string; byte_size: number; mode: string; url?: string }
-export interface PaperDetail extends PaperSummary { snapshot: Snapshot | null; assets: Asset[]; editions?: PrintEdition[]; release_number?: number; update_note?: string; versions?: { release_number: number; note: string; created_at: number }[] }
+export interface PaperDetail extends PaperSummary { difficulty?: string | null; snapshot?: Snapshot | null; assets: Asset[]; editions?: PrintEdition[]; release_number?: number; update_note?: string; versions?: { release_number: number; note: string; created_at: number }[] }
 export interface CatalogSummary {
   papers: number; favorites: number; downloads: number
   grades: string[]; subjects: string[]; categories: SiteCategory[]
@@ -77,5 +77,5 @@ export interface SiteHome {
   dictionaries: { grades: string[]; subjects: string[] }
 }
 export interface SiteDocument { key: string; title: string; body: string; updated_at: number }
-export interface PaperList { items: PaperSummary[]; total: number; has_more: boolean }
+export interface PaperList { items: PaperSummary[]; total: number | null; has_more: boolean; next_cursor?: string | null }
 export interface Authenticated { status: 'authenticated'; token: string; expires_at: number; user: User }

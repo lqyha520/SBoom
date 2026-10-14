@@ -158,6 +158,98 @@ test('新版教材目录不显示旧知识点和随机提示', async ({ page, co
 })
 
 for (const width of [1440, 390]) {
+  test(`人工核对完成、刷新恢复与重新编辑 ${width}px`, async ({ page, context }, info) => {
+    await api(context)
+    const snapshot = worksheet(1)
+    const section = snapshot.papers[0].sections[0]
+    section.warn = '独立复核未完成'
+    section.data.questions = [{ _qid: 'manual', type: 'multiple_choice', stem: '2+3等于多少？',
+      options: ['4', '5', '6'], answer: 1, analysis: '2+3=5', quality_status: 'unchecked' }]
+    snapshot.generateWarn = '1 个大题有质量或缺题提示，请核对后使用'
+    await page.setViewportSize({ width, height: 900 })
+    await seed(page, snapshot)
+    await page.locator('.quality-summary').getByRole('button', { name: '查看详情', exact: true }).click()
+    await page.getByRole('button', { name: '核对此大题', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '管理题目', exact: true })
+    await dialog.getByRole('checkbox', { name: '仅看待核对题目', exact: true }).check()
+    await dialog.getByRole('button', { name: '确认已核对', exact: true }).click()
+    await expect(dialog).toContainText('当前大题没有待核对题目')
+    await dialog.getByRole('checkbox', { name: '仅看待核对题目', exact: true }).uncheck()
+    await expect(dialog.getByText('人工核对完成', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('模型复核通过', { exact: true })).toHaveCount(0)
+    expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`manual-review-${width}.png`) })
+    await dialog.getByRole('button', { name: '完成', exact: true }).click()
+    await expect(page.locator('.quality-summary')).toHaveCount(0)
+    await expect.poll(() => page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('learn-coach-workspaces', 2)
+        request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error)
+      })
+      try {
+        return await new Promise<boolean>((resolve, reject) => {
+          const request = db.transaction('drafts').objectStore('drafts').get('7:' + sessionStorage.getItem('lc_draft_session:7'))
+          request.onsuccess = () => resolve(!!request.result?.snapshot.papers[0].sections[0].data.questions[0]._manualReview)
+          request.onerror = () => reject(request.error)
+        })
+      } finally { db.close() }
+    })).toBe(true)
+    await page.reload()
+    await expect(page.locator('.result-view')).toBeVisible()
+    await expect(page.locator('.quality-summary')).toHaveCount(0)
+    const stem = page.locator('.result-view .paper-stack [data-e="stem"]').first()
+    await stem.fill('2+4等于多少？')
+    await stem.blur()
+    await expect(page.locator('.quality-summary')).toContainText('待核对')
+  })
+
+  test(`质量核对定位、修改答案、锁定与撤销 ${width}px`, async ({ page, context }, info) => {
+    await api(context)
+    const snapshot = worksheet(1)
+    const first = snapshot.papers[0].sections[0]
+    first.data.questions = [{ _qid: 'passed', type: 'multiple_choice', stem: '3+4等于多少？',
+      options: ['6', '7', '8'], answer: 1, analysis: '3+4=7', quality_status: 'passed' }]
+    snapshot.papers[0].sections.push({ ...first, _sid: 'needs-review', name: '待核对选择题',
+      data: { questions: [{ _qid: 'fix-answer', type: 'multiple_choice', stem: '2+3等于多少？',
+        options: ['4', '5', '6'], answer: 0, analysis: '', quality_status: 'needs_review', quality_issues: ['答案与计算不符'] }] } })
+    await page.setViewportSize({ width, height: 900 })
+    await seed(page, snapshot)
+    await page.locator('.quality-summary').getByRole('button', { name: '查看详情', exact: true }).click()
+    await page.getByRole('button', { name: '核对此大题', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '管理题目', exact: true })
+    await expect(dialog).toContainText('2+3等于多少？')
+    await expect(dialog).not.toContainText('3+4等于多少？')
+    await expect(dialog).toContainText('B. 5')
+    await expect(dialog).toContainText('缺少解析')
+    await dialog.getByRole('checkbox', { name: '仅看待核对题目', exact: true }).check()
+    await dialog.getByRole('button', { name: '修改答案与解析', exact: true }).click()
+    await dialog.getByRole('textbox', { name: '修改答案', exact: true }).fill('Z')
+    await dialog.getByRole('button', { name: '保存修改', exact: true }).click()
+    await expect(dialog).toContainText('选择题请填写')
+    await dialog.getByRole('textbox', { name: '修改答案', exact: true }).fill('B')
+    await dialog.getByRole('textbox', { name: '修改解析', exact: true }).fill('2+3=5')
+    await dialog.getByRole('button', { name: '保存修改', exact: true }).click()
+    await expect(dialog).toContainText('解析：2+3=5')
+    await expect(dialog).toContainText('题目内容已修改，请重新核对答案与解析')
+    await expect(dialog.getByText('模型复核通过', { exact: true })).toHaveCount(0)
+    await dialog.getByRole('button', { name: '锁定显示的题目', exact: true }).click()
+    await expect(dialog.getByRole('button', { name: '已锁定 · 点击解锁', exact: true })).toBeVisible()
+    await expect(dialog.getByRole('button', { name: '换一道题', exact: true })).toBeInViewport({ ratio: 1 })
+    expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`quality-review-${width}.png`) })
+    await dialog.getByRole('button', { name: '完成', exact: true }).click()
+    for (let index = 0; index < 2; index++) {
+      if (width < 621) {
+        await page.getByRole('button', { name: '工作台工具', exact: true }).click()
+        await page.getByRole('menuitem', { name: '撤销编辑', exact: true }).click()
+      } else await page.getByRole('button', { name: '撤销编辑', exact: true }).click()
+    }
+    await page.getByRole('button', { name: '核对此大题', exact: true }).click()
+    await expect(dialog).toContainText('暂无解析')
+    await expect(dialog).toContainText('答案与计算不符')
+    await expect(dialog.getByRole('button', { name: '锁定此题', exact: true })).toBeVisible()
+  })
+
   test(`缺题补齐保留有效题 ${width}px`, async ({ page, context }, info) => {
     await api(context)
     const snapshot = worksheet(2)
@@ -348,14 +440,14 @@ test('标题默认只改当前试卷，全部修改可撤销且不重测题目',
   await expect(page.locator('.result-view [data-pagination-pending]')).toHaveCount(0)
   expect(await page.evaluate(() => (window as typeof window & { measuredQuestions: number }).measuredQuestions)).toBe(0)
   await page.getByRole('combobox', { name: '选择试卷' }).click()
-  await page.getByRole('option', { name: '第 2 份试卷', exact: true }).click()
+  await page.getByRole('option', { name: /^第 2 份试卷 · / }).click()
   await expect(title).toContainText('第二份原题')
   await page.getByRole('combobox', { name: '标题修改范围' }).click()
   await page.getByRole('option', { name: '全部试卷', exact: true }).click()
   await title.fill('统一试卷标题')
   await page.getByRole('heading', { name: '生成结果', exact: true }).click()
   await page.getByRole('combobox', { name: '选择试卷' }).click()
-  await page.getByRole('option', { name: '第 1 份试卷', exact: true }).click()
+  await page.getByRole('option', { name: /^第 1 份试卷 · / }).click()
   await expect(title).toContainText('统一试卷标题')
   await page.getByRole('button', { name: '撤销编辑', exact: true }).click()
   await expect(title).toContainText('仅修改第一份')

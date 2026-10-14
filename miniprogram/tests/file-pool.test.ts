@@ -9,6 +9,23 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
+test('按真实字节 LRU 淘汰空闲文件，未知大小不缓存，活动文件不被预算回收', async () => {
+  const disposed: string[] = []
+  const pool = createFilePool(async key => ({ path: key, bytes: key === 'unknown' ? 0 : 6 }), file => disposed.push(file), { maxIdleBytes: 10 })
+  const active = pool.acquire('reading'); await active.ready
+  const first = pool.acquire('one'); await first.ready; first.release()
+  assert.equal(pool.stats().idleBytes, 6)
+  const second = pool.acquire('two'); await second.ready; second.release()
+  assert.deepEqual(disposed, ['one']); assert.equal(pool.stats().idleBytes, 6)
+  const reused = pool.acquire('two'); await reused.ready
+  assert.equal(pool.stats().idleBytes, 0)
+  const unknown = pool.acquire('unknown'); await unknown.ready; unknown.release()
+  assert.deepEqual(disposed, ['one', 'unknown'])
+  reused.release(); pool.trim()
+  assert.deepEqual(disposed, ['one', 'unknown', 'two'])
+  active.release(); pool.clear(); assert.equal(pool.stats().idleBytes, 0)
+})
+
 test('concurrent images share a file until the last consumer releases it', async () => {
   let downloads = 0
   const disposed: string[] = []

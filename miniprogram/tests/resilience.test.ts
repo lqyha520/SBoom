@@ -9,6 +9,7 @@ import * as vue from 'vue'
 import { parse } from 'vue/compiler-sfc'
 import { createUnreadTracker } from '../src/services/unread-tracker'
 import { createLatestRequest } from '../src/services/latest-request'
+import * as paperIntents from '../src/services/paper-intent'
 
 function fixture(file: string, modules: Record<string, unknown>, expose = '', props: Record<string, unknown> = {}, globals: Record<string, unknown> = {}) {
   let source = readFileSync(new URL('../src/' + file, import.meta.url), 'utf8')
@@ -31,6 +32,7 @@ function sessionFixture(token = 'saved-token') {
   let generation = 0, removed = 0, calls = 0, unauthorized = () => {}
   let response: () => Promise<unknown> = async () => { throw Error('offline') }
   const app = fixture('services/session.ts', {
+    './paper-intent': paperIntents,
     './api': { TOKEN_KEY: 'token', authGeneration: () => generation, configureSession: () => { generation++ }, errorMessage: String,
       unauthorizedHandler: (callback: () => void) => { unauthorized = callback }, request: () => { calls++; return response() } },
     './assets': { clearAssetCache() {} }, './growth': { inboxState: { unread: 0 } }, './experience': { recordEvent: async () => {} },
@@ -218,7 +220,7 @@ test('the reader restores a page, clamps navigation, resets zoom on turn and per
     app.page.select(5); assert.equal(app.page.scale.value, 1); assert.equal(app.page.current.value, 5)
     assert.equal(app.page.resetKeys.value[4], 1)
     app.page.select(8); assert.equal(app.page.current.value, 5)
-    app.page.change({ detail: { current: 6 } }); assert.deepEqual(saved, []); app.hooks.onHide(); assert.deepEqual(saved, [6])
+    app.page.change({ detail: { current: 4, source: 'touch' } }); assert.deepEqual(saved, []); app.hooks.onHide(); assert.deepEqual(saved, [6])
     assert.deepEqual(Object.keys(app.page.resetKeys.value), ['4'])
     app.page.resize({ detail: { scale: 3 } }, 5)
     assert.equal(app.page.scale.value, 1)

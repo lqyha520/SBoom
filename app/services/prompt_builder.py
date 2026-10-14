@@ -1,6 +1,7 @@
-"""简短的教材出题条件与独立的 JSON 输出契约。"""
+"""教材条件、教学要求与独立的 JSON 输出契约。"""
 
 import json
+from types import SimpleNamespace
 
 from app.models import GenerateRequest, KnowledgeScope
 
@@ -38,7 +39,7 @@ def _question_fields(kind: str) -> dict:
         question["answer"] = "√或×"
         question["stem"] = "待判断的简短命题，解析放analysis"
     elif kind == "fill_blank":
-        question["stem"] = "简短题干，空缺处用___（三个下划线）表示，解题步骤放analysis"
+        question["stem"] = "简短题干，空缺处用___（三个下划线）表示；方法填空可展示待补步骤，完整解析放analysis"
     elif kind in ("oral_math", "vertical_calc", "recursive_calc", "smart_calc"):
         question["stem"] = "待计算的算式，末尾保留等号，不含结果或解题步骤"
         question["answer"] = "计算结果"
@@ -54,6 +55,42 @@ def _section_fields(kind: str, section_id: str | None = None) -> dict:
     return section
 
 
+DIFFICULTY_RULES = {
+    "easy": "基础：直接运用本课知识，条件明确，提供必要提示，不叠加无关计算或生词。",
+    "medium": "标准：在本课范围内独立运用知识，适度变化情境，步骤符合该年级已学内容。",
+    "hard": "提升：在本课范围内考查方法选择、解释或迁移，减少提示；不得靠超纲、大数或冗长题干提高难度。",
+}
+
+
+def teaching_requirements(grade: str, subject: str, keyword: str, difficulty: str, kinds: set[str]) -> str:
+    from app.services.knowledge_topics import is_make_ten_practice
+    from app.services.question_planning import planning_prompt
+
+    rules = [
+        f"难度：{DIFFICULTY_RULES.get(difficulty, DIFFICULTY_RULES['medium'])}",
+        "教学要求：每题必须对应所选知识点；保留用户明确指定的专项、数值范围和附加限制。"
+        "词汇、数值范围和解题步骤符合年级及所选册次；多个知识点合理覆盖，不强行混入每道题。",
+        "题意完整、条件充分、问法明确。先独立求解，再核对答案和解析；解析说明依据和关键步骤，不只重复答案。",
+        "同一大题和同卷同题型不照抄完全相同的题；基础练习允许同一计算关系在不同题型中合理重复。",
+        "不要把答案或提示答案的解析泄露到题干。不能完成指定范围时不要编造事实、引用或教材内容。",
+    ]
+    if kinds & {"quiz", "challenge", "reading"}:
+        rules.append("选择题只有一个正确选项，干扰项对应常见错误且互不等价；答案用从0开始的索引，正确选项位置适度分散。")
+    if "word_problem" in kinds:
+        rules.append("应用题保留完整条件、数量关系、单位和问句；答案包含必要单位，解析列出与题意对应的算式。")
+    if "reading" in kinds:
+        rules.append("阅读正文长度和词汇适合年级，问题只依据所给正文，解析指出原文依据；不依赖未提供的图片或课文。")
+    if "fill_blank" in kinds:
+        rules.append("多个空的答案按空位顺序返回；开放填空给出合理参考答案，可接受的其他答案放acceptable_answers。")
+    if "true_false" in kinds:
+        rules.append("判断题正误合理搭配，不以修改正确答案来平衡分布，避免含混或缺条件的断言。")
+    if "match_pair" in kinds:
+        rules.append("配对题两侧项目一一对应，不存在歧义；answer为[[左索引,右索引],...]，每个索引恰好使用一次。")
+    if is_make_ten_practice(grade, subject, keyword):
+        rules.append(planning_prompt(subject, keyword, [SimpleNamespace(game_type=kind) for kind in sorted(kinds)], grade))
+    return "\n" + "\n".join(rules)
+
+
 def _conditions(grade: str, subject: str, keyword: str, count: int) -> str:
     return f"年级：{grade}\n科目：{subject}\n题数：{count}\n知识点：{keyword}"
 
@@ -66,9 +103,12 @@ def _textbook_context(scope: KnowledgeScope | None, keyword: str) -> str:
     knowledge_scope_service.require_selected_semesters(scope, keyword)
     selected_semesters = [semester for semester in ("上册", "下册") if semester in keyword]
     books = [book for book in scope.books if not selected_semesters or book.semester in selected_semesters]
-    return "\n教材：" + "；".join(
+    context = "\n教材：" + "；".join(
         f"{book.series} {scope.grade}{book.semester}（官方资源号{book.id}）" for book in books
     )
+    units = [f"{book.semester}·{unit.title}：{'、'.join(unit.topics)}" for book in books for unit in book.units
+             if unit.title in keyword or any(topic in keyword for topic in unit.topics)]
+    return context + ("\n相关教材目录：" + "；".join(units)[:2000] if units else "") + "\n教材信息仅为目录，不代表已提供课文正文。"
 
 
 def _format_contract(value: dict) -> str:
@@ -79,7 +119,14 @@ def _format_contract(value: dict) -> str:
     )
 
 
-def _format_rules(kinds: set[str], subject: str, keyword: str) -> str:
+def allows_process_fill(grade: str, subject: str, keyword: str) -> bool:
+    from app.services.knowledge_topics import is_make_ten_practice
+
+    return subject == "数学" and (any(marker in keyword for marker in ("过程填空", "凑十法"))
+                               or is_make_ten_practice(grade, subject, keyword))
+
+
+def _format_rules(kinds: set[str], subject: str, keyword: str, grade: str) -> str:
     """给模型最少但明确的题面格式约束，避免题型字段正确而卷面难看。"""
     lines: list[str] = ["本次生成的题目不要重复。"]
     if kinds & {"oral_math", "vertical_calc", "recursive_calc", "smart_calc"}:
@@ -90,12 +137,14 @@ def _format_rules(kinds: set[str], subject: str, keyword: str) -> str:
     if "fill_blank" in kinds:
         lines.append(
             "填空题只保留学生需要作答的简短内容，不写‘在___里填’等说明性前缀；"
-            "未要求过程填空时，不写解题步骤。"
+            "完整解答写在analysis。"
         )
         if subject == "数学":
             lines.append("普通数学填空题题干一行控制在24个字符以内，通常只设置1个空，最多2个空。")
-            if any(marker in keyword for marker in ("过程填空", "凑十法")):
-                lines.append("知识点明确要求过程填空时，过程可换行，但每一行仍只保留必要内容。")
+            if allows_process_fill(grade, subject, keyword):
+                lines.append("本课可安排方法填空，待补过程可换行，保留作答空格；完整答案与解析单独返回。")
+            else:
+                lines.append("未要求过程填空时，不写解题步骤。")
     return ("\n题面格式要求：" + "\n".join(lines)) if lines else ""
 
 
@@ -106,8 +155,10 @@ class PromptBuilder:
             _conditions(request.grade, request.subject, request.keyword, request.question_count)
             + _textbook_context(scope, request.keyword)
             + f"\n题型：{TYPE_NAMES.get(request.game_type.value, request.game_type.value)}"
-            + _format_rules({request.game_type.value}, request.subject, request.keyword)
-            + "\n题干简洁，答案和解析单独返回；未要求过程填空时，不把解题步骤写进题干。"
+            + teaching_requirements(request.grade, request.subject, request.keyword, request.difficulty.value,
+                                    {request.game_type.value})
+            + _format_rules({request.game_type.value}, request.subject, request.keyword, request.grade)
+            + "\n题干简洁，答案和完整解析单独返回，方法填空只展示待补步骤。"
             + _format_contract(_section_fields(request.game_type.value))
         )
 
@@ -124,8 +175,9 @@ class PromptBuilder:
                 for section, item in zip(sections, items, strict=True)
             )
             + "\n各大题题数：" + json.dumps(counts, ensure_ascii=False)
-            + _format_rules({item.game_type for item in items}, subject, keyword)
-            + "\n题干简洁，答案和解析单独返回；未要求过程填空时，不把解题步骤写进题干。"
+            + teaching_requirements(grade, subject, keyword, difficulty, {item.game_type for item in items})
+            + _format_rules({item.game_type for item in items}, subject, keyword, grade)
+            + "\n题干简洁，答案和完整解析单独返回，方法填空只展示待补步骤。"
             + _format_contract({"sections": sections})
         )
 

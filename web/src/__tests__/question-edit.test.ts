@@ -6,6 +6,7 @@ import { DEFAULT_LAYOUT } from '../constants'
 import { applyOldSnapshot } from '../stores/exam-local'
 import type { Question, SecLayout } from '../types'
 import { shortenBlankLines } from '../rich-edit'
+import { confirmQuestionReview, isManuallyReviewed } from '../question-quality'
 
 // happy-dom 下 DOMPurify 的遍历不可靠（实测会丢掉 <b>、漏掉 <script>），这里只验证标签的去留与回写；
 // 净化本身由浏览器里的 DOMPurify 负责，不在本文件的测试范围内。
@@ -20,6 +21,36 @@ function render(question: Question, no = 1, layout: Partial<SecLayout> = {}) {
   return { q, wrapper }
 }
 const choice = (): Question => ({ type: 'multiple_choice', stem: '3 + 4 = ？', options: ['6', '7', '8', '9'], answer: 1 })
+
+describe('编辑后的复核状态', () => {
+  it('仅调整格式保留状态，改动题干或选项后转为待核对', async () => {
+    const { q, wrapper } = render({ ...choice(), quality_status: 'passed', analysis: '3+4=7' })
+    confirmQuestionReview(q)
+    const option = wrapper.findAll('[data-e="opts"] > div')[1]
+    option.element.innerHTML = 'B. <b>7</b>'
+    await option.trigger('blur')
+    expect(q.quality_status).toBe('passed')
+    expect(isManuallyReviewed(q)).toBe(true)
+    option.element.innerHTML = 'B. 8'
+    await option.trigger('blur')
+    expect(q.quality_status).toBe('needs_review')
+    expect(q._manualReview).toBeUndefined()
+    expect(q.quality_issues).toContain('题目内容已修改，请重新核对答案与解析')
+    q.quality_status = 'passed'
+    const stem = wrapper.get('[data-e="stem"]')
+    stem.element.innerHTML = '① 3 + 5 = ？'
+    await stem.trigger('blur')
+    expect(q.quality_status).toBe('needs_review')
+  })
+
+  it('英文删掉词间空格也属于内容修改', async () => {
+    const { q, wrapper } = render({ type: 'fill_blank', stem: 'a long ____', answer: 'road', analysis: '长路', quality_status: 'passed' })
+    const stem = wrapper.get('[data-e="stem"]')
+    stem.element.innerHTML = '① along ____'
+    await stem.trigger('blur')
+    expect(q.quality_status).toBe('needs_review')
+  })
+})
 
 describe('卷面编辑回写：选项', () => {
   it('只点进又离开不改数据，字母保留', async () => {

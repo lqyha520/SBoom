@@ -35,7 +35,8 @@ from app.services.question_qc import arithmetic_value, question_issue
 
 
 def questions(count=2, start=1, kind="fill_blank"):
-    return [{"type": kind, "stem": f"{start + i} + 8 = ____", "answer": str(start + i + 8)}
+    return [{"type": kind, "stem": f"{start + i} + 8 = ____", "answer": str(start + i + 8),
+             "analysis": f"{start + i}+8={start + i + 8}"}
             for i in range(count)]
 
 
@@ -50,6 +51,13 @@ def incomplete_sections(response):
     return detail["partial_sections"]
 
 
+async def passed_review(_system, user_message, _count):
+    """生成链路回归隔离第二次模型调用；复核协议另有专门的集成测试。"""
+    payload = json.loads(user_message)
+    return {"reviews": [{"review_id": question["review_id"], "status": "passed", "reason": ""}
+                        for section in payload["sections"] for question in section["questions"]]}
+
+
 class BackendReliability(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
@@ -60,6 +68,7 @@ class BackendReliability(unittest.TestCase):
         self.stack.enter_context(patch.object(get_settings(), "generation_daily_limit", 100))
         self.stack.enter_context(patch.object(get_settings(), "generation_user_concurrency", 3))
         self.stack.enter_context(patch.object(get_settings(), "generation_global_concurrency", 6))
+        self.stack.enter_context(patch.object(generate, "_call_quality_review", new=AsyncMock(side_effect=passed_review)))
         # An accidental provider request is a test failure, never real traffic.
         self.stack.enter_context(patch.object(httpx.AsyncClient, "post", side_effect=AssertionError("External HTTP disabled")))
         database.init_db()
@@ -150,12 +159,12 @@ class BackendReliability(unittest.TestCase):
         self.assertEqual(mock.await_count, 2)
         self.assertEqual(incomplete_sections(response)[0]["missing_count"], 2)
 
-    def test_duplicate_questions_are_preserved_across_sections(self):
+    def test_identical_questions_are_rejected_across_sections(self):
         self.body["items"].append({"section_id": "s2", "game_type": "fill_blank", "question_count": 2})
         response, model = self.send({"sections": [section(), section("s2")]})
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual([x["missing_count"] for x in response.json()["sections"]], [0, 0])
-        self.assertEqual([len(x["questions"]) for x in response.json()["sections"]], [2, 2])
+        values = incomplete_sections(response)
+        self.assertEqual([x["missing_count"] for x in values], [0, 2])
+        self.assertEqual([len(x["questions"]) for x in values], [2, 0])
         model.assert_awaited_once()
 
     def test_incomplete_is_failed_and_replay_preserves_questions_without_model_calls(self):

@@ -29,6 +29,53 @@ function fixture() {
   return { api: exports, tasks, opened, removed, changeSession() { generation++ } }
 }
 
+test('装饰图只占三个槽，PDF 使用预留槽并优先于排队预取', async () => {
+  const { api, tasks } = fixture()
+  const images = Array.from({ length: 7 }, (_, index) => api.acquireAsset('/image-' + index, 0))
+  images.forEach(handle => { void handle.ready.catch(() => {}) })
+  await Promise.resolve(); assert.equal(tasks.length, 3)
+  const first = api.openPdf({ url: '/first-pdf' }, '第一份')
+  await Promise.resolve(); assert.equal(tasks[3]!.url, '/first-pdf')
+  tasks[3]!.success({ statusCode: 200, tempFilePath: '/first.pdf' }); await first
+  const reading = api.acquireAsset('/reading', 2); void reading.ready.catch(() => {})
+  await Promise.resolve(); assert.equal(tasks[4]!.url, '/reading')
+  const second = api.openPdf({ url: '/second-pdf' }, '第二份')
+  await Promise.resolve(); assert.equal(tasks.length, 5)
+  tasks[0]!.success({ statusCode: 200, tempFilePath: '/image-0.jpg' })
+  assert.equal(tasks[5]!.url, '/second-pdf')
+  tasks[5]!.success({ statusCode: 200, tempFilePath: '/second.pdf' }); await second
+  images.forEach(handle => handle.release()); reading.release(); api.clearAssetCache()
+  assert.equal(api.assetCacheStats().queued, 0)
+})
+
+test('排队图片取消立即结束，预取升级为当前页后使用预留槽且不重复下载', async () => {
+  const { api, tasks } = fixture()
+  const images = Array.from({ length: 5 }, (_, index) => api.acquireAsset('/image-' + index, 0))
+  images.forEach(handle => { void handle.ready.catch(() => {}) })
+  await Promise.resolve(); assert.equal(tasks.length, 3)
+  images[4].release(); await assert.rejects(images[4].ready, /取消/)
+  images[3].prioritize(2); assert.equal(tasks[3]!.url, '/image-3')
+  const shared = api.acquireAsset('/image-3', 2)
+  tasks[3]!.success({ statusCode: 200, tempFilePath: '/image-3.jpg' })
+  assert.equal(await shared.ready, await images[3].ready)
+  assert.equal(tasks.length, 4)
+  images.forEach(handle => handle.release()); shared.release(); api.clearAssetCache()
+})
+
+test('预留容量按普通下载计数，PDF 已占槽时仍可并行加载三张图片', async () => {
+  const { api, tasks } = fixture()
+  const pdf = api.openPdf({ url: '/pdf' }, '原稿')
+  const rejected = assert.rejects(pdf)
+  await Promise.resolve()
+  const images = Array.from({ length: 4 }, (_, index) => api.acquireAsset('/image-' + index))
+  images.forEach(handle => { void handle.ready.catch(() => {}) })
+  await Promise.resolve()
+  assert.equal(tasks.length, 4)
+  api.cancelPdfDownload(); await rejected
+  assert.equal(tasks.length, 4, '三个普通下载仍占槽，不能挤掉主动操作的预留容量')
+  images.forEach(handle => handle.release()); api.clearAssetCache()
+})
+
 test('native downloads abort when the last image consumer leaves', async () => {
   const { api, tasks } = fixture()
   const first = api.acquireAsset('/image'), second = api.acquireAsset('/image')

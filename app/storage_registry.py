@@ -25,7 +25,7 @@ REFERENCES = (
 
 # 应用生成的存储键格式。存储目录里的其他文件（运维放进来的密钥、备份、日志等）一律不参与孤儿回收。
 MANAGED_KEY = re.compile(
-    r"[0-9a-f]{32}/[0-9a-f]{32}/(?:paper\.pdf|thumbnail\.jpg|page-\d+\.jpg)"  # 试卷归档（paper_library）与补齐的缩略图（maintenance）
+    r"[0-9a-f]{32}/[0-9a-f]{32}/(?:paper\.pdf|thumbnail(?:-\d+)?\.jpg|page-\d+\.jpg)"  # 归档及每页缩略图
     r"|imports/[0-9a-f]{24}/[0-9A-Za-z_-]+"  # 演示资料导入（scripts/import_demo_catalog.py）
     r"|images/\d+/[0-9a-f]{32}\.png"  # 生图结果（image_assets）
     r"|site/banners/[0-9a-f]{32}\.(?:jpg|png|webp)"  # 首页 Banner（site_content）

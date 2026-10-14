@@ -1,6 +1,6 @@
 """题型质检 —— 对 LLM 生成的题目做内容级校验，不合格的剔除或重生成
 
-结构、选项及可确定计算答案检查，不因题目内容重复而剔除。
+结构、选项及可确定计算答案检查；同卷避重由结果整理层负责。
 不替代教师对语义、知识范围与开放题答案的审核。
 """
 
@@ -107,7 +107,7 @@ def _number(value) -> Fraction | None:
 
 def filled_math_stem(question: dict) -> str:
     """依空格顺序代入数字答案；不能明确对应时返回空字符串。"""
-    stem = _text(question.get("stem", ""))
+    stem = re.sub(r"\s+", "", math_symbols(str(question.get("stem", ""))))
     blank = re.compile(r"_+|[?？]+")
     if not blank.search(stem):
         return stem
@@ -121,7 +121,7 @@ def filled_math_stem(question: dict) -> str:
 
 def arithmetic_statement(stem: str) -> tuple[str, str, str] | None:
     """只识别完整数值判断式，不对文字命题猜答案。"""
-    text = re.sub(r"\(\)$", "", _text(stem)).rstrip("。.")
+    text = re.sub(r"\(\)$", "", re.sub(r"\s+", "", math_symbols(stem))).rstrip("。.")
     match = re.fullmatch(r"([0-9.+*/()\-]+)([=<>≤≥≠])([0-9.+*/()\-]+)", text)
     if match and all(arithmetic_value(match[index]) is not None for index in (1, 3)):
         return match[1], match[2], match[3]
@@ -142,9 +142,6 @@ def question_issue(
         return "缺少题型"
     if kind not in ("number_split", "compare", "match_pair") and (not isinstance(stem, str) or not stem.strip()):
         return "缺少题干"
-    reason = reject_reason(stem)
-    if reason:
-        return reason
     if answer is None or isinstance(answer, bool) or (isinstance(answer, str) and not answer.strip()):
         return "缺少答案"
     if isinstance(answer, list) and kind != "match_pair":
@@ -158,6 +155,14 @@ def question_issue(
         index = _number(answer)
         if index is None or index.denominator != 1 or not 0 <= index < len(options):
             return "选择题答案索引越界"
+        expected = choice_value(stem or "")
+        values = [arithmetic_value(value) for value in options]
+        if expected is not None and all(value is not None for value in values):
+            correct_indices = [i for i, value in enumerate(values) if value == expected]
+            if len(correct_indices) != 1:
+                return "选择题没有唯一正确选项"
+            if int(index) != correct_indices[0]:
+                return "选择题答案与算式不一致"
     if kind in ("oral_math", "vertical_calc", "recursive_calc", "smart_calc"):
         expression = calculation_expression(stem or "")
         expected, actual = arithmetic_value(expression), _number(answer)
@@ -188,7 +193,7 @@ def question_issue(
         if a is not None and b is not None and operators[relation](a, b) != correct:
             return "判断题算式与正误答案不一致"
     if kind == "fill_blank":
-        text = _text(stem or "")
+        text = re.sub(r"\s+", "", math_symbols(stem or ""))
         numeric_fill = bool(re.fullmatch(r"[0-9.+*/()=_\-?]+", text) and re.search(r"[_?]", text) and "=" in text)
         process_fill = allow_fill_blank_steps and numeric_fill and "\n" in (stem or "") and text.count("=") > 1
         # 仅生成普通数学填空时限制题干长度；换行不能绕过限制。
@@ -227,7 +232,56 @@ def question_issue(
             return "配对题答案格式不正确"
         if {pair[0] for pair in answer} != set(range(len(left))) or {pair[1] for pair in answer} != set(range(len(right))):
             return "配对题索引越界或重复"
+        left_values = [arithmetic_value(value) for value in left]
+        right_values = [arithmetic_value(value) for value in right]
+        if all(value is not None for value in left_values + right_values):
+            if any(left_values[a] != right_values[b] for a, b in answer):
+                return "配对题计算结果与连线答案不一致"
+            if len(set(right_values)) != len(right_values):
+                return "配对题存在等值项目，无法唯一配对"
+    if analysis_issue(str(question.get("analysis", ""))):
+        return "解析包含不成立的计算等式"
     return None
+
+
+def choice_value(stem: str) -> Fraction | None:
+    """仅识别完整、直接求值的选择题；情境题和反向提问留给语义复核。"""
+    text = math_symbols(stem).strip().rstrip("。.?？")
+    text = re.sub(r"^(?:计算|算式)\s*", "", text)
+    text = re.sub(r"(?:的结果是|的结果|等于多少|等于|是多少|=)\s*(?:多少|[_?？]|\(\s*\))*\s*$", "", text)
+    return arithmetic_value(text)
+
+
+def analysis_issue(analysis: str) -> bool:
+    """只拦截独立的错误等式；引用错误示范或自然语言推理交给语义复核。"""
+    if any(marker in analysis for marker in ("错", "误", "不能", "不是", "并非", "不等", "≠", "\"", "“", "‘")):
+        return False
+    for clause in re.split(r"[。；;，,\n]", analysis):
+        text = math_symbols(clause).strip()
+        for word, symbol in (("等于", "="), ("乘以", "*"), ("除以", "/"), ("加", "+"), ("减", "-")):
+            text = text.replace(word, symbol)
+        text = re.sub(r"\((?:支|个|朵|本|人|元|米|厘米|千米|千克|克|只|辆|颗|块)\)$", "", text)
+        parts = text.split("=")
+        if len(parts) < 2:
+            continue
+        values = [arithmetic_value(part) for part in parts]
+        if all(value is not None for value in values) and len(set(values)) != 1:
+            return True
+    return False
+
+
+def exact_question_key(question: dict, passage: str = "") -> str:
+    """只去完全重复的题面；不合并换考法、换数字或不同文章的基础练习。"""
+    fields = ("type", "stem", "options", "left_items", "right_items", "top", "left", "right", "left_expr", "right_expr")
+
+    def normalize(value):
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        # 保留大小写、词间空格和上下标；它们可能改变语言题或数学题的含义。
+        text = re.sub(r"\s+", " ", math_symbols(str(value))).strip() if value is not None else ""
+        return re.sub(r"\s*([+*/=<>≤≥≠\-])\s*", r"\1", text)
+
+    return json.dumps([normalize(passage), {key: normalize(question.get(key)) for key in fields}], ensure_ascii=False, sort_keys=True)
 
 
 def make_ten_issue(question: dict) -> str | None:

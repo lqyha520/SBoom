@@ -7,7 +7,7 @@
   {"name":"division remainder","valid":true,"question":{"type":"vertical_calc","stem":"17 ÷ 5 =","answer":"3余2"}},
   {"name":"bad remainder","valid":false,"question":{"type":"vertical_calc","stem":"17 ÷ 5 =","answer":"2余7"}},
   {"name":"invalid expression","valid":false,"question":{"type":"oral_math","stem":"1 / 0 =","answer":0}},
-  {"name":"forbidden long addition","valid":false,"question":{"type":"oral_math","stem":"3 + 3 + 3 =","answer":9}},
+  {"name":"legitimate repeated addition","valid":true,"question":{"type":"oral_math","stem":"3 + 3 + 3 =","answer":9}},
   {"name":"digit boundaries","valid":true,"question":{"type":"oral_math","stem":"12 + 2 + 2 =","answer":16}},
   {"name":"trailing digit boundaries","valid":true,"question":{"type":"oral_math","stem":"1 + 1 + 10 =","answer":12}},
   {"name":"duplicate options","valid":false,"question":{"type":"multiple_choice","stem":"哪项正确？","options":["A","A"],"answer":0}},

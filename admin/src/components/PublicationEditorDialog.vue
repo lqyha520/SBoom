@@ -65,6 +65,20 @@ const displayCategories = computed(() => {
   const current = props.editor.filterCategories.find(item => item.value === form.value.category_id)
   return current && !categories.value.some(item => item.value === current.value) ? [...categories.value, current] : categories.value
 })
+const publicationHints = computed(() => {
+  const metadata = target.value || sources.value.find(item => item.id === sourceId.value) || imageFields.value
+  const title = form.value.title.trim()
+  const fullGrade = metadata.grade || ''
+  const subject = metadata.subject || ''
+  const grade = fullGrade.replace(/^(小学|初中|高中)/, '')
+  const hints: string[] = []
+  if (grade && !title.includes(grade)) hints.push('标题建议写明年级')
+  if (subject && !title.includes(subject)) hints.push('标题建议写明学科')
+  const theme = title.replace(fullGrade, '').replace(grade, '').replace(subject, '').replace(/[\s·・—_\-：:（）()]+/g, '')
+  if (!theme) hints.push('请补充具体主题，方便家长辨认资料')
+  if (!form.value.description.trim()) hints.push('建议补充简介，说明练习内容和适用场景')
+  return hints
+})
 const previewState = reactive(useCatalogPreview())
 const previewVisible = ref(false)
 type Panel = { busy: boolean; dirty: boolean; canLeave: () => boolean; reconcile: (latest: CatalogDetail) => void }
@@ -290,7 +304,7 @@ const sourceModes = [
         <details class="quick-category"><summary>新建分类</summary><div class="actions-row mt-2"><UInput v-model="editor.categoryName" aria-label="新分类名称" placeholder="输入分类名称" maxlength="60" :disabled="editor.categoryCreating" @keydown.enter.prevent="editor.addCategory" /><UButton label="创建并选中" :loading="editor.categoryCreating" :disabled="!editor.categoryName.trim() || busy" @click="editor.addCategory" /></div></details>
         <fieldset class="publication-group">
           <legend>基本信息</legend>
-          <UFormField v-if="!importing" label="公开标题" required
+          <UFormField v-if="!importing" label="公开标题" required description="建议使用“年级＋学科＋主题”，例如：一年级数学 · 20 以内加减法。请以文件实际内容为准。"
             ><UInput
               v-model="form.title"
               maxlength="240"
@@ -395,6 +409,13 @@ const sourceModes = [
             color="warning"
             variant="soft"
             title="发布后，习题、答案和文件按所设权限提供给小程序用户。请确认拥有发布权限且不含学生隐私。"
+          />
+          <UAlert
+            v-if="publishing && publicationHints.length"
+            color="info"
+            variant="soft"
+            title="发布前完善资料信息"
+            :description="publicationHints.join('；') + '。这些建议不影响保存或发布。'"
           />
           <p v-if="target" class="text-sm text-muted">
             内容复核：{{ target.reviewed_at ? '已记录人工确认' : '尚未记录' }} ·

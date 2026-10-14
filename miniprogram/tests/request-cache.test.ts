@@ -26,6 +26,25 @@ function fixture() {
   return { api: exports, growth, calls, reply, advance: (milliseconds: number) => { now += milliseconds } }
 }
 
+test('匿名首页与恢复登录后的新读取者共用在途公共配置，权限摘要仍重新读取', async () => {
+  const { api, calls, reply } = fixture()
+  const oldScope = createLatestRequest(), newScope = createLatestRequest()
+  const old = api.fetchSiteHome({ anonymous: true, scope: oldScope.begin() })
+  const cancelled = assert.rejects(old, /取消/)
+  api.configureSession('restored', 'reader')
+  oldScope.invalidate()
+  const current = api.fetchSiteHome({ scope: newScope.begin() })
+  await cancelled
+  assert.equal(calls.length, 1); assert.equal(calls[0].aborted, false)
+  assert.equal(calls[0].header.Authorization, undefined)
+  reply(0, { title: 'shared' }); assert.equal((await current).title, 'shared')
+  const guest = api.fetchCatalogSummary({ anonymous: true })
+  const personal = api.fetchCatalogSummary()
+  assert.equal(calls.length, 3)
+  reply(1, { favorites: 0 }); reply(2, { favorites: 3 })
+  assert.equal((await guest).favorites, 0); assert.equal((await personal).favorites, 3)
+})
+
 test('public metadata shares requests, clones cached values, and supports force refresh', async () => {
   const { api, calls, reply } = fixture()
   const first = api.fetchSiteHome(), second = api.fetchSiteHome()
@@ -117,8 +136,8 @@ test('浏览和已读等个人写操作保留公共缓存，私人统计短暂�
   reply(calls.length - 1, {}); await Promise.all([first, second])
   const tags = growth.fetchTags(); reply(calls.length - 1, { items: [] }); await tags
   api.configureSession('new', '2')
-  const fresh = api.fetchSiteHome(); reply(calls.length - 1, { title: 'new account' }); await fresh
-  assert.equal(calls.filter(call => call.url.endsWith('/site/home')).length, 2)
+  assert.equal((await api.fetchSiteHome()).title, 'home')
+  assert.equal(calls.filter(call => call.url.endsWith('/site/home')).length, 1)
 })
 
 test('刷新一种公共配置不会让其他配置的在途结果失去缓存', async () => {

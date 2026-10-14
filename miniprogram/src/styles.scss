@@ -41,15 +41,17 @@ button::after, uni-button::after { border: 0 !important; }
 .loading-line { display: flex; gap: 10px; align-items: center; justify-content: center; padding: 24px 0; color: var(--lc-muted); font-size: 12px; }
 .paper-list { display: flex; flex-direction: column; gap: 0; }
 .list-caption { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; padding: 7px 0; font-size: 12px; color: var(--lc-muted); }
-.paper-row { display: flex; align-items: center; gap: 4px; min-height: 120px; padding: 16px 0; background: transparent; }
+.paper-row { display: flex; align-items: center; gap: 4px; min-height: 112px; padding: 12px 0; background: transparent; }
 .paper-main { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; text-align: left; white-space: normal; line-height: 1.5; }
-.paper-thumb { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 56px; height: 78px; padding: 6px; border-radius: 8px; background: var(--subject-tint, #e9effb); }
-.paper-thumb-sheet { width: 100%; transform: rotate(-4deg); box-shadow: 2px 3px 0 #ffffff80; }
-.favorite-control { width: 44px !important; min-width: 44px !important; height: 44px !important; flex: none; color: var(--lc-muted) !important; --wot-button-size-icon-medium: 20px; }
+.paper-thumb { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 60px; height: 84px; padding: 4px; border-radius: 8px; background: var(--subject-tint, #e9effb); }
+.paper-thumb-sheet { width: 100%; box-shadow: 0 2px 5px #28372f10; }
+.favorite-control { width: 44px !important; min-width: 44px !important; height: 44px !important; flex: none; color: var(--lc-muted) !important; --wot-button-size-icon-medium: 22px; }
 .favorite-control.is-favorite { color: var(--lc-coral) !important; }
-.paper-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 15px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; margin-top: 5px; color: var(--lc-text); }
-.paper-labels { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; color: var(--lc-muted); font-size: 12px; line-height: 1.6; }
-.paper-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 8px; color: var(--lc-muted); font-size: 12px; margin-top: 7px; }
+.paper-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 16px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; margin-top: 5px; color: var(--lc-text); }
+.paper-labels { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; color: var(--lc-secondary); font-size: 13px; line-height: 1.6; }
+.paper-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 8px; color: var(--lc-secondary); font-size: 13px; margin-top: 7px; }
+.paper-answer { display:inline-flex;padding:2px 6px;border-radius:5px;background:#f0f3f1;color:var(--lc-secondary);font-size:12px;line-height:1.5; }
+.paper-answer.available { background:var(--lc-primary-soft);color:var(--lc-success-text); }
 .file-pending, .paper-editorial { color: var(--lc-warning); }
 .language { --subject-color: #b56857; --subject-tint: #f8e9e2; }
 .math { --subject-color: #526eac; --subject-tint: #e9effb; }
@@ -97,7 +99,7 @@ button::after, uni-button::after { border: 0 !important; }
 button:focus-visible, uni-button:focus-visible, [role='button']:focus-visible { outline: 2px solid var(--lc-primary); outline-offset: 3px; }
 @media (hover: hover) { .bare-icon:hover { background: var(--lc-primary-soft); } .paper-main:hover .paper-name { color: var(--lc-primary); } }
 @media (prefers-reduced-motion: reduce) { view, button, uni-view, uni-button { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
-@media (max-width: 359px) { page, .wd-root-portal { --lc-page-gutter: 16px; } .page-shell { padding-left: 16px; padding-right: 16px; } .paper-main { gap: 10px; } .paper-thumb { width: 52px; height: 74px; padding: 5px; } }
+@media (max-width: 359px) { page, .wd-root-portal { --lc-page-gutter: 16px; } .page-shell { padding-left: 16px; padding-right: 16px; } .paper-main { gap: 10px; } .paper-thumb { width: 52px; height: 74px; padding: 3px; } }
 /* Shared press feedback for native mini-program buttons and H5. */
 .control-pressed { opacity:.72; }
 /* #ifdef H5 */

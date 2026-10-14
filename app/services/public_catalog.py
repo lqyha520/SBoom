@@ -109,7 +109,7 @@ def _snapshot(raw, title):
 
 
 def list_papers(user_id, q="", grade="", subject="", category="", favorite=False, downloaded=False,
-                limit=20, offset=0, admin=False, status="", sort="featured", only_free=False, recent=False, favorite_group="", topic="", textbook="", term="", unit="", knowledge="", pagination="offset", cursor="", ungrouped=False, access=""):
+                limit=20, offset=0, admin=False, status="", sort="featured", only_free=False, recent=False, favorite_group="", topic="", textbook="", term="", unit="", knowledge="", pagination="offset", cursor="", ungrouped=False, access="", include_total=False):
     if not admin and user_id is None and (favorite or downloaded or recent or favorite_group or ungrouped):
         raise HTTPException(401, detail={"error": "请先登录后查看个人记录", "code": "login_required"})
     clauses, args = ([] if admin else [VISIBLE]), []
@@ -117,10 +117,19 @@ def list_papers(user_id, q="", grade="", subject="", category="", favorite=False
         if tag_id:
             clauses.append("EXISTS (SELECT 1 FROM catalog_paper_tags pt JOIN catalog_tags t ON t.id = pt.tag_id WHERE pt.catalog_id = c.id AND t.id = ? AND t.kind = ? AND t.is_visible = 1)")
             args.extend([tag_id, kind])
-    if q.strip():
-        # Split cross-table OR so trigram indexes can restrict candidates before joining.
-        clauses.append("c.id IN (SELECT id FROM catalog_papers WHERE LOWER(title) LIKE ? ESCAPE '\\' OR LOWER(category) LIKE ? ESCAPE '\\' UNION SELECT c2.id FROM catalog_papers c2 JOIN paper_archives a2 ON a2.id = c2.paper_id WHERE LOWER(a2.keyword) LIKE ? ESCAPE '\\')")
-        args.extend([_match(q)] * 3)
+    # 空白分隔的词逐个匹配，可跨标题、年级学科和可见教学标签组合；重复词只查一次。
+    # 保留跨表 UNION，让现有 trigram 索引先缩小候选集，再应用可见性和权限规则。
+    for word in dict.fromkeys(q.lower().split()):
+        clauses.append(
+            "c.id IN (SELECT id FROM catalog_papers WHERE LOWER(title) LIKE ? ESCAPE '\\' "
+            "OR LOWER(category) LIKE ? ESCAPE '\\' "
+            "UNION SELECT c2.id FROM catalog_papers c2 JOIN paper_archives a2 ON a2.id = c2.paper_id "
+            "WHERE LOWER(a2.keyword) LIKE ? ESCAPE '\\' OR LOWER(a2.grade) LIKE ? ESCAPE '\\' "
+            "OR LOWER(a2.subject) LIKE ? ESCAPE '\\' "
+            "UNION SELECT pt.catalog_id FROM catalog_paper_tags pt JOIN catalog_tags t ON t.id = pt.tag_id "
+            "WHERE t.is_visible = 1 AND LOWER(t.name) LIKE ? ESCAPE '\\')"
+        )
+        args.extend([_match(word)] * 6)
     for field, value in (("a.grade", grade), ("a.subject", subject)):
         if value:
             clauses.append(f"{field} = ?")
@@ -206,7 +215,7 @@ def list_papers(user_id, q="", grade="", subject="", category="", favorite=False
     key_columns = "" if topic or activity_table else ", " + ", ".join(f"{key} AS {alias}" for key, alias in zip(cursor_keys, aliases, strict=True))
     with db() as conn:
         user = None if admin or user_id is None else mini_auth._user(conn, user_id)
-        total = conn.execute(f"SELECT COUNT(*) FROM {JOIN} WHERE {where}", args).fetchone()[0] if pagination == "offset" else None
+        total = conn.execute(f"SELECT COUNT(*) FROM {JOIN} WHERE {where}", args).fetchone()[0] if pagination == "offset" or include_total else None
         query = f"SELECT {COLUMNS}, EXISTS (SELECT 1 FROM mini_catalog_favorites WHERE catalog_id = c.id AND user_id = ?) AS favorite {fields}"
         params = [str(user_id) if user_id is not None else None, *activity_params, *args]
         if pagination == "cursor":
@@ -267,12 +276,15 @@ def get_paper(user_id, catalog_id, admin=False):
         if admin:
             result["snapshot"] = _snapshot(raw, result["title"]) if access["can_view"] else None
         prefix = "/api/v1/admin/catalog" if admin else "/api/v1/catalog"
-        rows = conn.execute("SELECT id, kind, page_number, mime_type, byte_size FROM paper_assets WHERE paper_id = ? AND kind <> 'thumbnail' "
+        rows = conn.execute("SELECT id, kind, page_number, mime_type, byte_size FROM paper_assets WHERE paper_id = ? "
                             "ORDER BY page_number", (result.pop("archive_id"),)).fetchall()
+        thumbnails = {asset["page_number"]: f"{prefix}/papers/{catalog_id}/assets/{asset['id']}"
+                      for asset in rows if asset["kind"] == "thumbnail"}
         if admin:
             result["review_history"] = [dict(record) for record in conn.execute("SELECT admin_id, revision, reviewed_at, answer_readiness FROM catalog_reviews WHERE catalog_id = ? ORDER BY id DESC LIMIT 20", (catalog_id,))]
-        result["assets"] = [{**dict(asset), "url": f"{prefix}/papers/{catalog_id}/assets/{asset['id']}"} for asset in rows
-                            if access["can_download" if asset["kind"] == "pdf" else "can_view"]
+        result["assets"] = [{**dict(asset), "url": f"{prefix}/papers/{catalog_id}/assets/{asset['id']}",
+                             **({"thumbnail_url": thumbnails.get(asset["page_number"])} if asset["kind"] == "page" else {})} for asset in rows
+                            if asset["kind"] != "thumbnail" and access["can_download" if asset["kind"] == "pdf" else "can_view"]
                             and (admin or asset["kind"] != "pdf" or result["download_mode"] == "pdf")]
         result["versions"] = [dict(row) for row in conn.execute(
             "SELECT release_number, note, created_at FROM catalog_versions WHERE catalog_id = ? ORDER BY release_number DESC", (catalog_id,))]

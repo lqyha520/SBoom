@@ -184,6 +184,36 @@ test('fit to width resets native zoom without changing the selected page', () =>
   } finally { app.dispose() }
 })
 
+test('长资料只创建五个滑动容器与十二个选页项，连续滑动和跨组跳页使用真实页码', () => {
+  const app = component('components/PaperPreview.vue', {
+    '../services/session': { session: { user: { id: 'reader' } } },
+    '../services/chrome': { chromeBar: () => ({ inset: 24, height: 68 }) },
+    '../services/reading-position': { readPosition: () => 0, rememberPosition() {} },
+  }, 'current, windowStart, visiblePages, choices, chooserStart, select, change, finishTurn, openChooser, turnChoices', {
+    pages: Array.from({ length: 120 }, (_, id) => ({ id, page_number: id + 1, url: '/original/' + id, thumbnail_url: '/thumb/' + id })), paperId: 'long', release: 1,
+  })
+  const page = app.page
+  try {
+    for (let index = 1; index < 120; index++) {
+      page.change({ detail: { current: index - page.windowStart.value, source: 'touch' } })
+      assert.equal(page.current.value, index)
+      assert.equal(page.visiblePages.value.length, 5)
+      page.finishTurn()
+      assert.ok(page.visiblePages.value.some((item: any) => item.index === index))
+    }
+    page.select(37); page.openChooser()
+    assert.equal(page.current.value, 37); assert.equal(page.chooserStart.value, 36)
+    assert.equal(page.choices.value.length, 12)
+    page.turnChoices(1); assert.equal(page.chooserStart.value, 48)
+    page.select(page.choices.value[0].index); assert.equal(page.current.value, 48)
+    page.change({ detail: { current: 0, source: '' } }); assert.equal(page.current.value, 48, '忽略重建 swiper 的程序化事件')
+    for (let index = 47; index >= 0; index--) {
+      page.change({ detail: { current: index - page.windowStart.value, source: 'touch' } }); page.finishTurn()
+      assert.equal(page.current.value, index)
+    }
+  } finally { app.dispose() }
+})
+
 test('contact route accepts only the explicit contact flag', () => {
   assert.equal(safeDestination('/subpages/membership/index?contact=1'), '/subpages/membership/index?contact=1')
   assert.equal(safeDestination('/subpages/membership/index?contact=https://example.com'), '/pages/home/index')

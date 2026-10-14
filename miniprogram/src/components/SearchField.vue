@@ -1,11 +1,11 @@
 <script setup lang="ts">
 withDefaults(defineProps<{ modelValue: string; placeholder?: string }>(), { placeholder: '搜索习题' })
-const emit = defineEmits<{ 'update:modelValue': [value: string]; search: [] }>()
+const emit = defineEmits<{ 'update:modelValue': [value: string]; search: []; focus: []; blur: [] }>()
 </script>
 
 <template>
   <view class="search-field" :class="{ 'has-query': !!modelValue.trim() }" role="search">
-    <wd-search :model-value="modelValue" :placeholder="placeholder" :aria-label="placeholder" :maxlength="120" placeholder-left hide-cancel variant="plain" @update:model-value="emit('update:modelValue', $event)" @search="emit('search')">
+    <wd-search :model-value="modelValue" :placeholder="placeholder" :aria-label="placeholder" :maxlength="120" placeholder-left hide-cancel variant="plain" @update:model-value="emit('update:modelValue', $event)" @search="emit('search')" @focus="emit('focus')" @blur="emit('blur')">
       <template #input-suffix><wd-button icon="arrow-right" variant="text" type="info" role="button" aria-label="搜索习题" title="搜索习题" custom-class="search-submit" @click="emit('search')" /></template>
     </wd-search>
   </view>

@@ -4,6 +4,23 @@ interface Diagnostic { kind: DiagnosticKind; minute: number; count: number }
 const KEY = 'lc-diagnostics-v1'
 const kinds = new Set<DiagnosticKind>(['runtime', 'promise', 'network', 'server', 'memory', 'update'])
 const events: Diagnostic[] = []
+const performanceKinds = ['api', 'catalog_api', 'asset_wait', 'asset_download', 'asset_bytes', 'home_cold', 'home_warm', 'reader_image'] as const
+type PerformanceKind = typeof performanceKinds[number]
+const samples = new Map<PerformanceKind, number[]>()
+export function recordPerformance(event: { kind?: unknown; value?: unknown }) {
+  if (!event || !performanceKinds.includes(event.kind as PerformanceKind) || typeof event.value !== 'number' || !Number.isFinite(event.value) || event.value < 0) return
+  const kind = event.kind as PerformanceKind
+  const values = samples.get(kind) || []
+  values.push(Math.round(Math.min(event.value, kind === 'asset_bytes' ? 128 * 1024 * 1024 : 600_000)))
+  if (values.length > 60) values.shift()
+  samples.set(kind, values)
+}
+export function performanceSummary() {
+  return [...samples].map(([kind, values]) => {
+    const sorted = [...values].sort((a, b) => a - b)
+    return { kind, count: values.length, unit: kind === 'asset_bytes' ? 'bytes' : 'ms', p50: sorted[Math.ceil(sorted.length * .5) - 1], p95: sorted[Math.ceil(sorted.length * .95) - 1], max: sorted[sorted.length - 1] }
+  })
+}
 let initialized = false
 let connected = true
 let networkRevision = 0
@@ -23,7 +40,7 @@ export function recordDiagnostic(kind: DiagnosticKind) {
   persistTimer = setTimeout(flushDiagnostics, 500)
 }
 export function diagnosticSummary() {
-  return JSON.stringify({ version: 1, events: events.map(event => ({ ...event })) })
+  return JSON.stringify({ version: 2, events: events.map(event => ({ ...event })), performance: performanceSummary() })
 }
 export function initializeRuntime() {
   if (initialized) return
@@ -37,6 +54,7 @@ export function initializeRuntime() {
     }
   } catch { /* Diagnostics are optional. */ }
   uni.$on('lc-diagnostic', recordDiagnostic)
+  uni.$on('lc-performance', recordPerformance)
   const network = (online: boolean) => {
     const recovered = !connected && online
     connected = online

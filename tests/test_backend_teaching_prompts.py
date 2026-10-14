@@ -1,4 +1,4 @@
-"""最简提示词及旧教学规则不再介入生成的回归；模型均为模拟响应。"""
+"""教学条件、基础练习边界与模型补题回归；模型均为模拟响应。"""
 
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import test_backend_reliability as fixtures
 
 from app.config import get_settings
-from app.models import BatchItem, GenerateRequest, KnowledgeScope
+from app.models import BatchItem, Difficulty, GenerateRequest, KnowledgeScope
 from app.routers import generate
 from app.services.generation_results import _normalize_question
 from app.services.knowledge_topics import GENERAL_TOPIC, is_make_ten_practice
@@ -16,7 +16,7 @@ from app.services.question_qc import make_ten_issue, question_issue
 
 
 def oral(stem="8 + 7 =", answer=15):
-    return {"type": "oral_math", "stem": stem, "answer": answer}
+    return {"type": "oral_math", "stem": stem, "answer": answer, "analysis": f"{stem} {answer}"}
 
 
 class TeachingRules(unittest.TestCase):
@@ -61,7 +61,7 @@ class TeachingRules(unittest.TestCase):
         ):
             self.assertFalse(is_make_ten_practice(grade, subject, keyword))
 
-    def test_batch_and_single_only_include_four_conditions_and_output_contract(self):
+    def test_batch_and_single_include_difficulty_teaching_goals_and_output_contract(self):
         scope = KnowledgeScope(grade="小学一年级", subject="数学", allowed=[GENERAL_TOPIC], forbidden=["乘法"])
         for keyword in (GENERAL_TOPIC, "9加几", "8加几专项"):
             for kind in ("oral_math", "fill_blank", "number_split", "compare", "true_false"):
@@ -78,9 +78,10 @@ class TeachingRules(unittest.TestCase):
                     ]
                     for prompt in prompts:
                         self.assertIn(f"年级：{scope.grade}\n科目：{scope.subject}\n题数：8\n知识点：{keyword}", prompt)
-                        for rule in ("教学目标", "1～9", "近期", "最多出现2次", "至少安排3种",
-                                     "15 个字", "约 20 字符", "难度", "拆分", "先凑", "乘法"):
+                        for rule in ("最多出现2次", "至少安排3种", "15 个字", "约 20 字符"):
                             self.assertNotIn(rule, prompt)
+                        self.assertIn("难度：标准", prompt)
+                        self.assertIn("教学目标", prompt)
                         self.assertIn('"questions"', prompt)
                         self.assertIn("本次生成的题目不要重复。", prompt)
                         if kind == "oral_math":
@@ -95,9 +96,9 @@ class TeachingRules(unittest.TestCase):
         self.assertNotIn("批次编号", first)
         self.assertNotIn("不要重复常见", first)
         request = GenerateRequest(grade=scope.grade, subject=scope.subject, keyword=GENERAL_TOPIC)
-        self.assertEqual(
+        self.assertNotEqual(
             prompt_builder.build_system_prompt(request, scope),
-            prompt_builder.build_system_prompt(request.model_copy(update={"difficulty": "hard"}), scope),
+            prompt_builder.build_system_prompt(request.model_copy(update={"difficulty": Difficulty.HARD}), scope),
         )
 
     def test_fill_blank_length_rule_is_only_for_ordinary_math(self):
@@ -195,10 +196,10 @@ class TeachingAPI(unittest.TestCase):
         prompt = model.call_args.args[0][0]["content"]
         self.assertIn("题数：2", prompt)
         self.assertIn("知识点：" + GENERAL_TOPIC, prompt)
-        self.assertNotIn("教学目标", prompt)
+        self.assertIn("教学目标", prompt)
         self.assertIn("本次生成的题目不要重复。", prompt)
 
-    def test_same_fact_across_skills_and_previous_chunks_is_kept(self):
+    def test_same_fact_across_skills_allowed_but_exact_repeat_in_previous_chunks_rejected(self):
         self.body["items"] = [
             {"section_id": f"s{i}", "game_type": kind, "question_count": 1}
             for i, kind in enumerate(("oral_math", "compare", "true_false"))
@@ -216,11 +217,10 @@ class TeachingAPI(unittest.TestCase):
         get_settings().generation_repair_limit = 0
         self.body["previous_request_ids"] = ["job-one"]
         response, model = self.send(raw, request_id="same-paper-next-chunk")
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertTrue(all(section["missing_count"] == 0 for section in response.json()["sections"]))
+        self.assertTrue(all(section["missing_count"] == 1 for section in fixtures.incomplete_sections(response)))
         model.assert_awaited_once()
 
-    def test_old_teaching_boundaries_no_longer_force_model_repair(self):
+    def test_scoped_make_ten_boundary_triggers_model_repair(self):
         get_settings().generation_repair_limit = 1
         for endpoint in ("generate", "generate-batch"):
             with self.subTest(endpoint=endpoint):
@@ -238,10 +238,10 @@ class TeachingAPI(unittest.TestCase):
                     response = self.client.post(f"/api/v1/{endpoint}", json=body)
                 self.assertEqual(response.status_code, 200, response.text)
                 output = response.json() if endpoint == "generate" else response.json()["sections"][0]
-                self.assertEqual([q["stem"] for q in output["questions"]], ["18 + 2 =", "17 + 3 ="])
-                self.assertEqual(model.await_count, 1)
+                self.assertEqual([q["stem"] for q in output["questions"]], ["8 + 7 =", "9 + 6 ="])
+                self.assertEqual(model.await_count, 2)
                 for call in model.call_args_list:
-                    self.assertNotIn("两个加数均为1～9的整数", call.args[0])
+                    self.assertIn("两个加数均为1～9的整数", call.args[0])
 
     def test_wrong_answers_still_fail_but_old_teaching_boundary_does_not_apply(self):
         raw = {"sections": [{"section_id": "s1", "game_type": "oral_math",

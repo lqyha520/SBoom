@@ -6,6 +6,7 @@ import { clearAssetCache } from './assets'
 import { recordEvent } from './experience'
 import { inboxState } from './growth'
 import { loginUrl, routeFromPage } from './return-route'
+import { bindPaperIntent, clearPaperIntent } from './paper-intent'
 
 export const session = reactive({ user: null as User | null, ready: false, error: '' })
 
@@ -27,6 +28,7 @@ function markActive() {
 }
 
 export function clearSession() {
+  clearPaperIntent()
   inboxState.unread = 0; inboxState.pending = 0
   configureSession('')
   session.user = null
@@ -38,6 +40,8 @@ export function clearSession() {
 unauthorizedHandler(clearSession)
 
 export function acceptSession(user: User, token = '') {
+  if (session.user && session.user.id !== user.id) clearPaperIntent()
+  bindPaperIntent(user.id)
   if (configureSession(token, String(user.id))) {
     inboxState.unread = 0; inboxState.pending = 0
     clearAssetCache()

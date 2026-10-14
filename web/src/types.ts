@@ -10,6 +10,10 @@ export interface Question {
   answer?: number | string | [number, number][]
   acceptable_answers?: string[]
   analysis?: string
+  quality_status?: 'unchecked' | 'passed' | 'needs_review'
+  quality_issues?: string[]
+  /** 人工确认时的内容快照；独立于服务端模型复核状态。 */
+  _manualReview?: string
   tags?: string[]
   difficulty_level?: number
   expected_time_seconds?: number

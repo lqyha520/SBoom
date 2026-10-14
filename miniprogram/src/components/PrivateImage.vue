@@ -2,7 +2,7 @@
 import { getCurrentInstance, onMounted, onUnmounted, ref, watch } from 'vue'
 import { acquireAsset } from '../services/assets'
 import type { FileHandle } from '../services/file-pool'
-const props = withDefaults(defineProps<{ src: string | null; preview?: boolean; label?: string; lazy?: boolean; fit?: boolean; active?: boolean }>(), { active: true })
+const props = withDefaults(defineProps<{ src: string | null; preview?: boolean; label?: string; lazy?: boolean; fit?: boolean; active?: boolean; priority?: number }>(), { active: true, priority: 1 })
 const instance = getCurrentInstance()
 const visible = ref(!props.lazy)
 let observer: UniApp.IntersectionObserver | undefined
@@ -11,6 +11,7 @@ const failed = ref(false)
 let sequence = 0
 let disposed = false
 let handle: FileHandle | null = null
+let startedAt = 0
 async function load() {
   if (disposed) return
   const run = ++sequence
@@ -19,11 +20,16 @@ async function load() {
   failed.value = false
   source.value = ''
   if (!props.src || !visible.value || props.active === false) return
-  handle = acquireAsset(props.src)
+  startedAt = Date.now()
+  handle = acquireAsset(props.src, props.priority)
   try { const value = await handle.ready; if (run === sequence) source.value = value }
   catch { if (run === sequence) failed.value = true }
 }
 watch([() => props.src, () => props.active], load, { immediate: true })
+watch(() => props.priority, priority => handle?.prioritize?.(priority))
+function imageLoaded() {
+  if (props.priority >= 2) uni.$emit?.('lc-performance', { kind: 'reader_image', value: Date.now() - startedAt })
+}
 onMounted(() => {
   if (visible.value) return
   const reveal = () => { if (disposed || visible.value) return; visible.value = true; void load() }
@@ -52,7 +58,7 @@ function tap() {
 
 <template>
   <view class="private-image" :class="{ fit }" :role="preview || failed ? 'button' : 'img'" :tabindex="preview || failed ? 0 : -1" :aria-label="failed ? '重试加载预览图' : label || (preview ? '放大习题预览' : '习题封面')" @click="tap" @keydown.enter="tap">
-    <image v-if="source" :src="source" mode="aspectFit" class="image" @error="imageFailed" />
+    <image v-if="source" :src="source" mode="aspectFit" class="image" @error="imageFailed" @load="imageLoaded" />
     <view v-else class="placeholder"><text v-if="failed" class="retry-mark">↻</text><view v-else class="placeholder-paper" /></view>
     <view v-if="preview && source" class="zoom-badge" aria-hidden="true"><wd-icon name="fullscreen" size="17px" /></view>
   </view>

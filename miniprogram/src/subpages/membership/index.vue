@@ -117,14 +117,10 @@ function redeem() {
         <view class="benefit-grid"><view><wd-icon name="book" size="16px" /><text>专享资料</text></view><view><wd-icon name="image" size="16px" /><text>完整原稿</text></view><view><wd-icon name="file-pdf" size="16px" /><text>PDF 下载</text></view></view>
       </view>
     </view>
-    <AuthGate v-if="!session.user" @restored="page.refresh" />
+    <view v-if="!session.user" class="content-width guest-member-info"><text class="section-title">会员可以做什么</text><text>会员有效期内，可按资料标注查看 VIP 专享原稿，下载可用文件。</text><text>免费资料登录后即可按标注权限使用，是否含答案以每份资料的说明为准。</text><text>登录后可查看套餐、已有会员状态和卡密兑换入口。</text></view>
+    <AuthGate v-if="!session.user" title="登录查看会员服务" @restored="page.refresh" />
     <template v-else>
       <view class="content-width member-body">
-        <button v-if="!restricted" hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="contact-entry" role="button" aria-label="联系客服咨询会员" @click="contactOpen = true">
-          <view class="contact-icon"><wd-icon name="headset" size="24px" /></view>
-          <view class="grow"><text class="contact-title">联系客服</text><text class="contact-subtitle">开通咨询 · 卡密帮助 · 售后服务</text></view>
-          <view class="contact-cta"><text>咨询</text><wd-icon name="arrow-right" size="12px" /></view>
-        </button>
         <view v-if="error && action !== 'redeem'" class="error-strip" role="alert"><text class="grow">{{ error }}</text><wd-button role="button" aria-label="重新加载会员信息" variant="text" icon="refresh" type="danger" @click="page.refresh" /></view>
         <view v-if="loading" class="loading-line"><wd-loading /><text>正在加载会员信息</text></view>
 
@@ -136,7 +132,7 @@ function redeem() {
               <view v-if="selectedId === plan.id" class="plan-check"><wd-icon name="check" size="11px" /></view>
             </button>
           </view>
-          <view v-else-if="!loading" class="plans-empty"><text>暂时没有可选套餐</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" @click="contactOpen = true">咨询开通方式<wd-icon name="arrow-right" size="12px" /></button></view>
+          <view v-else-if="!loading" class="plans-empty"><text>暂时没有可选套餐，可通过下方「咨询开通」了解开通方式。</text></view>
           <text v-if="selectedPlan?.description" class="plan-description">{{ selectedPlan.description }}</text>
           <text v-if="plans.length" class="plan-tip">{{ canPurchase ? '有效期自动顺延，无自动续费。确认后在订单页付款。' : '套餐价格供参考，可联系客服了解开通方式。' }}</text>
         </view>
@@ -152,12 +148,12 @@ function redeem() {
 
         <view class="member-details">
           <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="details-toggle" role="button" :aria-expanded="detailsOpen" @click="detailsOpen = !detailsOpen"><text>会员权益与说明</text><wd-icon :name="detailsOpen ? 'arrow-up' : 'arrow-down'" size="15px" /></button>
-          <view v-if="detailsOpen" class="details-content"><text>会员有效期内，可查看 VIP 专享资料的完整原稿，并下载可用的 PDF 文件。</text><text>续期会从当前到期日顺延；会员已到期时，从开通成功时重新计算。</text><text v-if="contact?.benefits && !restricted">{{ contact.benefits }}</text><button v-if="!restricted" hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" @click="contactOpen = true">还有疑问？联系客服<wd-icon name="arrow-right" size="12px" /></button></view>
+          <view v-if="detailsOpen" class="details-content"><text>会员有效期内，可查看 VIP 专享资料的完整原稿，并下载可用文件。是否含答案以资料标注为准。</text><text>续期会从当前到期日顺延；会员已到期时，从开通成功时重新计算。</text><text v-if="contact?.benefits && !restricted">{{ contact.benefits }}</text></view>
         </view>
       </view>
 
       <view v-if="!restricted" class="member-footer">
-        <view class="footer-inner"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="footer-contact" role="button" aria-label="联系客服" @click="contactOpen = true"><wd-icon name="headset" size="22px" /><text>客服</text></button><view class="footer-main"><text v-if="selectedPlan && !lifetime" class="footer-summary">{{ selectedPlan.name }} · {{ selectedPlan.days }} 天 · {{ yuan(selectedPlan.price_fen) }}</text><wd-button role="button" block :loading="busy && action === 'purchase'" :disabled="busy || loading" @click="primary">{{ primaryLabel }}</wd-button></view></view>
+        <view class="footer-inner"><button v-if="canPurchase || lifetime" hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="footer-contact" role="button" aria-label="联系客服" @click="contactOpen = true"><wd-icon name="headset" size="22px" /><text>客服</text></button><view class="footer-main"><text v-if="selectedPlan && !lifetime" class="footer-summary">{{ selectedPlan.name }} · {{ selectedPlan.days }} 天 · {{ yuan(selectedPlan.price_fen) }}</text><wd-button role="button" block :loading="busy && action === 'purchase'" :disabled="busy || loading" @click="primary">{{ primaryLabel }}</wd-button></view></view>
       </view>
     </template>
 
@@ -179,6 +175,7 @@ function redeem() {
 </template>
 
 <style scoped>
+.guest-member-info { padding-top:20px; }.guest-member-info > text { display:block;margin-top:10px;font-size:14px;line-height:1.8;color:var(--lc-secondary); }.guest-member-info .section-title { color:var(--lc-text);font-size:17px; }
 .membership-page { width:100%;max-width:520px;min-height:100vh;margin:0 auto;padding-bottom:calc(122px + env(safe-area-inset-bottom));background:linear-gradient(180deg,#eaf3ed 0,#f7f9f8 330px); }
 .member-heading { display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:2px;padding-bottom:16px; }
 .member-heading > text { font-size:24px;font-weight:700;color:var(--lc-text);line-height:1.5; }
@@ -190,14 +187,10 @@ function redeem() {
 .benefit-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:20px;padding-top:15px;border-top:1px solid #ffffff26; }
 .benefit-grid > view { display:flex;align-items:center;justify-content:center;gap:5px;min-width:0;color:#eff3e9;font-size: 12px;white-space:nowrap; }.benefit-grid :deep(.wd-icon) { color:#ddca97; }
 .member-body { padding-top:16px; }
-.contact-entry { display:flex;align-items:center;gap:12px;width:100%;margin:0;padding:15px 14px;border:1px solid #dce9de;border-radius:16px;background:#fff;text-align:left;box-shadow:0 4px 12px #25433405; }
-.contact-icon { display:flex;align-items:center;justify-content:center;width:43px;height:43px;flex:none;border-radius:14px;color:var(--lc-primary);background:#eaf4ed; }
-.contact-title { display:block;color:var(--lc-text);font-size:16px;font-weight:650;line-height:1.4; }.contact-subtitle { display:block;margin-top:4px;font-size: 12px;line-height:1.5;color:var(--lc-secondary); }
-.contact-cta { display:flex;align-items:center;gap:3px;flex:none;padding:7px 10px;border-radius:999px;background:var(--lc-primary-soft);color:var(--lc-primary);font-size:12px;line-height:1.5; }
-.plans-section { margin-top:25px; }.section-heading { margin:0 0 12px; }.section-title { display:block;margin:0;color:var(--lc-text);font-size:16px;font-weight:650;line-height:1.5; }.section-note { color:var(--lc-muted);font-size: 12px; }
+.plans-section { margin-top:8px; }.section-heading { margin:0 0 12px; }.section-title { display:block;margin:0;color:var(--lc-text);font-size:16px;font-weight:650;line-height:1.5; }.section-note { color:var(--lc-muted);font-size: 12px; }
 .plan-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px; }.plan-grid.two { grid-template-columns:repeat(2,minmax(0,1fr)); }.plan-grid.single { grid-template-columns:1fr; }
 .plan-card { position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:0;width:100%;margin:0;padding:17px 6px 16px;border:1.5px solid #e3e8e3;border-radius:14px;background:#fff;text-align:center;line-height:1.5;transition:border-color .15s,background-color .15s; }
-.plan-card.selected { border-color:var(--lc-primary);background:#edf6ef; }.plan-card:active,.contact-entry:active { opacity:.85; }.plan-card[disabled] { opacity:.7; }
+.plan-card.selected { border-color:var(--lc-primary);background:#edf6ef; }.plan-card:active { opacity:.85; }.plan-card[disabled] { opacity:.7; }
 .plan-name { display:block;color:var(--lc-text);font-size:12px;font-weight:600;overflow-wrap:anywhere; }.plan-price { display:block;margin-top:8px;color:#2b694c;font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.4;white-space:nowrap; }.plan-duration { display:block;margin-top:5px;color:var(--lc-secondary);font-size: 12px; }
 .plan-check { position:absolute;top:-1px;right:-1px;display:flex;align-items:center;justify-content:center;width:21px;height:19px;border-radius:0 13px 0 10px;background:var(--lc-primary);color:#fff; }
 .single .plan-card { display:grid;grid-template-columns:1fr auto;justify-items:start;padding:15px 20px;text-align:left; }.single .plan-price { grid-column:2;grid-row:1/3;margin:0 8px 0 10px; }.single .plan-duration { grid-column:1; }
@@ -212,5 +205,5 @@ function redeem() {
 .contact-sheet { max-height:88vh;overflow-y:auto; }.contact-sheet-intro { display:block;margin-top:5px;color:var(--lc-muted);font-size:12px; }.contact-hours { display:block;margin-bottom:14px;color:var(--lc-secondary);font-size:12px; }.contact-empty { display:block;padding:12px 0 18px;font-size:13px;line-height:1.8;color:var(--lc-secondary); }
 .contact-row { display:flex;align-items:center;gap:11px;padding:14px 0;border-bottom:1px solid var(--lc-border); }.contact-row-icon { display:flex;align-items:center;justify-content:center;width:37px;height:37px;flex:none;border-radius:12px;background:var(--lc-primary-soft);color:var(--lc-primary); }.contact-label { display:block;color:var(--lc-text);font-size:13px;font-weight:600; }.contact-value { display:block;margin-top:3px;font-size:12px;line-height:1.5;color:var(--lc-secondary);overflow-wrap:anywhere; }.contact-row button { flex:none;min-width:54px;min-height:38px;margin:0;padding:6px 10px;border-radius:999px;background:var(--lc-primary-soft);color:var(--lc-primary);font-size:12px;line-height:1.5; }
 .contact-qr-block { display:flex;flex-direction:column;align-items:center;gap:10px;padding:20px 0 6px;color:var(--lc-muted);font-size: 12px; }.contact-qr { width:144px;height:144px;border:1px solid var(--lc-card-line);border-radius:12px;background:#fff; }.contact-message { margin-top:22px; }.contact-message > text { display:block;margin-top:10px;text-align:center;font-size: 12px;color:var(--lc-muted); }
-@media (max-width:359px) { .content-width { padding-right:16px;padding-left:16px; }.member-card { padding:18px 16px; }.member-title { font-size:20px; }.contact-entry { gap:9px;padding:13px 11px; }.contact-icon { width:36px;height:36px; }.contact-subtitle { font-size: 12px; }.contact-cta { padding:6px 8px; }.plan-grid { gap:6px; }.plan-price { font-size:21px; }.section-note { font-size: 12px; }.redeem-panel { padding:14px; } }
+@media (max-width:359px) { .content-width { padding-right:16px;padding-left:16px; }.member-card { padding:18px 16px; }.member-title { font-size:20px; }.plan-grid { gap:6px; }.plan-price { font-size:21px; }.section-note { font-size: 12px; }.redeem-panel { padding:14px; } }
 </style>

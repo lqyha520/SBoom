@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
+SUITES = ("http", "home", "profile", "discovery", "performance")
 
 
 def run_fixture(suite="http"):
@@ -19,11 +20,12 @@ def run_fixture(suite="http"):
         socket_.bind(("127.0.0.1", 0))
         port = socket_.getsockname()[1]
     base = f"http://127.0.0.1:{port}"
-    env = {**os.environ, "LC_TEST_BASE": base, "PYTHONIOENCODING": "utf-8", "HOME_UI_BASE": base, "PROFILE_UI_BASE": base, "NODE_PATH": str(ROOT / "web" / "node_modules")}
+    env = {**os.environ, "LC_TEST_BASE": base, "PYTHONIOENCODING": "utf-8", "HOME_UI_BASE": base, "PROFILE_UI_BASE": base,
+           "MINI_UI_BASE": base, "DISCOVERY_UI_BASE": base, "NODE_PATH": str(ROOT / "web" / "node_modules")}
     if suite != "http":
         env.update(LC_WEB_DIST=str(ROOT / "miniprogram" / "dist" / "build" / "h5"), LC_SEED_MINI_FIXTURE="1")
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as log:
-        fixture = "tests/profile_ui_fixture.py" if suite == "profile" else "tests/ui_fixture.py"
+        fixture = "tests/profile_ui_fixture.py" if suite in ("profile", "discovery") else "tests/ui_fixture.py"
         process = subprocess.Popen([sys.executable, fixture, "--port", str(port)],
                                    cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
         try:
@@ -40,7 +42,8 @@ def run_fixture(suite="http"):
             else:
                 raise TimeoutError("Disposable service did not become healthy")
             if suite != "http":
-                script = "tests/profile-membership-ui.cjs" if suite == "profile" else "tests/home-banner-ui.cjs"
+                script = {"profile": "tests/profile-membership-ui.cjs", "home": "tests/home-banner-ui.cjs",
+                          "discovery": "tests/mini-discovery-ui.cjs", "performance": "tests/mini-performance-ui.mjs"}[suite]
                 subprocess.run(["node", script], cwd=ROOT, env=env, check=True)
                 if suite == "profile":
                     subprocess.run(["node", "tests/mini-optimization-ui.mjs"], cwd=ROOT,
@@ -63,8 +66,8 @@ def run_fixture(suite="http"):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--suite", choices=("http", "home", "profile", "all"), default="http")
+    parser.add_argument("--suite", choices=(*SUITES, "all"), default="http")
     parser.add_argument("--browser", action="store_true", help="Run all suites (legacy alias)")
     args = parser.parse_args()
-    for suite in ("http", "home", "profile") if args.browser or args.suite == "all" else (args.suite,):
+    for suite in SUITES if args.browser or args.suite == "all" else (args.suite,):
         run_fixture(suite)
