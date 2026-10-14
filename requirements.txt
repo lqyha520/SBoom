@@ -8,7 +8,7 @@ pydantic==2.13.5
 pydantic-settings==2.15.0
 python-dotenv==1.2.4
 cryptography>=50.0.2
-psycopg[binary,pool]>=3.2  # PostgreSQL（DATABASE_URL 启用时使用；pool 提供连接池）
+psycopg[binary,pool]>=3.3.6  # PostgreSQL（DATABASE_URL 启用时使用；pool 提供连接池）
 Pillow>=12.3.0,<13  # Validate and normalize private paper preview images.
 pypdfium2>=4.30,<5  # 手动导入习题：服务端把 PDF 渲染成预览页图
 python-json-logger>=4.2.0  # 结构化 JSON 日志
