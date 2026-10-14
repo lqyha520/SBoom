@@ -23,6 +23,27 @@ class OptimizationContracts(unittest.TestCase):
     update = fixtures.PublicCatalogContracts.update
     publish = fixtures.PublicCatalogContracts.publish
 
+    def test_cached_limited_preview_still_checks_permissions_and_withdrawal(self):
+        from app import library_files
+
+        paper = self.publish()
+        paper = self.update(paper, view_access="free", download_access="vip").json()
+        self.sign_in(self.viewer)
+        detail = self.client.get(f"/api/v1/catalog/papers/{paper['id']}").json()
+        url = next(asset["url"] for asset in detail["assets"] if asset["kind"] == "page")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        with patch.object(library_files.Image, "open", side_effect=AssertionError("重复图片处理")):
+            self.assertEqual(self.client.get(url).content, response.content)
+            self.sign_in(self.admin)
+            paper = self.update(paper, view_access="vip").json()
+            self.sign_in(self.viewer)
+            self.assertEqual(self.client.get(url).status_code, 403)
+            self.sign_in(self.admin)
+            self.update(paper, status="withdrawn")
+            self.sign_in(self.viewer)
+            self.assertEqual(self.client.get(url).status_code, 404)
+
     def test_each_page_has_small_private_thumbnail_and_legacy_pages_are_backfilled(self):
         source = self.source(ready=False)
         image = io.BytesIO()

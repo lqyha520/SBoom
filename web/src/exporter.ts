@@ -4,13 +4,14 @@
  *
  * 性能：html2canvas / jspdf / jszip / PaperView 组件树均为动态 import——
  * 只有点导出时才加载（合计数百 KB），首屏 bundle 不再背上导出库。
- * 内存：批量导出逐份把画布立即转 JPEG dataURL 并释放，避免 20 份学生卷
+ * 内存：批量导出逐页把画布转 JPEG 字节并释放，避免 20 份学生卷
  * 的 RGBA 画布同时驻留（scale:3 单页约 32MB，累积可达 GB 级）。
  */
 import { createApp, h } from 'vue'
 import type { PaperData, PaperStyle, PaperTemplate } from './types'
 import type { ArchiveSnapshot } from './library'
 import { answerOf, escHtml } from './utils'
+import { measureExport } from './export-performance'
 
 /* ── html2canvas 字体基线探针的环境修正 ──
  *
@@ -69,14 +70,19 @@ async function renderPages(paper: PaperData, template: PaperTemplate, style: Pap
   const assertActive = () => checkExportActive(control.signal, control.isActive)
   try {
     assertActive()
-    if (mode !== 'answersOnly') prepared.push(await preparePaper(paper, template, style, addDay, assertActive))
-    if (mode !== 'student') prepared.push(await preparePaper(buildAnswerPaper(paper), template, style, false, assertActive))
+    if (mode !== 'answersOnly') prepared.push(await measureExport('layout', () => preparePaper(paper, template, style, addDay, assertActive)))
+    if (mode !== 'student') prepared.push(await measureExport('layout', () => preparePaper(buildAnswerPaper(paper), template, style, false, assertActive)))
     const pages = prepared.flatMap(value => value.pages)
     validateExportPageCount(pages.length)
     const { default: html2canvas } = await import('html2canvas')
     for (const [index, page] of pages.entries()) {
       assertActive()
-      const canvas = await withProbeFix(() => html2canvas(page, { scale: exportScale(), backgroundColor: '#ffffff' }))
+      const canvas = await measureExport('rasterize', () => withProbeFix(() => html2canvas(page, {
+        scale: exportScale(), backgroundColor: '#ffffff',
+        // html2canvas 默认克隆整份文档；只保留当前页及其祖先，避免重复克隆其他试卷和编辑界面。
+        ignoreElements: element => !element.contains(page) && (element.id === 'app'
+          || element.classList.contains('paper') || element.hasAttribute('data-export-holder')),
+      })))
       try { assertActive(); await consume(canvas, index, pages.length) }
       finally { canvas.width = canvas.height = 0 }
     }
@@ -127,6 +133,7 @@ export function buildAnswerPaper(paper: PaperData): PaperData {
 function makeHolder(): HTMLElement {
   const holder = document.createElement('div')
   holder.setAttribute('aria-hidden', 'true')
+  holder.setAttribute('data-export-holder', '')
   holder.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;overflow:hidden;'
   const inner = document.createElement('div')
   inner.style.cssText = 'position:absolute;left:0;top:0;background:#fff;'
@@ -180,7 +187,7 @@ export async function createArchiveBundle(snapshot: ArchiveSnapshot, progress?: 
     ctx.textAlign = 'center'
     ctx.fillText(`- ${index + 1} / ${total} -`, page.width / 2, 292.5 * pixelsPerMm)
     if (index) doc.addPage()
-    doc.addImage(page.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, 297)
+    doc.addImage(await jpegBytes(page), 'JPEG', 0, 0, 210, 297)
     const preview = document.createElement('canvas')
     preview.width = Math.min(1040, page.width)
     preview.height = Math.round(preview.width * 297 / 210)
@@ -189,8 +196,8 @@ export async function createArchiveBundle(snapshot: ArchiveSnapshot, progress?: 
       zip.file(`page-${index + 1}.jpg`, await canvasBlob(preview, 'image/jpeg', 0.85))
     } finally { preview.width = preview.height = 0 }
   }, control)
-  zip.file('paper.pdf', doc.output('arraybuffer'))
-  const bundle = await zip.generateAsync({ type: 'blob', compression: 'STORE' }, () => checkExportActive(control.signal, control.isActive))
+  zip.file('paper.pdf', await measureExport('assemble', async () => doc.output('arraybuffer')))
+  const bundle = await measureExport('assemble', () => zip.generateAsync({ type: 'blob', compression: 'STORE' }, () => checkExportActive(control.signal, control.isActive)))
   checkExportActive(control.signal, control.isActive)
   if (bundle.size > 40 * 1024 * 1024) throw new Error('文件包超过 40 MB，请减少页数后重试')
   return bundle
@@ -198,12 +205,16 @@ export async function createArchiveBundle(snapshot: ArchiveSnapshot, progress?: 
 function canvasBlob(canvas: HTMLCanvasElement, type = 'image/png', quality?: number): Promise<Blob> {
   return new Promise((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('图片生成失败')), type, quality))
 }
+/** JPEG 字节直接交给 jsPDF，避免同步 Base64 编码及随后解码的额外副本。 */
+function jpegBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
+  return measureExport('encode', async () => new Uint8Array(await (await canvasBlob(canvas, 'image/jpeg', 0.92)).arrayBuffer()))
+}
 async function paperPDF(paper: PaperData, template: PaperTemplate, style: PaperStyle,
   mode: 'student' | 'withAnswers' | 'answersOnly', addDay: boolean, signal?: AbortSignal, progress?: (message: string) => void) {
   const doc = await newPDF()
-  await renderPages(paper, template, style, mode, addDay, (page, index, total) => {
+  await renderPages(paper, template, style, mode, addDay, async (page, index, total) => {
     if (index) doc.addPage()
-    doc.addImage(page.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, 297)
+    doc.addImage(await jpegBytes(page), 'JPEG', 0, 0, 210, 297)
     progress?.(`正在导出第 ${index + 1}/${total} 页`)
   }, { signal })
   stampPages(doc)
@@ -214,7 +225,7 @@ export async function exportPDF(paper: PaperData, template: PaperTemplate, style
   const doc = await paperPDF(paper, template, style, mode, true, signal, progress)
   checkExportActive(signal)
   const suffix = mode === 'answersOnly' ? '（答案）' : mode === 'withAnswers' ? '（含答案）' : ''
-  doc.save(`${baseTitle(paper, template)}${suffix}.pdf`)
+  await measureExport('assemble', async () => { doc.save(`${baseTitle(paper, template)}${suffix}.pdf`) })
 }
 export async function exportPNG(paper: PaperData, template: PaperTemplate, style: PaperStyle, signal?: AbortSignal): Promise<void> {
   const { default: JSZip } = await import('jszip')
@@ -242,8 +253,8 @@ export async function exportBatch(papers: PaperData[], template: PaperTemplate, 
     checkExportActive(opts.signal)
     onProgress?.(`正在处理第 ${index + 1}/${papers.length} 份…`)
     const student = zip ? await newPDF() : null
-    await renderPages(paper, template, style, 'student', opts.addDay, (page, pageIndex, total) => {
-      const image = page.toDataURL('image/jpeg', 0.92)
+    await renderPages(paper, template, style, 'student', opts.addDay, async (page, pageIndex, total) => {
+      const image = await jpegBytes(page)
       if (mergedCount++) merged.addPage()
       merged.addImage(image, 'JPEG', 0, 0, 210, 297)
       if (student) {
@@ -255,17 +266,18 @@ export async function exportBatch(papers: PaperData[], template: PaperTemplate, 
     if (zip && student) {
       const suffix = opts.addDay ? `-第${index + 1}天` : `-第${index + 1}份`
       stampPages(student)
-      zip.file(`${title}${suffix}-学生卷.pdf`, student.output('arraybuffer'))
+      zip.file(`${title}${suffix}-学生卷.pdf`, await measureExport('assemble', async () => student.output('arraybuffer')))
       onProgress?.(`正在生成第 ${index + 1} 份答案…`)
-      zip.file(`${title}${suffix}-答案.pdf`, (await paperPDF(paper, template, style, 'answersOnly', false, opts.signal)).output('arraybuffer'))
+      const answers = await paperPDF(paper, template, style, 'answersOnly', false, opts.signal)
+      zip.file(`${title}${suffix}-答案.pdf`, await measureExport('assemble', async () => answers.output('arraybuffer')))
     }
   }
   stampPages(merged)
   checkExportActive(opts.signal)
-  if (!zip) { merged.save(`${title}-全部${papers.length}份合并.pdf`); return }
-  zip.file(`${title}-全部${papers.length}份合并.pdf`, merged.output('arraybuffer'))
+  if (!zip) { await measureExport('assemble', async () => { merged.save(`${title}-全部${papers.length}份合并.pdf`) }); return }
+  zip.file(`${title}-全部${papers.length}份合并.pdf`, await measureExport('assemble', async () => merged.output('arraybuffer')))
   onProgress?.('正在打包…')
-  const blob = await zip.generateAsync({ type: 'blob' }, () => checkExportActive(opts.signal))
+  const blob = await measureExport('assemble', () => zip.generateAsync({ type: 'blob' }, () => checkExportActive(opts.signal)))
   checkExportActive(opts.signal)
   download(blob, `${title}-${papers.length}份.zip`)
 }

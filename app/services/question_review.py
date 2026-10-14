@@ -5,6 +5,7 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from app.db import db
+from app.metrics import generation_stage
 from app.models import GameResult
 from app.services.prompt_builder import teaching_requirements
 from app.services.question_qc import exact_question_key
@@ -50,6 +51,7 @@ def previous_question_keys(user_id: int, request) -> set[str]:
     return seen
 
 
+@generation_stage("review")
 async def review_results(sections: list[GameResult], request, call_model: Callable[..., Awaitable[dict]]) -> None:
     """复核最终候选（包括程序补题），不接受模型改写题目或自报已通过。"""
     indexed = {f"q{index}": (section, question) for index, (section, question) in enumerate(

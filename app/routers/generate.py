@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from app.blocking import run_sync
 from app.config import get_settings
 from app.deps import require_user
+from app.metrics import generation_stage
 from app.models import (
     BatchGenerateRequest,
     BatchGenerateResponse,
@@ -256,7 +257,8 @@ async def generate_batch(request: BatchGenerateRequest, http_request: Request, u
     # 4. 调用 LLM（一次，配置：后台全局 > .env）
     truncated = None
     try:
-        raw = await _call_llm_and_parse(system_prompt, user_message, sum(item.question_count for item in resolved_items))
+        async with generation_stage("generate"):
+            raw = await _call_llm_and_parse(system_prompt, user_message, sum(item.question_count for item in resolved_items))
     except OutputTruncated as error:
         truncated = error
         raw = {"sections": completed_sections(error.partial_text)}
@@ -332,7 +334,8 @@ async def generate_questions(request: GenerateRequest, http_request: Request, us
 
     # 3. 调用 LLM（配置：后台全局 > .env）
     item = BatchItem(game_type=request.game_type.value, question_count=request.question_count)
-    raw_result = await _call_llm_and_parse(system_prompt, user_message, request.question_count)
+    async with generation_stage("generate"):
+        raw_result = await _call_llm_and_parse(system_prompt, user_message, request.question_count)
 
     result = await normalize_result(
         raw_result, request,

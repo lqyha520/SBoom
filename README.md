@@ -96,6 +96,10 @@ python -m mypy app run.py scripts
 
 热门排序使用事务内维护的收藏与下载用户汇总，重复下载不重复计数。升级到数据库版本`2026100501`前执行`python -m app.migrations`，迁移会回填既有记录；迁移完成后再启动新版应用。
 
+受限资料预览在实时授权后复用派生 JPEG，每个服务进程缓存最多 128 张、8 MiB、有效期 5 分钟；文件版本、修改时间或大小改变会重新生成，文件删除立即失效。缓存仅在内存中，服务重启后重新生成，响应仍为 `private, no-store`。公共元数据按键合并并发加载，不同内容互不等待；写入提交清空缓存后，尚未完成的旧加载不能重新填充。
+
+PDF 导出逐页克隆所需卷面并编码 JPEG 字节，保持原有分辨率和画质，释放画布后再处理下一页。浏览器 Performance 中的 `lc.export.layout/rasterize/encode/assemble` 分别记录分页、截图、JPEG 编码及文件合成，每阶段最多保留 60 条，达到上限后清空该阶段旧记录；不记录试卷内容、不自动上传。`generation_stage_duration_seconds` 按 `generate`、`validate_refill`、`review` 统计非流式出题、单个大题校验补题及整批复核耗时，失败/取消也计入；流式仅记录结束后的校验阶段。上述计时不替代真机或真实模型质量评测。
+
 ## 部署与维护
 
 [部署与备份恢复](docs/deploy.md)说明现有环境核对、镜像发布、异地加密备份、回滚和小程序上线验收。[运维变更手册](docs/operations.md)说明密钥轮换、数据库扩展/收缩迁移、PostgreSQL升级与敏感产物迁移。[监控说明](deploy/monitoring/README.md)提供readyz、磁盘、TLS、备份时效和维护失败检查。
