@@ -40,9 +40,11 @@ def rotate(*, apply: bool = False) -> dict[str, int | bool]:
     with db(serialized="accounts") as conn:
         for row in conn.execute("SELECT key, value FROM app_config WHERE key IN ('llm', 'image_generation') FOR UPDATE").fetchall():
             value = json.loads(row["value"])
-            old = value.get("apiKeyEnc", "")
-            value["apiKeyEnc"] = reencrypt(old)
-            if apply and old != value["apiKeyEnc"]:
+            before = changed
+            for profile in [value, *value.get("models", [])]:
+                if "apiKeyEnc" in profile:
+                    profile["apiKeyEnc"] = reencrypt(profile["apiKeyEnc"])
+            if apply and before != changed:
                 conn.execute("UPDATE app_config SET value = ? WHERE key = ?", (json.dumps(value, ensure_ascii=False), row["key"]))
         # 固定字段白名单，标识符不能由命令行输入。
         for table, key, column in (("mini_users", "id", "wechat_openid_enc"), ("mini_orders", "id", "payer_enc"),

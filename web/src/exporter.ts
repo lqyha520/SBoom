@@ -12,6 +12,7 @@ import type { PaperData, PaperStyle, PaperTemplate } from './types'
 import type { ArchiveSnapshot } from './library'
 import { answerOf, escHtml } from './utils'
 import { measureExport } from './export-performance'
+import { ExportBudget, EXPORT_LIMITS } from './export-budget'
 
 /* ── html2canvas 字体基线探针的环境修正 ──
  *
@@ -61,7 +62,7 @@ export function exportScale(): number {
   const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory
   return !memory || memory <= 4 ? 2 : 3
 }
-type ExportControl = { signal?: AbortSignal; isActive?: () => boolean }
+type ExportControl = { signal?: AbortSignal; isActive?: () => boolean; budget?: ExportBudget }
 type PageConsumer = (page: HTMLCanvasElement, index: number, total: number) => Promise<void> | void
 /** 每页截图、消费、释放后才处理下一页；页数在创建第一张画布前校验。 */
 async function renderPages(paper: PaperData, template: PaperTemplate, style: PaperStyle,
@@ -74,6 +75,7 @@ async function renderPages(paper: PaperData, template: PaperTemplate, style: Pap
     if (mode !== 'student') prepared.push(await measureExport('layout', () => preparePaper(buildAnswerPaper(paper), template, style, false, assertActive)))
     const pages = prepared.flatMap(value => value.pages)
     validateExportPageCount(pages.length)
+    control.budget?.reservePages(pages.length)
     const { default: html2canvas } = await import('html2canvas')
     for (const [index, page] of pages.entries()) {
       assertActive()
@@ -210,13 +212,15 @@ function jpegBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
   return measureExport('encode', async () => new Uint8Array(await (await canvasBlob(canvas, 'image/jpeg', 0.92)).arrayBuffer()))
 }
 async function paperPDF(paper: PaperData, template: PaperTemplate, style: PaperStyle,
-  mode: 'student' | 'withAnswers' | 'answersOnly', addDay: boolean, signal?: AbortSignal, progress?: (message: string) => void) {
+  mode: 'student' | 'withAnswers' | 'answersOnly', addDay: boolean, signal?: AbortSignal, progress?: (message: string) => void, budget?: ExportBudget) {
   const doc = await newPDF()
   await renderPages(paper, template, style, mode, addDay, async (page, index, total) => {
     if (index) doc.addPage()
-    doc.addImage(await jpegBytes(page), 'JPEG', 0, 0, 210, 297)
+    const bytes = await jpegBytes(page)
+    budget?.retain(bytes.byteLength)
+    doc.addImage(bytes, 'JPEG', 0, 0, 210, 297)
     progress?.(`正在导出第 ${index + 1}/${total} 页`)
-  }, { signal })
+  }, { signal, budget })
   stampPages(doc)
   return doc
 }
@@ -245,6 +249,9 @@ export async function exportPNG(paper: PaperData, template: PaperTemplate, style
 export async function exportBatch(papers: PaperData[], template: PaperTemplate, style: PaperStyle,
   opts: { addDay: boolean; mergeOnly?: boolean; signal?: AbortSignal }, onProgress?: (msg: string) => void): Promise<void> {
   if (!papers.length) throw new Error('试卷没有可导出的页面')
+  const budget = new ExportBudget()
+  // 每份至少一页（ZIP 还包含答案）；准备 DOM 前拒绝明显超限的输入。
+  if (papers.length * (opts.mergeOnly ? 1 : 2) > EXPORT_LIMITS.pages) throw new Error('导出超过容量上限，请减少每批试卷数量，或逐份下载')
   const zip = opts.mergeOnly ? null : new (await import('jszip')).default()
   const merged = await newPDF()
   let mergedCount = 0
@@ -255,6 +262,8 @@ export async function exportBatch(papers: PaperData[], template: PaperTemplate, 
     const student = zip ? await newPDF() : null
     await renderPages(paper, template, style, 'student', opts.addDay, async (page, pageIndex, total) => {
       const image = await jpegBytes(page)
+      // jsPDF 为每个文档保留独立的图像表示，保守计入所有副本。
+      budget.retain(image.byteLength * (student ? 2 : 1))
       if (mergedCount++) merged.addPage()
       merged.addImage(image, 'JPEG', 0, 0, 210, 297)
       if (student) {
@@ -262,22 +271,34 @@ export async function exportBatch(papers: PaperData[], template: PaperTemplate, 
         student.addImage(image, 'JPEG', 0, 0, 210, 297)
       }
       onProgress?.(`正在处理第 ${index + 1}/${papers.length} 份 · 第 ${pageIndex + 1}/${total} 页`)
-    }, { signal: opts.signal })
+    }, { signal: opts.signal, budget })
     if (zip && student) {
       const suffix = opts.addDay ? `-第${index + 1}天` : `-第${index + 1}份`
       stampPages(student)
-      zip.file(`${title}${suffix}-学生卷.pdf`, await measureExport('assemble', async () => student.output('arraybuffer')))
+      const studentBytes = await measureExport('assemble', async () => student.output('arraybuffer'))
+      budget.retain(studentBytes.byteLength)
+      zip.file(`${title}${suffix}-学生卷.pdf`, studentBytes)
       onProgress?.(`正在生成第 ${index + 1} 份答案…`)
-      const answers = await paperPDF(paper, template, style, 'answersOnly', false, opts.signal)
-      zip.file(`${title}${suffix}-答案.pdf`, await measureExport('assemble', async () => answers.output('arraybuffer')))
+      const answers = await paperPDF(paper, template, style, 'answersOnly', false, opts.signal, undefined, budget)
+      const answerBytes = await measureExport('assemble', async () => answers.output('arraybuffer'))
+      budget.retain(answerBytes.byteLength)
+      zip.file(`${title}${suffix}-答案.pdf`, answerBytes)
     }
   }
   stampPages(merged)
   checkExportActive(opts.signal)
-  if (!zip) { await measureExport('assemble', async () => { merged.save(`${title}-全部${papers.length}份合并.pdf`) }); return }
-  zip.file(`${title}-全部${papers.length}份合并.pdf`, await measureExport('assemble', async () => merged.output('arraybuffer')))
+  const mergedBytes = await measureExport('assemble', async () => merged.output('arraybuffer'))
+  budget.retain(mergedBytes.byteLength)
+  if (!zip) {
+    budget.checkFile(mergedBytes.byteLength)
+    checkExportActive(opts.signal)
+    download(new Blob([mergedBytes], { type: 'application/pdf' }), `${title}-全部${papers.length}份合并.pdf`)
+    return
+  }
+  zip.file(`${title}-全部${papers.length}份合并.pdf`, mergedBytes)
   onProgress?.('正在打包…')
   const blob = await measureExport('assemble', () => zip.generateAsync({ type: 'blob' }, () => checkExportActive(opts.signal)))
+  budget.checkFile(blob.size)
   checkExportActive(opts.signal)
   download(blob, `${title}-${papers.length}份.zip`)
 }

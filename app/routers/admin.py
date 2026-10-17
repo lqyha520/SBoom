@@ -5,27 +5,32 @@
 - 被禁用用户的现有会话立即失效（require_user 每次校验 is_active）
 """
 
+import asyncio
 import ipaddress
 import logging
 import socket
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from psycopg.errors import UniqueViolation
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.blocking import run_sync
 from app.config import APP_VERSION, get_settings
 from app.deps import require_admin, require_recent_admin
 from app.http_limits import limited_lines
+from app.models.model_profiles import TextModelProfiles
 from app.security import encryption_backend, security_warnings
+from app.sensitive_config import SensitiveConfigRoute
 from app.services import app_config, user_store
 from app.services.generation_control import usage_summary
+from app.services.llm_client import parse_stream_chunk
+from app.services.model_profiles import entries
 from app.services.user_store import CurrentUser
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/v1/admin", tags=["后台管理"])
+router = APIRouter(prefix="/api/v1/admin", tags=["后台管理"], route_class=SensitiveConfigRoute)
 
 settings = get_settings()
 # app/routers/admin.py → 上三级 = 项目根目录
@@ -45,13 +50,13 @@ def stats(admin: CurrentUser = Depends(require_admin)):
         fb_oob = conn.execute("SELECT COUNT(*) c FROM feedbacks WHERE is_oob = 1").fetchone()["c"]
     return {
         **s,
-        "llmConfigured": g["hasKey"] or bool(settings.llm_api_key),
+        "llmConfigured": g["hasKey"] or ("models" not in g and bool(settings.llm_api_key)),
         "feedbacks": fb_total,
         "feedbacksOob": fb_oob,
         "generationUsage": usage_summary(),
         "securityWarnings": security_warnings(),
         "server": {
-            "model": g["model"] or settings.llm_model or "（未配置）",
+            "model": g["model"] or (settings.llm_model if "models" not in g else "") or "（未配置）",
             "encryption": encryption_backend(),
             "version": APP_VERSION,
         },
@@ -203,28 +208,28 @@ def tail_logs(lines: int = 200, admin: CurrentUser = Depends(require_admin)):
 # ─── 全局模型配置（所有用户共用的 LLM 服务） ───
 
 class AdminLlmConfigIn(BaseModel):
-    baseUrl: str = ""
-    model: str = ""
-    apiKey: str = ""   # 空串 = 保留已保存的密钥不变
-    timeout: int = 60
+    model_config = ConfigDict(extra="forbid")
+    id: str | None = Field(None, max_length=64)
+    baseUrl: str = Field("", max_length=500)
+    model: str = Field("", max_length=120)
+    apiKey: str = Field("", max_length=4000, repr=False)   # 空串 = 保留已保存的密钥不变
+    timeout: int = Field(60, ge=10, le=600)
     maxTokens: int = Field(default=16384, ge=1024, le=131072)
 
 
 @router.get("/llm-config", summary="获取全局模型配置（不含密钥明文）")
 def get_llm_config(admin: CurrentUser = Depends(require_admin)):
-    g = app_config.get_llm()
-    return {
-        "baseUrl": g["baseUrl"],
-        "model": g["model"],
-        "timeout": g["timeout"],
-        "maxTokens": g["maxTokens"],
-        "hasKey": g["hasKey"],
-    }
+    return app_config.get_admin_config()
 
 
 @router.put("/llm-config", summary="保存全局模型配置（密钥服务端加密存储，全体用户生效）")
-def save_llm_config(req: AdminLlmConfigIn, admin: CurrentUser = Depends(require_recent_admin)):
+def save_llm_config(req: TextModelProfiles | AdminLlmConfigIn, admin: CurrentUser = Depends(require_recent_admin)):
     from app.provider_policy import validate_endpoint
+    if isinstance(req, TextModelProfiles):
+        for profile in req.models:
+            validate_endpoint(profile.baseUrl, resolve=profile.enabled)
+        saved = app_config.save_llm_models(req.models, expected_revision=req.revision, require_revision=True)
+        return {**saved, "status": "ok", "message": "模型配置已保存，全体用户生效"}
     validate_endpoint(req.baseUrl)
     app_config.save_llm(
         base_url=req.baseUrl.rstrip("/"),
@@ -239,11 +244,11 @@ def save_llm_config(req: AdminLlmConfigIn, admin: CurrentUser = Depends(require_
 
 
 @router.delete("/llm-config", summary="清除全局模型配置（含已存密钥）")
-def clear_llm_config(admin: CurrentUser = Depends(require_recent_admin)):
-    """整行删除全局 LLM 配置。用于部署纠错/安全清理（如密钥泄露后重置）。"""
-    app_config.clear_llm()
+def clear_llm_config(admin: CurrentUser = Depends(require_recent_admin), if_match: str | None = Header(None)):
+    """删除全部候选与密钥，保留空列表以阻止环境配置重新启用服务。"""
+    saved = app_config.save_llm_models([], expected_revision=if_match, require_revision=True)
     logger.info(f"管理员 {admin.username} 清除了全局模型配置")
-    return {"status": "ok", "message": "模型配置已清除"}
+    return {**saved, "status": "ok", "message": "模型配置已清除"}
 
 
 def _resolve_public_ip(hostname: str, port: int) -> str:
@@ -290,17 +295,27 @@ async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Dep
     """
     import httpx as _httpx
 
-    g = await run_sync(app_config.get_llm, with_key=True)
-    saved_base = (g["baseUrl"] or settings.llm_base_url).rstrip("/")
+    g = await run_sync(app_config.get_admin_config, with_key=True)
+    managed = g.get("managed", "models" in g) or bool(req and req.id)
+    if req and req.id:
+        g = next((profile for profile in entries(g) if profile["id"] == req.id), {})
+        if not g and not req.apiKey:
+            raise HTTPException(400, detail={"error": "此模型尚未保存密钥，请填写密钥后测试"})
+    elif "models" in g:
+        g = next((profile for profile in g["models"] if profile["enabled"]), {})
+    saved_base = (g.get("baseUrl") or ("" if managed else settings.llm_base_url)).rstrip("/")
     requested = req.baseUrl.strip().rstrip("/") if req and req.baseUrl else ""
     base_url = requested or saved_base
-    model = (req.model if req and req.model else g["model"]) or settings.llm_model
-    api_key = (req.apiKey if req and req.apiKey else g["api_key"]) or settings.llm_api_key
-    timeout = (req.timeout if req and req.timeout else g["timeout"]) or 60
+    model = (req.model if req and req.model else g.get("model")) or ("" if managed else settings.llm_model)
+    api_key = (req.apiKey if req and req.apiKey else g.get("api_key")) or ("" if managed else settings.llm_api_key)
+    timeout = (req.timeout if req and req.timeout else g.get("timeout")) or 60
+    if not api_key:
+        raise HTTPException(400, detail={"error": "请先配置此模型的 API 密钥"})
     request_headers: dict[str, str] = {}
     extensions: dict = {}
     from app.provider_policy import require_new_key, validate_endpoint
-    require_new_key(saved_base, base_url, req.apiKey if req else "")
+    if saved_base:
+        require_new_key(saved_base, base_url, req.apiKey if req else "")
     if not settings.provider_allow_private:
         try:
             base_url, host_header = await run_sync(_pin_public_url, base_url)
@@ -311,11 +326,11 @@ async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Dep
     else:
         validate_endpoint(base_url, resolve=False)
     try:
-        async with _httpx.AsyncClient(
+        async with asyncio.timeout(float(timeout)), _httpx.AsyncClient(
             base_url=base_url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             # 整体耐心按配置放宽，但握手 10s 不通就该报错，别让不可达地址挂满整个窗口
-            timeout=_httpx.Timeout(max(float(timeout), 90.0), connect=10.0, pool=10.0),
+            timeout=_httpx.Timeout(float(timeout), connect=10.0, pool=10.0),
             trust_env=False,
         ) as client:
             async with client.stream(
@@ -336,18 +351,25 @@ async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Dep
                         detail={"error": f"模型服务返回 {resp.status_code}"},
                     )
                 async for line in limited_lines(resp, get_settings().provider_max_response_bytes):
-                    if line.startswith("data: ") and '"content"' in line:
+                    if not line.startswith("data:"):
+                        continue
+                    event = line[5:].strip()
+                    if event == "[DONE]":
+                        break
+                    content, reason, _ = parse_stream_chunk(event)
+                    if reason == "content_filter":
+                        raise HTTPException(502, detail={"error": "模型拒绝了连接测试请求"})
+                    if content.strip():
                         return {"status": "ok", "reply": "已连通（流式响应正常）"}
-                # 流结束但没收到 content（如空回复）——链路已通，也算成功
-                return {"status": "ok", "reply": "已连通"}
+                raise HTTPException(502, detail={"error": "模型未返回有效的流式文本，请检查接口与模型名称"})
     except HTTPException:
         raise
-    except _httpx.TimeoutException:
+    except (TimeoutError, _httpx.TimeoutException):
         # 注意：必须放在 TransportError 之前（Timeout 是 TransportError 的子类，
         # 顺序反了会把超时误报成"无法连接"——请求其实已到达服务端并计费）
         raise HTTPException(
             status_code=502,
-            detail={"error": "模型服务响应超时", "detail": f"等待 {max(timeout, 90)}s 未见任何输出（服务端可能极度拥堵）"},
+            detail={"error": "模型服务响应超时", "detail": f"等待 {timeout}s 未见任何输出（服务端可能极度拥堵）"},
         ) from None
     except _httpx.TransportError as e:
         raise HTTPException(

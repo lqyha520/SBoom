@@ -10,7 +10,7 @@ from app.models import BatchItem, Difficulty, GenerateRequest, KnowledgeScope
 from app.routers import generate
 from app.services.generation_results import _normalize_question
 from app.services.knowledge_topics import GENERAL_TOPIC, is_make_ten_practice
-from app.services.prompt_builder import prompt_builder
+from app.services.prompt_builder import _question_fields, prompt_builder
 from app.services.question_diversity import DiversityContext, recent_questions
 from app.services.question_qc import make_ten_issue, question_issue
 
@@ -20,6 +20,45 @@ def oral(stem="8 + 7 =", answer=15):
 
 
 class TeachingRules(unittest.TestCase):
+    def test_prompt_examples_use_actual_answer_types(self):
+        for kind in ("quiz", "challenge", "reading"):
+            fields = _question_fields(kind)
+            self.assertIs(type(fields["answer"]), int)
+            self.assertTrue(0 <= fields["answer"] < len(fields["options"]))
+            self.assertGreaterEqual(len(fields["options"]), 3)
+        pair = _question_fields("match_pair")
+        self.assertIsNone(question_issue(pair))
+        self.assertIsInstance(pair["answer"], list)
+        self.assertEqual(sorted(row[0] for row in pair["answer"]), list(range(len(pair["left_items"]))))
+        self.assertEqual(sorted(row[1] for row in pair["answer"]), list(range(len(pair["right_items"]))))
+        split = _question_fields("number_split")
+        self.assertIsNone(question_issue(split))
+        self.assertEqual(sum(split[key] == "____" for key in ("top", "left", "right")), 1)
+        self.assertIs(type(split["answer"]), int)
+
+    def test_subject_requirements_agree_across_single_and_batch(self):
+        for subject, phrase in (("数学", "可复算的关键算式"), ("语文", "提供足够语境"), ("英语", "提供足够上下文")):
+            scope = KnowledgeScope(grade="小学三年级", subject=subject, allowed=["专项练习"], forbidden=[])
+            request = GenerateRequest(grade=scope.grade, subject=subject, keyword="专项练习", game_type="quiz", question_count=2)
+            for prompt in (prompt_builder.build_system_prompt(request, scope), prompt_builder.build_batch_prompt(
+                    scope.grade, subject, request.keyword, "medium", [BatchItem(game_type="quiz", question_count=2)], scope)):
+                self.assertIn(phrase, prompt)
+                self.assertIn("保留用户明确指定的专项、数值范围和附加限制", prompt)
+                self.assertIn("只返回一个合法JSON对象", prompt)
+                self.assertIn("字符串中的换行和引号须按JSON转义", prompt)
+
+    def test_language_tasks_keep_target_words_and_distinguish_quotes_from_paraphrases(self):
+        for subject, keyword, kind, required in (
+            ("语文", "近义词辨析", "quiz", "题干中明确目标词"),
+            ("语文", "反义词辨析", "quiz", "题干中明确目标词"),
+            ("英语", "短文阅读", "reading", "引用原句须与正文逐字一致"),
+        ):
+            scope = KnowledgeScope(grade="小学三年级", subject=subject, allowed=[keyword], forbidden=[])
+            body = GenerateRequest(grade=scope.grade, subject=subject, keyword=keyword, game_type=kind, question_count=2)
+            for prompt in (prompt_builder.build_system_prompt(body, scope), prompt_builder.build_batch_prompt(
+                    scope.grade, subject, keyword, "medium", [BatchItem(game_type=kind, question_count=2)], scope)):
+                self.assertIn(required, prompt)
+
     def test_calculation_format_preserves_model_content_and_existing_equals(self):
         for kind in ("oral_math", "vertical_calc", "recursive_calc", "smart_calc"):
             for stem, expected in (("9＋2", "9＋2 ="), (" 9＋2 ", "9＋2 ="),

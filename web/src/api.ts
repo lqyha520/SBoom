@@ -199,6 +199,7 @@ export interface GenerationStatus {
   error?: { error?: string; code?: string; partial_sections?: BatchRespSection[] } | null
   error_status: number
   cache_expired: boolean
+  usage?: Pick<GenerationUsage, 'model_calls' | 'reported_calls' | 'prompt_tokens' | 'completion_tokens'>
 }
 
 export function fetchGenerationStatus(requestId: string) {

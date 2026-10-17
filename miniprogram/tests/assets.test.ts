@@ -10,6 +10,7 @@ function fixture() {
   const source = readFileSync(new URL('../src/services/assets.ts', import.meta.url), 'utf8').replace(/\/\/ #ifdef H5[\s\S]*?\/\/ #endif/g, '')
   const tasks: { url: string; timeout: number; success: (result: { statusCode: number; tempFilePath: string }) => void; fail: () => void; aborted: number }[] = []
   const opened: string[] = [], removed: string[] = []
+  const performance: { kind: string; value: number }[] = []
   const exports: Record<string, any> = {}
   let generation = 0
   vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
@@ -18,6 +19,7 @@ function fixture() {
       ApiError: Error, apiUrl: (path: string) => path, authHeaders: () => ({}), authGeneration: () => generation, handleAuthFailure() {},
     },
     uni: {
+      $emit(name: string, event: { kind: string; value: number }) { if (name === 'lc-performance') performance.push(event) },
       downloadFile(options: (typeof tasks)[number]) {
         const task = { ...options, aborted: 0 }; tasks.push(task)
         return { abort() { task.aborted++; task.fail() }, onProgressUpdate() {} }
@@ -26,7 +28,7 @@ function fixture() {
       openDocument({ filePath, success }: { filePath: string; success: () => void }) { opened.push(filePath); success() },
     },
   })
-  return { api: exports, tasks, opened, removed, changeSession() { generation++ } }
+  return { api: exports, tasks, opened, removed, performance, changeSession() { generation++ } }
 }
 
 test('装饰图只占三个槽，PDF 使用预留槽并优先于排队预取', async () => {
@@ -104,7 +106,7 @@ test('PDF asset IDs get a long timeout without changing the API URL; images reta
 })
 
 test('leaving a page cancels its pending PDF and never opens a late document', async () => {
-  const { api, tasks, opened, removed } = fixture()
+  const { api, tasks, opened, removed, performance } = fixture()
   const pending = api.openPdf({ url: '/pdf' }, '练习')
   const rejected = assert.rejects(pending)
   await Promise.resolve()
@@ -112,10 +114,11 @@ test('leaving a page cancels its pending PDF and never opens a late document', a
   await rejected
   assert.equal(tasks[0]!.aborted, 1); assert.deepEqual(opened, [])
   assert.deepEqual(removed, [])
+  assert.equal(performance.filter(item => item.kind === 'pdf_open').length, 0)
 })
 
 test('opening the native viewer does not cancel or delete its completed PDF', async () => {
-  const { api, tasks, opened, removed } = fixture()
+  const { api, tasks, opened, removed, performance } = fixture()
   const pending = api.openPdf({ url: '/pdf' }, '练习')
   await Promise.resolve()
   tasks[0]!.success({ statusCode: 200, tempFilePath: '/temporary.pdf' })
@@ -123,6 +126,9 @@ test('opening the native viewer does not cancel or delete its completed PDF', as
   api.cancelPdfDownload()
   assert.deepEqual(opened, ['/temporary.pdf']); assert.deepEqual(removed, [])
   assert.equal(tasks[0]!.aborted, 0)
+  const timings = performance.filter(item => item.kind === 'pdf_open')
+  assert.equal(timings.length, 1)
+  assert.ok(timings[0]!.value >= 0)
   api.clearAssetCache()
   assert.deepEqual(removed, ['/temporary.pdf'])
 })

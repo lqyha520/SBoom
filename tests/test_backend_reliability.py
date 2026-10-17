@@ -359,7 +359,7 @@ class BackendReliability(unittest.TestCase):
         mock.assert_not_awaited()
 
     def test_provider_usage_is_reported_not_estimated(self):
-        async def model(*_):
+        async def model(*_, **kwargs):
             control.record_attempt()
             control.record_usage({"prompt_tokens": 42, "completion_tokens": 21})
             return {"sections": [section()]}
@@ -367,6 +367,18 @@ class BackendReliability(unittest.TestCase):
             self.client.post("/api/v1/generate-batch", json=self.body).raise_for_status()
         usage = self.client.get("/api/v1/me/usage").json()
         self.assertEqual((usage["model_calls"], usage["reported_calls"], usage["prompt_tokens"], usage["completion_tokens"]), (1, 1, 42, 21))
+
+    def test_owned_request_exposes_only_its_recorded_usage(self):
+        async def model(*_, **kwargs):
+            control.record_attempt()
+            control.record_usage({"prompt_tokens": 42, "completion_tokens": 21})
+            return {"sections": [section()]}
+        with patch.object(generate, "_call_llm_and_parse", new=model):
+            response = self.client.post("/api/v1/generate-batch", json=self.body, headers={"X-Request-ID": "usage-one"})
+        self.assertEqual(response.status_code, 200)
+        result = self.client.get("/api/v1/me/generations/usage-one").json()
+        self.assertEqual(result["usage"], {"model_calls": 1, "reported_calls": 1, "prompt_tokens": 42, "completion_tokens": 21})
+        self.assertNotIn("user_id", result)
 
     def test_stream_is_metered_and_not_replayed(self):
         async def stream(*args, **kwargs):

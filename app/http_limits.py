@@ -24,7 +24,8 @@ async def limited_body(request: Request, limit: int, *, error: str = "请求过�
 async def limited_lines(response: httpx.Response, limit: int) -> AsyncIterator[str]:
     pending = bytearray()
     total = 0
-    async for chunk in response.aiter_bytes(chunk_size=65536):
+    # SSE 要在网络分片到达时解析，不能等积满 64 KiB 才交出首个事件。
+    async for chunk in response.aiter_bytes():
         total += len(chunk)
         if total > limit:
             raise HTTPException(502, detail={"code": "provider_response_too_large", "error": "模型响应超过安全上限"})

@@ -21,7 +21,12 @@ def origin(url: str) -> tuple[str, str, int]:
 
 def validate_endpoint(url: str, *, resolve: bool = True) -> str:
     url = url.strip().rstrip("/")
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+        if (parts.port is not None and not 1 <= parts.port <= 65535) or any(char.isspace() or ord(char) < 32 for char in url):
+            raise ValueError("invalid URL")
+    except ValueError as exc:
+        raise HTTPException(422, detail={"error": "模型接口地址无效"}) from exc
     scheme, host, port = origin(url)
     private = get_settings().provider_allow_private
     if (not host or scheme not in (("http", "https") if private else ("https",))
@@ -44,7 +49,8 @@ def require_new_key(previous: str, requested: str, supplied: str) -> None:
 
 async def pin_provider_request(request: httpx.Request) -> None:
     """Resolve once per request; retain the original Host and TLS certificate name."""
-    validate_endpoint(str(request.url), resolve=False)
+    # 配置地址仍禁止查询参数；实际请求允许任务查询参数，并继续校验来源及固定公网 IP。
+    validate_endpoint(str(request.url.copy_with(query=None)), resolve=False)
     if get_settings().provider_allow_private:
         return
     host = request.url.host
@@ -53,7 +59,9 @@ async def pin_provider_request(request: httpx.Request) -> None:
         ips = [str(entry[4][0]) for entry in addresses]
         if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
             raise ValueError("private address")
-    except (OSError, ValueError) as exc:
+    except OSError as exc:
+        raise HTTPException(502, detail={"code": "provider_dns_error", "error": "模型服务域名暂时无法解析，未发送请求"}) from exc
+    except ValueError as exc:
         raise HTTPException(422, detail={"code": "provider_address_rejected", "error": "模型接口当前未解析到公网地址，未发送请求"}) from exc
     request.headers["Host"] = request.url.netloc.decode("ascii")
     request.extensions["sni_hostname"] = host

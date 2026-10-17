@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 from collections import OrderedDict
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 
 import httpx
@@ -44,15 +44,57 @@ def _should_retry(e: Exception) -> bool:
     return isinstance(e, RETRYABLE)
 
 
+def _check_text_completion(message: dict, reason: str | None) -> None:
+    """拒绝与工具调用都不是题目文本；兼容未返回 finish_reason 的中转接口。"""
+    if message.get("refusal") or reason == "content_filter":
+        raise HTTPException(502, detail={"code": "provider_content_filtered", "error": "模型拒绝生成本次内容"})
+    if message.get("tool_calls") or message.get("function_call") or reason not in (None, "stop", "length"):
+        raise ValueError("模型未完成文本响应")
+
+
 class OutputTruncated(HTTPException):
     """保留原始残片供服务端校验；错误响应只公开已验证的大题。"""
 
     def __init__(self, partial_text: str):
         super().__init__(422, detail={
             "code": "generation_truncated",
-            "error": "生成内容达到模型输出上限，请减少单次题量后重试；原请求不会自动重新计费",
+            "error": "生成内容达到模型输出上限，请减少单次题量后重试；查询原请求不会再次调用模型",
         })
         self.partial_text = partial_text
+
+
+def parse_stream_chunk(text: str, *, on_usage: Callable[[dict], None] | None = None) -> tuple[str, str | None, dict | None]:
+    """只接受兼容聊天协议；错误页、错误事件及非文本 delta 不算连通成功。"""
+    try:
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError("invalid stream event")
+        usage = data.get("usage")
+        # 先保存累计用量，随后拒绝/异常结束也不能漏记这一轮已上报的费用。
+        if isinstance(usage, dict) and on_usage is not None:
+            on_usage(usage)
+        if "error" in data or not isinstance(data.get("choices"), list):
+            raise ValueError("invalid stream event")
+        if not data["choices"]:
+            if not isinstance(usage, dict):
+                raise ValueError("empty stream event")
+            return "", None, usage
+        choice = data["choices"][0]
+        delta = choice.get("delta", {})
+        if not isinstance(delta, dict):
+            raise ValueError("invalid stream delta")
+        content = delta.get("content")
+        if content is None:
+            content = ""
+        if not isinstance(content, str):
+            raise ValueError("non-text stream event")
+        reason = choice.get("finish_reason")
+        if reason is not None and not isinstance(reason, str):
+            raise ValueError("invalid finish reason")
+        _check_text_completion(delta, reason)
+        return content, reason, usage if isinstance(usage, dict) else None
+    except (ValueError, TypeError, AttributeError, IndexError, RecursionError) as exc:
+        raise HTTPException(502, detail={"code": "provider_invalid_stream", "error": "模型未返回有效的流式文本"}) from exc
 
 
 class LLMClient:
@@ -65,6 +107,7 @@ class LLMClient:
     def __init__(self):
         self._clients: OrderedDict[tuple[str, str], httpx.AsyncClient] = OrderedDict()
         self._busy: dict[httpx.AsyncClient, int] = {}
+        self._closing: set[asyncio.Task[None]] = set()
 
     def _evict_oldest(self, free_slots: int = 1) -> None:
         """缓存超限时淘汰最久未用的 client（连接在后台异步关闭，不阻塞调用方）。"""
@@ -75,7 +118,9 @@ class LLMClient:
             old_client = self._clients.pop(idle)
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._aclose_quietly(old_client))
+                task = loop.create_task(self._aclose_quietly(old_client))
+                self._closing.add(task)
+                task.add_done_callback(self._closing.discard)
             except RuntimeError:
                 pass  # 无事件循环（理论上不会发生），由 GC 兜底
 
@@ -141,6 +186,7 @@ class LLMClient:
         model: str | None = None,
         api_key: str | None = None,
         timeout: float | None = None,
+        max_attempts: int | None = None,
     ) -> str:
         """非流式调用，返回完整响应文本。可选传入 base_url/model/api_key/timeout 覆盖默认配置。"""
         url = base_url or settings.llm_base_url
@@ -158,8 +204,9 @@ class LLMClient:
         }
 
         async with self._borrow_client(url, key) as client:
-            response_content: bytes | None = None
-            for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            response_content: bytearray | None = None
+            attempts = max_attempts if max_attempts is not None else self.MAX_ATTEMPTS
+            for attempt in range(1, attempts + 1):
                 try:
                     if current_usage.get() is not None:
                         await run_sync(reserve, tokens=len(json.dumps(messages, ensure_ascii=False).encode()) + (max_tokens if max_tokens is not None else settings.llm_max_tokens) + 2048)
@@ -167,15 +214,15 @@ class LLMClient:
                     async with client.stream("POST", "/chat/completions", json=payload, timeout=self._req_timeout(timeout)) as streamed:
                         streamed.raise_for_status()
                         raw = bytearray()
-                        async for chunk in streamed.aiter_bytes():
-                            raw.extend(chunk)
-                            if len(raw) > settings.provider_max_response_bytes:
+                        async for chunk in streamed.aiter_bytes(chunk_size=64 * 1024):
+                            if len(raw) + len(chunk) > settings.provider_max_response_bytes:
                                 raise HTTPException(502, detail={"code": "provider_response_too_large", "error": "模型响应超过安全上限，请减少题量"})
+                            raw.extend(chunk)
                         # aiter_bytes 已解压；直接解析正文，不能携带原压缩头再次构造响应。
-                        response_content = bytes(raw)
+                        response_content = raw
                     break
                 except Exception as e:
-                    if attempt == self.MAX_ATTEMPTS or not _should_retry(e):
+                    if attempt == attempts or not _should_retry(e):
                         raise
                     wait = 2 ** attempt
                     logger.warning("模型连接失败（第 %s 次，%s），%s 秒后重试", attempt, type(e).__name__, wait)
@@ -187,16 +234,28 @@ class LLMClient:
                 # 上面的循环要么 break（正文已赋值）要么抛出；这里只是让类型收窄
                 raise RuntimeError("LLM 请求未返回响应")
             try:
-                data = json.loads(response_content)
+                data = await run_sync(json.loads, response_content)
+                if not isinstance(data, dict):
+                    raise ValueError("模型响应不是对象")
                 record_usage(data.get("usage"))
-                if data["choices"][0].get("finish_reason") == "length":
-                    content = data["choices"][0].get("message", {}).get("content")
+                choices = data.get("choices")
+                if "error" in data or not isinstance(choices, list) or not choices:
+                    raise ValueError("模型返回错误或缺少候选")
+                choice = choices[0]
+                message = choice["message"]
+                if not isinstance(message, dict):
+                    raise ValueError("模型消息格式错误")
+                _check_text_completion(message, choice.get("finish_reason"))
+                content = message.get("content")
+                if choice.get("finish_reason") == "length":
                     raise OutputTruncated(content if isinstance(content, str) else "")
-                return str(data["choices"][0]["message"]["content"])
-            except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
+                if not isinstance(content, str) or not content.strip():
+                    raise ValueError("模型未返回文本")
+                return content
+            except (ValueError, KeyError, IndexError, TypeError, AttributeError, RecursionError) as e:
                 # LLM 返回了非 JSON 错误页或结构异常——翻译成统一异常，由调用方按 502 处理
                 logger.error("模型响应结构异常: %s", type(e).__name__)
-                raise RuntimeError(f"LLM 响应结构异常: {e}") from e
+                raise HTTPException(502, detail={"code": "provider_invalid_response", "error": "模型响应结构异常"}) from e
 
     @observe_provider
     async def chat_stream(
@@ -228,25 +287,38 @@ class LLMClient:
             if current_usage.get() is not None:
                 await run_sync(reserve, tokens=len(json.dumps(messages, ensure_ascii=False).encode()) + (max_tokens if max_tokens is not None else settings.llm_max_tokens) + 2048)
             record_attempt()
-            async with client.stream(
-                "POST", "/chat/completions", json=payload, timeout=self._req_timeout(timeout)) as response:
-                response.raise_for_status()
-                async for line in limited_lines(response, settings.provider_max_response_bytes):
-                    if line.startswith("data: "):
-                        data_str = line[6:].strip()
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data_str)
-                            record_usage(chunk.get("usage"))
-                            if chunk.get("choices") and chunk["choices"][0].get("finish_reason") == "length":
-                                raise HTTPException(422, detail={"code": "generation_truncated", "error": "生成内容达到输出上限，请减少题量后重试"})
-                            delta = (chunk.get("choices") or [{}])[0].get("delta", {})
-                            content = delta.get("content", "")
-                            if content:
-                                yield content
-                        except (json.JSONDecodeError, KeyError, IndexError):
+            final_usage = None
+
+            def remember_usage(usage: dict) -> None:
+                nonlocal final_usage
+                if all(type(usage.get(key)) is int and usage[key] >= 0 for key in ("prompt_tokens", "completion_tokens")):
+                    final_usage = usage
+
+            completed = received = False
+            try:
+                async with client.stream(
+                    "POST", "/chat/completions", json=payload, timeout=self._req_timeout(timeout)) as response:
+                    response.raise_for_status()
+                    async for line in limited_lines(response, settings.provider_max_response_bytes):
+                        if not line.startswith("data:"):
                             continue
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            completed = True
+                            break
+                        content, finished, _ = parse_stream_chunk(data_str, on_usage=remember_usage)
+                        if finished == "length":
+                            raise OutputTruncated("")
+                        completed = completed or finished == "stop"
+                        if content.strip():
+                            received = True
+                        if content:
+                            yield content
+                if not received or not completed:
+                    raise HTTPException(502, detail={"code": "provider_incomplete_stream", "error": "模型流式响应为空或未完整结束"})
+            finally:
+                # 有些服务在多个事件中重复累计用量，一次模型调用只能累计一次。
+                record_usage(final_usage)
 
     async def close(self) -> None:
         """关闭全部缓存的连接池（应用关停时调用）。"""
@@ -256,6 +328,8 @@ class LLMClient:
             except Exception:
                 pass
         self._clients.clear()
+        if self._closing:
+            await asyncio.gather(*self._closing)
 
 
 # 全局单例

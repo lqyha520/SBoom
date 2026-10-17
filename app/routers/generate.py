@@ -1,5 +1,6 @@
 """生成路由 —— 题目/游戏生成 API 端点"""
 
+import asyncio
 import json
 import logging
 
@@ -29,6 +30,7 @@ from app.services.generation_results import completed_sections, match_sections, 
 from app.services.knowledge_scope import knowledge_scope_service
 from app.services.llm_client import OutputTruncated, llm_client
 from app.services.prompt_builder import prompt_builder
+from app.services.provider_failover import run_with_failover
 from app.services.question_review import previous_question_keys, review_results
 from app.services.rate_limit import allow
 from app.services.user_store import CurrentUser
@@ -36,11 +38,12 @@ from app.services.user_store import CurrentUser
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["生成"])
 settings = get_settings()
+QUALITY_REVIEW_TIMEOUT = 120.0  # 复核超时后保留候选题，不能占满出题模型的长等待窗口。
 
 
 def _object(value) -> dict:
-    """模型返回的 JSON 必须是对象；合法 JSON 也可能是数组/标量，那种情况按生成失败处理。"""
-    if not isinstance(value, dict):
+    """模型返回的 JSON 必须是结果对象，数组、标量与上游错误都按失败处理。"""
+    if not isinstance(value, dict) or "error" in value:
         raise ValueError("模型返回的 JSON 不是对象")
     return value
 
@@ -78,7 +81,7 @@ def _extract_json(text: str) -> dict:
         try:
             obj, _ = json.JSONDecoder().raw_decode(text)
             if isinstance(obj, dict):
-                return obj
+                return _object(obj)
         except (json.JSONDecodeError, ValueError, TypeError):
             pass
         # 括号配平修复：从第一个 { 起逐字符配平，截取完整对象
@@ -113,22 +116,29 @@ def _merged_llm_params() -> dict:
     客户端不可指定接口地址/密钥（防 SSRF 与越权绕过）。
     """
     g = app_config.get_llm(with_key=True)
+    if "models" in g:
+        return {"models": [
+            {"base_url": profile["baseUrl"], "model": profile["model"], "api_key": profile["api_key"],
+             "timeout": profile["timeout"], "max_tokens": profile["maxTokens"]}
+            for profile in g["models"] if profile["enabled"]
+        ]}
     t = float(g["timeout"] or 0)
     return {
         "base_url": g["baseUrl"] or settings.llm_base_url,
         "model": g["model"] or settings.llm_model,
         "api_key": g["api_key"] or settings.llm_api_key,
-        # 超时下限 120s：整卷生成 prompt 很长，部分模型需要 1-2 分钟；
-        # 超时过短会让客户端先掐断，而服务端通常已开始生成并计费——白白扣钱
-        "timeout": max(t, 120.0),
+        "timeout": t or 120.0,
         "max_tokens": int(g.get("maxTokens") or settings.llm_max_tokens),
     }
 
 
-async def _call_llm_and_parse(system_prompt: str, user_message: str, question_count: int = 30) -> dict:
+async def _call_llm_and_parse(system_prompt: str, user_message: str, question_count: int = 30,
+                            *, temperature: float | None = None, expected_key: str | None = None,
+                            time_budget: float | None = None) -> dict:
     """调用 LLM 并解析返回的 JSON。配置来源：后台全局配置 > .env 兜底。"""
     p = await run_sync(_merged_llm_params)
-    if not p["api_key"]:
+    candidates = p.get("models", [p])
+    if not candidates or any(not candidate["api_key"] for candidate in candidates):
         raise HTTPException(
             status_code=400,
             detail={
@@ -141,12 +151,30 @@ async def _call_llm_and_parse(system_prompt: str, user_message: str, question_co
         {"role": "user", "content": user_message},
     ]
 
+    async def invoke(candidate):
+        # 多候选复核为后备项预留时间；仍服从管理员配置的更短超时。
+        timeout = candidate["timeout"]
+        if time_budget is not None:
+            timeout = min(timeout, time_budget / min(len(candidates), 2))
+        async with asyncio.timeout(timeout):
+            raw_response = await llm_client.chat(
+                messages, base_url=candidate["base_url"], model=candidate["model"],
+                api_key=candidate["api_key"], timeout=timeout,
+                max_tokens=min(candidate["max_tokens"], 2048 + 400 * question_count), max_attempts=1,
+                temperature=temperature,
+            )
+            try:
+                result = await run_sync(_extract_json, raw_response)
+                # 只校验任务容器，题目仍交给后续逐题校验，保留部分有效内容。
+                if expected_key is not None and not isinstance(result.get(expected_key), list):
+                    raise ValueError("模型返回了其他任务的数据")
+                return result
+            except (ValueError, TypeError, RecursionError) as exc:
+                raise HTTPException(502, detail={"error": "LLM 返回格式异常，请重试"}) from exc
+
     try:
-        raw_response = await llm_client.chat(
-            messages, base_url=p["base_url"], model=p["model"],
-            api_key=p["api_key"], timeout=p["timeout"], max_tokens=min(p["max_tokens"], 2048 + 400 * question_count),
-        )
-        return _extract_json(raw_response)
+        async with asyncio.timeout(time_budget):
+            return await run_with_failover(candidates, invoke)
     except HTTPException:
         raise
     except json.JSONDecodeError as e:
@@ -160,25 +188,24 @@ async def _call_llm_and_parse(system_prompt: str, user_message: str, question_co
         logger.error("模型 API 错误: HTTP %s", e.response.status_code)
         raise HTTPException(
             status_code=502,
-            detail={"error": f"模型服务请求失败 ({e.response.status_code})", "detail": "未自动重发，请先查询原请求状态"},
+            detail={"error": f"模型服务请求失败 ({e.response.status_code})", "detail": "已尝试全部可用候选，请先查询原请求状态"},
         ) from e
-    except httpx.TimeoutException as e:
-        # 注意：TimeoutException 是 TransportError 的子类，必须先于其捕获。
-        # 超时意味着请求已到达服务端（很可能已被处理甚至计费），不能自动重试。
-        logger.error(f"LLM 响应超时（timeout={p['timeout']}s）: {type(e).__name__}")
+    except httpx.PoolTimeout as e:
+        raise HTTPException(429, detail={"error": "模型连接池繁忙，请稍后重试"}) from e
+    except (httpx.TimeoutException, TimeoutError) as e:
+        logger.error("LLM 响应超时: %s", type(e).__name__)
         raise HTTPException(
             status_code=504,
             detail={
-                "error": f"生成超时（等待 {int(p['timeout'])} 秒无响应）",
-                "detail": "请求已发送给模型服务，超时前未返回结果（服务端可能已处理并计费）。"
-                          "未自动重发。请先查询原请求状态，重新生成会发起新的模型调用。",
+                "error": "生成超时",
+                "detail": "模型响应未在时限内完成，上游可能已处理并计费。请先查询原请求状态，重新生成会发起新的模型调用。",
             },
         ) from e
     except httpx.DecodingError as e:
         logger.error("模型响应解压失败: %s", type(e).__name__)
         raise HTTPException(
             status_code=502,
-            detail={"error": "模型返回的数据无法解压，未自动重发；请查询原请求状态",
+            detail={"error": "模型返回的数据无法解压；请查询原请求状态",
                     "code": "provider_decoding_error"},
         ) from e
     except httpx.TransportError as e:
@@ -208,7 +235,8 @@ def _require_complete(sections: list[GameResult]) -> None:
 
 async def _call_quality_review(system_prompt: str, user_message: str, question_count: int) -> dict:
     # 独立请求仍由同一计量、限流和 token 预算约束，不自动重试复核或循环重出。
-    return await _call_llm_and_parse(system_prompt, user_message, question_count)
+    return await _call_llm_and_parse(system_prompt, user_message, question_count, temperature=0.1,
+                                     expected_key="reviews", time_budget=QUALITY_REVIEW_TIMEOUT)
 
 @router.post(
     "/generate-batch",
@@ -258,7 +286,8 @@ async def generate_batch(request: BatchGenerateRequest, http_request: Request, u
     truncated = None
     try:
         async with generation_stage("generate"):
-            raw = await _call_llm_and_parse(system_prompt, user_message, sum(item.question_count for item in resolved_items))
+            raw = await _call_llm_and_parse(system_prompt, user_message, sum(item.question_count for item in resolved_items),
+                                            expected_key="sections")
     except OutputTruncated as error:
         truncated = error
         raw = {"sections": completed_sections(error.partial_text)}
@@ -335,7 +364,7 @@ async def generate_questions(request: GenerateRequest, http_request: Request, us
     # 3. 调用 LLM（配置：后台全局 > .env）
     item = BatchItem(game_type=request.game_type.value, question_count=request.question_count)
     async with generation_stage("generate"):
-        raw_result = await _call_llm_and_parse(system_prompt, user_message, request.question_count)
+        raw_result = await _call_llm_and_parse(system_prompt, user_message, request.question_count, expected_key="questions")
 
     result = await normalize_result(
         raw_result, request,
@@ -382,23 +411,51 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
     ]
     p = await run_sync(_merged_llm_params)
 
-    if not p["api_key"]:
+    candidates = p.get("models", [p])
+    if not candidates or any(not candidate["api_key"] for candidate in candidates):
         raise HTTPException(400, detail={"error": "尚未配置模型，请联系管理员"})
 
     question_count = request.question_count
+    async def candidate_tokens(candidate):
+        async with asyncio.timeout(candidate["timeout"]):
+            async for token in llm_client.chat_stream(
+                messages, base_url=candidate["base_url"], model=candidate["model"],
+                api_key=candidate["api_key"], timeout=candidate["timeout"],
+                max_tokens=min(candidate["max_tokens"], 2048 + 400 * question_count),
+            ):
+                yield token
+
+    async def tokens():
+        if len(candidates) == 1:
+            async for token in candidate_tokens(candidates[0]):
+                yield token
+            return
+
+        async def collect(candidate):
+            # 多候选先缓存完整一轮，失败残片不下发，避免不同模型的 JSON 拼接。
+            async with asyncio.timeout(candidate["timeout"]):
+                chunks = [token async for token in candidate_tokens(candidate)]
+                try:
+                    data = await run_sync(_extract_json, "".join(chunks))
+                    if not isinstance(data.get("questions"), list):
+                        raise ValueError("模型返回了其他任务的数据")
+                except (ValueError, TypeError, RecursionError) as exc:
+                    raise HTTPException(502, detail={"error": "模型返回格式异常"}) from exc
+                return chunks
+
+        for token in await run_with_failover(candidates, collect):
+            yield token
+
     async def event_generator():
         """SSE 事件流（结束时做质检，违禁题无法撤回已流出的内容，只追加告警事件）"""
         buffered = []
         try:
-            async for token in llm_client.chat_stream(
-                messages, base_url=p["base_url"], model=p["model"],
-                api_key=p["api_key"], timeout=p["timeout"], max_tokens=min(p["max_tokens"], 2048 + 400 * question_count),
-            ):
+            async for token in tokens():
                 buffered.append(token)
                 yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
             # 流结束：解析并质检，违禁题只告警（流式无法事后剔除）
             try:
-                data = _extract_json("".join(buffered))
+                data = await run_sync(_extract_json, "".join(buffered))
                 if isinstance(data, dict) and isinstance(data.get("questions"), list):
                     result = await normalize_result(data, request, BatchItem(
                         game_type=request.game_type.value, question_count=request.question_count,
@@ -415,7 +472,7 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
             yield "data: [DONE]\n\n"
         except HTTPException as exc:
             yield f"data: {json.dumps(exc.detail, ensure_ascii=False)}\n\n"
-        except (httpx.HTTPError, json.JSONDecodeError, RuntimeError, ValueError) as e:
+        except (httpx.HTTPError, TimeoutError, json.JSONDecodeError, RuntimeError, ValueError) as e:
             # 不向客户端泄漏内部异常细节（可能含内网 URL/密钥提示），详情留日志
             logger.exception("流式生成失败: %s", type(e).__name__)
             yield f"data: {json.dumps({'error': '生成失败，请重试；若持续失败请联系管理员'}, ensure_ascii=False)}\n\n"
@@ -494,26 +551,8 @@ async def validate_oob(request: ValidateRequest, http_request: Request, user: Cu
         "只输出 JSON，不要额外文字。"
     )
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"请分析以下题目：\n{request.question_content}"},
-    ]
-
     try:
-        p = await run_sync(_merged_llm_params)
-        if not p["api_key"]:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "尚未配置模型",
-                    "detail": "模型服务由管理员统一配置，请联系管理员在后台「模型配置」中填写接口地址和密钥",
-                },
-            )
-        raw = await llm_client.chat(
-            messages, base_url=p["base_url"], model=p["model"],
-            api_key=p["api_key"], timeout=p["timeout"], max_tokens=min(p["max_tokens"], 4096),
-        )
-        data = _extract_json(raw)
+        data = await _call_llm_and_parse(system_prompt, f"请分析以下题目：\n{request.question_content}", 5)
         return ValidateResult(**data)
     except HTTPException:
         raise

@@ -25,16 +25,16 @@ def _grade_num(grade: str) -> int:
 def _question_fields(kind: str) -> dict:
     question: dict = {"type": kind, "stem": "题干", "answer": "答案", "analysis": "解析"}
     if kind in ("quiz", "challenge", "reading"):
-        question.update(type="multiple_choice", options=["选项内容"], answer="正确选项的从0开始的索引")
+        question.update(type="multiple_choice", options=["选项内容甲", "选项内容乙", "选项内容丙"], answer=0)
     elif kind == "number_split":
-        question = {"type": kind, "top": "数字或____", "left": "数字或____", "right": "数字或____",
-                    "answer": "空缺的数字", "analysis": "解析"}
+        question = {"type": kind, "top": 5, "left": 2, "right": "____",
+                    "answer": 3, "analysis": "解析"}
     elif kind == "compare":
         question = {"type": kind, "left_expr": "左侧表达式", "right_expr": "右侧表达式",
                     "answer": ">、<或=", "analysis": "解析"}
     elif kind == "match_pair":
-        question = {"type": kind, "left_items": ["左侧内容"], "right_items": ["右侧内容"],
-                    "answer": "从0开始的配对索引数组", "analysis": "解析"}
+        question = {"type": kind, "left_items": ["左侧内容甲", "左侧内容乙"], "right_items": ["右侧内容甲", "右侧内容乙"],
+                    "answer": [[0, 1], [1, 0]], "analysis": "解析"}
     elif kind == "true_false":
         question["answer"] = "√或×"
         question["stem"] = "待判断的简短命题，解析放analysis"
@@ -61,6 +61,14 @@ DIFFICULTY_RULES = {
     "hard": "提升：在本课范围内考查方法选择、解释或迁移，减少提示；不得靠超纲、大数或冗长题干提高难度。",
 }
 
+SUBJECT_RULES = {
+    "数学": "数学：核对运算顺序、数值和单位；条件与问题的数量关系一致，解析给出可复算的关键算式。",
+    "语文": "语文：字音、字形、词义与语境相符；多音字、近义词和句意题提供足够语境。"
+            "引用需准确，未提供的课文原文不得自行补写；原创阅读材料不冒称教材原文。",
+    "英语": "英语：词汇和句式符合年级，拼写、大小写、标点及语法正确；"
+            "补全或选择题提供足够上下文，避免多个选项在语法和语义上同时成立。",
+}
+
 
 def teaching_requirements(grade: str, subject: str, keyword: str, difficulty: str, kinds: set[str]) -> str:
     from app.services.knowledge_topics import is_make_ten_practice
@@ -74,18 +82,25 @@ def teaching_requirements(grade: str, subject: str, keyword: str, difficulty: st
         "同一大题和同卷同题型不照抄完全相同的题；基础练习允许同一计算关系在不同题型中合理重复。",
         "不要把答案或提示答案的解析泄露到题干。不能完成指定范围时不要编造事实、引用或教材内容。",
     ]
+    if subject in SUBJECT_RULES:
+        rules.append(SUBJECT_RULES[subject])
+    if subject == "语文" and any(word in keyword for word in ("近义词", "反义词")):
+        rules.append("近义词、反义词辨析须在题干中明确目标词、比较要求和具体语境，不能只在解析中引入目标词或改成无关的选词填空。")
     if kinds & {"quiz", "challenge", "reading"}:
         rules.append("选择题只有一个正确选项，干扰项对应常见错误且互不等价；答案用从0开始的索引，正确选项位置适度分散。")
     if "word_problem" in kinds:
         rules.append("应用题保留完整条件、数量关系、单位和问句；答案包含必要单位，解析列出与题意对应的算式。")
     if "reading" in kinds:
-        rules.append("阅读正文长度和词汇适合年级，问题只依据所给正文，解析指出原文依据；不依赖未提供的图片或课文。")
+        rules.append("阅读正文长度和词汇适合年级，问题只依据所给正文，解析指出原文依据；不依赖未提供的图片或课文。"
+                     "引用原句须与正文逐字一致，转述应标明是概括，不能加引号冒充原句。")
     if "fill_blank" in kinds:
         rules.append("多个空的答案按空位顺序返回；开放填空给出合理参考答案，可接受的其他答案放acceptable_answers。")
     if "true_false" in kinds:
         rules.append("判断题正误合理搭配，不以修改正确答案来平衡分布，避免含混或缺条件的断言。")
     if "match_pair" in kinds:
         rules.append("配对题两侧项目一一对应，不存在歧义；answer为[[左索引,右索引],...]，每个索引恰好使用一次。")
+    if "number_split" in kinds:
+        rules.append("数的分成满足top=left+right，三个位置只留一个____，其余填整数；answer为该空的整数值。")
     if is_make_ten_practice(grade, subject, keyword):
         rules.append(planning_prompt(subject, keyword, [SimpleNamespace(game_type=kind) for kind in sorted(kinds)], grade))
     return "\n" + "\n".join(rules)
@@ -113,8 +128,10 @@ def _textbook_context(scope: KnowledgeScope | None, keyword: str) -> str:
 
 def _format_contract(value: dict) -> str:
     return (
-        "\n\n接口格式：只返回JSON。下面是字段说明，字段说明文字需替换成生成内容；"
-        "game_type、type和section_id保留指定值，questions按指定题数返回数组。\n"
+        "\n\n接口格式：只返回一个合法JSON对象，不加代码块或额外文字；字符串中的换行和引号须按JSON转义。"
+        "下面是字段与类型示例，说明文字及示例数值须替换成实际题目内容；"
+        "game_type、type和section_id保留指定值，questions按指定题数返回数组。"
+        "选择题answer用整数索引，配对题用二维整数数组，不把数组或整数写成说明文字。\n"
         + json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     )
 

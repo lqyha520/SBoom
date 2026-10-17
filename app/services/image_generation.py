@@ -1,4 +1,4 @@
-"""OpenAI-compatible image generation. Paid requests are never retried implicitly."""
+"""单个图片模型调用；跨模型切换由路由统一编排。"""
 
 import asyncio
 import base64
@@ -6,6 +6,7 @@ import binascii
 import io
 import ipaddress
 import json
+import re
 import socket
 import warnings
 from urllib.parse import urljoin, urlsplit
@@ -14,9 +15,10 @@ import httpx
 from fastapi import HTTPException
 from PIL import Image, UnidentifiedImageError
 
-from app.blocking import run_sync
+from app.blocking import run_sync, run_sync_in
 from app.metrics import observe_provider
 from app.models.image_generation import ImageWorksheetRequest
+from app.provider_policy import origin, validate_endpoint
 from app.services.generation_control import record_attempt, record_usage
 from app.services.knowledge_scope import knowledge_scope_service
 from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num, _textbook_context
@@ -25,6 +27,8 @@ from app.services.resource_admission import bounded_image_request, bounded_media
 
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_RESPONSE_BYTES = 18 * 1024 * 1024
+TASK_POLL_INTERVAL = 2.0
+MODEL_ERROR_CODES = {"model_not_found", "model_not_supported", "invalid_model", "unsupported_model"}
 TYPE_NAMES = {
     "quiz": "选择题", "fill_blank": "填空题", "match_pair": "连线配对", "challenge": "闯关挑战",
     "oral_math": "口算题", "reading": "阅读理解", "vertical_calc": "竖式计算",
@@ -99,13 +103,142 @@ def generation_url(base_url: str) -> str:
 
 
 async def _read_limited(response: httpx.Response, limit: int) -> bytes:
-    chunks, length = [], 0
-    async for chunk in response.aiter_bytes():
-        length += len(chunk)
-        if length > limit:
+    content = bytearray()
+    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+        if len(content) + len(chunk) > limit:
             raise ValueError("图片服务返回内容过大")
-        chunks.append(chunk)
-    return b"".join(chunks)
+        content.extend(chunk)
+    return bytes(content)
+
+
+def _provider_error(status: int, payload: bytes = b"") -> dict:
+    # 只将上游错误归类成固定提示，不回显可能含密钥、提示词或内部地址的正文。
+    try:
+        data = json.loads(payload)
+    except (ValueError, UnicodeError):
+        data = {}
+    error = data.get("error", data) if isinstance(data, dict) else {}
+    if isinstance(error, str):
+        error = {"message": error}
+    if not isinstance(error, dict):
+        error = {}
+    message = str(error.get("message", "")).lower()
+    code = str(error.get("code", "")).lower()
+    param = str(error.get("param", "")).lower()
+    reason, hint = "request_rejected", "上游拒绝请求，请核对接口支持的参数与模型权限"
+    if status in (401, 403):
+        reason, hint = "authentication", "密钥无效或没有该模型的调用权限"
+    elif status == 402 or code in ("insufficient_quota", "insufficient_balance", "quota_exceeded"):
+        reason, hint = "quota", "上游额度不足或配额已用尽"
+    elif status == 429:
+        reason, hint = "rate_limit", "上游限流或配额已用尽"
+    elif status >= 500:
+        reason, hint = "unavailable", "上游服务暂不可用"
+    elif code in ("content_policy_violation", "content_filter", "safety_violation"):
+        reason, hint = "content_policy", "上游内容审核拒绝了请求"
+    elif status == 400 and (code == "async_required" or message.startswith("图片 api 仅支持异步任务")):
+        reason, hint = "async_required", "该接口要求通过异步任务生成图片"
+    elif param == "size" or ("size" in message and any(word in message for word in ("invalid", "support", "must be"))):
+        reason, hint = "size", "上游不接受当前图片尺寸，请核对该模型支持的尺寸"
+    elif param == "response_format":
+        reason, hint = "response_format", "上游不接受当前返回格式，请核对模型配置"
+    elif param == "model" or code in MODEL_ERROR_CODES:
+        reason, hint = "model", "模型不可用或当前密钥没有该模型的权限"
+    elif param == "prompt" and any(word in message for word in ("long", "length", "limit")):
+        reason, hint = "prompt_length", "上游提示词长度限制小于当前请求"
+    return {"code": "image_provider_error", "upstream_status": status, "reason": reason,
+            "error": f"生图服务请求失败（HTTP {status}）：{hint}"}
+
+
+async def _provider_json(client: httpx.AsyncClient, method: str, url: str, headers: dict,
+                         body: dict | None = None) -> dict:
+    async with client.stream(method, url, headers=headers, json=body) as response:
+        if response.is_error:
+            payload = b""
+            try:
+                # 错误正文既限长又限时，不能拖住备用模型的切换。
+                async with asyncio.timeout(1):
+                    payload = await _read_limited(response, 8192)
+            except (ValueError, TimeoutError, httpx.HTTPError):
+                pass
+            raise HTTPException(502, detail=_provider_error(response.status_code, payload))
+        response.raise_for_status()
+        payload = await _read_limited(response, MAX_RESPONSE_BYTES)
+        # 成品 JSON 可含十余 MiB Base64；解析不应阻塞其他请求和任务心跳。
+        data = await run_sync_in("media", json.loads, payload)
+        if not isinstance(data, dict):
+            raise ValueError("图片服务返回格式异常")
+        return data
+
+
+def _has_image_result(data: dict) -> bool:
+    items = data.get("data")
+    if not isinstance(items, list) or not items or not isinstance(items[0], dict):
+        return False
+    return any(isinstance(items[0].get(key), str) and bool(items[0][key]) for key in ("b64_json", "url"))
+
+
+def _task_poll_url(data: dict, endpoint: str) -> tuple[str, str]:
+    task_id, poll_url = data.get("task_id", data.get("id")), data.get("poll_url")
+    if (not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", task_id)
+            or not isinstance(poll_url, str) or not poll_url or len(poll_url) > 2000
+            or any(char.isspace() or ord(char) < 32 for char in poll_url)):
+        raise ValueError("异步图片任务缺少有效编号或查询地址")
+    target = urljoin(endpoint, poll_url)
+    parts = urlsplit(target)
+    # 轮询携带原服务商密钥，仅允许同协议、主机、端口；拒绝重定向与内网解析。
+    if parts.username or parts.password or parts.fragment or origin(target) != origin(endpoint):
+        raise ValueError("异步图片任务查询地址不属于当前服务商")
+    validate_endpoint(parts._replace(query="").geturl(), resolve=False)
+    return task_id, target
+
+
+async def _poll_image_task(client: httpx.AsyncClient, data: dict, endpoint: str, headers: dict) -> dict:
+    task_id, poll_url = _task_poll_url(data, endpoint)
+    transient_errors = 0
+    while True:
+        # 只查询已提交任务，绝不在轮询阶段重复发送生成 POST。
+        await asyncio.sleep(TASK_POLL_INTERVAL)
+        try:
+            response = await _provider_json(client, "GET", poll_url, headers)
+        except (httpx.TransportError, HTTPException) as exc:
+            detail: dict = exc.detail if isinstance(exc, HTTPException) and isinstance(exc.detail, dict) else {}
+            status = detail.get("upstream_status", 0)
+            retryable = isinstance(exc, httpx.TransportError) or status == 429 or status >= 500
+            if not retryable or transient_errors >= 2:
+                raise
+            transient_errors += 1
+            continue
+        transient_errors = 0
+        # 两种已验证协议：批量 items 列表，以及 image.task 单任务对象。
+        items = response.get("items") if "items" in response else [response]
+        if not isinstance(items, list):
+            raise ValueError("异步图片任务查询格式异常")
+        matches = [item for item in items if isinstance(item, dict) and item.get("id") == task_id]
+        if len(matches) != 1:
+            raise ValueError("未返回指定的异步图片任务")
+        task = matches[0]
+        status = task.get("status")
+        if status in ("queued", "running") and task.get("terminal") is not True:
+            continue
+        if status in ("success", "partial_success", "succeeded", "completed"):
+            results = task.get("results", task.get("data"))
+            if results is None and isinstance(task.get("result"), dict):
+                results = task["result"].get("data")
+            if not isinstance(results, list) or not results:
+                raise ValueError("异步图片任务未返回成品图片")
+            return {"data": results, "usage": task.get("usage")}
+        if status in ("failed", "cancelled", "text_review"):
+            reason = "content_policy" if status == "text_review" else "generation_failed"
+            hint = "上游内容审核拒绝了图片任务" if reason == "content_policy" else "上游图片任务执行失败，请稍后重试或更换服务商"
+            error = task.get("error")
+            code = task.get("error_code") or (error.get("code") if isinstance(error, dict) else None)
+            # 服务商可能用笼统的 public_error 覆盖具体原因，保留标准模型错误码的分类。
+            if status == "failed" and isinstance(code, str) and code.lower() in MODEL_ERROR_CODES:
+                reason, hint = "model", "上游模型不可用或当前密钥没有该模型的权限，请更换可用型号或联系服务商"
+            # 任务原始报错可能含提示词或内部地址，不能直接返回给工作台。
+            raise HTTPException(502, detail={"code": "image_task_failed", "reason": reason, "error": hint})
+        raise ValueError("异步图片任务状态异常")
 
 
 async def _public_image(url: str) -> bytes:
@@ -152,23 +285,47 @@ def normalize_image(raw: bytes) -> dict:
                     "width": source.width, "height": source.height}
 
 
+async def _normalize_when_available(raw: bytes) -> dict:
+    while True:
+        try:
+            return await run_sync_in("media", normalize_image, raw)
+        except HTTPException as exc:
+            if exc.status_code != 429:
+                raise
+            # 模型已出图，只等待本地处理槽位；沿用候选总超时，不重新请求上游。
+            await asyncio.sleep(0.05)
+
+
 @observe_provider
 @bounded_image_request
 async def generate_image(config: dict, prompt: str) -> dict:
+    processing_image = False
     body = {"model": config["model"], "prompt": prompt, "n": 1, "size": config["size"]}
+    mode = config.get("requestMode", "auto")
+    if mode == "async":
+        body["async"] = True
     if config["responseFormat"] != "auto":
         body["response_format"] = config["responseFormat"]
     try:
         # Total timeout also bounds a provider trickling bytes indefinitely.
         async with asyncio.timeout(config["timeout"]):
-            async with borrow_client("image-generation", config["timeout"]) as client:
-                record_attempt()
+            endpoint = generation_url(config["baseUrl"])
+            async with borrow_client("image-generation", config["timeout"], base_url=endpoint) as client:
                 from app.services.generation_budget import reserve
                 await run_sync(reserve, images=1)
-                async with client.stream("POST", generation_url(config["baseUrl"]), json=body,
-                                         headers={"Authorization": "Bearer " + config["api_key"]}) as response:
-                    response.raise_for_status()
-                    data = json.loads(await _read_limited(response, MAX_RESPONSE_BYTES))
+                record_attempt()
+                headers = {"Authorization": "Bearer " + config["api_key"]}
+                try:
+                    data = await _provider_json(client, "POST", endpoint, headers, body)
+                except HTTPException as exc:
+                    # 仅在服务明确拒绝同步协议时协商一次；超时、断线和其他 400 均不重发。
+                    if mode != "auto" or not isinstance(exc.detail, dict) or exc.detail.get("reason") != "async_required":
+                        raise
+                    record_attempt()
+                    data = await _provider_json(client, "POST", endpoint, headers, {**body, "async": True})
+                # 同步成品也可能附带 task_id/poll_url；仅在尚无图片时进入异步轮询。
+                if not _has_image_result(data) and (data.get("object") == "image_task" or "task_id" in data or "poll_url" in data):
+                    data = await _poll_image_task(client, data, endpoint, headers)
             if not isinstance(data, dict) or not isinstance(data.get("data"), list) or not data["data"]:
                 raise ValueError("接口没有返回图片")
             record_usage(data.get("usage"))
@@ -176,19 +333,27 @@ async def generate_image(config: dict, prompt: str) -> dict:
             if not isinstance(item, dict):
                 raise ValueError("接口返回的图片格式异常")
             if isinstance(item.get("b64_json"), str) and item["b64_json"]:
-                raw = base64.b64decode(item["b64_json"], validate=True)
+                raw = await run_sync_in("media", base64.b64decode, item["b64_json"], validate=True)
             elif isinstance(item.get("url"), str) and item["url"]:
                 raw = await _public_image(item["url"])
             else:
                 raise ValueError("接口未返回 b64_json 或图片 URL")
-            image = await run_sync(normalize_image, raw)
+            # 归一化会产生新 PNG 和 Base64，提前释放供应商的大响应，减少峰值副本。
+            del item, data
+            processing_image = True
+            image = await _normalize_when_available(raw)
         return {**image, "prompt": prompt}
+    except httpx.PoolTimeout as exc:
+        raise HTTPException(429, detail={"error": "生图连接池繁忙，请稍后重试"}) from exc
     except (TimeoutError, httpx.TimeoutException) as exc:
-        raise HTTPException(504, detail={"error": "生图等待超时，未自动重发；可查询原请求状态"}) from exc
+        if processing_image:
+            raise HTTPException(429, detail={"code": "image_processing_busy",
+                "error": "上游已返回图片，但本地处理超时；重新生成可能产生新的费用"}) from exc
+        raise HTTPException(504, detail={"error": "生图等待超时，请查询原请求状态；上游可能已处理并计费"}) from exc
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(502, detail={"error": f"生图服务请求失败（HTTP {exc.response.status_code}），请检查接口与模型配置"}) from exc
-    except httpx.TransportError as exc:
-        raise HTTPException(502, detail={"error": "生图服务连接中断，未自动重发；可查询原请求状态"}) from exc
+        raise HTTPException(502, detail=_provider_error(exc.response.status_code)) from exc
+    except (httpx.TransportError, httpx.DecodingError) as exc:
+        raise HTTPException(502, detail={"error": "生图服务连接中断，请查询原请求状态；上游可能已处理并计费"}) from exc
     except (ValueError, binascii.Error, UnidentifiedImageError, OSError, Image.DecompressionBombError,
             Image.DecompressionBombWarning) as exc:
         raise HTTPException(502, detail={"error": "生图接口未返回有效图片，请检查返回格式和图片大小"}) from exc

@@ -17,6 +17,7 @@ class ImageModelConfig(BaseModel):
     timeout: int = Field(300, ge=30, le=600)
     size: str = Field("1024x1536", max_length=30)
     responseFormat: Literal["auto", "b64_json", "url"] = "auto"
+    requestMode: Literal["auto", "sync", "async"] = "auto"
 
     @field_validator("baseUrl")
     @classmethod

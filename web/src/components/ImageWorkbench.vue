@@ -84,7 +84,7 @@ const status = computed(() => {
 })
 const statusHint = computed(() => checking.value ? '正在找回已有图片，不会发起新的生成。'
   : busy.value ? batch.state.paused ? '正在生成的这一张会保留，后续图片等你继续。' : '图片逐张完成，生成期间可查看和下载已完成的图片。'
-  : batch.unresolved ? '先查询本次结果，确认后再继续，避免重复生成。'
+  : batch.unresolved ? '只查询原请求结果，不会重复生成；也可点击下方手动查询。'
   : !batch.remaining ? '可下载单张图片，或合并为 PDF 打印。'
   : !batchParams.value ? '原批次设置无法读取，请重新设置并新建批次，已完成的图片仍可下载。'
   : retrying.value ? '继续生成会重试未完成的图片，可能产生新的费用；已完成的图片会保留。'

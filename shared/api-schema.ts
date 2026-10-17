@@ -1,7 +1,7 @@
 // 自动生成：python scripts/generate_api_types.py；请修改后端模型后重新生成。
 export interface ApiSchemas {
   "AdminCreateUser": { "password": string; "role"?: string; "username": string }
-  "AdminLlmConfigIn": { "apiKey"?: string; "baseUrl"?: string; "maxTokens"?: number; "model"?: string; "timeout"?: number }
+  "AdminLlmConfigIn": { "apiKey"?: string; "baseUrl"?: string; "id"?: (string | null); "maxTokens"?: number; "model"?: string; "timeout"?: number }
   "AdminProfileUpdate": { "avatar"?: (string | null); "new_password"?: (string | null); "nickname"?: (string | null); "revision": number; "username"?: (string | null) }
   "AdminUpdateUser": { "is_active"?: (boolean | null); "password"?: (string | null); "role"?: (string | null) }
   "ArchiveUpdate": { "favorite"?: (boolean | null); "folder_id"?: (string | null); "title"?: (string | null) }
@@ -50,7 +50,9 @@ export interface ApiSchemas {
   "GroupInput": { "name": string; "revision"?: number }
   "HTTPValidationError": { "detail"?: Array<ApiSchemas["ValidationError"]> }
   "HomeSettings": { "banner_mode"?: "welcome" | "operations"; "revision"?: number }
-  "ImageModelConfig": { "apiKey"?: string; "baseUrl": string; "model": string; "responseFormat"?: "auto" | "b64_json" | "url"; "size"?: string; "timeout"?: number }
+  "ImageModelConfig": { "apiKey"?: string; "baseUrl": string; "model": string; "requestMode"?: "auto" | "sync" | "async"; "responseFormat"?: "auto" | "b64_json" | "url"; "size"?: string; "timeout"?: number }
+  "ImageModelProfile": { "apiKey"?: string; "baseUrl": string; "enabled"?: boolean; "id": string; "model": string; "name"?: string; "requestMode"?: "auto" | "sync" | "async"; "responseFormat"?: "auto" | "b64_json" | "url"; "size"?: string; "timeout"?: number }
+  "ImageModelProfiles": { "models": Array<ApiSchemas["ImageModelProfile"]>; "revision": string }
   "ImageWorksheetItem": { "game_type": ApiSchemas["GameType"]; "question_count"?: (number | null) }
   "ImageWorksheetRequest": { "difficulty"?: ApiSchemas["Difficulty"]; "grade": string; "image_count"?: number; "image_index"?: number; "items"?: Array<ApiSchemas["ImageWorksheetItem"]>; "keyword"?: string; "requirements"?: string; "style"?: "playful" | "clean" | "black_white"; "subject": string }
   "KnowledgeScope": { "allowed": Array<string>; "books"?: Array<ApiSchemas["TextbookBook"]>; "catalog_revision"?: string; "forbidden": Array<string>; "grade": string; "semesters"?: ({ [key: string]: Array<string> } | null); "subject": string }
@@ -76,6 +78,8 @@ export interface ApiSchemas {
   "SupportSettings": { "benefits"?: string; "email"?: string; "hours"?: string; "phone"?: string; "qr_url"?: string; "revision"?: number; "wechat"?: string }
   "TagInput": { "is_visible"?: boolean; "kind": "textbook" | "term" | "unit" | "knowledge"; "name": string; "revision"?: number; "sort_order"?: number }
   "TemplateIn": { "expected_revision"?: (number | null); "template": { [key: string]: unknown } }
+  "TextModelProfile": { "apiKey"?: string; "baseUrl": string; "enabled"?: boolean; "id": string; "maxTokens"?: number; "model": string; "name"?: string; "timeout"?: number }
+  "TextModelProfiles": { "models": Array<ApiSchemas["TextModelProfile"]>; "revision": string }
   "TextbookBook": { "id": string; "semester": string; "series": string; "source_url": string; "units": Array<ApiSchemas["TextbookUnit"]>; "verified_on": string }
   "TextbookUnit": { "page": number; "title": string; "topics"?: Array<string> }
   "TopicInput": { "description"?: string; "is_visible"?: boolean; "paper_ids"?: Array<string>; "revision"?: number; "sort_order"?: number; "title": string }
@@ -142,10 +146,10 @@ export interface ApiOperations {
   "GET /api/v1/admin/feedbacks": { body: unknown }
   "DELETE /api/v1/admin/image-config": { body: unknown }
   "GET /api/v1/admin/image-config": { body: unknown }
-  "PUT /api/v1/admin/image-config": { body: ApiSchemas["ImageModelConfig"] }
+  "PUT /api/v1/admin/image-config": { body: (ApiSchemas["ImageModelProfiles"] | ApiSchemas["ImageModelConfig"]) }
   "DELETE /api/v1/admin/llm-config": { body: unknown }
   "GET /api/v1/admin/llm-config": { body: unknown }
-  "PUT /api/v1/admin/llm-config": { body: ApiSchemas["AdminLlmConfigIn"] }
+  "PUT /api/v1/admin/llm-config": { body: (ApiSchemas["TextModelProfiles"] | ApiSchemas["AdminLlmConfigIn"]) }
   "GET /api/v1/admin/logs": { body: unknown }
   "GET /api/v1/admin/mini-users": { body: unknown }
   "POST /api/v1/admin/mini-users": { body: ApiSchemas["MiniRegistration"] }

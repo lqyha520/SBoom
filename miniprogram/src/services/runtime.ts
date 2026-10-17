@@ -4,7 +4,7 @@ interface Diagnostic { kind: DiagnosticKind; minute: number; count: number }
 const KEY = 'lc-diagnostics-v1'
 const kinds = new Set<DiagnosticKind>(['runtime', 'promise', 'network', 'server', 'memory', 'update'])
 const events: Diagnostic[] = []
-const performanceKinds = ['api', 'catalog_api', 'asset_wait', 'asset_download', 'asset_bytes', 'home_cold', 'home_warm', 'reader_image'] as const
+const performanceKinds = ['api', 'catalog_api', 'asset_wait', 'asset_download', 'asset_bytes', 'home_cold', 'home_warm', 'reader_image', 'pdf_open'] as const
 type PerformanceKind = typeof performanceKinds[number]
 const samples = new Map<PerformanceKind, number[]>()
 export function recordPerformance(event: { kind?: unknown; value?: unknown }) {

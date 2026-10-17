@@ -199,6 +199,19 @@ test('手机网络异常后直接查询原请求，成功找回图片且不重�
   expect(api.unexpected).toEqual([])
 })
 
+test('断线后自动查询找回图片，剩余页面仍需用户点击继续', async ({ page, context }) => {
+  const api = await imageApi(page, context, { unknownFirst: true })
+  await openImages(page)
+  await configure(page, 2)
+  await page.getByRole('button', { name: '生成 2 张图片' }).click()
+  await expect(page.locator('.image-batch-status')).toContainText('生成结果待确认')
+  await expect(page.getByRole('button', { name: '继续生成剩余 1 张' })).toBeVisible({ timeout: 15_000 })
+  expect(api.calls).toHaveLength(1)
+  expect(api.queries).toEqual([api.calls[0].id])
+  await expect(page.getByRole('button', { name: '下载本张' })).toBeEnabled()
+  expect(api.unexpected).toEqual([])
+})
+
 test('明确失败后提示重试费用，修改下一批条件不会改变本批次的继续生成', async ({ page, context }) => {
   const api = await imageApi(page, context, { rejectFirst: true })
   await openImages(page)
