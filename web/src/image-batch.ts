@@ -2,7 +2,7 @@ import { openDB } from 'idb'
 import { computed, reactive, shallowRef } from 'vue'
 import { ApiError } from './api'
 import { randomId } from '../../shared/webcrypto'
-import { fetchImageStatus, generateWorksheetImage, imageWorksheetTitle, loadImageBlob, type ImageWorksheetParams, type WorksheetImage } from './image-generation'
+import { fetchImageStatus, generateWorksheetImage, imageBlob, imageWorksheetTitle, loadImageBlob, type ImageWorksheetParams, type WorksheetImage } from './image-generation'
 
 export const MAX_WORKSHEET_IMAGES = 10
 type PageState = 'queued' | 'running' | 'unknown' | 'failed' | 'ready' | 'expired'
@@ -10,6 +10,7 @@ export interface GeneratedPage { id: string; state: PageState; error: string; im
 const validId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(value)
 const imageCache = async () => openDB('lc-worksheet-images', 1, { upgrade(db) { db.createObjectStore('images') } })
 const states: PageState[] = ['queued', 'running', 'unknown', 'failed', 'ready', 'expired']
+const MAX_RECOVERY_QUERIES = 120
 
 /** Each page keeps its own paid request ID. Reloads only query; resuming needs a click. */
 export function useImageBatch(storageKey: string, current: () => boolean, onImage: (index: number) => void) {
@@ -18,12 +19,39 @@ export function useImageBatch(storageKey: string, current: () => boolean, onImag
   const storageError = shallowRef('')
   const historyKey = storageKey + '_history'
   const input = shallowRef<ImageWorksheetParams | null>(null)
+  const reads = new AbortController()
+  let recoveryTimer: ReturnType<typeof setTimeout> | undefined
+  let recoveryQueries = 0
   let disposed = false
   const active = () => !disposed && current()
   const unresolved = computed(() => state.pages.some(page => page.state === 'running' || page.state === 'unknown'))
   const completed = computed(() => state.pages.filter(page => !!page.image).length)
   const remaining = computed(() => state.pages.filter(page => page.state !== 'ready').length)
   const canContinue = computed(() => !!input.value && remaining.value > 0 && !unresolved.value && !state.busy && !state.checking)
+  const visibleOnline = () => document.visibilityState !== 'hidden' && navigator.onLine !== false
+  function cancelRecovery() {
+    clearTimeout(recoveryTimer); recoveryTimer = undefined
+  }
+  function scheduleRecovery() {
+    cancelRecovery()
+    if (!active() || !unresolved.value || state.busy || state.checking || !visibleOnline() || recoveryQueries >= MAX_RECOVERY_QUERIES) return
+    // 只查询原 ID；逐步降到每 30 秒一次，后台页和离线时暂停。
+    const delay = Math.min(5_000 * 2 ** Math.min(recoveryQueries, 3), 30_000)
+    recoveryTimer = setTimeout(() => {
+      recoveryTimer = undefined
+      if (!active() || !visibleOnline()) return
+      recoveryQueries++
+      void recover()
+    }, delay)
+  }
+  function resumeRecovery() {
+    if (active() && visibleOnline() && unresolved.value && !state.busy && !state.checking) {
+      recoveryQueries = 0
+      void recover()
+    }
+  }
+  document.addEventListener('visibilitychange', resumeRecovery)
+  window.addEventListener('online', resumeRecovery)
   function persist(): boolean {
     try {
       localStorage.setItem(storageKey, JSON.stringify({ version: 1, input: input.value, pages: state.pages.map(({ id, state }) => ({ id, state })) }))
@@ -34,9 +62,9 @@ export function useImageBatch(storageKey: string, current: () => boolean, onImag
       return false
     }
   }
-  async function show(page: GeneratedPage, image: WorksheetImage, index: number) {
+  async function show(page: GeneratedPage, image: WorksheetImage, index: number, cached = false) {
     if (!active()) return
-    const blob = await loadImageBlob(image)
+    const blob = await loadImageBlob(image, reads.signal)
     if (!active()) return
     // IndexedDB stores structured Blob values; never duplicate base64 in state.
     const { b64_json: _legacy, ...metadata } = image
@@ -44,7 +72,7 @@ export function useImageBatch(storageKey: string, current: () => boolean, onImag
     const url = URL.createObjectURL(blob)
     if (page.url) URL.revokeObjectURL(page.url)
     page.image = stored; page.url = url; page.state = 'ready'; page.error = ''
-    await imageCache().then(async db => {
+    if (!cached) await imageCache().then(async db => {
       try {
         const owner = storageKey.match(/^lc_u([^_]+)_/)?.[1]
         if (active() && (!owner || !localStorage.getItem('lc_purge:' + owner))) await db.put('images', stored, storageKey + ':' + page.id)
@@ -55,6 +83,7 @@ export function useImageBatch(storageKey: string, current: () => boolean, onImag
   function release() { state.pages.forEach(page => { if (page.url) URL.revokeObjectURL(page.url) }) }
   async function run() {
     if (!active() || !canContinue.value || !input.value) return
+    cancelRecovery(); recoveryQueries = 0
     state.busy = true; state.paused = false; state.error = ''
     try {
       for (const [index, page] of state.pages.entries()) {
@@ -84,7 +113,7 @@ export function useImageBatch(storageKey: string, current: () => boolean, onImag
           break
         } finally { if (active()) persist() }
       }
-    } finally { state.busy = false }
+    } finally { state.busy = false; scheduleRecovery() }
   }
   async function start(params: ImageWorksheetParams, count: number) {
     if (!active() || state.busy || state.checking || unresolved.value) return
@@ -97,6 +126,7 @@ export function useImageBatch(storageKey: string, current: () => boolean, onImag
   }
   async function recover() {
     if (!active() || state.busy || state.checking) return
+    cancelRecovery()
     state.checking = true; state.error = ''
     try {
       for (const [index, page] of state.pages.entries()) {
@@ -104,10 +134,24 @@ export function useImageBatch(storageKey: string, current: () => boolean, onImag
         if (page.image || page.state === 'queued' || page.state === 'expired') continue
         try {
           let cached: WorksheetImage | undefined
-          try { const db = await imageCache(); cached = await db.get('images', storageKey + ':' + page.id); db.close() } catch { /* Server recovery remains available. */ }
+          try {
+            const db = await imageCache()
+            try {
+              cached = await db.get('images', storageKey + ':' + page.id)
+              if (cached) {
+                try {
+                  if (cached.request_id !== page.id) throw new Error('缓存请求不匹配')
+                  imageBlob(cached)
+                } catch {
+                  cached = undefined
+                  await db.delete('images', storageKey + ':' + page.id)
+                }
+              }
+            } finally { db.close() }
+          } catch { /* Server recovery remains available. */ }
           if (!active()) break
-          if (cached) { await show(page, cached, index); continue }
-          const value = await fetchImageStatus(page.id)
+          if (cached) { await show(page, cached, index, true); if (active()) persist(); continue }
+          const value = await fetchImageStatus(page.id, reads.signal)
           if (!active()) break
           if (value.kind !== 'image') throw new Error('该请求不是图片生成任务')
           if (value.status === 'succeeded' && value.result) await show(page, value.result, index)
@@ -123,7 +167,7 @@ export function useImageBatch(storageKey: string, current: () => boolean, onImag
         }
         if (active()) persist()
       }
-    } finally { state.checking = false }
+    } finally { state.checking = false; scheduleRecovery() }
   }
   function archiveCurrent() {
     if (!state.pages.length || !input.value) return
@@ -177,5 +221,10 @@ export function useImageBatch(storageKey: string, current: () => boolean, onImag
   }
   return reactive({ state, history, storageError, selectHistory, completed, remaining, unresolved, canContinue, start, run, recover, restore,
     parameters: () => input.value ? JSON.parse(JSON.stringify(input.value)) as ImageWorksheetParams : null,
-    pause: () => { state.paused = true }, dispose: () => { disposed = true; release() } })
+    pause: () => { state.paused = true }, dispose: () => {
+      disposed = true; cancelRecovery(); reads.abort()
+      document.removeEventListener('visibilitychange', resumeRecovery)
+      window.removeEventListener('online', resumeRecovery)
+      release()
+    } })
 }

@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto'
 import { Blob as NativeBlob } from 'node:buffer'
+import { openDB } from 'idb'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { useImageBatch } from '../image-batch'
 import { fetchImageStatus, generateWorksheetImage, type ImageWorksheetParams } from '../image-generation'
@@ -52,4 +53,28 @@ it('names automatic batches by grade and subject and preserves their empty selec
   expect(batch.completed).toBe(1)
   expect(generateWorksheetImage).toHaveBeenCalledTimes(2)
   batch.dispose()
+})
+
+it('恢复完好的本机图片不重复写入 Blob，坏缓存可回源找回并修复', async () => {
+  const key = 'cache-repair'
+  const original = useImageBatch(key, () => true, () => {})
+  await original.start(params, 2)
+  const ids = original.state.pages.map(page => page.id)
+  original.dispose()
+  const db = await openDB('lc-worksheet-images', 1)
+  await db.put('images', { request_id: ids[1], mime_type: 'image/png', blob: new NativeBlob([], { type: 'image/png' }) }, key + ':' + ids[1])
+  db.close()
+  const writes = vi.spyOn(IDBObjectStore.prototype, 'put')
+  vi.mocked(fetchImageStatus).mockImplementation(async id => ({ kind: 'image', status: 'succeeded',
+    result: { request_id: id, b64_json: btoa('recovered'), mime_type: 'image/png', width: 2, height: 3, prompt: 'test' },
+  } as Awaited<ReturnType<typeof fetchImageStatus>>))
+  const restored = useImageBatch(key, () => true, () => {})
+  try {
+    await restored.restore()
+    expect(restored.completed).toBe(2)
+    expect(fetchImageStatus).toHaveBeenCalledExactlyOnceWith(ids[1], expect.any(AbortSignal))
+    expect(writes).toHaveBeenCalledTimes(1)
+    expect(generateWorksheetImage).toHaveBeenCalledTimes(2)
+    expect(restored.state.pages[1].image?.blob?.size).toBe(9)
+  } finally { restored.dispose(); writes.mockRestore() }
 })

@@ -102,6 +102,8 @@ test('runtime reconnects once, updates only with confirmation, and diagnostics n
   assert.equal(performance[0].count, 60)
   assert.equal(performance[0].p50, 70); assert.equal(performance[0].p95, 97)
   assert.ok(!exports.diagnosticSummary().includes('SECRET'))
+  exports.recordPerformance({ kind: 'pdf_open', value: 1200 })
+  assert.equal(exports.performanceSummary().find((item: any) => item.kind === 'pdf_open').p95, 1200)
 })
 
 test('lazy images release downloaded files offscreen and reacquire before reentry', async () => {

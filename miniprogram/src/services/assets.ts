@@ -130,6 +130,9 @@ export function pdfTimeout(bytes: number) {
 }
 
 export async function openPdf(asset: Asset, title: string, progress?: (percent: number) => void) {
+  // #ifdef MP-WEIXIN
+  const openedAt = Date.now()
+  // #endif
   const handle = pdfFiles.acquire('pdf:' + (asset.byte_size || 0) + ':' + asset.url, progress, 3)
   uni.getNetworkType?.({ success: result => {
     if (['2g', '3g', '4g', '5g'].includes(result.networkType) && asset.byte_size > 5 * 1024 * 1024) {
@@ -146,7 +149,10 @@ export async function openPdf(asset: Asset, title: string, progress?: (percent: 
     // #ifdef MP-WEIXIN
     await new Promise<void>((resolve, reject) => uni.openDocument({
       filePath: path, fileType: 'pdf', showMenu: true,
-      success() { resolve() }, fail() { reject(new ApiError('无法打开 PDF，请重试')) },
+      success() {
+        uni.$emit?.('lc-performance', { kind: 'pdf_open', value: Date.now() - openedAt })
+        resolve()
+      }, fail() { reject(new ApiError('无法打开 PDF，请重试')) },
     }))
     // #endif
     // #ifdef H5

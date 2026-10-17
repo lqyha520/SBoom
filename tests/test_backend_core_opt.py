@@ -188,7 +188,7 @@ class TestLlmSsrfContracts(unittest.TestCase):
         self.client = TestClient(app)
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
-        self.stack.enter_context(patch.object(app_config, "get_llm", return_value={
+        self.stack.enter_context(patch.object(app_config, "get_admin_config", return_value={
             "baseUrl": "https://api.example.invalid", "model": "m", "timeout": 30, "hasKey": True, "api_key": "k"}))
         self.stack.enter_context(patch.object(httpx.AsyncClient, "stream", side_effect=AssertionError("must not connect")))
 

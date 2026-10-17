@@ -86,6 +86,38 @@ class QualityRules(unittest.TestCase):
 
 
 class ReviewProtocol(unittest.IsolatedAsyncioTestCase):
+    async def test_compact_review_retains_all_solving_data_and_zero_answers(self):
+        source = [
+            {**choice(0), "acceptable_answers": ["四"], "difficulty_level": 1, "tags": ["internal"],
+             "expected_time_seconds": 30},
+            {"type": "number_split", "top": 5, "left": 5, "right": "____", "answer": 0, "analysis": "5-5=0"},
+            {"type": "match_pair", "left_items": ["a", "b"], "right_items": ["B", "A"],
+             "answer": [[0, 1], [1, 0]], "analysis": "大小写对应"},
+            {"type": "compare", "left_expr": "1+2", "right_expr": "3", "answer": "=", "analysis": ""},
+        ]
+        value = result(*source)
+        value.passage = "审查所需的完整正文。"
+        original = json.dumps({"sections": [{"game_type": value.game_type, "passage": value.passage, "questions": [
+            {"review_id": f"q{i}", **q.model_dump(exclude={"quality_status", "quality_issues"})}
+            for i, q in enumerate(value.questions, 1)]}]}, ensure_ascii=False)
+        call = AsyncMock(side_effect=fixtures.passed_review)
+        await review_results([result(), value], request(), call)
+        serialized = call.await_args.args[1]
+        sent = json.loads(serialized)["sections"]
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["passage"], value.passage)
+        for index, (raw, compact) in enumerate(zip(source, sent[0]["questions"], strict=True), 1):
+            self.assertEqual(compact["review_id"], f"q{index}")
+            for key, content in raw.items():
+                if key not in {"tags", "expected_time_seconds"}:
+                    self.assertEqual(compact[key], content)
+            self.assertNotIn("id", compact)
+            self.assertNotIn("quality_status", compact)
+            self.assertNotIn("tags", compact)
+            self.assertNotIn(None, compact.values())
+        self.assertLess(len(serialized.encode()), len(original.encode()) * 0.75)
+        self.assertEqual(value.questions[-1].quality_status, "needs_review")
+
     async def test_process_fill_prompt_and_validator_agree_for_carrying_addition(self):
         body = GenerateRequest(grade="小学一年级", subject="数学", keyword="20以内的进位加法", game_type="fill_blank", question_count=1)
         scope = KnowledgeScope(grade=body.grade, subject=body.subject, allowed=[body.keyword], forbidden=[])

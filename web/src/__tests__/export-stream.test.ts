@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
-import { exportPDF, exportPNG } from '../exporter'
+import { exportBatch, exportPDF, exportPNG } from '../exporter'
+import { ExportBudget } from '../export-budget'
 import { TEMPLATES } from '../constants'
 import { STYLE_DEFAULTS } from '../stores/exam-local'
 import type { PaperData } from '../types'
@@ -28,6 +29,7 @@ vi.mock('jszip', () => ({ default: class { file = state.file; generateAsync = st
 vi.mock('jspdf', () => ({ jsPDF: class {
   addImage = pdf.addImage; addPage = pdf.addPage; save = pdf.save
   getNumberOfPages() { return state.pages }
+  output() { return new ArrayBuffer(3) }
   setFont() {}; setFontSize() {}; setPage() {}; text() {}
 } }))
 
@@ -75,4 +77,32 @@ it('取消后释放当前画布并停止下一页及下载', async () => {
   expect(state.pack).not.toHaveBeenCalled()
   expect(HTMLAnchorElement.prototype.click).not.toHaveBeenCalled()
   expect(document.querySelector('.paper-stack')).toBeNull()
+})
+
+it('合并导出达到整批页数上限后，在下一份截图前停止且不下载残卷', async () => {
+  state.pages = 40
+  await expect(exportBatch([paper, paper, paper, paper], TEMPLATES[0], STYLE_DEFAULTS, { addDay: false, mergeOnly: true })).rejects.toThrow('容量上限')
+  expect(state.rendered).toHaveBeenCalledTimes(120)
+  expect(HTMLAnchorElement.prototype.click).not.toHaveBeenCalled()
+  expect(document.querySelector('[data-export-holder]')).toBeNull()
+})
+
+it('ZIP 学生卷、合并卷、答案和序列化文件均计入同一预算', async () => {
+  const retain = vi.spyOn(ExportBudget.prototype, 'retain')
+  const reserve = vi.spyOn(ExportBudget.prototype, 'reservePages')
+  await exportBatch([paper], TEMPLATES[0], STYLE_DEFAULTS, { addDay: false })
+  expect(reserve.mock.calls).toEqual([[2], [2]])
+  expect(retain.mock.calls).toEqual([[10], [10], [3], [5], [5], [3], [3]])
+  expect(state.file).toHaveBeenCalledTimes(3)
+  expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledOnce()
+})
+
+it('编码预算超限后释放画布，不开始下一页、合成或下载', async () => {
+  vi.spyOn(ExportBudget.prototype, 'retain').mockImplementation(() => { throw new Error('容量上限') })
+  await expect(exportBatch([paper], TEMPLATES[0], STYLE_DEFAULTS, { addDay: false })).rejects.toThrow('容量上限')
+  expect(state.rendered).toHaveBeenCalledOnce()
+  expect(state.canvases[0].width).toBe(0)
+  expect(state.pack).not.toHaveBeenCalled()
+  expect(HTMLAnchorElement.prototype.click).not.toHaveBeenCalled()
+  expect(document.querySelector('[data-export-holder]')).toBeNull()
 })

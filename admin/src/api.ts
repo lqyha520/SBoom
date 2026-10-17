@@ -64,7 +64,7 @@ export function accountChanged() {
 
 /** 默认超时：后台接口均为轻量操作，30s 足够（test-llm 除外，可能要等首 token） */
 const DEFAULT_TIMEOUT_MS = 30_000
-const TEST_LLM_TIMEOUT_MS = 120_000
+const TEST_LLM_TIMEOUT_MS = 610_000
 
 export async function request<T>(url: string, init?: RequestInit, responseType: 'json' | 'blob' = 'json'): Promise<T> {
   const authEntry = url === '/api/v1/auth/login' || url === '/api/v1/auth/register' || url === '/api/v1/auth/me'
@@ -209,18 +209,22 @@ export async function fetchAdminLogs(lines = 200): Promise<string> {
 
 /* ── 全局模型配置（全体用户共用的 LLM 服务） ── */
 export interface GlobalLlmConfig {
+  revision?: string
   baseUrl: string
   model: string
   maxTokens?: number
   timeout: number
   hasKey: boolean
+  models?: TextModelProfile[]
 }
+
+export type TextModelProfile = Omit<ApiSchemas["TextModelProfile"], 'apiKey'> & { hasKey: boolean }
 
 export async function fetchLlmConfig(): Promise<GlobalLlmConfig> {
   return request('/api/v1/admin/llm-config')
 }
 
-export async function saveLlmConfig(cfg: ApiSchemas["AdminLlmConfigIn"]): Promise<{ message: string; hasKey: boolean }> {
+export async function saveLlmConfig(cfg: ApiSchemas["TextModelProfiles"] | ApiSchemas["AdminLlmConfigIn"]): Promise<GlobalLlmConfig & { message: string }> {
   return request('/api/v1/admin/llm-config', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -229,8 +233,8 @@ export async function saveLlmConfig(cfg: ApiSchemas["AdminLlmConfigIn"]): Promis
 }
 
 /** 清除全局模型配置（含已存密钥）：密钥疑似泄露/换服务商时使用 */
-export async function clearLlmConfig(): Promise<{ message: string }> {
-  return request('/api/v1/admin/llm-config', { method: 'DELETE' })
+export async function clearLlmConfig(revision?: string): Promise<GlobalLlmConfig & { message: string }> {
+  return request('/api/v1/admin/llm-config', { method: 'DELETE', headers: revision ? { 'If-Match': revision } : {} })
 }
 
 export async function testLlm(cfg?: ApiSchemas["AdminLlmConfigIn"]): Promise<{ reply: string }> {

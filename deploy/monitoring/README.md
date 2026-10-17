@@ -48,6 +48,8 @@ sudo systemctl restart learn-coach-ops-check.service
 
 已有Prometheus可使用 `prometheus.yml.example` 与 `alerts.yml.example`。分别复制为 `/etc/prometheus/prometheus.yml` 和 `/etc/prometheus/learn-coach-alerts.yml`（与rule_files保持一致），先运行 `promtool check config /etc/prometheus/prometheus.yml` 与 `promtool check rules /etc/prometheus/learn-coach-alerts.yml`；再在现有Alertmanager中配置接收人。本仓库没有启动Prometheus/Alertmanager或宣称通知已经送达。
 
+`generation_stage_duration_seconds` 的 `status` 为 `success/degraded/skipped/error`。复核超时、协议错误但保留题目的结果记 `degraded`；无候选题记 `skipped`；未处理异常及取消记 `error`。复核协议完整处理记 `success`，其中仍可能包含剔除题或待人工核对题，不应当作正确率。统计复核尝试失败比例时分母排除 `skipped`，分子包括 `degraded` 与 `error`；直方图可继续按阶段统计 p50/p95。
+
 ## 投产验收
 
 - 公网readyz正常；在隔离演练中关闭探测端点后告警、恢复后恢复通知。

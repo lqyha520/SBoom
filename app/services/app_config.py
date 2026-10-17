@@ -11,11 +11,19 @@ import json
 import logging
 import threading
 import time
+from copy import deepcopy
 
 from app.config import get_settings
 from app.db import db
 from app.provider_policy import require_new_key, validate_endpoint
 from app.security import decrypt_secret, encrypt_secret
+from app.services.model_profiles import (
+    check_revision,
+    encode_profiles,
+    public_config,
+    public_profile,
+    require_legacy_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +77,7 @@ def _snapshot() -> tuple[dict | None, bool]:
     with _cache_lock:
         if _cache_raw is None:
             return None, False
-        return dict(_cache_raw), time.monotonic() - _cache_ts < _CACHE_TTL_SECONDS
+        return deepcopy(_cache_raw), time.monotonic() - _cache_ts < _CACHE_TTL_SECONDS
 
 
 def _refresh() -> dict:
@@ -80,9 +88,9 @@ def _refresh() -> dict:
     loaded = _load_llm_raw()
     with _cache_lock:
         if _cache_gen == generation:
-            _cache_raw = dict(loaded)
+            _cache_raw = deepcopy(loaded)
             _cache_ts = time.monotonic()
-    return dict(loaded)
+    return deepcopy(loaded)
 
 
 # ─── 全局 LLM 配置 ───
@@ -108,6 +116,11 @@ def get_llm(with_key: bool = False) -> dict:
                 _refresh_lock.release()
     if not raw:
         return dict(_EMPTY)
+    if "models" in raw:
+        defaults = {key: value for key, value in _EMPTY.items() if key not in ("hasKey", "api_key")}
+        models = [public_profile(profile, defaults, with_key=with_key) for profile in raw["models"]]
+        primary = next((profile for profile in models if profile["enabled"]), {})
+        return {**_EMPTY, **primary, "models": models}
     key_enc = raw.get("apiKeyEnc", "")
     return {
         "baseUrl": raw.get("baseUrl", ""),
@@ -150,6 +163,7 @@ def save_llm(base_url: str, model: str, api_key: str, timeout: int, max_tokens: 
             current = {}
         if not isinstance(current, dict):
             current = {}
+        require_legacy_config(current)
         if current.get("apiKeyEnc") or get_settings().llm_api_key:
             require_new_key(current.get("baseUrl") or get_settings().llm_base_url, base_url, api_key)
         key_enc = encrypt_secret(api_key) if api_key else current.get("apiKeyEnc", "")
@@ -157,8 +171,37 @@ def save_llm(base_url: str, model: str, api_key: str, timeout: int, max_tokens: 
     _invalidate_cache()
 
 
+def _admin_snapshot(raw: dict, *, with_key: bool = False) -> dict:
+    defaults = {key: value for key, value in _EMPTY.items() if key not in ("hasKey", "api_key")}
+    result = public_config(raw, defaults, with_key=with_key)
+    if with_key:
+        result["managed"] = "models" in raw
+    return result
+
+
+def get_admin_config(with_key: bool = False) -> dict:
+    # 编辑基线必须直接读库，不能复用生成请求允许的短期旧缓存。
+    return _admin_snapshot(_load_llm_raw(), with_key=with_key)
+
+
+def save_llm_models(profiles: list, *, expected_revision: str | None = None, require_revision: bool = False) -> dict:
+    with db(serialized="accounts") as conn:
+        row = conn.execute("SELECT value FROM app_config WHERE key = ?", (_LLM_KEY,)).fetchone()
+        current = json.loads(row["value"]) if row else {}
+        if require_revision or expected_revision is not None:
+            check_revision(current, expected_revision)
+        raw = encode_profiles(profiles, current)
+        conn.execute(
+            "INSERT INTO app_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET "
+            "value = excluded.value, updated_at = datetime('now', 'localtime')",
+            (_LLM_KEY, json.dumps(raw, ensure_ascii=False)),
+        )
+    _invalidate_cache()
+    return _admin_snapshot(raw)
+
+
 def clear_llm() -> None:
-    """清除全局 LLM 配置（整行删除，含已存密钥）。用于后台重置 / 测试还原。"""
+    """删除配置行，恢复旧版环境兜底；仅用于迁移与测试还原。"""
     with db(serialized="accounts") as conn:
         conn.execute("DELETE FROM app_config WHERE key = ?", (_LLM_KEY,))
     _invalidate_cache()

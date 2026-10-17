@@ -63,7 +63,7 @@ def test_slow_image_providers_do_not_exhaust_local_media_capacity():
             await release.wait()
             return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(b"fixture").decode()}]})
         @asynccontextmanager
-        async def borrow(*args):
+        async def borrow(*args, **kwargs):
             async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as client:
                 yield client
         config = {"model": "fixture", "size": "1024x1024", "responseFormat": "auto", "timeout": 5,

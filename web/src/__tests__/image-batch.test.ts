@@ -13,7 +13,7 @@ beforeEach(() => {
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
   generate.mockImplementation(async (_, id) => image(id))
 })
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
 it('存储不可用时不发送付费请求，恢复后重用尚未发送的 ID', async () => {
   const failure = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new DOMException('Full', 'QuotaExceededError') })
@@ -61,7 +61,7 @@ it('queries the original image after an unclassified response error before allow
   expect(generate).toHaveBeenCalledOnce()
   query.mockResolvedValue({ kind: 'image', status: 'succeeded', result: image(id) } as Awaited<ReturnType<typeof fetchImageStatus>>)
   await batch.recover()
-  expect(query).toHaveBeenCalledWith(id)
+  expect(query).toHaveBeenCalledWith(id, expect.any(AbortSignal))
   expect(batch.completed).toBe(1)
   expect(batch.state.pages[0].id).toBe(id)
   expect(generate).toHaveBeenCalledOnce()
@@ -90,7 +90,7 @@ it('stops on timeout, preserves earlier results, queries before resuming and nev
   const failedId = batch.state.pages[1].id
   query.mockResolvedValue({ kind: 'image', status: 'unknown', result: null, cache_expired: false } as Awaited<ReturnType<typeof fetchImageStatus>>)
   await batch.recover()
-  expect(query).toHaveBeenCalledWith(failedId); expect(generate).toHaveBeenCalledTimes(2)
+  expect(query).toHaveBeenCalledWith(failedId, expect.any(AbortSignal)); expect(generate).toHaveBeenCalledTimes(2)
   expect(batch.state.pages[1].error).toContain('费用')
   await batch.run()
   expect(generate).toHaveBeenCalledTimes(4); expect(batch.completed).toBe(3)
@@ -172,4 +172,108 @@ it('keeps a completed paid request recoverable when its separate file download f
     expect(generate).toHaveBeenCalledTimes(1)
     batch.dispose()
   } finally { globalThis.fetch = nativeFetch }
+})
+
+it('断线后自动查询原请求，逐步降低频率，找回图片后不自动生成下一张', async () => {
+  vi.useFakeTimers()
+  generate.mockRejectedValueOnce(new ApiError('网络中断', 0))
+  const batch = useImageBatch('auto-recover', () => true, () => {})
+  try {
+    await batch.start(params, 2)
+    const id = batch.state.pages[0].id
+    query.mockResolvedValueOnce({ kind: 'image', status: 'running', result: null } as Awaited<ReturnType<typeof fetchImageStatus>>)
+      .mockResolvedValueOnce({ kind: 'image', status: 'succeeded', result: image(id) } as Awaited<ReturnType<typeof fetchImageStatus>>)
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(query).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(query).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(query).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(batch.completed).toBe(1)
+    expect(batch.canContinue).toBe(true)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(generate).toHaveBeenCalledTimes(1)
+    expect(batch.state.pages[1].state).toBe('queued')
+  } finally { batch.dispose() }
+})
+
+it('后台和离线暂停自动查询，回到页面后继续；销毁后移除监听和计时器', async () => {
+  vi.useFakeTimers()
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+  const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
+  generate.mockRejectedValueOnce(new ApiError('网络中断', 0))
+  query.mockResolvedValue({ kind: 'image', status: 'running', result: null } as Awaited<ReturnType<typeof fetchImageStatus>>)
+  const batch = useImageBatch('background-recover', () => true, () => {})
+  try {
+    await batch.start(params, 1)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(query).not.toHaveBeenCalled()
+    visibility.mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(query).toHaveBeenCalledTimes(1)
+    online.mockReturnValue(false)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(query).toHaveBeenCalledTimes(1)
+    online.mockReturnValue(true)
+    window.dispatchEvent(new Event('online'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(query).toHaveBeenCalledTimes(2)
+  } finally { batch.dispose() }
+  window.dispatchEvent(new Event('online'))
+  document.dispatchEvent(new Event('visibilitychange'))
+  await vi.advanceTimersByTimeAsync(60_000)
+  expect(query).toHaveBeenCalledTimes(2)
+  expect(query.mock.calls[0][1]?.aborted).toBe(true)
+})
+
+it('自动查询有次数上限，达到上限后仍可手动找回，不重发生成', async () => {
+  vi.useFakeTimers()
+  generate.mockRejectedValueOnce(new ApiError('网络中断', 0))
+  query.mockRejectedValue(new ApiError('暂时无法查询', 503))
+  const batch = useImageBatch('bounded-recover', () => true, () => {})
+  try {
+    await batch.start(params, 1)
+    await vi.runAllTimersAsync()
+    expect(query).toHaveBeenCalledTimes(120)
+    expect(generate).toHaveBeenCalledTimes(1)
+    expect(batch.canContinue).toBe(false)
+    query.mockResolvedValue({ kind: 'image', status: 'succeeded', result: image(batch.state.pages[0].id) } as Awaited<ReturnType<typeof fetchImageStatus>>)
+    await batch.recover()
+    expect(batch.completed).toBe(1)
+  } finally { batch.dispose() }
+})
+
+it('心跳过期的未知结果不自动重发，显式重试前保留费用提示', async () => {
+  vi.useFakeTimers()
+  generate.mockRejectedValueOnce(new ApiError('网络中断', 0))
+  const batch = useImageBatch('lease-pending', () => true, () => {})
+  try {
+    await batch.start(params, 1)
+    query.mockResolvedValue({ kind: 'image', status: 'unknown', result: null,
+      error: { code: 'generation_lease_expired', error: '任务心跳超时，结果尚不确定' }, error_status: 0,
+    } as Awaited<ReturnType<typeof fetchImageStatus>>)
+    await batch.recover()
+    expect(batch.state.pages[0].error).toContain('再次生成可能产生新的费用')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(generate).toHaveBeenCalledTimes(1)
+  } finally { batch.dispose() }
+})
+
+it('查询过程中离开页面会取消只读请求，晚到结果不创建图片或继续轮询', async () => {
+  let finish!: (value: Awaited<ReturnType<typeof fetchImageStatus>>) => void
+  generate.mockRejectedValueOnce(new ApiError('网络中断', 0))
+  query.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const batch = useImageBatch('dispose-recover', () => true, () => {})
+  await batch.start(params, 1)
+  const recovering = batch.recover()
+  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1))
+  batch.dispose()
+  expect(query.mock.calls[0][1]?.aborted).toBe(true)
+  finish({ kind: 'image', status: 'succeeded', result: image(batch.state.pages[0].id) } as Awaited<ReturnType<typeof fetchImageStatus>>)
+  await recovering
+  expect(URL.createObjectURL).not.toHaveBeenCalled()
 })

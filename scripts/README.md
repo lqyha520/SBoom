@@ -55,3 +55,48 @@ prune默认只报告。`--archive-loose --apply`按日期移动过期顶层诊�
 `bench_api.py`、`bench_memory.py`、`bench_runtime.py`、`benchmark-catalog.py`与`check-metrics-workers.py`用于隔离环境测量。逐个查看`--help`，记录数据规模、并发、进程数与目标；不得默认向生产发压测流量。`import_demo_catalog.py`只导入隔离演示数据；`smoke_site.py`已接入pg_support护栏，只在本机创建和清理 `lc_test_site_*` 一次性库，日常回归优先pytest。
 
 新增可复用脚本放本目录并补用法和安全边界；一次性排查脚本放`artifacts/日期-主题/`，不要放仓库根目录。
+
+## 质量与真机验收
+
+### 真实模型评测
+
+`evaluate_generation.py` 使用 `tests/fixtures/generation-evaluation.json` 的8组固定条件，覆盖数学、语文、英语和三档难度，每组3题。先查看计划：
+
+```bash
+python scripts/evaluate_generation.py plan
+```
+
+真实运行前，向已部署本轮后端的测试环境配置真实模型；使用专用工作台账号，通过环境变量 `LC_EVAL_USERNAME`、`LC_EVAL_PASSWORD` 提供凭据，不把密码写到命令行。明确目标与费用后执行：
+
+```bash
+python scripts/evaluate_generation.py run --base-url https://测试域名 --model-label 配置中的模型版本 --limit 8 --directory artifacts/quality-run-01 --confirm-paid
+python scripts/evaluate_generation.py collect --base-url https://测试域名 --directory artifacts/quality-run-01
+python scripts/evaluate_generation.py ratings --directory artifacts/quality-run-01 --output artifacts/quality-run-01/ratings.json
+python scripts/evaluate_generation.py report --directory artifacts/quality-run-01 --ratings artifacts/quality-run-01/ratings.json --output artifacts/quality-run-01/report.json
+```
+
+`run` 默认只执行第一组，必须显式确认付费，不复用已有目录。每个编号在发送前落盘；未知状态时停止后续样本，`collect` 只查询已提交的原编号，绝不重发生成。尚未提交的样本需之后另建一轮，不能把查询不到当作可免费重试。登录/退出只影响本工具创建的会话；不读取本机 `.env` 密码、不直接调用供应商、不改业务配置。
+
+请人工核对评分表中的题干、答案、解析、阅读依据和年级适配，将 `correct` 从 `null` 填为 `true/false`，错误题写明 `reason`。表中隐藏模型质量标签；评分绑定整轮结果摘要，结果变化必须重建评分表。报告列出各组返回数、缺题、人工覆盖率、正确率及首次HTTP请求耗时（不包含断线后查询恢复）；未评分不算正确。现有API不返回被剔除题原文，误剔除率保持未知，不以缺题率替代。
+
+报告可同时传入 `--input-per-million`、`--output-per-million`，单位为同一种货币/百万token。仅对服务端完整上报的用量估算费用，不代表账单；缓存折扣、不同模型混用、按次计费须另对账。`--model-label` 是操作者填写的配置标签，运行期间应冻结模型配置。结果含合成试题，只保存在指定目录，不上传。
+
+### 微信真机验收
+
+```bash
+python scripts/check_device_acceptance.py init artifacts/device-run-01/acceptance.json
+python scripts/check_device_acceptance.py check artifacts/device-run-01/acceptance.json
+```
+
+模板默认全部未验收。分别在低端安卓和 iOS 的可重复弱网条件下，记录设备/系统/微信版本、构建commit、网络限速/延迟及测试时间；用专用测试账号和40页资料，保存录像或开发者工具性能trace到同一目录。每个场景完成至少5次测量：
+
+| 场景 | 操作与功能确认 | 当前阈值 |
+| --- | --- | --- |
+| `cold_start` | 彻底退出后冷启动，确认首屏文字和封面可用，每次复制故障记录 | `home_cold` 每个会话p95最大值≤5000ms |
+| `reader_40_pages` | 连续前后翻页、跨组选页、缩放，确认无白页、错页、卡死；用trace另查掉帧 | `reader_image` ≤1500ms |
+| `pdf_open` | 下载并打开PDF，再从微信菜单另存且重新打开核验 | `pdf_open` ≤15000ms |
+| `foreground_resume` | 返回首页后切后台30秒再恢复，确认原账号、资料和交互状态正常 | `home_warm` ≤3000ms |
+
+上述是初始验收预算，不是实测成绩；固定测试PDF大小和网络参数后再比较版本。`home_cold/home_warm` 只计数据就绪，不代表图片绘制或前台全部业务恢复；`pdf_open` 只计微信打开回调，不代表另存成功。完整功能必须人工确认，H5不能替代微信原生文件验证。
+
+将“服务与反馈 → 复制故障记录”的JSON分别放入目录，在对应记录的 `diagnostics` 列出相对文件名，`evidence` 列出录像/trace相对文件名，完整操作成功后才填 `functional_pass: true`。多份诊断按最大会话p95校验，不伪称合并后的整体p95；相同文件不能重复凑样本。缺测量、异常/内存告警、缺文件或超阈值均返回非零。既有诊断包含历史错误计数，复测前使用干净测试安装并保留旧失败证据。校验只证明记录完整，不证明设备或录像真实性，最终由测试者签收。

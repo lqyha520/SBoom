@@ -302,7 +302,8 @@ def usage_summary(user_id: int | None = None) -> dict:
 def request_status(user_id: int, request_id: str) -> dict:
     with db() as conn:
         row = conn.execute(
-            "SELECT request_id, kind, status, created_at, lease_expires_at, finished_at, result_json, error_json, error_status "
+            "SELECT request_id, kind, status, created_at, lease_expires_at, finished_at, result_json, error_json, error_status, "
+            "model_calls, reported_calls, prompt_tokens, completion_tokens "
             "FROM generation_requests "
             "WHERE user_id = ? AND request_id = ?", (user_id, request_id),
         ).fetchone()
@@ -316,4 +317,5 @@ def request_status(user_id: int, request_id: str) -> dict:
     return {"request_id": row["request_id"], "kind": row["kind"], "status": status,
             "result": json.loads(row["result_json"]) if row["result_json"] and not expired else None,
             "error": json.loads(row["error_json"]) if row["error_json"] else None,
-            "error_status": row["error_status"], "cache_expired": expired}
+            "error_status": row["error_status"], "cache_expired": expired,
+            "usage": {key: row[key] for key in ("model_calls", "reported_calls", "prompt_tokens", "completion_tokens")}}

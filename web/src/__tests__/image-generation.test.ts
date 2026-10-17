@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { bindWorkspaceOwner } from '../api'
-import { fetchImageStatus, generateWorksheetImage, imageBlob, plannedImageQuestionCount, previewImagePrompt, type ImageWorksheetParams, type WorksheetImage } from '../image-generation'
+import { fetchImageStatus, generateWorksheetImage, imageBlob, loadImageBlob, MAX_IMAGE_BYTES, plannedImageQuestionCount, previewImagePrompt, type ImageWorksheetParams, type WorksheetImage } from '../image-generation'
 
 const params: ImageWorksheetParams = { grade: '小学三年级', subject: '数学', keyword: '两位数加减法', difficulty: 'medium', items: [{ game_type: 'fill_blank', question_count: 4 }], style: 'black_white', requirements: '预留书写空间' }
 afterEach(() => { bindWorkspaceOwner(''); vi.unstubAllGlobals() })
@@ -50,5 +50,16 @@ describe('image worksheets', () => {
     expect(blob.type).toBe('image/png'); expect(blob.size).toBe(11)
     expect(() => imageBlob({ ...image, mime_type: 'image/svg+xml' as 'image/png' })).toThrow()
     expect(() => imageBlob({ ...image, b64_json: '' })).toThrow()
+    expect(() => imageBlob({ ...image, b64_json: undefined, blob: new Blob([], { type: 'image/png' }) })).toThrow()
+    expect(() => imageBlob({ ...image, b64_json: 'A'.repeat(4 * Math.ceil(MAX_IMAGE_BYTES / 3) + 4) })).toThrow()
+  })
+  it('可取消状态查询和图片下载，不再等待已离开的页面', async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response('{}')))
+    vi.stubGlobal('fetch', fetch)
+    const controller = new AbortController()
+    controller.abort()
+    await expect(fetchImageStatus('cancelled', controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    await expect(loadImageBlob({ url: '/api/v1/image-generation/assets/' + 'a'.repeat(32) } as WorksheetImage, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetch).not.toHaveBeenCalled()
   })
 })

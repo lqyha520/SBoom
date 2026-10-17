@@ -3,6 +3,7 @@ import inspect
 import time
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from functools import wraps
 from typing import Literal
 
@@ -29,13 +30,19 @@ thread_capacity = Gauge("thread_capacity", "Thread limiter usage", ["kind", "sta
 provider_model: ContextVar[str] = ContextVar("provider_model", default="unknown")
 
 
+@dataclass
+class GenerationStageOutcome:
+    status: Literal["success", "degraded", "skipped"] = "success"
+
+
 @asynccontextmanager
 async def generation_stage(stage: Literal["generate", "validate_refill", "review"]):
     """阶段名由代码固定；包含失败/取消耗时，不记录题干、请求 ID 或账号。"""
     started, status = time.perf_counter(), "error"
+    outcome = GenerationStageOutcome()
     try:
-        yield
-        status = "success"
+        yield outcome
+        status = outcome.status
     finally:
         generation_stage_duration.labels(stage, status).observe(time.perf_counter() - started)
 

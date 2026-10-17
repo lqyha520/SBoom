@@ -40,6 +40,7 @@ declare module 'vue' {
     MemberTools: typeof import('./src/components/MemberTools.vue')['default']
     MiniAnalytics: typeof import('./src/components/MiniAnalytics.vue')['default']
     MiniUsers: typeof import('./src/components/MiniUsers.vue')['default']
+    ModelProfilesEditor: typeof import('./src/components/ModelProfilesEditor.vue')['default']
     ModelSettings: typeof import('./src/components/ModelSettings.vue')['default']
     NavigationSearch: typeof import('./src/components/NavigationSearch.vue')['default']
     NoticeManager: typeof import('./src/components/NoticeManager.vue')['default']
