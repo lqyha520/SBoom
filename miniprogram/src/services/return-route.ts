@@ -61,3 +61,8 @@ export function catalogShare(event: { target?: { dataset?: Record<string, unknow
   if (typeof data?.paperId !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(data.paperId)) return fallback
   return shareCard('paper', data.paperId, typeof data.paperTitle === 'string' ? data.paperTitle : '')
 }
+
+/** 朋友圈分享：onShareTimeline 只能分享「当前页面路径」，因此仅返回 title + query。 */
+export function shareTimeline(card = shareCard('home')) {
+  return { title: card.title, query: card.path.split('?')[1] || '' }
+}

@@ -20,19 +20,24 @@ def batch(body, admin_id=None):
             if not category:
                 fail("所选分类不存在", 404)
         elif body.action == "tags":
+            tag_ids = list(body.tag_ids)
+            kinds = {row["id"]: row["kind"] for row in conn.execute(
+                "SELECT id, kind FROM catalog_tags WHERE id = ANY(?)", (tag_ids,)).fetchall()} if tag_ids else {}
             for identifier in body.tag_ids:
-                tag = conn.execute("SELECT kind FROM catalog_tags WHERE id = ?", (identifier,)).fetchone()
-                if not tag:
+                if identifier not in kinds:
                     fail("所选标签已删除，请刷新", 404)
-                tag_kinds[identifier] = tag[0]
+                tag_kinds[identifier] = kinds[identifier]
             for kind in ("textbook", "term", "unit"):
                 if sum(1 for kind_ in tag_kinds.values() if kind_ == kind) > 1:
                     fail("教材、学期、单元各只能设置一个", 422)
+        ids = [item.id for item in body.items]
+        fetched = {row["id"]: row for row in conn.execute(
+            f"SELECT c.*, a.file_status FROM {catalog.JOIN} WHERE c.id = ANY(?)", (ids,)).fetchall()} if ids else {}
         rows = []
         for item in body.items:
-            row = conn.execute(f"SELECT c.*, a.file_status FROM {catalog.JOIN} WHERE c.id = ?", (item.id,)).fetchone()
-            if not row:
+            if item.id not in fetched:
                 fail("所选资料不存在，请刷新列表", 404)
+            row = fetched[item.id]
             if row["revision"] != item.revision:
                 fail("部分资料已被其他操作更新，本次未作修改，请刷新后重试")
             if body.action == "published" and not (row["download_mode"] == "external" and row["external_url"]) and row["file_status"] != "ready":
@@ -61,9 +66,8 @@ def batch(body, admin_id=None):
                 if len(merged.get("knowledge", [])) > 20:
                     fail("「" + row["title"] + "」合并后知识点将超过 20 个，本次未作修改", 422)
                 conn.execute("DELETE FROM catalog_paper_tags WHERE catalog_id = ?", (row["id"],))
-                for identifiers in merged.values():
-                    for identifier in identifiers:
-                        conn.execute("INSERT INTO catalog_paper_tags(catalog_id, tag_id) VALUES (?, ?)", (row["id"], identifier))
+                conn.executemany("INSERT INTO catalog_paper_tags(catalog_id, tag_id) VALUES (?, ?)",
+                                 [(row["id"], identifier) for identifiers in merged.values() for identifier in identifiers])
             conn.execute("UPDATE catalog_papers SET revision = revision + 1, updated_at = ? WHERE id = ?", (now, row["id"]))
             if body.action == "published":
                 from app.services.catalog_review import confirm
@@ -167,8 +171,10 @@ def save_topic(body, identifier=None):
         else:
             if conn.execute("SELECT COUNT(*) FROM site_topics").fetchone()[0] >= 200:
                 fail("专题数量已达 200，请先整理旧专题", 422)
-        for paper_id in body.paper_ids:
-            if not conn.execute("SELECT 1 FROM catalog_papers WHERE id = ?", (paper_id,)).fetchone():
+        if body.paper_ids:
+            known = {row["id"] for row in conn.execute(
+                "SELECT id FROM catalog_papers WHERE id = ANY(?)", (list(body.paper_ids),)).fetchall()}
+            if any(paper_id not in known for paper_id in body.paper_ids):
                 fail("专题中有资料已删除，请刷新资料列表", 404)
         if not identifier:
             identifier = uuid.uuid4().hex
@@ -178,8 +184,8 @@ def save_topic(body, identifier=None):
             conn.execute("UPDATE site_topics SET title = ?, description = ?, is_visible = ?, sort_order = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
                          (body.title, body.description, int(body.is_visible), body.sort_order, now, identifier))
         conn.execute("DELETE FROM site_topic_items WHERE topic_id = ?", (identifier,))
-        for index, paper_id in enumerate(body.paper_ids):
-            conn.execute("INSERT INTO site_topic_items(topic_id, catalog_id, sort_order) VALUES (?, ?, ?)", (identifier, paper_id, index))
+        conn.executemany("INSERT INTO site_topic_items(topic_id, catalog_id, sort_order) VALUES (?, ?, ?)",
+                         [(identifier, paper_id, index) for index, paper_id in enumerate(body.paper_ids)])
         return dict(conn.execute("SELECT * FROM site_topics WHERE id = ?", (identifier,)).fetchone())
 
 

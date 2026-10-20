@@ -140,9 +140,8 @@ def reorder_categories(ids: list[str]) -> dict:
         unknown = [item for item in ids if item not in known]
         if unknown:
             raise _missing("排序列表包含不存在的分类")
-        for index, category_id in enumerate(ids):
-            conn.execute("UPDATE site_categories SET sort_order = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
-                         ((index + 1) * 10, now, category_id))
+        conn.executemany("UPDATE site_categories SET sort_order = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
+                         [((index + 1) * 10, now, category_id) for index, category_id in enumerate(ids)])
     return list_categories()
 
 
@@ -255,21 +254,27 @@ def save_banner_image(banner_id: str, content_type: str, data: bytes, revision: 
 
     storage_name = "local"
     key = f"site/banners/{uuid.uuid4().hex}.{ALLOWED_IMAGE_MIMES[mime]}"
-    with db(serialized=True) as conn:
-        row = conn.execute("SELECT revision, image_key, image_storage FROM site_banners WHERE id = ?", (banner_id,)).fetchone()
-        if not row:
-            raise _missing("Banner 不存在")
-        if revision is not None and row["revision"] != revision:
-            raise _conflict("Banner 已被其他操作更新，请刷新后重试")
-        try:
-            storage_for(storage_name).put(key, data, mime)
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(503, detail={"error": "图片存储不可用，请稍后重试"}) from exc
-        conn.execute("UPDATE site_banners SET image_key = ?, image_storage = ?, image_mime = ?, image_bytes = ?, "
-                     "revision = revision + 1, updated_at = ? WHERE id = ?",
-                     (key, storage_name, mime, len(data), _now(), banner_id))
+    # 磁盘写入放在内容独占锁之外：锁内只做版本校验与行更新，避免所有内容域写
+    # 排队等待 2MB 落盘。写入先于更新，失败（含版本冲突）时删除本次孤儿文件。
+    try:
+        storage_for(storage_name).put(key, data, mime)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(503, detail={"error": "图片存储不可用，请稍后重试"}) from exc
+    try:
+        with db(serialized=True) as conn:
+            row = conn.execute("SELECT revision, image_key, image_storage FROM site_banners WHERE id = ?", (banner_id,)).fetchone()
+            if not row:
+                raise _missing("Banner 不存在")
+            if revision is not None and row["revision"] != revision:
+                raise _conflict("Banner 已被其他操作更新，请刷新后重试")
+            conn.execute("UPDATE site_banners SET image_key = ?, image_storage = ?, image_mime = ?, image_bytes = ?, "
+                         "revision = revision + 1, updated_at = ? WHERE id = ?",
+                         (key, storage_name, mime, len(data), _now(), banner_id))
+    except BaseException:
+        _drop_image(key, storage_name)
+        raise
     _drop_image(row["image_key"], row["image_storage"])
     return _one_banner(banner_id)
 
@@ -541,9 +546,8 @@ def set_dictionary_links(grade_id: str, subject_ids: list[str]) -> dict:
             raise HTTPException(422, detail={"error": "包含不存在的科目条目，请刷新后重试"})
         conn.execute("DELETE FROM site_dict_links WHERE parent_id = ?", (grade_id,))
         now = _now()
-        for subject_id in wanted:
-            conn.execute("INSERT INTO site_dict_links(parent_id, child_id, created_at) VALUES (?, ?, ?)",
-                         (grade_id, subject_id, now))
+        conn.executemany("INSERT INTO site_dict_links(parent_id, child_id, created_at) VALUES (?, ?, ?)",
+                         [(grade_id, subject_id, now) for subject_id in wanted])
     return {"grade_id": grade_id, "subject_ids": wanted,
             "subject_values": [subjects[item] for item in wanted]}
 
@@ -563,19 +567,22 @@ def unlisted_dictionary() -> dict:
 def adopt_dictionary(kind: str, values: list[str]) -> dict:
     with db(serialized=True) as conn:
         order = conn.execute("SELECT COALESCE(MAX(sort_order), 0) FROM site_dictionary WHERE kind = ?", (kind,)).fetchone()[0]
+        existing = {row[0] for row in conn.execute("SELECT value FROM site_dictionary WHERE kind = ?", (kind,))}
         now = _now()
-        added = 0
+        rows: list[tuple] = []
         for value in values:
             value = _clean(value)
-            if not value:
+            if not value or value in existing:
                 continue
+            existing.add(value)
             order += 10
-            added += conn.execute(
-                "INSERT INTO site_dictionary(id, kind, value, label, sort_order, is_visible, revision, created_at, updated_at) "
-                "VALUES (?, ?, ?, '', ?, 1, 1, ?, ?) ON CONFLICT(kind, value) DO NOTHING",
-                (uuid.uuid4().hex, kind, value, order, now, now),
-            ).rowcount or 0
-    return {"added": added, **list_dictionary(kind)}
+            rows.append((uuid.uuid4().hex, kind, value, order, now, now))
+        conn.executemany(
+            "INSERT INTO site_dictionary(id, kind, value, label, sort_order, is_visible, revision, created_at, updated_at) "
+            "VALUES (?, ?, ?, '', ?, 1, 1, ?, ?) ON CONFLICT(kind, value) DO NOTHING",
+            rows,
+        )
+    return {"added": len(rows), **list_dictionary(kind)}
 
 
 # ─── 小程序端公开视图 ───

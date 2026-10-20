@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import type { PaperData, PaperSection, PaperStyle, PaperTemplate, Question } from '../types'
 import { DIFF_NAME } from '../constants'
 import { sanitizeRich } from '../sanitize'
@@ -92,12 +92,22 @@ function toggleHidden(key: string) {
    移动超过 3px 才进入拖拽态并才 preventDefault */
 const MM = 96 / 25.4
 const dragState = ref<{ startY: number; startOffset: number; dragging: boolean } | null>(null)
+// 拖拽期间 window 上挂的监听器；组件在拖拽中途被卸载时也要能摘掉，否则监听器泄漏到全局。
+let stopTitleDrag: (() => void) | null = null
 
 function onTitleDragStart(e: MouseEvent) {
   if (!props.editable) return
   if ((e.target as HTMLElement).closest('.el-del')) return // 删除按钮不触发拖拽
   const startX = e.clientX
   dragState.value = { startY: e.clientY, startOffset: props.style.titleOffsetY ?? 0, dragging: false }
+  const stop = () => {
+    dragState.value = null
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    window.removeEventListener('mousemove', move)
+    window.removeEventListener('mouseup', stop)
+    stopTitleDrag = null
+  }
   const move = (ev: MouseEvent) => {
     if (!dragState.value) return
     const dx = ev.clientX - startX
@@ -106,9 +116,7 @@ function onTitleDragStart(e: MouseEvent) {
       if (Math.abs(dyPx) < 3) return // 尚未构成拖拽（点击/双击编辑不受影响）
       // 横向移动为主 = 用户在框选标题文字，不是拖动标题位置 → 放弃拖拽
       if (Math.abs(dx) > Math.abs(dyPx)) {
-        dragState.value = null
-        window.removeEventListener('mousemove', move)
-        window.removeEventListener('mouseup', up)
+        stop()
         return
       }
       dragState.value.dragging = true
@@ -120,16 +128,12 @@ function onTitleDragStart(e: MouseEvent) {
     const clamped = Math.max(-10, Math.min(30, dyMm))
     emit('title-offset', clamped)
   }
-  const up = () => {
-    dragState.value = null
-    document.body.style.cursor = ''
-    document.body.style.userSelect = ''
-    window.removeEventListener('mousemove', move)
-    window.removeEventListener('mouseup', up)
-  }
+  stopTitleDrag = stop
   window.addEventListener('mousemove', move)
-  window.addEventListener('mouseup', up)
+  window.addEventListener('mouseup', stop)
 }
+
+onBeforeUnmount(() => stopTitleDrag?.())
 
 /** 卷头整体应用标题偏移：负值上移（压缩顶部间距）、正值下移 */
 const headStyle = computed(() => ({

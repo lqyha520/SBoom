@@ -6,7 +6,7 @@
  *   题目自由移动/调整大小；退出时 DOM 顺序回写数据
  */
 import { computed, nextTick, onActivated, onDeactivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import Sortable from 'sortablejs'
+import type Sortable from 'sortablejs'
 import type { PaperData, PaperSection, PaperStyle, PaperTemplate } from '../types'
 import { computeScores, gradeNumOf } from '../utils'
 import PaperPage from './PaperPage.vue'
@@ -195,12 +195,15 @@ watch(
   () => props.layoutMode,
   async on => {
     await nextTick()
-    if (on) enterLayout()
+    if (on) await enterLayout()
     else { teardownLayout(); visibleRevision.value++; await nextTick(); void setupTableResize() }
   },
 )
 
-function enterLayout() {
+async function enterLayout() {
+  // sortablejs（约 45KB）只在进入排版模式时按需加载，不进入工作台首屏 bundle。
+  const { default: SortableCtor } = await import('sortablejs')
+  if (!props.layoutMode) return
   const stack = stackEl.value
   if (!stack) return
   stack.querySelectorAll('.paper').forEach(paper => {
@@ -209,7 +212,7 @@ function enterLayout() {
 
     // 大题排序
     sortables.push(
-      new Sortable(exam, {
+      new SortableCtor(exam, {
         animation: 150,
         handle: 'h2.sec',
         draggable: '.sec-block',
@@ -220,7 +223,7 @@ function enterLayout() {
     // 题目排序（可跨大题）—— 拖拽手柄注入到题干前
     paper.querySelectorAll('.sec-block').forEach(secEl => {
       sortables.push(
-        new Sortable(secEl as HTMLElement, {
+        new SortableCtor(secEl as HTMLElement, {
           group: 'questions',
           animation: 150,
           handle: '.sort-handle',

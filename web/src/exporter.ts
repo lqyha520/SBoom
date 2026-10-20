@@ -13,6 +13,7 @@ import type { ArchiveSnapshot } from './library'
 import { answerOf, escHtml } from './utils'
 import { measureExport } from './export-performance'
 import { ExportBudget, EXPORT_LIMITS } from './export-budget'
+import { downloadBlob as download } from '../../shared/download'
 
 /* ── html2canvas 字体基线探针的环境修正 ──
  *
@@ -159,13 +160,6 @@ function stampPages(doc: jsPDF) {
   }
 }
 
-function download(blob: Blob, name: string) {
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = name
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000)
-}
 
 function baseTitle(paper: PaperData, template: PaperTemplate): string {
   return (

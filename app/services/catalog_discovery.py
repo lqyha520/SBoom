@@ -81,16 +81,20 @@ def assign(catalog_id, body):
             fail("资料不存在", 404)
         if row[0] != body.revision:
             fail("资料已更新，请刷新后重试")
+        tag_kinds: dict[str, str] = {}
+        if body.tag_ids:
+            tag_kinds = {row["id"]: row["kind"] for row in conn.execute(
+                "SELECT id, kind FROM catalog_tags WHERE id = ANY(?)", (list(body.tag_ids),)).fetchall()}
         counts: dict[str, int] = {}
         for identifier in body.tag_ids:
-            tag = conn.execute("SELECT kind FROM catalog_tags WHERE id = ?", (identifier,)).fetchone()
-            if not tag:
+            if identifier not in tag_kinds:
                 fail("所选标签已删除，请刷新", 404)
-            counts[tag[0]] = counts.get(tag[0], 0) + 1
+            kind = tag_kinds[identifier]
+            counts[kind] = counts.get(kind, 0) + 1
         if any(counts.get(kind, 0) > 1 for kind in KINDS[:3]) or counts.get("knowledge", 0) > 20:
             fail("教材、学期、单元各选一个，知识点最多 20 个", 422)
         conn.execute("DELETE FROM catalog_paper_tags WHERE catalog_id = ?", (catalog_id,))
-        for identifier in body.tag_ids:
-            conn.execute("INSERT INTO catalog_paper_tags(catalog_id, tag_id) VALUES (?, ?)", (catalog_id, identifier))
+        conn.executemany("INSERT INTO catalog_paper_tags(catalog_id, tag_id) VALUES (?, ?)",
+                         [(catalog_id, identifier) for identifier in body.tag_ids])
         conn.execute("UPDATE catalog_papers SET revision = revision + 1 WHERE id = ?", (catalog_id,))
         return {"revision": body.revision + 1, "tags": label_map(conn, [catalog_id], True)[catalog_id]}

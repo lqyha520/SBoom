@@ -1,4 +1,5 @@
 import { request } from './api'
+import { downloadBlob } from '../../shared/download'
 import type { Page } from './catalog'
 export type TagKind = 'textbook' | 'term' | 'unit' | 'knowledge'
 export const tagKinds: { value: TagKind; label: string }[] = [{ value: 'textbook', label: '教材' }, { value: 'term', label: '学期' }, { value: 'unit', label: '单元' }, { value: 'knowledge', label: '知识点' }]
@@ -48,8 +49,7 @@ export const reviewRefund = (admin: number, refund: Refund, action: 'approve' | 
 export const syncRefund = (admin: number, id: string) => change<Order>(commerce + '/refunds/' + encodeURIComponent(id) + '/sync', admin)
 export async function exportOrders(admin: number, filter: OrderFilter) {
   const blob = await request<Blob>(commerce + '/orders/export?' + new URLSearchParams({ ...filter }), { headers: { 'X-Workspace-User': String(admin) } }, 'blob')
-  const url = URL.createObjectURL(blob), link = document.createElement('a')
-  link.href = url; link.download = 'membership-orders.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 2000)
+  downloadBlob(blob, 'membership-orders.csv', 2000)
 }
 export const getReconciliations = (offset = 0) => request<Page<Reconciliation>>(commerce + '/reconciliations?offset=' + offset)
 export const getReconciliation = (id: string) => request<Reconciliation>(commerce + '/reconciliations/' + encodeURIComponent(id))

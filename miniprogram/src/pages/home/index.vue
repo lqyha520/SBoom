@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { onHide, onPullDownRefresh, onShow, onUnload, onShareAppMessage } from '@dcloudio/uni-app'
+import { onHide, onPullDownRefresh, onShow, onUnload, onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app'
 import AppTabBar from '../../components/AppTabBar.vue'
 import PageChrome from '../../components/PageChrome.vue'
 import HomeBanner from '../../components/HomeBanner.vue'
@@ -22,7 +22,7 @@ import { readPreferences, rememberSearch, writePreferences } from '../../service
 import type { CatalogSummary, PaperSummary, SiteCategory, SiteHome } from '../../types'
 import { refreshUnread } from '../../services/growth'
 import { categoryIcon } from '../../services/category-icons'
-import { shareCard } from '../../services/return-route'
+import { shareCard, shareTimeline } from '../../services/return-route'
 import { captureScroll } from '../../services/page-lifecycle'
 
 const items = ref<PaperSummary[]>([])
@@ -198,6 +198,7 @@ uni.$on?.('lc-memory-warning', memoryWarning)
 onUnload(() => { leave(); uni.$off?.('lc-network-restored', reconnect); uni.$off?.('lc-memory-warning', memoryWarning) })
 onPullDownRefresh(() => load(true))
 onShareAppMessage(() => shareCard('home'))
+onShareTimeline(() => shareTimeline())
 </script>
 
 <template>

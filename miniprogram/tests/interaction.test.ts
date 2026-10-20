@@ -69,7 +69,7 @@ test('guest login restores the selected download version and resumes a favorite 
   let failRead = false, saved = false
   const scope = vue.effectScope()
   const page = scope.run(() => fixture('pages/paper/index.vue', {
-    '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage'].map(name => [name, (fn: (...args: any[]) => any) => { callbacks[name] = fn }])),
+    '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onShareTimeline'].map(name => [name, (fn: (...args: any[]) => any) => { callbacks[name] = fn }])),
     '../../services/session': { session, ensureSession: async () => !!session.user, requireLogin: () => !!session.user },
     '../../services/latest-request': { createLatestRequest },
     '../../services/api': { ApiError: Error, errorMessage: String,
@@ -113,7 +113,7 @@ test('首页隐藏后关闭图片并响应内存警告，重新进入恢复加�
   const hooks: Record<string, (...args: any[]) => any> = {}, events: Record<string, () => void> = {}
   const scope = vue.effectScope()
   const page = scope.run(() => fixture('pages/home/index.vue', {
-    '@dcloudio/uni-app': Object.fromEntries(['onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage'].map(name => [name, (fn: (...args: any[]) => any) => { hooks[name] = fn }])),
+    '@dcloudio/uni-app': Object.fromEntries(['onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onShareTimeline'].map(name => [name, (fn: (...args: any[]) => any) => { hooks[name] = fn }])),
     '../../services/session': { session: vue.reactive({ user: null }), ensureSession: async () => false },
     '../../services/latest-request': { createLatestRequest },
     '../../services/api': { fetchCatalog: async () => ({ items: [{ id: 'paper' }], total: 1 }), fetchCatalogSummary: async () => ({}), fetchSiteHome: async () => ({ banners: [{ id: 'banner' }] }) },
@@ -223,7 +223,7 @@ test('冷启动公开内容先于会话完成，恢复登录保留输入，详�
   const calls: { anonymous?: boolean; grade?: string }[] = [], scrolls: number[] = []
   const scope = vue.effectScope()
   const page = scope.run(() => fixture('pages/home/index.vue', {
-    '@dcloudio/uni-app': Object.fromEntries(['onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage'].map(name => [name, (fn: (...args: any[]) => any) => { hooks[name] = fn }])),
+    '@dcloudio/uni-app': Object.fromEntries(['onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onShareTimeline'].map(name => [name, (fn: (...args: any[]) => any) => { hooks[name] = fn }])),
     '../../services/session': { session, ensureSession: () => waiting },
     '../../services/latest-request': { createLatestRequest },
     '../../services/api': { errorMessage: String, fetchCatalog: async (filters: any, options: any) => {
@@ -265,7 +265,7 @@ test('detail return retains metadata, cancels old reads, and withholds private c
     snapshot: { private: true }, assets: [{ kind: 'page', url: '/original' }, { kind: 'pdf', url: '/pdf' }] }
   const scope = vue.effectScope()
   const page = scope.run(() => fixture('pages/paper/index.vue', {
-    '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onPageScroll'].map(name => [name, (fn: Function) => { callbacks[name] = fn }])),
+    '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onShareTimeline', 'onPageScroll'].map(name => [name, (fn: Function) => { callbacks[name] = fn }])),
     '../../services/api': { ApiError: Error, errorMessage: String, fetchCatalogPaper: async (_id: string, options: any) => {
       options.scope.onCancel(() => { cancelled++ })
       if (++calls === 1) return detail
@@ -338,7 +338,7 @@ test('预览内下载保留所选版本，失败后可原地重试并显示进�
     assets: [{ kind: 'pdf', url: '/file', byte_size: 100 }], editions: [{ kind: 'original', label: '原稿' }, { kind: 'answers', label: '答案' }] }
   const scope = vue.effectScope()
   const page = scope.run(() => fixture('pages/paper/index.vue', {
-    '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onPageScroll'].map(key => [key, (callback: (...args: any[]) => void) => { callbacks[key] = callback }])),
+    '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onShareTimeline', 'onPageScroll'].map(key => [key, (callback: (...args: any[]) => void) => { callbacks[key] = callback }])),
     '../../services/api': { ApiError, errorMessage: String, fetchCatalogPaper: async () => detail,
       requestCatalogDownload: async (_id: string, edition: string) => { calls.push(edition); return { url: '/pdf' } } },
     '../../services/session': { session: vue.reactive({ user: { id: 'reader' } }), ensureSession: async () => true, requireLogin: () => true },
@@ -382,7 +382,7 @@ test('网盘资料不依赖 PDF，获取后展示链接，复制失败可重试�
   let pdfOpened = false
   const scope = vue.effectScope()
   const page = scope.run(() => fixture('pages/paper/index.vue', {
-    '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onPageScroll'].map(key => [key, (cb: (...args: any[]) => void) => { callbacks[key] = cb }])),
+    '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onShareTimeline', 'onPageScroll'].map(key => [key, (cb: (...args: any[]) => void) => { callbacks[key] = cb }])),
     '../../services/api': { errorMessage: String, fetchCatalogPaper: async () => ({ id: 'link', title: '资料', can_view: true, can_download: true, download_mode: 'external', assets: [] }),
       requestCatalogDownload: async () => ({ kind: 'external', url: 'https://pan.example.com/a', extraction_code: 'Ab12' }) },
     '../../services/session': { session: vue.reactive({ user: { id: 'reader' } }), ensureSession: async () => true, requireLogin: () => true },
@@ -412,7 +412,7 @@ test('网盘下载权限不足时显示会员入口，离开页面后迟到的�
   let requests = 0, finish!: (value: unknown) => void, entitled = false
   const scope = vue.effectScope()
   const page = scope.run(() => fixture('pages/paper/index.vue', {
-    '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onPageScroll'].map(key => [key, (cb: (...args: any[]) => void) => { callbacks[key] = cb }])),
+    '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onShareTimeline', 'onPageScroll'].map(key => [key, (cb: (...args: any[]) => void) => { callbacks[key] = cb }])),
     '../../services/api': { errorMessage: String, fetchCatalogPaper: async () => ({ id: 'link', title: '资料', can_view: true, can_download: entitled, download_mode: 'external', assets: [] }),
       requestCatalogDownload: async () => { requests++; return new Promise(resolve => { finish = resolve }) } },
     '../../services/session': { session: vue.reactive({ user: { id: 'reader' } }), ensureSession: async () => true, requireLogin: () => true },

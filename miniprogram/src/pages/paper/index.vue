@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { copyWithPrivacy } from '../../services/privacy'
 import { computed, nextTick, ref, watch } from 'vue'
-import { onHide, onLoad, onPullDownRefresh, onShow, onUnload, onShareAppMessage } from '@dcloudio/uni-app'
+import { onHide, onLoad, onPullDownRefresh, onShow, onUnload, onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app'
 import PageChrome from '../../components/PageChrome.vue'
 import PrivateImage from '../../components/PrivateImage.vue'
 import PaperPreview from '../../components/PaperPreview.vue'
@@ -17,7 +17,7 @@ import { answerReadinessLabel, difficultyLabel, exerciseText, exerciseTitle, dow
 import { assignGroup, createGroup, fetchGroups, openSupport, recordEvent, recordView, type FavoriteGroup } from '../../services/experience'
 import type { ExternalDownload, PaperDetail, PrintEdition } from '../../types'
 import { captureScroll } from '../../services/page-lifecycle'
-import { shareCard } from '../../services/return-route'
+import { shareCard, shareTimeline } from '../../services/return-route'
 
 const id = ref('')
 const edition = ref<PrintEdition['kind']>('original')
@@ -240,6 +240,7 @@ function sharePaper() {
 // #endif
 onLoad(options => { id.value = typeof options?.id === 'string' ? options.id : '' })
 onShareAppMessage(() => shareCard('paper', id.value, paper.value?.title))
+onShareTimeline(() => shareTimeline(shareCard('paper', id.value, paper.value?.title)))
 onShow(async () => { active = true; await ensureSession(); if (active) void load() })
 function leave() {
   active = false; groupReads.invalidate(); actionRevision++; requests.invalidate(); loading.value = false; verified.value = false
