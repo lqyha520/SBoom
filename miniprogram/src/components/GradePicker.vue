@@ -9,7 +9,7 @@ function select(value: string) { emit('select', value); emit('close') }
 </script>
 <template>
   <wd-popup :model-value="open" position="bottom" :z-index="1200" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0" @update:model-value="!$event && emit('close')">
-    <view class="sheet" role="dialog" aria-modal="true" aria-label="选择年级">
+    <view class="sheet" aria-role="dialog" role="dialog" aria-modal="true" aria-label="选择年级">
       <view class="sheet-handle" />
       <view class="sheet-head"><text class="sheet-title">选择年级</text><button role="button" class="bare-icon" aria-label="关闭年级选择" hover-class="control-pressed" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
       <scroll-view scroll-y class="grade-scroll"><view class="grade-choices">

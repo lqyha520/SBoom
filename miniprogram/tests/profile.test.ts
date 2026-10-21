@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { nicknameError, registrationAccountError } from '../../shared/mini-profile'
+import { clipNickname, nicknameError, registrationAccountError } from '../../shared/mini-profile'
 import { profileAvatar } from '../src/presentation'
 
 test('WeChat display names accept single characters, spaces and emoji', () => {
@@ -10,6 +10,14 @@ test('WeChat display names accept single characters, spaces and emoji', () => {
 
 test('display names reject empty values, control characters and overlong Unicode text', () => {
   for (const value of ['', ' ', 'a\nb', 'a\u202eb', '😀'.repeat(33)]) assert.notEqual(nicknameError(value), '', JSON.stringify(value))
+})
+
+test('nickname input clips by code point without breaking emoji', () => {
+  assert.equal(clipNickname('一'.repeat(32)), '一'.repeat(32))
+  assert.equal(clipNickname('一'.repeat(33)), '一'.repeat(32))
+  assert.equal(clipNickname('😀'.repeat(33)), '😀'.repeat(32))
+  assert.equal(clipNickname('👩‍🏫'), '👩‍🏫')
+  assert.equal(clipNickname('  短  '), '  短  ')
 })
 
 test('registration uses ASCII accounts while Chinese remains valid for display names', () => {

@@ -29,7 +29,7 @@ function dismiss() {
 
 <template>
   <wd-popup :model-value="!!current" position="center" :z-index="1300" root-portal custom-style="background: transparent; box-shadow: none;" @update:model-value="!$event && dismiss()">
-    <view v-if="current" class="notice-card" role="dialog" aria-modal="true" :aria-label="current.title">
+    <view v-if="current" class="notice-card" aria-role="dialog" role="dialog" aria-modal="true" :aria-label="current.title">
       <view class="notice-head">
         <view class="notice-level" :class="current.level"><wd-icon :name="current.level === 'warning' ? 'exclamation-polygon-fill' : 'info-circle-fill'" size="16px" /></view>
         <text class="notice-title">{{ current.title }}</text>

@@ -23,8 +23,8 @@ function close() { if (current.value) closed.value = [...closed.value, current.v
 </template>
 
 <style scoped>
-.notice-bar { display: flex; align-items: center; gap: 8px; margin: 0 var(--lc-page-gutter) 12px; padding: 0 8px 0 12px; border-radius: var(--lc-radius-control); background: var(--lc-primary-soft); }
-.notice-bar.warning { background: var(--lc-warning-bg); }
+.notice-bar { display: flex; align-items: center; gap: 8px; margin: 10px var(--lc-page-gutter) 0; padding: 0 8px 0 12px; border: 1px solid #e1eee5; border-radius: 12px; background: #eff6f0; }
+.notice-bar.warning { border-color: #f3e5c4; background: var(--lc-warning-bg); }
 .notice-symbol { display: flex; align-items: center; justify-content: center; width: 21px; height: 21px; flex: none; margin-top: 1px; color: var(--lc-primary); }
 .notice-bar.warning .notice-symbol { color: var(--lc-warning); }
 .notice-content { flex:1;min-width:0;min-height:44px;padding:10px 0;margin:0;background:transparent;text-align:left;line-height:1.6; }

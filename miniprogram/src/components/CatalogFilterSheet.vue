@@ -56,13 +56,13 @@ function selectTag(event: { value: (string | number)[] }) { tagDraft[activeTag.v
 
 <template>
   <wd-popup :model-value="open" position="bottom" :z-index="1200" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0" @after-enter="measureOptions" @update:model-value="!$event && emit('close')">
-    <view class="catalog-sheet" role="dialog" aria-modal="true" aria-label="更多筛选">
+    <view class="catalog-sheet" aria-role="dialog" role="dialog" aria-modal="true" aria-label="更多筛选">
       <view class="sheet-handle" /><view class="catalog-sheet-head"><text class="sheet-title">更多筛选</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭筛选" title="关闭筛选" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
       <text class="filter-context">{{ grade || '全部年级' }} · {{ subject || '全部学科' }}</text>
       <scroll-view scroll-y class="filter-options" :style="{ height: optionsHeight + 'px' }">
         <view :id="optionsId" class="filter-options-content">
         <text class="filter-label">习题分类</text>
-        <wd-radio-group v-model="categoryDraft" type="button" direction="horizontal" custom-class="filter-radio-group" role="radiogroup" aria-label="习题分类">
+        <wd-radio-group v-model="categoryDraft" type="button" direction="horizontal" custom-class="filter-radio-group" aria-role="radiogroup" role="radiogroup" aria-label="习题分类">
           <wd-radio value="" custom-class="filter-radio" role="radio" :aria-checked="!categoryDraft">全部分类</wd-radio>
           <wd-radio v-for="item in categories" :key="item.id" :value="item.id" custom-class="filter-radio" role="radio" :aria-checked="categoryDraft === item.id">{{ exerciseText(item.name) }}</wd-radio>
         </wd-radio-group>

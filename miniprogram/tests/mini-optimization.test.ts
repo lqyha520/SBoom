@@ -31,7 +31,7 @@ function component(file: string, modules: Record<string, unknown>, expose: strin
     exports, uni: native, setTimeout, clearTimeout, defineProps: () => props, defineOptions() {}, defineExpose() {},
     defineEmits: () => (...args: unknown[]) => events.push(args),
     require: (id: string) => id === 'vue' ? { ...vue, onBeforeUnmount: (fn: () => void) => (hooks.dispose ||= []).push(fn) }
-      : id === '@dcloudio/uni-app' ? Object.fromEntries(['onLoad', 'onHide', 'onUnload', 'onShow', 'onReachBottom'].map(key => [key, (fn: () => void) => (hooks[key] ||= []).push(fn)]))
+      : id === '@dcloudio/uni-app' ? Object.fromEntries(['onLoad', 'onHide', 'onUnload', 'onShow', 'onReachBottom', 'onPullDownRefresh'].map(key => [key, (fn: () => void) => (hooks[key] ||= []).push(fn)]))
       : modules[id] || (id.endsWith('/page-lifecycle') ? { usePageLifecycle } : id.endsWith('/latest-request') ? { createLatestRequest } : id.endsWith('/tabbar-overlay') ? { useTabBarOverlay() {} } : {}),
   }))
   return { page: exports.page, props, events, hook: (name: string, ...args: unknown[]) => hooks[name]?.forEach(fn => fn(...args)), dispose() { hooks.dispose?.forEach(fn => fn()); scope.stop() } }

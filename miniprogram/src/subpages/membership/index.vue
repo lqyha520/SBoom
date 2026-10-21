@@ -124,9 +124,14 @@ function redeem() {
         <view v-if="error && action !== 'redeem'" class="error-strip" role="alert"><text class="grow">{{ error }}</text><wd-button role="button" aria-label="重新加载会员信息" variant="text" icon="refresh" type="danger" @click="page.refresh" /></view>
         <view v-if="loading" class="loading-line"><wd-loading /><text>正在加载会员信息</text></view>
 
+        <view v-if="restricted && !lifetime" class="restricted-notice">
+          <view class="restricted-icon"><wd-icon name="info-circle-fill" size="18px" /></view>
+          <view class="grow"><text class="restricted-title">当前平台暂不支持开通</text><text class="restricted-copy">已有会员权益可正常使用；如需开通、续费或有其他问题，可以联系客服。</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="restricted-action" role="button" aria-label="联系客服" @click="contactOpen = true"><wd-icon name="headset" size="14px" /><text>联系客服</text></button></view>
+        </view>
+
         <view v-if="!lifetime && !restricted" class="plans-section">
           <view class="section-heading"><text class="section-title">选择会员时长</text><text class="section-note">权益相同，按需选择</text></view>
-          <view v-if="plans.length" class="plan-grid" :class="{ single: plans.length === 1, two: plans.length === 2 }" role="radiogroup" aria-label="会员套餐">
+          <view v-if="plans.length" class="plan-grid" :class="{ single: plans.length === 1, two: plans.length === 2 }" aria-role="radiogroup" role="radiogroup" aria-label="会员套餐">
             <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="plan in plans" :key="plan.id" class="plan-card" :class="{ selected: selectedId === plan.id }" role="radio" :aria-label="plan.name + '，' + plan.days + '天，' + yuan(plan.price_fen)" :aria-checked="selectedId === plan.id" :disabled="busy || loading" @click="selectPlan(plan)">
               <text class="plan-name">{{ plan.name }}</text><text class="plan-price">{{ yuan(plan.price_fen) }}</text><text class="plan-duration">{{ plan.days }} 天会员</text>
               <view v-if="selectedId === plan.id" class="plan-check"><wd-icon name="check" size="11px" /></view>
@@ -157,8 +162,8 @@ function redeem() {
       </view>
     </template>
 
-    <wd-popup v-if="!restricted" v-model="contactOpen" position="bottom" :z-index="1250" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0">
-      <view class="sheet contact-sheet" role="dialog" aria-modal="true" aria-label="会员客服">
+    <wd-popup v-model="contactOpen" position="bottom" :z-index="1250" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0">
+      <view class="sheet contact-sheet" aria-role="dialog" role="dialog" aria-modal="true" aria-label="会员客服">
         <view class="sheet-handle" />
         <view class="sheet-head"><view><text class="sheet-title">联系客服</text><text class="contact-sheet-intro">开通、兑换或使用问题，都可以问我们</text></view><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭会员客服" @click="contactOpen = false"><wd-icon name="close" size="20px" /></button></view>
         <text v-if="contact?.hours" class="contact-hours"><wd-icon name="time-line" size="14px" /> 服务时间：{{ contact.hours }}</text>
@@ -187,6 +192,11 @@ function redeem() {
 .benefit-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:20px;padding-top:15px;border-top:1px solid #ffffff26; }
 .benefit-grid > view { display:flex;align-items:center;justify-content:center;gap:5px;min-width:0;color:#eff3e9;font-size: 12px;white-space:nowrap; }.benefit-grid :deep(.wd-icon) { color:#ddca97; }
 .member-body { padding-top:16px; }
+.restricted-notice { display:flex;align-items:flex-start;gap:11px;margin-top:8px;padding:14px 15px;border:1px solid #eadfc4;border-radius:14px;background:#fdf8ec; }
+.restricted-icon { display:flex;align-items:center;justify-content:center;width:34px;height:34px;flex:none;border-radius:11px;background:#f4e9d1;color:#977947; }
+.restricted-title { display:block;color:var(--lc-text);font-size:13px;font-weight:600;line-height:1.5; }
+.restricted-copy { display:block;margin-top:3px;color:var(--lc-secondary);font-size:12px;line-height:1.6; }
+.restricted-action { display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:36px;margin:10px 0 0;padding:6px 13px;border-radius:999px;background:var(--lc-primary-soft);color:var(--lc-primary);font-size:12px;line-height:1.5; }
 .plans-section { margin-top:8px; }.section-heading { margin:0 0 12px; }.section-title { display:block;margin:0;color:var(--lc-text);font-size:16px;font-weight:650;line-height:1.5; }.section-note { color:var(--lc-muted);font-size: 12px; }
 .plan-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px; }.plan-grid.two { grid-template-columns:repeat(2,minmax(0,1fr)); }.plan-grid.single { grid-template-columns:1fr; }
 .plan-card { position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:0;width:100%;margin:0;padding:17px 6px 16px;border:1.5px solid #e3e8e3;border-radius:14px;background:#fff;text-align:center;line-height:1.5;transition:border-color .15s,background-color .15s; }

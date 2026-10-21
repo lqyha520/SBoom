@@ -6,7 +6,7 @@ import { saveAvatar, saveProfile, session } from '../services/session'
 import { useTabBarOverlay } from '../services/tabbar-overlay'
 import { prepareProfilePhoto, type ProfilePhoto } from '../services/profile-photo'
 import { DEFAULT_AVATAR_CHOICES } from '../presentation'
-import { nicknameError as validateNickname } from '../../../shared/mini-profile'
+import { clipNickname, nicknameError as validateNickname } from '../../../shared/mini-profile'
 import ProfileAvatar from './ProfileAvatar.vue'
 
 const props = defineProps<{ open: boolean }>()
@@ -51,7 +51,7 @@ watch(() => props.open, value => {
 function editNickname(event: Event | { detail: { value: string } }) {
   const value = 'detail' in event && typeof event.detail === 'object'
     ? event.detail.value : (('target' in event ? event.target : null) as HTMLInputElement | null)?.value
-  if (typeof value === 'string') { nickname.value = value; error.value = '' }
+  if (typeof value === 'string') { nickname.value = clipNickname(value); error.value = '' }
 }
 function choosePreset(key: string) {
   if (busy.value) return
@@ -104,7 +104,7 @@ async function save() {
 
 <template>
   <wd-popup :model-value="open" position="bottom" :z-index="1250" :close-on-click-modal="!busy" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0" @update:model-value="!$event && emit('close')">
-    <view class="sheet profile-sheet" role="dialog" aria-modal="true" aria-label="编辑资料">
+    <view class="sheet profile-sheet" aria-role="dialog" role="dialog" aria-modal="true" aria-label="编辑资料">
       <view class="sheet-handle" />
       <view class="sheet-head"><view><text class="sheet-title">编辑资料</text><text class="profile-intro">换个喜欢的头像，认识一下新的自己</text></view><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭编辑资料" :disabled="busy" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
       <view class="profile-preview">
@@ -120,7 +120,7 @@ async function save() {
         <!-- #endif -->
       </view>
       <view class="avatar-label"><text class="field-label">默认头像</text><text>选一个你喜欢的</text></view>
-      <view class="preset-grid" role="radiogroup" aria-label="选择默认头像">
+      <view class="preset-grid" aria-role="radiogroup" role="radiogroup" aria-label="选择默认头像">
         <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="choice in DEFAULT_AVATAR_CHOICES" :key="choice.key" class="preset-option" :class="{ selected: !photo && avatar === choice.key }" role="radio" :aria-label="choice.label" :aria-checked="!photo && avatar === choice.key" :disabled="busy" @click="choosePreset(choice.key)">
           <view class="preset-picture" :style="{ background: choice.background }"><image :src="choice.image" mode="aspectFill" /><view v-if="!photo && avatar === choice.key" class="preset-check"><wd-icon name="check" size="11px" /></view></view>
           <text>{{ choice.label }}</text>

@@ -17,5 +17,5 @@ defineEmits<{ press: [] }>()
 </template>
 
 <style scoped>
-.chrome-back { position: absolute; background: #ffffffb8; color: var(--lc-text); z-index: 1; }
+.chrome-back { position: absolute; background: var(--wot-primary-3); color: var(--lc-text); z-index: 1; }
 </style>

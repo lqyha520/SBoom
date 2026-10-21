@@ -7,7 +7,7 @@ onShow(() => { visible.value = true })
 onHide(() => { visible.value = false })
 </script>
 <template>
-  <view v-if="visible && privacyState.open" class="privacy-mask" role="dialog" aria-label="隐私授权">
+  <view v-if="visible && privacyState.open" class="privacy-mask" aria-role="dialog" role="dialog" aria-label="隐私授权">
     <view class="privacy-dialog">
       <text>使用头像、昵称或剪贴板前，请阅读并同意微信隐私保护指引。</text>
       <button @click="openPrivacy">{{ privacyState.name }}</button>

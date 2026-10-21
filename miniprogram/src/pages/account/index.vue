@@ -3,7 +3,7 @@ import { navigatePage } from '../../services/page-navigation'
 
 import { copyWithPrivacy } from '../../services/privacy'
 import { reactive, ref, watch } from 'vue'
-import { onHide, onShow, onUnload } from '@dcloudio/uni-app'
+import { onHide, onPullDownRefresh, onShow, onUnload } from '@dcloudio/uni-app'
 import AuthGate from '../../components/AuthGate.vue'
 import AppTabBar from '../../components/AppTabBar.vue'
 import PageChrome from '../../components/PageChrome.vue'
@@ -83,6 +83,7 @@ function closure() { settingsOpen.value = false; navigatePage({ url: '/subpages/
 function profileSaved() { profileOpen.value = false; void load(); uni.showToast({ title: '资料已更新', icon: 'none' }) }
 function passwordSaved() { passwordOpen.value = false; uni.showToast({ title: session.user?.has_password ? '密码已保存' : '密码已设置', icon: 'none' }) }
 onShow(() => { active = true; requests.show(); if (!profileOpen.value) void load() })
+onPullDownRefresh(async () => { try { await load('all', true) } finally { uni.stopPullDownRefresh() } })
 function suspend() {
   active = false; requests.leave()
   for (const { key } of sections) sectionLoading[key] = false
@@ -100,7 +101,7 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
 <template>
   <view class="account-page has-tabbar">
     <view class="profile-hero" :class="{ guest: !session.user }">
-      <PageChrome />
+      <PageChrome transparent />
       <view class="content-width hero-content">
         <view class="identity-card">
           <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="session.user" class="avatar-button" role="button" aria-label="编辑头像和昵称" @click="openProfile">
@@ -125,7 +126,7 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
         <view v-if="sectionErrors[section.key]" class="error-strip" role="status"><text class="grow">{{ section.label }}：{{ sectionErrors[section.key] }}</text><wd-button icon="refresh" role="button" variant="text" :aria-label="'重试' + section.label" :loading="sectionLoading[section.key]" :disabled="sectionLoading[section.key]" @click="load(section.key, true)" /></view>
       </view>
       <view class="content-width dashboard">
-        <view class="quick-grid" role="group" aria-label="个人数据快捷入口">
+        <view class="quick-grid" aria-role="group" role="group" aria-label="个人数据快捷入口">
           <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="quick-card" role="button" @click="favorites"><view class="quick-icon favorite"><wd-icon name="heart" size="20px" /></view><text class="quick-value">{{ summary ? summary.favorites : '—' }}</text><text class="quick-label">我的收藏</text></button>
           <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="quick-card" role="button" @click="downloads"><view class="quick-icon download"><wd-icon name="download" size="20px" /></view><text class="quick-value">{{ summary ? summary.downloads : '—' }}</text><text class="quick-label">下载记录</text></button>
           <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="quick-card" role="button" @click="recent"><view class="quick-icon recent"><wd-icon name="history" size="20px" /></view><text class="quick-value small">继续学习</text><text class="quick-label">最近浏览</text></button>
@@ -164,7 +165,7 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
     <ProfileSheet :open="profileOpen" @close="profileOpen = false" @saved="profileSaved" />
     <PasswordSheet :open="passwordOpen" @close="passwordOpen = false" @saved="passwordSaved" />
     <wd-popup v-model="settingsOpen" position="bottom" :z-index="1200" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0">
-      <view class="sheet" role="dialog" aria-modal="true" aria-label="账号设置">
+      <view class="sheet" aria-role="dialog" role="dialog" aria-modal="true" aria-label="账号设置">
         <view class="sheet-handle" />
         <view class="sheet-head"><text class="sheet-title">账号设置</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭账号设置" @click="settingsOpen = false"><wd-icon name="close" size="20px" /></button></view>
         <wd-cell-group :border="false" center>
@@ -178,7 +179,7 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
       </view>
     </wd-popup>
     <wd-popup v-model="logoutOpen" transition="zoom-in" :z-index="1400" :close-on-click-modal="!busy" root-portal custom-style="width:calc(100% - 40px);max-width:340px;border-radius:8px">
-      <view class="logout-confirm" role="alertdialog" aria-modal="true" aria-label="确认退出登录">
+      <view class="logout-confirm" aria-role="alertdialog" role="alertdialog" aria-modal="true" aria-label="确认退出登录">
         <text class="sheet-title">退出登录？</text>
         <text class="logout-caption">收藏、下载记录和会员信息仍保留在账号中。</text>
         <view v-if="error" class="error-strip" role="alert">{{ error }}</view>

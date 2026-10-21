@@ -95,7 +95,7 @@ watch(kind, load)
 
 <style scoped>
 .privacy { padding-top: 0; }
-.legal-title { margin-top: 24px; font-size: 23px; }
+.legal-title { margin-top: 16px; font-size: 23px; }
 .privacy-heading { display: block; margin: 28px 0 12px; font-size: 17px; font-weight: 600; color: var(--lc-text); }
 .privacy-text { display: block; margin-bottom:12px;line-height: 1.95; font-size: 15px; color: var(--lc-text); overflow-wrap: anywhere; }
 .legal-loading { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 26px 0; color: var(--lc-muted); font-size: 12px; }

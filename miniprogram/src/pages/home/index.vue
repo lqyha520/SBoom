@@ -16,7 +16,7 @@ import { ensureSession, requireLogin, session } from '../../services/session'
 import { rememberPaperIntent } from '../../services/paper-intent'
 import { openCatalog } from '../../services/navigation'
 import { createLatestRequest } from '../../services/latest-request'
-import { catalogCountLabel, exerciseText, homeSelection, subjectTone } from '../../presentation'
+import { exerciseText, homeSelection, subjectTone } from '../../presentation'
 import { fetchTopics, type Topic } from '../../services/experience'
 import { readPreferences, rememberSearch, writePreferences } from '../../services/preferences'
 import type { CatalogSummary, PaperSummary, SiteCategory, SiteHome } from '../../types'
@@ -55,7 +55,6 @@ const subjects = computed(() => {
     { label: '全部学科', icon: 'apps', tone: 'all-subjects', subject: '' }]
 })
 const categories = computed<SiteCategory[]>(() => (summary.value?.categories || []).slice(0, 4))
-const feedCaption = computed(() => (grade.value || '全部年级') + ' · ' + catalogCountLabel(total.value, loaded.value, loading.value, error.value))
 const paperRequests = createLatestRequest()
 const contentRequests = createLatestRequest()
 const favoriteRequests = createLatestRequest()
@@ -207,35 +206,49 @@ onShareTimeline(() => shareTimeline())
     <view class="content-width home-search-row"><SearchGradeBar v-model="q" :grade="grade" placeholder="搜知识点、习题" :disabled="!!changing" @search="search" @select-grade="gradePicker = true" /></view>
     <HomeBanner :banners="banners" :mode="site?.banner_mode || 'welcome'" :grade="grade" :recent="recentPaper" :loading="contentLoading && !site" :active="imagesActive" @select-grade="gradePicker = true" />
     <view class="content-width home-subjects">
-      <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="item in subjects" :key="item.label" class="subject-entry" role="button" :aria-label="item.subject ? item.label + '习题' : '全部习题'" @click="openCatalog({ subject: item.subject, grade })"><view class="subject-symbol" :class="item.tone"><wd-icon :name="item.icon" size="24px" /></view><text>{{ item.label }}</text></button>
+      <view class="subject-card">
+        <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="item in subjects" :key="item.label" class="subject-entry" role="button" :aria-label="item.subject ? item.label + '习题' : '全部习题'" @click="openCatalog({ subject: item.subject, grade })"><view class="subject-symbol" :class="item.tone"><wd-icon :name="item.icon" size="23px" /></view><text class="subject-label">{{ item.label }}</text></button>
+      </view>
     </view>
     <NoticeBar :notices="notices" />
     <view v-if="contentError" class="content-width"><view class="home-status" role="status"><text class="grow">{{ contentError }}暂时加载失败</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="section-link" :disabled="contentLoading" @click="loadContent(true)">{{ contentLoading ? '加载中' : '重试' }}</button></view></view>
       <view class="content-width home-feed">
-        <view class="section-heading feed-heading">
-          <view class="feed-tabs"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" :class="{ active: feed === 'featured' }" :aria-pressed="feed === 'featured'" role="button" @click="selectFeed('featured')">为你精选</button><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" :class="{ active: feed === 'latest' }" :aria-pressed="feed === 'latest'" role="button" @click="selectFeed('latest')">最近上新</button></view>
-          <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="items.length > 2" class="change-papers" :disabled="loading || !!changing" role="button" aria-label="换一组习题" @click="offset += 2"><wd-icon name="refresh" size="14px" /><text>换一组</text></button>
+        <view class="feed-heading">
+          <view class="feed-title-row">
+            <view class="feed-title-group">
+              <text class="feed-title">为你精选</text>
+              <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="items.length > 2" class="change-papers" :disabled="loading || !!changing" role="button" aria-label="换一组习题" @click="offset += 2"><wd-icon name="refresh" size="13px" /><text>换一组</text></button>
+            </view>
+            <view class="feed-switch" aria-role="group" role="group" aria-label="精选方式">
+              <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="feed-tab" :class="{ active: feed === 'featured' }" :aria-pressed="feed === 'featured'" role="button" aria-label="为你精选" @click="selectFeed('featured')"><text>精选</text><view class="feed-tab-mark" aria-hidden="true" /></button>
+              <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="feed-tab" :class="{ active: feed === 'latest' }" :aria-pressed="feed === 'latest'" role="button" aria-label="最近上新" @click="selectFeed('latest')"><text>上新</text><view class="feed-tab-mark" aria-hidden="true" /></button>
+            </view>
+          </view>
         </view>
-        <text class="feed-caption">{{ feedCaption }}</text>
         <view v-if="error" class="error-strip" role="status"><text class="grow">{{ error }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="section-link retry-papers" role="button" :disabled="loading" aria-label="重试加载习题" @click="loadPapers()">{{ loading ? '加载中' : '重试' }}</button></view>
         <EnhancedSkeleton v-if="loading && !items.length" :count="2" type="card" />
-        <view v-else-if="cards.length" class="home-cards">
-          <PaperCard compact :active="imagesActive"
-            v-for="paper in cards"
-            :key="paper.id"
-            :paper="paper"
-            :busy="loading || !!changing || !session.ready"
-            @favorite="favorite(paper)"
-          />
-        </view>
+        <template v-else-if="cards.length">
+          <view class="home-cards">
+            <PaperCard :active="imagesActive"
+              v-for="paper in cards"
+              :key="paper.id"
+              :paper="paper"
+              :busy="loading || !!changing || !session.ready"
+              @favorite="favorite(paper)"
+            />
+          </view>
+          <view v-if="total > items.length" class="feed-all">
+            <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" :aria-label="'查看全部 ' + total + ' 份习题'" @click="openCatalog({ grade })"><text>查看全部 {{ total }} 份习题</text><wd-icon name="arrow-right" size="13px" /></button>
+          </view>
+        </template>
         <view v-else-if="!loading && !error" class="home-empty"><view class="empty-symbol"><wd-icon name="book" size="28px" /></view><text class="empty-title">{{ grade ? '这个年级的练习还在准备中' : '新的练习正在准备中' }}</text><text class="empty-caption">{{ grade ? '换个年级，看看其他练习吧' : '稍后再来，或去习题库逛逛' }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="empty-link" role="button" @click="grade ? clearGrade() : openCatalog()">{{ grade ? '查看全部年级' : '进入习题库' }}<wd-icon name="arrow-right" size="14px" /></button></view>
       </view>
       <view v-if="categories.length" class="content-width home-categories">
-        <view class="section-heading"><text class="section-title">按需练习</text></view>
-        <view class="category-grid"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="(category, index) in categories" :key="category.id" class="category-entry" role="button" @click="openCatalog({ category: category.id, grade })"><view class="category-symbol" :class="'category-tone-' + index"><wd-icon :name="categoryIcon(category.icon, index % 2 ? 'copy' : 'edit')" size="21px" /></view><view class="grow"><text class="category-title">{{ exerciseText(category.name) }}</text><text class="category-caption">{{ category.description || (category.paper_count ? category.paper_count + ' 份练习' : '打开看看') }}</text></view><wd-icon name="arrow-right" size="12px" color="#91a094" /></button></view>
+        <view class="section-heading"><view class="section-head"><text class="section-title">按需练习</text><text class="section-caption">按场景快速找题</text></view></view>
+        <view class="category-grid"><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="(category, index) in categories" :key="category.id" class="category-entry" role="button" @click="openCatalog({ category: category.id, grade })"><view class="category-symbol" :class="'category-tone-' + index"><wd-icon :name="categoryIcon(category.icon, index % 2 ? 'copy' : 'edit')" size="20px" /></view><view class="grow category-copy"><text class="category-title">{{ exerciseText(category.name) }}</text><text class="category-caption">{{ category.paper_count ? category.paper_count + ' 份练习' : '打开看看' }}</text></view><wd-icon class="category-arrow" name="arrow-right" size="12px" /></button></view>
       </view>
       <view v-if="collections.length" class="home-collections">
-        <view class="content-width section-heading"><view><text class="section-title">专题合集</text><text class="section-caption">围绕一个主题，系统练一练</text></view><text v-if="collections.length > 1" class="swipe-hint">左右滑动</text></view>
+        <view class="content-width section-heading"><view class="section-head"><text class="section-title">专题合集</text><text class="section-caption">围绕一个主题，成体系地练</text></view><text v-if="collections.length > 1" class="swipe-hint">左右滑动</text></view>
         <scroll-view class="collection-scroll" scroll-x :show-scrollbar="false"><view class="collection-track"><TopicCard v-for="(collection, index) in collections" :key="collection.id" :topic="collection" :index="index" /></view></scroll-view>
       </view>
     <AppTabBar current="home" />
@@ -247,51 +260,64 @@ onShareTimeline(() => shareTimeline())
 <style scoped>
 .home-page { background: var(--lc-canvas); }
 .home-search-row { padding-top: 12px; padding-bottom: 12px; }
-.home-subjects { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding-top: 12px; padding-bottom: 10px; animation: fade-in 0.4s ease-out; }
-.subject-entry { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; width: 100%; margin: 0; padding: 0; background: transparent; font-size: 13px; line-height: 1.5; color: #374c3d; }
-.subject-entry > text { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.subject-symbol { display: flex; align-items: center; justify-content: center; width: 50px; height: 50px; border-radius: 17px; color: var(--subject-color); background: var(--subject-tint); transition: transform .18s ease, box-shadow .18s ease; }
-.subject-entry:active .subject-symbol { transform: scale(.94); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-@media (hover:hover) { .subject-entry:hover .subject-symbol { transform: translateY(-2px); box-shadow: var(--lc-card-shadow-soft); } }
-.all-subjects { --subject-color: #777951; --subject-tint: #eeefdf; }
-.home-status { display: flex; align-items: center; gap: 10px; padding: 0 12px; margin-bottom: 18px; border-radius: 10px; background: #fff4dc; color: #80612b; font-size: 13px; }
+.home-subjects { padding-top: 12px; padding-bottom: 4px; animation: fade-in 0.4s ease-out; }
+.subject-card { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; padding: 11px 8px 10px; border: 1px solid var(--lc-card-line); border-radius: 16px; background: var(--lc-card); box-shadow: var(--lc-card-shadow-soft); }
+.subject-entry { display: flex; flex-direction: column; align-items: center; gap: 7px; min-width: 0; width: 100%; margin: 0; padding: 0; border: 0; border-radius: 12px; background: transparent; font-size: 13px; font-weight: 500; line-height: 1.5; color: var(--lc-secondary); }
+.subject-label { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subject-symbol { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 14px; color: var(--subject-color); background: var(--subject-tint); transition: transform .18s ease, box-shadow .18s ease; }
+.subject-entry:active .subject-symbol { transform: scale(.94); }
+@media (hover:hover) { .subject-entry:hover .subject-symbol { transform: translateY(-2px); box-shadow: 0 4px 10px #23392d12; } }
+.all-subjects { --subject-color: #68764f; --subject-tint: #eef1e2; }
+.home-status { display: flex; align-items: center; gap: 10px; padding: 0 12px; margin-bottom: 18px; border-radius: 12px; background: #fff4dc; color: #80612b; font-size: 13px; }
 .home-status .section-link { color: #80612b; }
-.home-feed { padding-top: 0; }
-.feed-heading { margin-bottom: 0; gap: 8px; }
-.feed-tabs { display: flex; align-items: center; gap: 20px; }
-.feed-tabs button { position: relative; min-height: 44px; margin: 0; padding: 6px 0; border-radius: 0; font-size: 16px; font-weight: 500; line-height: 1.5; color: var(--lc-muted); background: transparent; }
-.feed-tabs button.active { font-weight: 700; color: #252c35; }
-.feed-tabs button.active::before { content: ''; position: absolute; left: 0; bottom: 0; width: 24px; height: 3px; background: var(--lc-primary); }
-.change-papers { display: flex; align-items: center; justify-content: flex-end; gap: 4px; flex: none; min-height: 44px; margin: 0; padding: 0; background: transparent; font-size: 13px; line-height: 1.5; color: #617d67; }
+.home-feed { padding-top: 22px; }
+.feed-heading { margin-bottom: 12px; }
+.feed-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.feed-title-group { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.feed-title { flex: none; font-size: 18px; font-weight: 650; line-height: 1.4; color: var(--lc-text); letter-spacing: .1px; }
+.feed-switch { display: flex; align-items: center; gap: 2px; flex: none; margin-right: -8px; }
+.feed-tab { position: relative; display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 36px; margin: 0; padding: 0 8px; border: 0; background: transparent; color: var(--lc-secondary); font-size: 13.5px; font-weight: 500; line-height: 1; letter-spacing: .2px; transition: color .16s ease, opacity .16s ease; }
+.feed-tab.active { color: var(--lc-primary); font-weight: 650; }
+.feed-tab-mark { position: absolute; left: 50%; bottom: 7px; width: 14px; height: 2px; margin-left: -7px; border-radius: 2px; background: var(--lc-primary); opacity: 0; transform: scaleX(.5); transition: opacity .16s ease, transform .16s ease; }
+.feed-tab.active .feed-tab-mark { opacity: 1; transform: scaleX(1); }
+.change-papers { display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: none; min-height: 30px; margin: 0; padding: 0 10px; border: 1px solid var(--lc-card-line); border-radius: 999px; background: var(--lc-surface); color: var(--lc-secondary); font-size: 12px; line-height: 1; }
+.change-papers:active { border-color: #c9dbce; color: var(--lc-primary); }
 .change-papers[disabled] { opacity: .5; }
-.feed-caption { display: block; margin: 6px 0 12px; font-size: 13px; color: var(--lc-muted); }
-.home-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.home-cards { display: flex; flex-direction: column; gap: 10px; }
+.feed-all { display: flex; justify-content: center; padding-top: 12px; }
+.feed-all button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 42px; margin: 0; padding: 0 22px; border: 0; border-radius: 999px; background: var(--lc-primary-soft); color: var(--lc-primary); font-size: 13px; font-weight: 600; line-height: 1; }
 .retry-papers { color: #a34040; flex: none; }
-.home-empty { display: flex; flex-direction: column; align-items: center; padding: 27px 16px 13px; background: #fff; border: 1px solid #e6ede5; border-radius: 16px; }
+.home-empty { display: flex; flex-direction: column; align-items: center; padding: 27px 16px 15px; background: var(--lc-card); border: 1px solid var(--lc-card-line); border-radius: 16px; }
 .empty-symbol { display: flex; align-items: center; justify-content: center; width: 56px; height: 56px; margin-bottom: 14px; border-radius: 18px; background: #eef4ee; color: #7d9b81; }
 .empty-title { font-size: 14px; font-weight: 600; color: #435948; }
 .empty-caption { margin-top: 6px; font-size: 13px; color: var(--lc-muted); }
-.empty-link { display: flex; align-items: center; gap: 7px; min-height: 44px; margin: 10px 0 0; padding: 0; background: transparent; font-size: 13px; color: var(--lc-primary); }
-.home-categories { padding-top: 23px; }
-.home-categories .section-heading { margin-bottom: 10px; }
+.empty-link { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; margin: 14px 0 0; padding: 0 20px; border-radius: 999px; background: var(--lc-primary-soft); font-size: 13px; font-weight: 600; color: var(--lc-primary); }
+.home-categories { padding-top: 26px; }
+.home-categories .section-heading, .home-collections .section-heading { margin-bottom: 12px; align-items: flex-end; }
+.section-head { min-width: 0; }
+.home-categories .section-title, .home-collections .section-title { display: block; font-size: 18px; font-weight: 650; line-height: 1.4; color: var(--lc-text); }
+.section-caption { display: block; margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--lc-muted); }
 .category-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; animation: slide-up 0.5s ease-out; }
-.category-entry { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 85px; margin: 0; padding: 12px 10px; background: #fff; border: 1px solid #e7ede4; border-radius: 14px; font-size: 13px; text-align: left; line-height: 1.5; transition: all 0.2s ease; }
-.category-entry:active { transform: scale(0.98); border-color: #c5d8c4; }
-@media (hover:hover) { .category-entry:hover { border-color: #b8d5b7; box-shadow: var(--lc-card-shadow-soft); } }
-.category-symbol { display: flex; align-items: center; justify-content: center; flex: none; width: 30px; height: 34px; color: #8a784b; }
-.category-tone-1 { color: #7883a3; }.category-tone-2 { color: #7b977f; }.category-tone-3 { color: #b48673; }
+.category-entry { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 74px; margin: 0; padding: 12px; border: 1px solid var(--lc-card-line); border-radius: 16px; background: var(--lc-card); box-shadow: var(--lc-card-shadow-soft); font-size: 13px; text-align: left; line-height: 1.5; transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+.category-entry:active { transform: scale(.98); border-color: #c5d8c4; }
+@media (hover:hover) { .category-entry:hover { border-color: #c9ddcc; box-shadow: var(--lc-card-shadow); } }
+.category-symbol { display: flex; align-items: center; justify-content: center; flex: none; width: 40px; height: 40px; border-radius: 13px; background: var(--category-bg, #f7efe0); color: var(--category-ink, #8a6a32); }
+.category-tone-0 { --category-bg: #f7efe0; --category-ink: #8a6a32; }
+.category-tone-1 { --category-bg: #eaf0f8; --category-ink: #52709c; }
+.category-tone-2 { --category-bg: #eaf3ec; --category-ink: #4c7a5c; }
+.category-tone-3 { --category-bg: #f8ece6; --category-ink: #a86650; }
+.category-copy { display: flex; flex-direction: column; justify-content: center; }
 .category-title { display: block; color: var(--lc-text); font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.category-caption { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; color: var(--lc-muted); margin-top: 4px; }
+.category-caption { display: block; margin-top: 3px; color: var(--lc-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.category-arrow { flex: none; color: #a3b0a6; transition: transform .18s ease, color .18s ease; }
+@media (hover:hover) { .category-entry:hover .category-arrow { transform: translateX(1px); color: #7e9a85; } }
 .home-collections { padding-top: 28px; }
-.home-collections .section-heading { margin-bottom: 14px; }
-.section-title { font-size: 17px; color: #2b4131; }
-.section-caption { display: block; margin-top: 4px; font-size: 13px; color: var(--lc-muted); }
-.swipe-hint { font-size: 13px; color: var(--lc-muted); }
+.swipe-hint { flex: none; font-size: 11.5px; color: var(--lc-muted); }
 .collection-scroll { width: 100%; }
-.collection-track { display:flex;gap:12px;padding:0 var(--lc-page-gutter) 8px; }
+.collection-track { display: flex; gap: 12px; padding: 0 var(--lc-page-gutter) 8px; animation: slide-up 0.6s ease-out; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-@media (max-height:680px) { .home-search-row { padding-top:8px;padding-bottom:8px; }.home-subjects { padding-top:8px;padding-bottom:8px; }.subject-symbol { width:40px;height:40px;border-radius:14px; } }
 @keyframes slide-up { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-.collection-track { animation: slide-up 0.6s ease-out; }
-@media (max-width: 359px) { .home-cards { gap: 10px; } .feed-tabs { gap: 14px; } .category-entry { gap: 5px; padding: 12px 8px; } .category-symbol { width: 25px; } .collection-track { padding-left: 16px; padding-right: 16px; } .collection-card { width: 235px; } }
+@media (max-height:680px) { .home-search-row { padding-top:8px;padding-bottom:8px; }.home-subjects { padding-top:8px; }.subject-card { padding:9px 8px 8px; }.subject-symbol { width:40px;height:40px;border-radius:13px; }.home-feed { padding-top:18px; } }
+@media (max-width: 359px) { .home-cards { gap: 8px; } .feed-switch { margin-right: -7px; } .feed-tab { min-width: 42px; padding: 0 7px; font-size: 13px; } .category-grid { gap: 8px; } .category-entry { gap: 8px; padding: 10px; } .category-symbol { width: 36px; height: 36px; border-radius: 12px; } .category-arrow { display: none; } .collection-track { padding-left: 16px; padding-right: 16px; } .collection-card { width: 235px; } }
+@media (prefers-reduced-motion: reduce) { .home-subjects, .category-grid, .collection-track { animation: none; } .feed-tab { transition: none; } }
 </style>

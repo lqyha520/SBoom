@@ -61,7 +61,7 @@ async function save() {
 
 <template>
   <wd-popup :model-value="open" position="bottom" :z-index="1250" :close-on-click-modal="!busy" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0" @update:model-value="!$event && emit('close')">
-    <view class="sheet password-sheet" role="dialog" aria-modal="true" :aria-label="hasPassword ? '修改密码' : '设置密码'">
+    <view class="sheet password-sheet" aria-role="dialog" role="dialog" aria-modal="true" :aria-label="hasPassword ? '修改密码' : '设置密码'">
       <view class="sheet-handle" />
       <view class="sheet-head"><text class="sheet-title">{{ hasPassword ? '修改密码' : '设置密码' }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭密码设置" :disabled="busy" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
       <text class="password-intro">{{ hasPassword ? '修改后，其它设备上的登录会失效，这台设备保持登录状态。' : '设置密码后，可使用账号 ' + session.user?.username + ' 登录习题库。' }}</text>

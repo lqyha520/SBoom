@@ -314,11 +314,11 @@ onPullDownRefresh(() => { void load() })
       <view v-else-if="!loading && !error" class="state-block"><wd-empty icon="no-content" tip="未找到习题" /></view>
     </template>
     <wd-popup v-model="editionOpen" position="bottom" :z-index="1200" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0">
-      <view class="sheet edition-sheet" role="dialog" aria-modal="true" aria-label="选择下载版本">
+      <view class="sheet edition-sheet" aria-role="dialog" role="dialog" aria-modal="true" aria-label="选择下载版本">
         <view class="sheet-handle" />
         <view class="sheet-head"><text class="sheet-title">选择下载版本</text><button class="bare-icon" hover-class="control-pressed" role="button" aria-label="关闭版本选择" @click="editionOpen = false"><wd-icon name="close" size="20px" /></button></view>
         <text class="edition-help">选择后用于下载，页面预览始终展示原稿。</text>
-        <view class="edition-options" role="radiogroup" aria-label="文件版本">
+        <view class="edition-options" aria-role="radiogroup" role="radiogroup" aria-label="文件版本">
           <button v-for="item in paper?.editions || []" :key="item.kind" class="edition-option" role="radio" hover-class="control-pressed" :aria-checked="edition === item.kind" :class="{ selected: edition === item.kind }" :disabled="downloading || loading || !verified" @click="selectEdition(item.kind)"><view class="grow"><text>{{ item.label }}</text><text class="edition-size">{{ fileSize(item.byte_size) }}</text></view><wd-icon v-if="edition === item.kind" name="check" size="22px" /></button>
         </view>
         <text class="edition-help">{{ paper ? downloadAccessHint(paper, !!session.user) : '' }}</text><text class="edition-help">{{ pdfGuide }}</text>
@@ -342,7 +342,7 @@ onPullDownRefresh(() => { void load() })
       </PaperPreview>
     </wd-popup>
     <wd-popup v-model="groupOpen" position="bottom" :z-index="1200" :close-on-click-modal="!groupBusy" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0">
-      <view class="sheet group-sheet" role="dialog" aria-modal="true" aria-label="选择收藏分组">
+      <view class="sheet group-sheet" aria-role="dialog" role="dialog" aria-modal="true" aria-label="选择收藏分组">
         <view class="sheet-handle" />
         <view class="sheet-head"><text class="sheet-title">选择收藏分组</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭收藏分组" :disabled="groupBusy" @click="groupOpen = false"><wd-icon name="close" size="20px" /></button></view>
         <view v-if="groupError" class="error-strip" role="alert">{{ groupError }}<wd-button variant="text" :disabled="groupBusy" @click="chooseGroup">刷新分组</wd-button></view><view class="group-create"><input v-model="groupName" class="group-name-input" maxlength="40" :disabled="groupBusy" placeholder="新分组名称，例如：期末复习" aria-label="新分组名称" confirm-type="done" @confirm="createAndAssignGroup" /><wd-button :loading="groupBusy" :disabled="groupBusy || !groupName.trim()" @click="createAndAssignGroup">新建并归组</wd-button></view><text v-if="!groupItems.length && !groupBusy" class="group-empty">还没有分组，可在这里创建并收藏这份资料</text>
@@ -355,7 +355,7 @@ onPullDownRefresh(() => { void load() })
     </wd-popup>
     <MembershipSheet :open="membershipOpen" @close="membershipOpen = false" @refreshed="load" />
     <wd-popup v-model="linkOpen" position="bottom" :z-index="1200" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0" @close="clearLink">
-      <view v-if="linkOpen && linkTarget" class="sheet link-sheet" role="dialog" aria-modal="true" aria-label="网盘下载链接">
+      <view v-if="linkOpen && linkTarget" class="sheet link-sheet" aria-role="dialog" role="dialog" aria-modal="true" aria-label="网盘下载链接">
         <view class="sheet-handle" /><view class="sheet-head"><text class="sheet-title">网盘下载</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭网盘链接" @click="clearLink"><wd-icon name="close" size="20px" /></button></view>
         <text class="link-tip">复制链接后，在浏览器或网盘 App 中打开并下载。</text>
         <text class="external-url" selectable>{{ linkTarget.url }}</text>

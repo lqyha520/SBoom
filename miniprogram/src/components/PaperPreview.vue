@@ -75,7 +75,7 @@ watch(() => props.pages.length, count => { if (current.value >= count) current.v
 </script>
 
 <template>
-  <view class="paper-reader" role="dialog" aria-modal="true" aria-label="习题原稿预览">
+  <view class="paper-reader" aria-role="dialog" role="dialog" aria-modal="true" aria-label="习题原稿预览">
     <view class="reader-header" :style="{ paddingTop: navigationTop + 'px', height: navigationHeight + 'px' }"><ChromeBack :top="navigationTop + 5" label="返回习题详情" @press="close" /><text class="reader-title">原稿预览</text></view>
     <swiper :key="windowStart" class="reader-pages" :current="current - windowStart" :disable-touch="zoomedCurrent" @change="change" @animationfinish="finishTurn">
       <swiper-item v-for="{ page, index } in visiblePages" :key="page.id">

@@ -27,7 +27,7 @@ onShow(hideNativeTabBar)
 </script>
 
 <template>
-  <view v-if="!tabBarObscured" class="app-tabbar" role="navigation" aria-label="主导航">
+  <view v-if="!tabBarObscured" class="app-tabbar" aria-role="navigation" role="navigation" aria-label="主导航">
     <button
       v-for="tab in tabs"
       :key="tab.name"
@@ -52,13 +52,17 @@ onShow(hideNativeTabBar)
 
 <style scoped>
 .app-tabbar, .app-tab-item, .tab-unread { box-sizing: border-box; }
-.app-tabbar { position:fixed;bottom:0;left:50%;transform:translateX(-50%);z-index:50;display:flex;align-items:stretch;gap:4px;width:100%;max-width:520px;padding:6px 12px calc(6px + var(--lc-tabbar-safe-bottom, env(safe-area-inset-bottom, 0px)));border-top:1px solid #e0e9e3;background:#fff; }
+.app-tabbar { position:fixed;bottom:0;left:50%;transform:translateX(-50%);z-index:50;display:flex;align-items:stretch;gap:4px;width:100%;max-width:520px;padding:6px 12px calc(6px + var(--lc-tabbar-safe-bottom, env(safe-area-inset-bottom, 0px)));border-top:1px solid #e0e9e3;background:var(--lc-surface); }
+/* #ifdef H5 */
+.app-tabbar { background:rgba(255,255,255,.9);backdrop-filter:saturate(1.5) blur(18px);-webkit-backdrop-filter:saturate(1.5) blur(18px); }
+/* #endif */
 .app-tab-item { display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-width:0;min-height:56px;margin:0;padding:5px 0;border:0;border-radius:16px;background:transparent;color:var(--lc-muted);font-size:12px;font-weight:500;line-height:16px;transition:background-color .16s,color .16s,transform .16s; }
-.tab-icon-wrap { position:relative;display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:28px;border-radius:12px;transition:background-color .16s; }
+.tab-icon-wrap { position:relative;display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:28px;border-radius:12px;transition:background-color .16s,transform .18s; }
 .tab-icon { display: block; width: 24px; height: 24px; }
 .tab-label { display: block; max-width: 100%; line-height: 16px; white-space: nowrap; }
 .app-tab-active { color:var(--lc-primary);font-weight:600; }
-.app-tab-active .tab-icon-wrap { background:var(--lc-primary-soft); }
+.app-tab-active .tab-icon-wrap { background:var(--lc-primary-soft);box-shadow:inset 0 0 0 1px #d9eadd;transform:translateY(-1px);animation:tab-activate .22s ease-out; }
+@keyframes tab-activate { from { transform:translateY(0) scale(.9); } to { transform:translateY(-1px) scale(1); } }
 .app-tab-item:active,.app-tab-pressed { transform:scale(.95);background:var(--lc-primary-soft); }
 .app-tab-active:active,.app-tab-active.app-tab-pressed { background:var(--lc-primary-soft); }
 .tab-unread { position:absolute;right:0;top:-1px;width:9px;height:9px;border:2px solid #fff;border-radius:50%;background:var(--lc-coral); }

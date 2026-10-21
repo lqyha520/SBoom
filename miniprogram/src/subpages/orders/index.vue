@@ -2,8 +2,8 @@
 import { navigatePage } from '../../services/page-navigation'
 
 import { copyWithPrivacy } from '../../services/privacy'
-import { ref } from 'vue'
-import { onLoad, onReachBottom } from '@dcloudio/uni-app'
+import { computed, ref, watch } from 'vue'
+import { onHide, onLoad, onReachBottom, onShow, onUnload } from '@dcloudio/uni-app'
 import ServicePage from '../components/ServicePage.vue'
 import { useConsumerPage, type ConsumerTicket } from '../../services/consumer-page'
 import { fetchPlans, fetchOrders, fetchOrder, cancelOrder, syncOrder, requestRefund, syncRefund, orderStatus, refundStatus, yuan, openOrder, type Order } from '../../services/growth'
@@ -21,7 +21,25 @@ async function load(valid: ConsumerTicket, append = false) {
 }
 const page = useConsumerPage(load, () => { items.value = []; selected.value = null; more.value = false; refundOpen.value = false; reason.value = ''; notice.value = ''; refundError.value = '';  canPay.value = false; online.value = false })
 const { error, busy, loading } = page
-function payable(order: Order) { return ['created', 'pending'].includes(order.status) && order.expires_at > Date.now() / 1000 }
+const now = ref(Date.now())
+let countdown: ReturnType<typeof setInterval> | undefined
+function payable(order: Order) { return ['created', 'pending'].includes(order.status) && order.expires_at > now.value / 1000 }
+const payRemaining = computed(() => {
+  const seconds = selected.value ? Math.max(0, Math.ceil(selected.value.expires_at - now.value / 1000)) : 0
+  return String(Math.floor(seconds / 60)).padStart(2, '0') + ':' + String(seconds % 60).padStart(2, '0')
+})
+function stopCountdown() { if (countdown !== undefined) { clearInterval(countdown); countdown = undefined } }
+function startCountdown() {
+  stopCountdown(); now.value = Date.now()
+  const order = selected.value
+  if (!order || !['created', 'pending'].includes(order.status) || order.expires_at <= now.value / 1000) return
+  // 到期后自动停下，页面隐藏时也不占用定时器。
+  countdown = setInterval(() => { now.value = Date.now(); if (!selected.value || selected.value.expires_at <= now.value / 1000) stopCountdown() }, 1000)
+}
+watch([selected, () => selected.value?.status], startCountdown)
+onShow(() => { now.value = Date.now(); if (selected.value) startCountdown() })
+onHide(stopCountdown)
+onUnload(stopCountdown)
 function pay() { if (!selected.value || !canPay.value) return; void page.act(async valid => { const result = await checkout(selected.value!.id, valid, { scope: valid }); if (valid() && result) { selected.value = result; notice.value = result.status === 'paid' ? '付款已确认，会员权益已更新' : '付款结果仍在确认中，请稍后查询订单状态' } }) }
 function sync() { if (!selected.value) return; void page.act(async valid => { const item = selected.value!; const result = item.refund && ['processing', 'abnormal'].includes(item.refund.status) ? await syncRefund(item.refund.id) : await syncOrder(item.id); if (!valid()) return; selected.value = result; settleCheckout(result); await refreshMembership({ scope: valid }); if (valid()) notice.value = '已查询最新订单状态' }) }
 function cancel() { if (!selected.value) return; void page.act(async valid => { if (!await confirmAction('取消订单', '确认关闭这笔未付款订单？') || !valid()) return; const result = await cancelOrder(selected.value!.id); if (valid()) { selected.value = result; settleCheckout(result) } }) }
@@ -69,7 +87,7 @@ onReachBottom(loadMore)
         <text class="service-meta">创建：{{ formatDate(selected.created_at) }}</text>
         <text v-if="selected.paid_at" class="service-meta">付款：{{ formatDate(selected.paid_at) }}</text>
         <text v-if="['created', 'pending'].includes(selected.status)" class="service-meta">
-          {{ payable(selected) ? '订单创建后 15 分钟内可付款' : '订单已超时，请取消或查询状态' }}
+          {{ payable(selected) ? '剩余支付时间 ' + payRemaining : '订单已超时，请取消或查询状态' }}
         </text>
         <text v-if="checkoutState.has(selected.id)" class="service-meta">{{ checkoutState.get(selected.id)?.phase === 'waiting' ? '尚未收到付款结果，可查询最新订单状态' : '正在确认付款结果' }}</text>
         <view class="service-actions">
