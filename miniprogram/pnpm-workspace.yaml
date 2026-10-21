@@ -12,8 +12,10 @@ onlyBuiltDependencies:
   - sharp
 
 overrides:
-  # https://github.com/vitejs/vite/security/advisories
-  "vite@5.2.8": "6.4.3"
+  # https://github.com/vitejs/vite/security/advisories/GHSA-587h-7wmj-h5pm
+  "vite@5.2.8": "6.4.4"
+  # https://github.com/follow-redirects/follow-redirects/security/advisories/GHSA-q3jh-wrc6-jgq8
+  "follow-redirects@1.16.0": "1.16.1"
   # https://github.com/postcss/postcss/releases
   "postcss@<8.5.28": "8.5.28"
   # https://github.com/websockets/ws/security/advisories/GHSA-3h5v-q93c-6h6q
