@@ -127,7 +127,7 @@ try {
     const first = page.locator('.paper-card').first()
     await expect(first.locator('.paper-card-keyword')).toHaveCount(0)
     await expect(first.locator('.paper-card-meta')).toContainText('12 题 · 4 页')
-    await expect(first.locator('.paper-card-meta')).toContainText('含答案')
+    await expect(first.locator('.paper-answer')).toHaveText('含答案')
     assert.ok((await first.boundingBox()).height <= (height <= 680 ? 270 : 360), 'Featured cards must fit the responsive cover and metadata')
     assert.equal(await first.locator('.cover-sheet').evaluate(element => getComputedStyle(element).transform), 'none')
     assert.equal(await first.locator('.cover-sheet').evaluate(element => {
@@ -135,15 +135,15 @@ try {
       return sheet.left >= cover.left && sheet.right <= cover.right && sheet.top >= cover.top && sheet.bottom <= cover.bottom
     }), true, 'Full cover must fit without clipping')
     await expect.poll(() => page.locator('.home-cards .paper-cover').evaluateAll(elements => {
-      const tops = elements.map(element => element.getBoundingClientRect().top)
-      return Math.abs(tops[0] - tops[1])
-    }), { message: 'Cards with and without keywords must align' }).toBeLessThan(1)
+      const boxes = elements.map(element => element.getBoundingClientRect())
+      return Math.max(Math.abs(boxes[0].left - boxes[1].left), Math.abs(boxes[0].width - boxes[1].width))
+    }), { message: 'Cards with and without keywords must share cover geometry' }).toBeLessThan(1)
     await screenshot('home-' + width)
     await first.evaluate(element => element.scrollIntoView({ block: 'center' }))
     await expect(first.locator('.paper-card-meta')).toBeInViewport()
     await first.screenshot({ path: output('paper-card-' + width + '.png') })
   }
-  report.flows.push('home first title, complete covers and aligned keyword rows at 320/375/430/1024')
+  report.flows.push('home first title and consistent stacked-cover geometry at 320/375/430/1024')
   await page.setViewportSize({ width: 375, height: 812 })
   await go('/pages/home/index')
   await page.getByRole('button', { name: '换一组习题', exact: true }).click()

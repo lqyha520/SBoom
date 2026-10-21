@@ -63,11 +63,11 @@ async function main() {
   }
   try {
     await page.goto(base + '/#/pages/home/index')
-    await expect(page.locator('.feed-caption')).toContainText('正在加载习题')
+    await expect(page.locator('.skeleton-container[aria-busy="true"]')).toHaveAttribute('aria-label', '正在加载习题')
     hold = false; release()
-    await expect(page.locator('.feed-caption')).toContainText('加载失败，请重试', { timeout: 15000 })
+    await expect(page.locator('.error-strip')).toContainText('模拟网络暂时不可用', { timeout: 15000 })
     await expect(page.locator('.home-empty')).toHaveCount(0)
-    assert.ok(!(await page.locator('.feed-caption').innerText()).includes('0 份'))
+    assert.ok(!(await page.locator('.home-feed').innerText()).includes('共 0 份'))
     await shot('home-error-390')
     fail = false
     await page.getByRole('button', { name: '重试加载习题', exact: true }).click()
@@ -77,8 +77,15 @@ async function main() {
     await expect(page.locator('.home-more')).toHaveCount(0)
     await page.getByRole('button', { name: '选择适合的年级' }).click()
     await expect(page.getByRole('button', { name: '小学三年级', exact: true })).toBeVisible()
+    const gradeResponse = page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return url.pathname === '/api/v1/catalog/papers' && url.searchParams.get('grade') === '小学三年级' && response.ok()
+    })
     await page.getByRole('button', { name: '小学三年级', exact: true }).click()
-    await expect(page.locator('.feed-caption')).toContainText('小学三年级 · 共 4 份习题')
+    await gradeResponse
+    await expect(page.getByRole('button', { name: '选择年级', exact: true })).toContainText('三年级')
+    await expect(page.locator('.error-strip')).toHaveCount(0)
+    await expect(page.locator('.home-cards .paper-card')).toHaveCount(2)
     await shot('home-390')
     check('首页首次加载、失败、重试、答案标识和年级入口')
 
@@ -97,13 +104,14 @@ async function main() {
 
     fail = true
     await page.goBack()
-    await expect(page.locator('.feed-caption')).toContainText('更新失败 · 上次共 4 份', { timeout: 15000 })
+    await expect(page.locator('.error-strip')).toContainText('模拟网络暂时不可用', { timeout: 15000 })
     await expect(page.locator('.home-cards .paper-card')).toHaveCount(2)
     await shot('home-retained-320')
     fail = false
     await page.getByRole('button', { name: '重试加载习题', exact: true }).click()
-    await expect(page.locator('.feed-caption')).toContainText('共 4 份习题')
-    check('返回首页刷新失败保留旧资料，并标明旧数量')
+    await expect(page.locator('.error-strip')).toHaveCount(0)
+    await expect(page.locator('.home-cards .paper-card')).toHaveCount(2)
+    check('返回首页刷新失败保留旧资料，并可重试恢复')
 
     fail = true
     await page.goto(base + '/#/pages/library/index')
@@ -145,9 +153,9 @@ async function main() {
       const url = new URL(response.url())
       return url.pathname === '/api/v1/catalog/papers' && url.searchParams.get('sort') === 'latest' && url.searchParams.get('only_free') === 'true' && response.ok()
     })
-    await page.getByRole('button', { name: '仅免费', exact: true }).click()
+    await page.locator('.filter-free').click()
     await freeResponse
-    await expect(page.getByRole('button', { name: '仅免费', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.locator('.filter-free')).toHaveAttribute('aria-pressed', 'true')
     await expect(page.locator('.result-count')).toHaveText('共 4 份习题')
     await shot('library-sorted-free-320')
     check('切换最新排序并叠加免费筛选，保留排序和列表结果')
