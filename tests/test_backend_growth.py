@@ -47,7 +47,8 @@ class GrowthBase(unittest.TestCase):
         fixtures.PublicCatalogContracts.setUp(self)
         for router in (engagement.router, commerce.router, experience.router):
             self.client.app.include_router(router)
-        for key, value in {"wechat_pay_enabled": False, "wechat_subscribe_template_id": "", "wechat_pay_auto_reconcile": False}.items():
+        # 这些用例固定验证普通微信支付，不随开发机 .env 的虚拟支付开关漂移。
+        for key, value in {"wechat_pay_enabled": False, "wechat_virtual_pay_enabled": False, "wechat_subscribe_template_id": "", "wechat_pay_auto_reconcile": False}.items():
             self.stack.enter_context(patch.object(get_settings(), key, value))
 
     def tag(self, kind, name):

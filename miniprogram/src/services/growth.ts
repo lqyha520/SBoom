@@ -45,18 +45,22 @@ export const closureStatus = { pending: '等待审核', cancelled: '已撤回', 
 export const fetchClosure = (options: ReadOptions = {}) => request<{ request: Closure | null }>('/api/v1/mini/closure', 'GET', undefined, options)
 export const applyClosure = (reason: string) => request<{ request: Closure }>('/api/v1/mini/closure', 'POST', { reason, acknowledge: true })
 export const cancelClosure = (revision: number) => request<{ request: Closure }>('/api/v1/mini/closure?revision=' + revision, 'DELETE')
-export interface Plan { id: string; name: string; description: string; days: number; price_fen: number; revision: number }
+export interface Plan { id: string; name: string; description: string; days: number; price_fen: number; revision: number; virtual_product_id?: string }
 export interface Refund { id: string; reason: string; reply: string; status: 'requested' | 'processing' | 'success' | 'closed' | 'abnormal' | 'rejected'; revision: number; created_at: number; updated_at: number; completed_at: number | null }
-export interface Order { id: string; plan_id: string; plan_name: string; plan_days: number; amount_fen: number; currency: string; status: 'created' | 'pending' | 'paid' | 'closed' | 'refunded'; created_at: number; expires_at: number; paid_at: number | null; revision: number; refund: Refund | null }
+export type PaymentChannel = 'wechat' | 'virtual'
+export interface Order { id: string; plan_id: string; plan_name: string; plan_days: number; amount_fen: number; currency: string; status: 'created' | 'pending' | 'paid' | 'closed' | 'refunded'; payment_channel?: PaymentChannel; created_at: number; expires_at: number; paid_at: number | null; revision: number; refund: Refund | null }
 export interface PaymentParameters { timeStamp: string; nonceStr: string; package: string; signType: 'RSA'; paySign: string }
+export interface VirtualPaymentParameters { mode: 'short_series_goods'; signData: string; paySig: string; signature: string }
+export type CheckoutPayment = PaymentParameters | VirtualPaymentParameters
 export { orderLabels as orderStatus, refundLabels as refundStatus } from '../../../shared/commerce'
 export const yuan = (fen: number) => '¥' + (fen / 100).toFixed(2)
-export const fetchPlans = (options: ReadOptions = {}) => request<{ items: Plan[]; checkout_enabled: boolean; ios_enabled: boolean }>('/api/v1/mini/membership/plans', 'GET', undefined, options)
+export const fetchPlans = (options: ReadOptions = {}) => request<{ items: Plan[]; checkout_enabled: boolean; ios_enabled: boolean; checkout_channel?: PaymentChannel }>('/api/v1/mini/membership/plans', 'GET', undefined, options)
 export const redeemMembershipCard = (code: string) => request<{ user: import('../types').User; days: number; vip_expires_at: number | null }>('/api/v1/mini/membership/redeem', 'POST', { code })
 export const createOrder = (plan: Plan, request_id: string) => request<Order>('/api/v1/mini/orders', 'POST', { plan_id: plan.id, plan_revision: plan.revision, request_id })
 export const fetchOrders = (offset = 0, options: ReadOptions = {}) => request<Page<Order>>('/api/v1/mini/orders?offset=' + offset, 'GET', undefined, options)
 export const fetchOrder = (id: string, options: ReadOptions = {}) => request<Order>('/api/v1/mini/orders/' + encodeURIComponent(id), 'GET', undefined, options)
-export const payOrder = (id: string) => request<{ order: Order; payment: PaymentParameters | null }>('/api/v1/mini/orders/' + encodeURIComponent(id) + '/pay', 'POST')
+export const payOrder = (id: string) => request<{ order: Order; payment: CheckoutPayment | null }>('/api/v1/mini/orders/' + encodeURIComponent(id) + '/pay', 'POST')
+export const refreshWechatSession = (code: string) => request<{ refreshed: boolean }>('/api/v1/mini/wechat/session', 'POST', { code })
 export const syncOrder = (id: string) => request<Order>('/api/v1/mini/orders/' + encodeURIComponent(id) + '/sync', 'POST')
 export const cancelOrder = (id: string) => request<Order>('/api/v1/mini/orders/' + encodeURIComponent(id) + '/cancel', 'POST')
 export const requestRefund = (id: string, reason: string) => request<Order>('/api/v1/mini/orders/' + encodeURIComponent(id) + '/refund', 'POST', { reason })

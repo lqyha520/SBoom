@@ -43,9 +43,16 @@ def _limit(request: Request, name: str, count=30, seconds=300):
 @router.post("/mini/login-public")
 async def public_login(body: CodeInput, request: Request):
     _limit(request, "login")
-    identity = await mini_auth.exchange_code(body.code, with_openid=True)
-    credentials = identity if isinstance(identity, tuple) else (identity, "")
-    return await run_sync(mini_auth.login_public_identity, *credentials)
+    identity = await mini_auth.exchange_code(body.code, with_openid=True, with_session=True)
+    return await run_sync(mini_auth.login_public_identity, *mini_auth.login_credentials(identity))
+
+
+@router.post("/mini/wechat/session")
+async def refresh_wechat_session(body: CodeInput, request: Request, user: MiniUser = Depends(require_mini_user)):
+    """已登录用户重新 wx.login，刷新虚拟支付签名所需的 session_key。"""
+    _limit(request, "wechat-session:" + user.id, 20, 300)
+    identity = await mini_auth.exchange_code(body.code, with_openid=True, with_session=True)
+    return await run_sync(mini_auth.refresh_wechat_session, user.id, *mini_auth.login_credentials(identity))
 
 
 @router.post("/mini/login-password")

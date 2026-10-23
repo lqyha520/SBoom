@@ -11,6 +11,7 @@ def init_commerce_schema(conn):
             id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
             days INTEGER NOT NULL, price_fen INTEGER NOT NULL, is_active INTEGER NOT NULL DEFAULT 0,
             sort_order INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 1,
+            virtual_product_id TEXT NOT NULL DEFAULT '',
             created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS mini_orders (
@@ -19,6 +20,10 @@ def init_commerce_schema(conn):
             plan_name TEXT NOT NULL, plan_days INTEGER NOT NULL, amount_fen INTEGER NOT NULL,
             currency TEXT NOT NULL DEFAULT 'CNY', status TEXT NOT NULL DEFAULT 'created',
             appid TEXT NOT NULL, mchid TEXT NOT NULL, transaction_id TEXT UNIQUE,
+            payment_channel TEXT NOT NULL DEFAULT 'wechat', virtual_env INTEGER NOT NULL DEFAULT 0,
+            virtual_offer_id TEXT NOT NULL DEFAULT '', virtual_product_id TEXT NOT NULL DEFAULT '',
+            virtual_order_id TEXT NOT NULL DEFAULT '', virtual_order_type INTEGER NOT NULL DEFAULT 0,
+            delivered_at BIGINT,
             prepay_id TEXT NOT NULL DEFAULT '', payer_enc TEXT NOT NULL DEFAULT '',
             lease_key TEXT NOT NULL DEFAULT '', lease_until BIGINT NOT NULL DEFAULT 0,
             revision INTEGER NOT NULL DEFAULT 1, created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL,
@@ -61,4 +66,17 @@ def init_commerce_schema(conn):
             created_at BIGINT NOT NULL, expires_at BIGINT
         );
         CREATE INDEX IF NOT EXISTS idx_mini_membership_cards_status ON mini_membership_cards(status, created_at DESC);
+    """)
+    # 存量库补列：虚拟支付渠道快照与发货状态。
+    conn.executescript("""
+        ALTER TABLE mini_membership_plans ADD COLUMN IF NOT EXISTS virtual_product_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS payment_channel TEXT NOT NULL DEFAULT 'wechat';
+        ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS virtual_env INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS virtual_offer_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS virtual_product_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS virtual_order_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS virtual_order_type INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS delivered_at BIGINT;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_orders_virtual_order ON mini_orders(virtual_order_id) WHERE virtual_order_id <> '';
+        CREATE INDEX IF NOT EXISTS idx_mini_orders_channel_status ON mini_orders(payment_channel, status, updated_at);
     """)

@@ -85,6 +85,7 @@ onReachBottom(loadMore)
           </button>
         </view>
         <text class="service-meta">创建：{{ formatDate(selected.created_at) }}</text>
+        <text class="service-meta">支付方式：{{ selected.payment_channel === 'virtual' ? '微信小程序内支付' : '微信支付' }}</text>
         <text v-if="selected.paid_at" class="service-meta">付款：{{ formatDate(selected.paid_at) }}</text>
         <text v-if="['created', 'pending'].includes(selected.status)" class="service-meta">
           {{ payable(selected) ? '剩余支付时间 ' + payRemaining : '订单已超时，请取消或查询状态' }}
@@ -98,7 +99,7 @@ onReachBottom(loadMore)
             :loading="busy"
             @click="pay"
           >
-            微信支付
+            立即支付
           </wd-button>
           <wd-button
             role="button"
@@ -116,10 +117,10 @@ onReachBottom(loadMore)
             :disabled="busy || loading"
             @click="sync"
           >
-            查询支付 / 退款状态
+            查询订单状态
           </wd-button>
         </view>
-        <text v-if="payable(selected) && !canPay" class="service-meta">当前暂不支持付款，可稍后在微信小程序查看。</text>
+        <text v-if="payable(selected) && !canPay" class="service-meta">当前设备暂不支持在线付款，可联系客服协助开通。</text>
       </view>
       <view v-if="selected.refund" class="service-card">
         <text class="service-card-title">{{ refundStatus[selected.refund.status] }}</text>

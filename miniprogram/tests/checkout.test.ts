@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
 
-function fixture(platform = 'MP-WEIXIN', status = 'paid', nativeFailure = '', hideDuringPayment = false, switchAccount = false) {
+function fixture(platform = 'MP-WEIXIN', status = 'paid', nativeFailure = '', hideDuringPayment = false, switchAccount = false, options: { virtual?: boolean; payErrors?: any[]; virtualErrors?: any[]; refreshFails?: boolean } = {}) {
   const code = readFileSync(new URL('../src/services/checkout.ts', import.meta.url), 'utf8')
   let include = true
   const filtered = code.split('\n').filter(line => {
@@ -18,10 +18,24 @@ function fixture(platform = 'MP-WEIXIN', status = 'paid', nativeFailure = '', hi
   const delays: number[] = []
   let valid = true, epoch = 0
   const exports: Record<string, any> = {}
-  const payment = { timeStamp: '123', nonceStr: 'nonce', package: 'prepay_id=fixture', signType: 'RSA', paySign: 'fixture-signature' }
+  const ordinaryPayment = { timeStamp: '123', nonceStr: 'nonce', package: 'prepay_id=fixture', signType: 'RSA', paySign: 'fixture-signature' }
+  const virtualPayment = { mode: 'short_series_goods', signData: '{"offerId":"123","buyQuantity":1,"env":0,"currencyType":"CNY","productId":"fixture-product","goodsPrice":1990,"outTradeNo":"order-one","attach":"plan-one"}', paySig: 'fixture-pay-signature', signature: 'fixture-user-signature' }
+  const payment = options.virtual ? virtualPayment : ordinaryPayment
   const growth = {
-    async payOrder() { events.push('prepay'); return { order: { status: 'pending' }, payment } },
+    async payOrder() { events.push('prepay'); const failure = options.payErrors?.shift(); if (failure) throw failure; return { order: { status: 'pending' }, payment } },
     async syncOrder() { events.push('server-confirm'); return { id: 'order-one', status } },
+    async refreshWechatSession(value: string) { events.push('refresh-session:' + value); if (options.refreshFails) throw new Error('refresh failed') },
+  }
+  const requestVirtualPayment = (request: any) => {
+    assert.equal(request.mode, virtualPayment.mode)
+    assert.equal(request.signData, virtualPayment.signData)
+    assert.equal(request.paySig, virtualPayment.paySig)
+    assert.equal(request.signature, virtualPayment.signature)
+    events.push('virtual-payment')
+    if (hideDuringPayment) valid = false
+    if (switchAccount) epoch++
+    const failure = options.virtualErrors?.shift()
+    if (failure) request.fail(failure); else request.success()
   }
   vm.runInNewContext(ts.transpileModule(filtered, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
     exports,
@@ -29,8 +43,11 @@ function fixture(platform = 'MP-WEIXIN', status = 'paid', nativeFailure = '', hi
     require: (id: string) => id === 'vue' ? vue : id === './api' ? { authGeneration: () => epoch } : id === './growth' ? growth : { async refreshMembership() { events.push('membership') } },
     uni: {
       getSystemInfoSync: () => ({ platform: 'ios' }),
-      requestPayment(options: any) { assert.equal(options.paySign, payment.paySign); events.push('native-payment'); if (hideDuringPayment) valid = false; if (switchAccount) epoch++; if (nativeFailure) options.fail({ errMsg: nativeFailure }); else options.success() },
+      login(options: any) { events.push('wx-login'); options.success({ code: 'fixture-code' }) },
+      requestPayment(options: any) { assert.equal(options.paySign, ordinaryPayment.paySign); events.push('native-payment'); if (hideDuringPayment) valid = false; if (switchAccount) epoch++; if (nativeFailure) options.fail({ errMsg: nativeFailure }); else options.success() },
+      requestVirtualPayment,
     },
+    wx: { requestVirtualPayment },
   })
   return { api: exports as any, events, delays, growth, valid: () => valid, invalidate: () => { valid = false }, switchAccount: () => { epoch++ } }
 }
@@ -114,4 +131,39 @@ test('支付期间换账号不再以新账号确认旧订单或刷新其会员�
   const app = fixture('MP-WEIXIN', 'paid', '', true, true)
   assert.equal(await app.api.checkout('order-one', app.valid), null)
   assert.deepEqual(app.events, ['prepay', 'native-payment'])
+})
+
+test('虚拟支付使用服务端签名唤起收银台，并以服务端查单结果为准', async () => {
+  const app = fixture('MP-WEIXIN', 'paid', '', false, false, { virtual: true })
+  const order = await app.api.checkout('order-one', app.valid)
+  assert.equal(order.status, 'paid')
+  assert.deepEqual(app.events, ['prepay', 'virtual-payment', 'server-confirm', 'membership'])
+})
+
+test('虚拟支付 session_key 过期时重新登录换签并自动重试', async () => {
+  const app = fixture('MP-WEIXIN', 'paid', '', false, false, { virtual: true, virtualErrors: [{ errCode: -15007, errMsg: 'session_key expired' }] })
+  const order = await app.api.checkout('order-one', app.valid)
+  assert.equal(order.status, 'paid')
+  assert.deepEqual(app.events, ['prepay', 'virtual-payment', 'wx-login', 'refresh-session:fixture-code', 'prepay', 'virtual-payment', 'server-confirm', 'membership'])
+})
+
+test('获取支付参数发现登录态过期时先刷新再重新下单', async () => {
+  const app = fixture('MP-WEIXIN', 'paid', '', false, false, { virtual: true, payErrors: [{ code: 'wechat_session_expired' }] })
+  const order = await app.api.checkout('order-one', app.valid)
+  assert.equal(order.status, 'paid')
+  assert.deepEqual(app.events, ['prepay', 'wx-login', 'refresh-session:fixture-code', 'prepay', 'virtual-payment', 'server-confirm', 'membership'])
+})
+
+test('虚拟支付重复单号交给服务端查单，不伪造付款成功', async () => {
+  const app = fixture('MP-WEIXIN', 'pending', '', false, false, { virtual: true, virtualErrors: [{ errCode: -15002, errMsg: 'outTradeNo duplicate' }] })
+  assert.equal((await app.api.checkout('order-one', app.valid)).status, 'pending')
+  assert.deepEqual(app.events, ['prepay', 'virtual-payment', 'server-confirm', 'server-confirm', 'server-confirm', 'membership'])
+  assert.equal(app.api.checkoutState.get('order-one').phase, 'waiting')
+})
+
+test('取消虚拟支付不触发服务端确认，可在订单页再次付款', async () => {
+  const app = fixture('MP-WEIXIN', 'paid', '', false, false, { virtual: true, virtualErrors: [{ errCode: -2, errMsg: 'requestVirtualPayment:fail cancel' }] })
+  await assert.rejects(app.api.checkout('order-one', app.valid), /已取消支付/)
+  assert.deepEqual(app.events, ['prepay', 'virtual-payment'])
+  assert.equal(app.api.checkoutState.has('order-one'), false)
 })

@@ -105,8 +105,8 @@ def compare(conn: _PgConn, rows: list[dict[str, Any]], bill_date: str) -> tuple[
         if reason:
             differences.append({"order_id": row["order_id"], "refund_id": row["refund_id"], "reason": reason,
                                 "remote_fen": row["refund_fen"] if row["status"] == "REFUND" else row["amount_fen"], "local_fen": order["amount_fen"] if order else None})
-    local_paid = conn.execute("SELECT id, amount_fen FROM mini_orders WHERE paid_at >= ? AND paid_at < ?", (start, end)).fetchall()
-    local_refunds = conn.execute("SELECT f.id, f.order_id, o.amount_fen FROM mini_refunds f JOIN mini_orders o ON o.id = f.order_id WHERE f.status = 'success' AND f.completed_at >= ? AND f.completed_at < ?", (start, end)).fetchall()
+    local_paid = conn.execute("SELECT id, amount_fen FROM mini_orders WHERE payment_channel = 'wechat' AND paid_at >= ? AND paid_at < ?", (start, end)).fetchall()
+    local_refunds = conn.execute("SELECT f.id, f.order_id, o.amount_fen FROM mini_refunds f JOIN mini_orders o ON o.id = f.order_id WHERE o.payment_channel = 'wechat' AND f.status = 'success' AND f.completed_at >= ? AND f.completed_at < ?", (start, end)).fetchall()
     for row in local_paid:
         if row["id"] not in seen_payments:
             differences.append({"order_id": row["id"], "refund_id": "", "reason": "本地有收款记录，微信当日账单未找到", "local_fen": row["amount_fen"], "remote_fen": None})
@@ -185,11 +185,12 @@ def export_orders(status: str = "", q: str = "", start_date: str = "", end_date:
         fail("结果超过 5000 条，请缩小筛选范围再导出", 422)
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["订单号", "账号", "套餐", "天数", "金额（元）", "状态", "微信交易号", "创建时间", "退款状态"])
+    writer.writerow(["订单号", "账号", "套餐", "天数", "金额（元）", "状态", "支付渠道", "微信交易号", "创建时间", "退款状态"])
     def safe(value: Any) -> str:
         text = str(value or "")
         return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r", "\n")) else text
     for item in page["items"]:
         writer.writerow([safe(item["id"]), safe(item["username"]), safe(item["plan_name"]), item["plan_days"], f"{item['amount_fen'] / 100:.2f}",
-                         item["status"], safe(item["transaction_id"]), datetime.fromtimestamp(item["created_at"], ZONE).isoformat(), item["refund"]["status"] if item["refund"] else ""])
+                         item["status"], "虚拟支付" if item.get("payment_channel") == "virtual" else "微信支付", safe(item["transaction_id"]),
+                         datetime.fromtimestamp(item["created_at"], ZONE).isoformat(), item["refund"]["status"] if item["refund"] else ""])
     return "\ufeff" + output.getvalue()

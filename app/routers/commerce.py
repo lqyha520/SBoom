@@ -1,5 +1,6 @@
 """Authenticated order operations and signature-verified payment notifications."""
 
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -10,13 +11,14 @@ from app.http_limits import limited_body
 from app.library_deps import no_store, require_mini_user
 from app.models.commerce import BillInput, OrderInput, PlanInput, RefundInput, RefundReview
 from app.models.membership_cards import CardCreate, CardRedeem
-from app.services import membership_cards, mini_orders, mini_refunds, payment_bills
+from app.services import membership_cards, mini_orders, mini_refunds, payment_bills, wechat_virtual_pay
 from app.services.mini_auth import MiniUser
 from app.services.payment_admission import execute, throttle
 from app.services.user_store import CurrentUser
 from app.services.wechat_pay import PaymentError, WeChatPay
 
 router = APIRouter(prefix="/api/v1", tags=["会员订单与支付"], dependencies=[Depends(no_store)])
+logger = logging.getLogger(__name__)
 OrderStatus = Literal["", "created", "pending", "paid", "closed", "refunded", "refund_requested", "refund_processing", "refund_abnormal", "refund_closed"]
 
 
@@ -195,3 +197,32 @@ async def paid_notification(request: Request):
 @router.post("/payments/wechat/refund-notify")
 async def refund_notification(request: Request):
     return await receive(request, True)
+
+
+@router.get("/payments/wechat/virtual-notify")
+def verify_virtual_notification(signature: str = Query(""), timestamp: str = Query(""), nonce: str = Query(""), echostr: str = Query("")):
+    """微信保存虚拟支付消息推送地址时的 URL 校验。"""
+    if not wechat_virtual_pay.verify_push_url(signature, timestamp, nonce):
+        raise HTTPException(400, detail={"error": "无法验证虚拟支付通知"})
+    return Response(echostr, media_type="text/plain")
+
+
+@router.post("/payments/wechat/virtual-notify")
+async def virtual_notification(request: Request):
+    """虚拟支付消息推送：只当触发器，最终状态一律回查微信订单接口。"""
+    raw = await limited_body(request, 1048576, error="通知过大")
+    try:
+        value, is_json = wechat_virtual_pay.parse_push(bytes(raw), dict(request.headers), dict(request.query_params))
+    except Exception as error:
+        raise HTTPException(400, detail={"error": "无法验证虚拟支付通知"}) from error
+    event = value.get("event", "")
+    identifier = value.get("out_trade_no", "")
+    if event in ("xpay_goods_deliver_notify", "xpay_refund_notify") and isinstance(identifier, str) and len(identifier) == 32 and all(char in "0123456789abcdef" for char in identifier):
+        try:
+            if event == "xpay_refund_notify":
+                await run_sync(mini_refunds.sync_order, identifier)
+            else:
+                await run_sync(mini_orders.sync, identifier)
+        except (PaymentError, HTTPException) as error:
+            logger.warning("虚拟支付推送对应的查单暂未完成 order_id=%s event=%s error=%s", identifier, event, error)
+    return Response(wechat_virtual_pay.success_response(is_json), media_type="application/json" if is_json else "application/xml")

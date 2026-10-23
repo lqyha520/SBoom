@@ -60,7 +60,7 @@ function purchase(plan: Plan) {
   if (!canPurchase.value) return
   action.value = 'purchase'
   void page.act(async valid => {
-    if (!await confirmAction('确认会员套餐', plan.name + '：' + plan.days + ' 天，' + yuan(plan.price_fen) + '。确认后生成订单，在订单页完成微信支付。') || !valid()) return
+    if (!await confirmAction('确认会员套餐', plan.name + '：' + plan.days + ' 天，' + yuan(plan.price_fen) + '。确认后生成订单，在订单页完成付款。') || !valid()) return
     if (attempt.plan !== plan.id || attempt.revision !== plan.revision) attempt = { plan: plan.id, revision: plan.revision, key: requestKey() }
     const order = await createOrder(plan, attempt.key)
     if (valid()) { attempt = { plan: '', revision: 0, key: '' }; openOrder(order.id) }
