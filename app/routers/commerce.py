@@ -31,7 +31,7 @@ def payment_call(function, *args):
 
 @router.get("/mini/membership/plans")
 def plans(user: MiniUser = Depends(require_mini_user)):
-    return mini_orders.plans()
+    return mini_orders.plans(user_id=user.id)
 
 @router.post('/mini/membership/redeem')
 def redeem_card(body: CardRedeem, user: MiniUser = Depends(require_mini_user)):

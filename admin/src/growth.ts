@@ -11,7 +11,7 @@ export interface Demand { fingerprint: string; title: string; grade: string; sub
 export const requestStatuses = { pending: '待处理', planned: '已安排', fulfilled: '资料已补齐', closed: '已关闭' }
 export interface Closure { id: string; account_name: string; user_id: string | null; reason: string; status: 'pending' | 'cancelled' | 'rejected' | 'completed'; reply: string; revision: number; created_at: number; updated_at: number }
 export const closureStatuses = { pending: '等待审核', cancelled: '已撤回', rejected: '审核未通过', completed: '已注销' }
-export interface Plan { id: string; name: string; description: string; days: number; price_fen: number; is_active: boolean; sort_order: number; revision: number; virtual_product_id: string }
+export interface Plan { id: string; name: string; description: string; days: number; price_fen: number; is_active: boolean; sort_order: number; purchase_limit: number; revision: number; virtual_product_id: string; purchased?: number; pending?: number }
 export interface MembershipCard { id: string; code_hint: string; days: number; status: string; redeemed_by: string | null; redeemed_at: number | null; created_at: number; expires_at: number | null }
 export type PlanInput = Omit<Plan, 'id'>
 export type PaymentChannel = 'wechat' | 'virtual'

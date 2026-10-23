@@ -218,11 +218,14 @@ class VirtualPayContracts(GrowthBase):
             reviewed = mini_refunds.review(self.admin.id, refund["id"], RefundReview(action="approve", revision=refund["revision"], reply="确认原路退回", confirm_refund=True))
         self.assertEqual(reviewed["refund"]["status"], "processing")
         self.assertEqual(dispatch.call_count, 1)
-        settled = mini_refunds.settle_virtual(order["id"], self.query_value(order, 5, refund_fee=order["amount_fen"], wx_order_id="wxrefund-" + order["id"]))
+        settled = mini_refunds.settle_virtual(order["id"], self.query_value(order, 5, refund_fee=order["amount_fen"], wx_order_id="wxrefund-" + order["id"], paid_time=int(time.time()) - 3600))
         self.assertEqual(settled["status"], "refunded")
         self.assertLessEqual(mini_auth.get_user(self.viewer.id).vip_expires_at, time.time() + 2)
         with database.db() as conn:
-            self.assertEqual(conn.execute("SELECT status FROM mini_refunds WHERE id = ?", (refund["id"],)).fetchone()[0], "success")
+            row = conn.execute("SELECT status, completed_at FROM mini_refunds WHERE id = ?", (refund["id"],)).fetchone()
+        self.assertEqual(row["status"], "success")
+        # completed_at 记录退款确认时刻，不能沿用微信返回的支付时间。
+        self.assertGreater(row["completed_at"], time.time() - 60)
 
     def test_ios_virtual_refund_cannot_be_started_by_admin(self):
         self.configure()

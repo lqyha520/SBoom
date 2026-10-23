@@ -16,6 +16,8 @@ class PlanInput(Input):
     price_fen: int = Field(ge=1, le=10000000)
     is_active: bool = False
     sort_order: int = Field(0, ge=0, le=10000)
+    #: 0 表示不限购；按账号统计该套餐的已付款与未完成订单
+    purchase_limit: int = Field(0, ge=0, le=100)
     virtual_product_id: str = Field("", max_length=64, pattern=r"^[A-Za-z0-9_-]*$")
     revision: int = Field(0, ge=0)
 

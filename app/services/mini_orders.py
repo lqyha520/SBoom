@@ -63,9 +63,30 @@ def detail(identifier, user_id=None):
         return public_order(conn, owned(conn, identifier, user_id), user_id is None)
 
 
-def plans(admin=False):
+def plans(admin=False, user_id=None):
     with db() as conn:
         items = [dict(row) for row in conn.execute("SELECT * FROM mini_membership_plans " + ("" if admin else "WHERE is_active = 1 ") + "ORDER BY sort_order, created_at, id")]
+        if user_id is not None and items:
+            paid = {row[0]: row[1] for row in conn.execute(
+                "SELECT plan_id, COUNT(*) FROM mini_orders WHERE user_id = ? AND paid_at IS NOT NULL GROUP BY plan_id", (user_id,))}
+            pending, pending_order, pending_expiry = {}, {}, {}
+            for row in conn.execute("SELECT id, plan_id, expires_at FROM mini_orders WHERE user_id = ? AND paid_at IS NULL AND status IN ('created', 'pending') ORDER BY created_at DESC, id DESC", (user_id,)):
+                pending[row["plan_id"]] = pending.get(row["plan_id"], 0) + 1
+                pending_order.setdefault(row["plan_id"], row["id"])
+                pending_expiry.setdefault(row["plan_id"], row["expires_at"])
+            for item in items:
+                item["purchased"] = paid.get(item["id"], 0)
+                item["pending"] = pending.get(item["id"], 0)
+                item["pending_order"] = pending_order.get(item["id"])
+                item["pending_expires_at"] = pending_expiry.get(item["id"])
+        elif admin and items:
+            # 后台按套餐统计订单量，便于核对限购效果和放弃付款情况。
+            stats = {row[0]: (row[1], row[2]) for row in conn.execute(
+                "SELECT plan_id, SUM(CASE WHEN paid_at IS NOT NULL THEN 1 ELSE 0 END), "
+                "SUM(CASE WHEN paid_at IS NULL AND status IN ('created', 'pending') THEN 1 ELSE 0 END) "
+                "FROM mini_orders GROUP BY plan_id")}
+            for item in items:
+                item["purchased"], item["pending"] = stats.get(item["id"], (0, 0))
     virtual = wechat_virtual_pay.configuration()
     ordinary = configuration()
     channel = "virtual" if virtual["enabled"] else "wechat"
@@ -89,14 +110,14 @@ def save_plan(body, identifier=None):
                 fail("会员套餐不存在", 404)
             if row[0] != body.revision:
                 fail("套餐已更新，请刷新后重试")
-            conn.execute("UPDATE mini_membership_plans SET name = ?, description = ?, days = ?, price_fen = ?, is_active = ?, sort_order = ?, virtual_product_id = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
-                         (body.name, body.description, body.days, body.price_fen, int(body.is_active), body.sort_order, body.virtual_product_id, now, identifier))
+            conn.execute("UPDATE mini_membership_plans SET name = ?, description = ?, days = ?, price_fen = ?, is_active = ?, sort_order = ?, purchase_limit = ?, virtual_product_id = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
+                         (body.name, body.description, body.days, body.price_fen, int(body.is_active), body.sort_order, body.purchase_limit, body.virtual_product_id, now, identifier))
         else:
             if conn.execute("SELECT COUNT(*) FROM mini_membership_plans").fetchone()[0] >= 100:
                 fail("套餐数量已达上限，请编辑已有套餐", 422)
             identifier = uuid.uuid4().hex
-            conn.execute("INSERT INTO mini_membership_plans(id, name, description, days, price_fen, is_active, sort_order, virtual_product_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                         (identifier, body.name, body.description, body.days, body.price_fen, int(body.is_active), body.sort_order, body.virtual_product_id, now, now))
+            conn.execute("INSERT INTO mini_membership_plans(id, name, description, days, price_fen, is_active, sort_order, purchase_limit, virtual_product_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (identifier, body.name, body.description, body.days, body.price_fen, int(body.is_active), body.sort_order, body.purchase_limit, body.virtual_product_id, now, now))
         return dict(conn.execute("SELECT * FROM mini_membership_plans WHERE id = ?", (identifier,)).fetchone())
 
 
@@ -129,6 +150,15 @@ def create(user_id, body):
             fail("套餐已下架，请重新选择", 404)
         if plan["revision"] != body.plan_revision:
             fail("套餐价格或权益已更新，请重新确认后下单")
+        limit = plan["purchase_limit"]
+        if limit:
+            # 已付款（含已退款）和未完成订单都占用额度：既防止重复购买，也防止先囤多笔待付款订单。
+            paid = conn.execute("SELECT COUNT(*) FROM mini_orders WHERE user_id = ? AND plan_id = ? AND paid_at IS NOT NULL", (user_id, plan["id"])).fetchone()[0]
+            if paid >= limit:
+                fail(f"该套餐每个账号限购 {limit} 次，你已达到购买上限", 422, "purchase_limit")
+            pending = conn.execute("SELECT COUNT(*) FROM mini_orders WHERE user_id = ? AND plan_id = ? AND paid_at IS NULL AND status IN ('created', 'pending')", (user_id, plan["id"])).fetchone()[0]
+            if paid + pending >= limit:
+                fail(f"该套餐每个账号限购 {limit} 次，请先完成或取消已有的未完成订单", 422, "purchase_limit")
         if channel == "virtual" and not plan["virtual_product_id"]:
             fail("该套餐尚未配置虚拟支付商品，请联系客服", 422)
         if max(now, user["vip_expires_at"] or 0) + plan["days"] * 86400 > 253402300799:
@@ -165,6 +195,10 @@ def pay(identifier, user_id):
         user = conn.execute("SELECT * FROM mini_users WHERE id = ? AND is_active = 1", (user_id,)).fetchone()
         if not user or user["membership"] == "vip" and user["vip_expires_at"] is None:
             fail("当前账号无需重复购买，请取消此订单", 422)
+        # 管理员下调限购后可能留下旧订单：阻止继续发起支付；已完成的支付仍照常履约。
+        limit = conn.execute("SELECT purchase_limit FROM mini_membership_plans WHERE id = ?", (order["plan_id"],)).fetchone()
+        if limit and limit[0] and conn.execute("SELECT COUNT(*) FROM mini_orders WHERE user_id = ? AND plan_id = ? AND paid_at IS NOT NULL AND id <> ?", (user_id, order["plan_id"], identifier)).fetchone()[0] >= limit[0]:
+            fail(f"该套餐每个账号限购 {limit[0]} 次，请取消此订单", 422, "purchase_limit")
         if order["payment_channel"] == "virtual":
             if not wechat_virtual_pay.configuration()["ready"]:
                 fail("在线开通暂未开放，请联系客服", 503)

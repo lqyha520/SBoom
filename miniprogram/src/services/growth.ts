@@ -45,7 +45,7 @@ export const closureStatus = { pending: '等待审核', cancelled: '已撤回', 
 export const fetchClosure = (options: ReadOptions = {}) => request<{ request: Closure | null }>('/api/v1/mini/closure', 'GET', undefined, options)
 export const applyClosure = (reason: string) => request<{ request: Closure }>('/api/v1/mini/closure', 'POST', { reason, acknowledge: true })
 export const cancelClosure = (revision: number) => request<{ request: Closure }>('/api/v1/mini/closure?revision=' + revision, 'DELETE')
-export interface Plan { id: string; name: string; description: string; days: number; price_fen: number; revision: number; virtual_product_id?: string }
+export interface Plan { id: string; name: string; description: string; days: number; price_fen: number; revision: number; virtual_product_id?: string; purchase_limit?: number; purchased?: number; pending?: number; pending_order?: string | null; pending_expires_at?: number | null }
 export interface Refund { id: string; reason: string; reply: string; status: 'requested' | 'processing' | 'success' | 'closed' | 'abnormal' | 'rejected'; revision: number; created_at: number; updated_at: number; completed_at: number | null }
 export type PaymentChannel = 'wechat' | 'virtual'
 export interface Order { id: string; plan_id: string; plan_name: string; plan_days: number; amount_fen: number; currency: string; status: 'created' | 'pending' | 'paid' | 'closed' | 'refunded'; payment_channel?: PaymentChannel; created_at: number; expires_at: number; paid_at: number | null; revision: number; refund: Refund | null }

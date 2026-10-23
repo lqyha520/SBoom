@@ -187,7 +187,7 @@ def settle_virtual(order_id, value):
         provider_id = value.get("wx_order_id") or value.get("wxpay_order_id") or ""
         provider_id = provider_id if isinstance(provider_id, str) and 8 <= len(provider_id) <= 64 else ""
         paid_time = value.get("paid_time")
-        completed_at = paid_time if type(paid_time) is int and 0 < paid_time <= now + 300 else now
+        paid_at = paid_time if type(paid_time) is int and 0 < paid_time <= now + 300 else now
         transaction = provider_id or (value.get("channel_order_id") if isinstance(value.get("channel_order_id"), str) else "")
         if order["paid_at"] is None and transaction:
             duplicate = conn.execute("SELECT id FROM mini_orders WHERE (transaction_id = ? OR virtual_order_id = ?) AND id <> ?", (transaction, transaction, order_id)).fetchone()
@@ -195,15 +195,16 @@ def settle_virtual(order_id, value):
                 fail("此支付交易已用于其他订单", 400)
             order_type = value.get("order_type") if type(value.get("order_type")) is int else 0
             conn.execute("UPDATE mini_orders SET paid_at = ?, transaction_id = ?, virtual_order_id = ?, virtual_order_type = ?, updated_at = ? WHERE id = ?",
-                         (completed_at, transaction, transaction, order_type, now, order_id))
+                         (paid_at, transaction, transaction, order_type, now, order_id))
         if refund is None:
+            # 虚拟支付查单结果只有 paid_time（支付时间），没有退款完成时间，只能记录确认成功的时刻。
             refund_identifier = uuid.uuid4().hex
             conn.execute("INSERT INTO mini_refunds(id, order_id, reason, reply, status, provider_id, created_at, updated_at, completed_at) VALUES (?, ?, ?, '', 'success', ?, ?, ?, ?)",
-                         (refund_identifier, order_id, "用户通过微信支付申请退款", provider_id, now, now, completed_at))
+                         (refund_identifier, order_id, "用户通过微信支付申请退款", provider_id, now, now, now))
         else:
             refund_identifier = refund["id"]
             conn.execute("UPDATE mini_refunds SET status = 'success', provider_id = ?, revision = revision + 1, updated_at = ?, completed_at = ? WHERE id = ?",
-                         (provider_id or refund["provider_id"], now, completed_at, refund_identifier))
+                         (provider_id or refund["provider_id"], now, now, refund_identifier))
         user = conn.execute("SELECT * FROM mini_users WHERE id = ?", (order["user_id"],)).fetchone()
         before = mini_auth._admin_item(user) if user else None
         seconds = membership_ledger.revoke(conn, order_id)

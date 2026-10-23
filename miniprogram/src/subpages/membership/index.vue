@@ -29,8 +29,23 @@ const lifetime = computed(() => session.user?.is_vip && session.user.vip_expires
 const hasContact = computed(() => !!(contact.value?.wechat || contact.value?.phone || contact.value?.email || contact.value?.qr_url))
 const canPurchase = computed(() => enabled.value && supported.value && !!session.user?.has_wechat && !lifetime.value)
 const selectedPlan = computed(() => plans.value.find(plan => plan.id === selectedId.value))
-const primaryLabel = computed(() => lifetime.value ? '去挑选习题' : canPurchase.value && selectedPlan.value
-  ? (session.user?.is_vip ? '确认续费' : '确认开通') : '咨询开通')
+const limitReached = (plan: Plan) => !!plan.purchase_limit && (plan.purchased || 0) >= plan.purchase_limit
+// 任何套餐只要还有未付款订单就先去处理它，避免重复点击生成多笔待付款订单。
+const awaitingOrder = (plan: Plan) => !limitReached(plan) && (plan.pending || 0) > 0
+const pendingExpired = (plan: Plan) => awaitingOrder(plan) && !!plan.pending_expires_at && plan.pending_expires_at * 1000 <= Date.now()
+function planLimitLabel(plan: Plan) {
+  if (limitReached(plan)) return '已达限购'
+  if (awaitingOrder(plan)) return pendingExpired(plan) ? '订单已超时' : '有待付款订单'
+  if (!plan.purchase_limit) return ''
+  return (plan.purchased || 0) > 0 ? '已购 ' + plan.purchased + '/' + plan.purchase_limit : '限购 ' + plan.purchase_limit + ' 次'
+}
+const unavailable = (plan: Plan) => limitReached(plan) || awaitingOrder(plan)
+const allBlocked = computed(() => plans.value.length > 0 && plans.value.every(unavailable))
+const allLimited = computed(() => plans.value.length > 0 && plans.value.every(limitReached))
+const awaitingPlan = computed(() => plans.value.find(awaitingOrder))
+const canBuySelected = computed(() => canPurchase.value && !!selectedPlan.value && !unavailable(selectedPlan.value))
+const primaryLabel = computed(() => lifetime.value ? '去挑选习题' : canBuySelected.value
+  ? (session.user?.is_vip ? '确认续费' : '确认开通') : awaitingPlan.value ? '查看待付款订单' : '咨询开通')
 
 async function load(valid: ConsumerTicket) {
   action.value = ''
@@ -40,7 +55,7 @@ async function load(valid: ConsumerTicket) {
   else { contact.value = null; contactError.value = true }
   if (catalog.status === 'fulfilled') {
     plans.value = catalog.value.items; enabled.value = catalog.value.checkout_enabled; iosEnabled.value = catalog.value.ios_enabled
-    if (!plans.value.some(plan => plan.id === selectedId.value)) selectedId.value = plans.value[0]?.id || ''
+    if (!plans.value.some(plan => plan.id === selectedId.value && !unavailable(plan))) selectedId.value = plans.value.find(plan => !unavailable(plan))?.id || ''
   } else throw catalog.reason
   if (membership.status === 'rejected') throw membership.reason
 }
@@ -53,24 +68,38 @@ const page = useConsumerPage(load, () => {
 const { error, busy, loading } = page
 
 function selectPlan(plan: Plan) {
-  if (busy.value || loading.value || lifetime.value) return
+  if (busy.value || loading.value || lifetime.value || limitReached(plan)) return
+  if (awaitingOrder(plan)) {
+    if (plan.pending_order) openOrder(plan.pending_order)
+    else orders()
+    return
+  }
   selectedId.value = plan.id; action.value = ''; error.value = ''
 }
 function purchase(plan: Plan) {
-  if (!canPurchase.value) return
+  if (!canPurchase.value || unavailable(plan)) return
   action.value = 'purchase'
+  let limitConflict = false
   void page.act(async valid => {
     if (!await confirmAction('确认会员套餐', plan.name + '：' + plan.days + ' 天，' + yuan(plan.price_fen) + '。确认后生成订单，在订单页完成付款。') || !valid()) return
     if (attempt.plan !== plan.id || attempt.revision !== plan.revision) attempt = { plan: plan.id, revision: plan.revision, key: requestKey() }
-    const order = await createOrder(plan, attempt.key)
-    if (valid()) { attempt = { plan: '', revision: 0, key: '' }; openOrder(order.id) }
-  })
+    try {
+      const order = await createOrder(plan, attempt.key)
+      if (valid()) { attempt = { plan: '', revision: 0, key: '' }; openOrder(order.id) }
+    } catch (cause) {
+      // 另一台设备刚创建了订单等情况：刷新套餐后卡片会变成“有待付款订单”，直接带用户去处理。
+      limitConflict = (cause as { code?: string })?.code === 'purchase_limit'
+      throw cause
+    }
+  }).then(() => { if (limitConflict) void page.refresh() })
 }
 function primary() {
   if (restricted.value) return
   if (busy.value || loading.value) return
   if (lifetime.value) { uni.switchTab({ url: '/pages/library/index' }); return }
-  if (canPurchase.value && selectedPlan.value) purchase(selectedPlan.value)
+  if (canBuySelected.value && selectedPlan.value) purchase(selectedPlan.value)
+  else if (awaitingPlan.value?.pending_order) openOrder(awaitingPlan.value.pending_order)
+  else if (awaitingPlan.value) orders()
   else contactOpen.value = true
 }
 function orders() { navigatePage({ url: '/subpages/orders/index' }) }
@@ -117,7 +146,7 @@ function redeem() {
         <view class="benefit-grid"><view><wd-icon name="book" size="16px" /><text>专享资料</text></view><view><wd-icon name="image" size="16px" /><text>完整原稿</text></view><view><wd-icon name="file-pdf" size="16px" /><text>PDF 下载</text></view></view>
       </view>
     </view>
-    <view v-if="!session.user" class="content-width guest-member-info"><text class="section-title">会员可以做什么</text><text>会员有效期内，可按资料标注查看 VIP 专享原稿，下载可用文件。</text><text>免费资料登录后即可按标注权限使用，是否含答案以每份资料的说明为准。</text><text>登录后可查看套餐、已有会员状态和卡密兑换入口。</text></view>
+    <view v-if="!session.user" class="content-width guest-member-info"><text class="section-title">会员可以做什么</text><text>会员有效期内，可按资料标注查看 VIP 专享原稿，下载可用文件。</text><text>免费资料登录后即可按标注权限使用，是否含答案以每份资料的说明为准。</text></view>
     <AuthGate v-if="!session.user" title="登录查看会员服务" @restored="page.refresh" />
     <template v-else>
       <view class="content-width member-body">
@@ -132,14 +161,15 @@ function redeem() {
         <view v-if="!lifetime && !restricted" class="plans-section">
           <view class="section-heading"><text class="section-title">选择会员时长</text><text class="section-note">权益相同，按需选择</text></view>
           <view v-if="plans.length" class="plan-grid" :class="{ single: plans.length === 1, two: plans.length === 2 }" aria-role="radiogroup" role="radiogroup" aria-label="会员套餐">
-            <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="plan in plans" :key="plan.id" class="plan-card" :class="{ selected: selectedId === plan.id }" role="radio" :aria-label="plan.name + '，' + plan.days + '天，' + yuan(plan.price_fen)" :aria-checked="selectedId === plan.id" :disabled="busy || loading" @click="selectPlan(plan)">
+            <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="plan in plans" :key="plan.id" class="plan-card" :class="{ selected: selectedId === plan.id, limited: limitReached(plan), awaiting: awaitingOrder(plan) }" role="radio" :aria-label="plan.name + '，' + plan.days + '天，' + yuan(plan.price_fen) + (limitReached(plan) ? '，已达限购' : awaitingOrder(plan) ? (pendingExpired(plan) ? '，订单已超时' : '，有待付款订单') : plan.purchase_limit ? '，每账号限购' + plan.purchase_limit + '次' : '')" :aria-checked="selectedId === plan.id" :disabled="busy || loading || limitReached(plan)" @click="selectPlan(plan)">
               <text class="plan-name">{{ plan.name }}</text><text class="plan-price">{{ yuan(plan.price_fen) }}</text><text class="plan-duration">{{ plan.days }} 天会员</text>
+              <text v-if="planLimitLabel(plan)" class="plan-limit">{{ planLimitLabel(plan) }}</text>
               <view v-if="selectedId === plan.id" class="plan-check"><wd-icon name="check" size="11px" /></view>
             </button>
           </view>
           <view v-else-if="!loading" class="plans-empty"><text>暂时没有可选套餐，可通过下方「咨询开通」了解开通方式。</text></view>
           <text v-if="selectedPlan?.description" class="plan-description">{{ selectedPlan.description }}</text>
-          <text v-if="plans.length" class="plan-tip">{{ canPurchase ? '有效期自动顺延，无自动续费。确认后在订单页付款。' : '套餐价格供参考，可联系客服了解开通方式。' }}</text>
+          <text v-if="plans.length" class="plan-tip">{{ allBlocked ? (allLimited ? '可选套餐均已达到限购次数，如需再次开通请联系客服。' : '你还有待付款订单，请先完成或取消后再购买。') : canPurchase ? '有效期自动顺延，无自动续费。确认后在订单页付款。' : '套餐价格供参考，可联系客服了解开通方式。' }}</text>
         </view>
 
         <view v-if="!restricted" class="redeem-panel">
@@ -200,8 +230,8 @@ function redeem() {
 .plans-section { margin-top:8px; }.section-heading { margin:0 0 12px; }.section-title { display:block;margin:0;color:var(--lc-text);font-size:16px;font-weight:650;line-height:1.5; }.section-note { color:var(--lc-muted);font-size: 12px; }
 .plan-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px; }.plan-grid.two { grid-template-columns:repeat(2,minmax(0,1fr)); }.plan-grid.single { grid-template-columns:1fr; }
 .plan-card { position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:0;width:100%;margin:0;padding:17px 6px 16px;border:1.5px solid #e3e8e3;border-radius:14px;background:#fff;text-align:center;line-height:1.5;transition:border-color .15s,background-color .15s; }
-.plan-card.selected { border-color:var(--lc-primary);background:#edf6ef; }.plan-card:active { opacity:.85; }.plan-card[disabled] { opacity:.7; }
-.plan-name { display:block;color:var(--lc-text);font-size:12px;font-weight:600;overflow-wrap:anywhere; }.plan-price { display:block;margin-top:8px;color:#2b694c;font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.4;white-space:nowrap; }.plan-duration { display:block;margin-top:5px;color:var(--lc-secondary);font-size: 12px; }
+.plan-card.selected { border-color:var(--lc-primary);background:#edf6ef; }.plan-card:active { opacity:.85; }.plan-card[disabled] { opacity:.7; }.plan-card.awaiting { border-color:#e5d6b0;background:#fdfaf1; }.plan-card.awaiting .plan-limit { color:var(--lc-warning); }
+.plan-name { display:block;color:var(--lc-text);font-size:12px;font-weight:600;overflow-wrap:anywhere; }.plan-price { display:block;margin-top:8px;color:#2b694c;font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.4;white-space:nowrap; }.plan-duration { display:block;margin-top:5px;color:var(--lc-secondary);font-size: 12px; }.plan-limit { display:block;margin-top:4px;color:var(--lc-muted);font-size:11px;line-height:1.5; }
 .plan-check { position:absolute;top:-1px;right:-1px;display:flex;align-items:center;justify-content:center;width:21px;height:19px;border-radius:0 13px 0 10px;background:var(--lc-primary);color:#fff; }
 .single .plan-card { display:grid;grid-template-columns:1fr auto;justify-items:start;padding:15px 20px;text-align:left; }.single .plan-price { grid-column:2;grid-row:1/3;margin:0 8px 0 10px; }.single .plan-duration { grid-column:1; }
 .plan-description { display:block;margin-top:10px;color:var(--lc-secondary);font-size:12px;line-height:1.7;overflow-wrap:anywhere; }.plan-tip { display:block;margin-top:9px;color:var(--lc-muted);font-size: 12px;line-height:1.7; }
