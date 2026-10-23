@@ -24,6 +24,8 @@ const { error, busy, loading } = page
 const now = ref(Date.now())
 let countdown: ReturnType<typeof setInterval> | undefined
 function payable(order: Order) { return ['created', 'pending'].includes(order.status) && order.expires_at > now.value / 1000 }
+// 虚拟支付要等客户端拉起收银台后微信侧才有单；created 表示还没发起过支付，查单只会得到“数据不存在”。
+function syncable(order: Order) { return order.status !== 'closed' && !(order.payment_channel === 'virtual' && order.status === 'created') }
 const payRemaining = computed(() => {
   const seconds = selected.value ? Math.max(0, Math.ceil(selected.value.expires_at - now.value / 1000)) : 0
   return String(Math.floor(seconds / 60)).padStart(2, '0') + ':' + String(seconds % 60).padStart(2, '0')
@@ -112,7 +114,7 @@ onReachBottom(loadMore)
           </wd-button>
           <wd-button
             role="button"
-            v-if="online && selected.status !== 'closed'"
+            v-if="online && syncable(selected)"
             variant="text"
             :disabled="busy || loading"
             @click="sync"

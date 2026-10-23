@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
+import httpx
 import test_backend_catalog as fixtures  # noqa: F401  Initializes isolated environment before app imports.
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fastapi import HTTPException
@@ -187,6 +188,16 @@ class VirtualPayContracts(GrowthBase):
         with patch.object(VirtualPay, "query_order", return_value=self.query_value(another, 6)):
             closed = mini_orders.sync(another["id"], self.viewer.id)
         self.assertEqual(closed["status"], "closed")
+
+    def test_query_order_not_found_is_reported_as_missing_order(self):
+        self.configure()
+        order = self.create_order()
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"errcode": 268490002, "errmsg": "数据不存在"}))
+        with patch.object(wechat_virtual_pay, "access_token", return_value="fixture-token"):
+            with self.assertRaises(wechat_virtual_pay.PaymentError) as raised:
+                VirtualPay(transport=transport).query_order("fixture-openid", order["id"])
+        self.assertEqual(raised.exception.code, "XPAY_NOT_FOUND")
+        self.assertIn("取消", str(raised.exception))
 
     def test_cancel_closes_locally_and_recovers_payment_completed_at_the_same_time(self):
         self.configure()

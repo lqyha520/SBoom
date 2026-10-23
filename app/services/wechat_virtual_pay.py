@@ -112,6 +112,9 @@ class VirtualPay:
                 raise PaymentError("XPAY_SESSION_EXPIRED", "微信支付登录态已过期，请重新进入小程序后重试")
             if errcode == 268490003:
                 raise PaymentError("XPAY_SIGNATURE", "虚拟支付签名校验失败，请检查 AppKey 配置")
+            if errcode == 268490002:
+                # 支付参数生成失败（如道具发布未生效）时微信侧没有订单，查单会落到这里。
+                raise PaymentError("XPAY_NOT_FOUND", "订单尚未在微信侧生成，请取消后重新下单")
             raise PaymentError("XPAY_" + str(errcode), "微信支付服务暂不可用，请稍后重试")
         return data
 
