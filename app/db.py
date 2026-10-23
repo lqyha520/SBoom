@@ -455,7 +455,7 @@ def _verify_schema(conn) -> tuple[list, int]:
     return [t for t in _CORE_TABLES if t not in present], len(present)
 
 
-SCHEMA_VERSION = 2026102301
+SCHEMA_VERSION = 2026102401
 
 
 def init_db(*, migrate: bool | None = None) -> None:
