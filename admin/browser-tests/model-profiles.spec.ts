@@ -11,12 +11,17 @@ async function fixture(context: BrowserContext, gate = Promise.resolve()) {
   const versions = { text: 1, image: 1 }
   const writes: { path: string; body: { revision: string; models: Profile[] } }[] = []
   const probes: Record<string, unknown>[] = []
+  const modelFetches: Record<string, unknown>[] = []
   await context.route('**/api/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname
     if (path.endsWith('/auth/me')) { await route.fulfill({ json: { id: 1, username: 'admin', role: 'admin' } }); return }
     if (path.endsWith('/test-llm')) {
       probes.push(request.postDataJSON())
       await route.fulfill({ json: { reply: 'offline fixture' } }); return
+    }
+    if (path.endsWith('/llm-models')) {
+      modelFetches.push(request.postDataJSON())
+      await route.fulfill({ json: { status: 'ok', models: ['text-main', 'backup-model', 'third-model'], count: 3 } }); return
     }
     if (!path.endsWith('/llm-config') && !path.endsWith('/image-config')) {
       await route.fulfill({ status: 503, json: { detail: '未启用的离线接口' } }); return
@@ -46,7 +51,7 @@ async function fixture(context: BrowserContext, gate = Promise.resolve()) {
     }
     await route.fulfill({ json: { ...(models[0] ?? { baseUrl: '', model: '', timeout: 120, hasKey: false }), models, revision: String(versions[kind]) } })
   })
-  return { writes, probes, text, image, changeText: () => { versions.text++; text[0]!.name = '另一窗口已保存' } }
+  return { writes, probes, modelFetches, text, image, changeText: () => { versions.text++; text[0]!.name = '另一窗口已保存' } }
 }
 
 for (const width of [1440, 390, 320]) {
@@ -59,6 +64,12 @@ for (const width of [1440, 390, 320]) {
     await expect(text.locator('.model-select')).toHaveCount(2)
     await text.getByRole('button', { name: '上移模型 2', exact: true }).click()
     await text.locator('.model-select').first().click()
+    await text.getByRole('button', { name: '拉取模型', exact: true }).click()
+    await expect.poll(() => server.modelFetches.length).toBe(1)
+    expect(server.modelFetches[0]).toMatchObject({ id: 'text-backup', baseUrl: 'https://backup.example.test/v1', apiKey: '' })
+    await text.getByRole('combobox', { name: '从拉取结果选择' }).click()
+    await page.getByRole('option', { name: 'backup-model', exact: true }).click()
+    await expect(text.getByRole('textbox', { name: '模型名称', exact: false })).toHaveValue('backup-model')
     await text.getByRole('textbox', { name: '备注名称' }).fill('备用模型优先处理')
     await text.getByRole('switch', { name: '启用', exact: true }).click()
     await page.getByRole('tab', { name: '图片出题' }).click()

@@ -249,6 +249,50 @@ class ModelFailover(unittest.TestCase):
         }).status_code, 400)
         self.assertEqual(len(self.calls), 1)
 
+    def test_probe_accepts_reasoning_only_stream_as_connected(self):
+        self.login_admin()
+        self.outputs = [sse({"choices": [{"delta": {"reasoning_content": "先想一下"}, "finish_reason": "length"}]})]
+        result = self.client.post("/api/v1/admin/test-llm", json={"id": "first"})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["status"], "ok")
+
+    def test_model_list_uses_selected_key_and_normalizes_ids(self):
+        self.login_admin()
+        self.outputs = [httpx.Response(200, json={"data": [
+            {"id": "zeta"}, {"id": "Alpha"}, {"id": "Alpha"}, {"id": "x" * 121}, 42,
+        ]})]
+        result = self.client.post("/api/v1/admin/llm-models", json={"id": "second", "timeout": 30})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json(), {"status": "ok", "models": ["Alpha", "zeta"], "count": 2})
+        self.assertEqual(self.calls[0].method, "GET")
+        self.assertEqual(self.calls[0].url.path, "/v1/models")
+        self.assertEqual(self.calls[0].headers["authorization"], "Bearer secret-second")
+        self.assertNotIn("secret-second", result.text)
+
+    def test_model_list_rejects_unknown_ids_and_unusable_responses(self):
+        self.login_admin()
+        rejected = self.client.post("/api/v1/admin/llm-models", json={
+            "id": "unknown", "baseUrl": "https://other.invalid/v1",
+        })
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(len(self.calls), 0)
+        for payload in ({"data": []}, {"data": "wrong"}, {"object": "list"}, {"data": [{"name": "no-id"}]}):
+            with self.subTest(payload=payload):
+                self.outputs = [httpx.Response(200, json=payload)]
+                result = self.client.post("/api/v1/admin/llm-models", json={"id": "first"})
+                self.assertEqual(result.status_code, 502, result.text)
+                self.assertIn("手动填写模型名称", result.text)
+        self.assertEqual(len(self.calls), 4)
+
+    def test_model_list_rejects_private_addresses_without_connecting(self):
+        self.login_admin()
+        for base in ("http://169.254.169.254", "http://127.0.0.1", "http://127.0.0.1:11434/v1", "ftp://example.com"):
+            with self.subTest(base=base):
+                result = self.client.post("/api/v1/admin/llm-models", json={"baseUrl": base, "apiKey": "k"})
+                self.assertEqual(result.status_code, 400, result.text)
+                self.assertEqual(result.json()["detail"]["error"], "接口地址不允许")
+        self.assertEqual(len(self.calls), 0)
+
     def test_legacy_configuration_preserves_key_on_upgrade_and_clear_disables(self):
         app_config.clear_llm()
         app_config.save_llm("https://provider.invalid/v1", "old", "old-key", 60)

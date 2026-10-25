@@ -2,6 +2,7 @@
 export interface ApiSchemas {
   "AdminCreateUser": { "password": string; "role"?: string; "username": string }
   "AdminLlmConfigIn": { "apiKey"?: string; "baseUrl"?: string; "id"?: (string | null); "maxTokens"?: number; "model"?: string; "timeout"?: number }
+  "AdminLlmModelsIn": { "apiKey"?: string; "baseUrl"?: string; "id"?: (string | null); "timeout"?: number }
   "AdminProfileUpdate": { "avatar"?: (string | null); "new_password"?: (string | null); "nickname"?: (string | null); "revision": number; "username"?: (string | null) }
   "AdminUpdateUser": { "is_active"?: (boolean | null); "password"?: (string | null); "role"?: (string | null) }
   "ArchiveUpdate": { "favorite"?: (boolean | null); "folder_id"?: (string | null); "title"?: (string | null) }
@@ -63,9 +64,9 @@ export interface ApiSchemas {
   "MiniRegistration": { "password": string; "username": string }
   "NoticeInput": { "body"?: string; "ends_at"?: number; "is_visible"?: boolean; "level"?: "info" | "warning"; "placement"?: "popup" | "banner"; "starts_at"?: number; "title": string }
   "NoticeUpdate": { "body"?: string; "ends_at"?: number; "is_visible"?: boolean; "level"?: "info" | "warning"; "placement"?: "popup" | "banner"; "revision": number; "starts_at"?: number; "title": string }
-  "OrderInput": { "plan_id": string; "plan_revision": number; "request_id": string }
+  "OrderInput": { "plan_id": string; "plan_revision": number; "platform"?: string; "request_id": string }
   "PaperLabels": { "revision": number; "tag_ids"?: Array<string> }
-  "PlanInput": { "days": number; "description"?: string; "is_active"?: boolean; "name": string; "price_fen": number; "revision"?: number; "sort_order"?: number }
+  "PlanInput": { "days": number; "description"?: string; "is_active"?: boolean; "name": string; "price_fen": number; "price_fen_ios"?: number; "purchase_limit"?: number; "revision"?: number; "sort_order"?: number; "virtual_product_id"?: string; "virtual_product_id_ios"?: string }
   "Question": { "acceptable_answers"?: (Array<string> | null); "analysis"?: string; "answer": (string | number | number | Array<Array<number>>); "difficulty_level"?: (number | null); "expected_time_seconds"?: (number | null); "id"?: (number | null); "left"?: (number | string | null); "left_expr"?: (string | null); "left_items"?: (Array<string> | null); "options"?: (Array<string> | null); "quality_issues"?: Array<string>; "quality_status"?: "unchecked" | "passed" | "needs_review"; "right"?: (number | string | null); "right_expr"?: (string | null); "right_items"?: (Array<string> | null); "stem"?: string; "tags"?: Array<string>; "top"?: (number | string | null); "type"?: string }
   "RefundInput": { "reason": string }
   "RefundReview": { "action": "approve" | "reject"; "confirm_refund"?: boolean; "reply": string; "revision": number }
@@ -150,6 +151,7 @@ export interface ApiOperations {
   "DELETE /api/v1/admin/llm-config": { body: unknown }
   "GET /api/v1/admin/llm-config": { body: unknown }
   "PUT /api/v1/admin/llm-config": { body: (ApiSchemas["TextModelProfiles"] | ApiSchemas["AdminLlmConfigIn"]) }
+  "POST /api/v1/admin/llm-models": { body: (ApiSchemas["AdminLlmModelsIn"] | null) }
   "GET /api/v1/admin/logs": { body: unknown }
   "GET /api/v1/admin/mini-users": { body: unknown }
   "POST /api/v1/admin/mini-users": { body: ApiSchemas["MiniRegistration"] }
@@ -281,8 +283,11 @@ export interface ApiOperations {
   "GET /api/v1/mini/requests": { body: unknown }
   "POST /api/v1/mini/requests": { body: ApiSchemas["ContentRequest"] }
   "GET /api/v1/mini/requests/{identifier}": { body: unknown }
+  "POST /api/v1/mini/wechat/session": { body: ApiSchemas["CodeInput"] }
   "POST /api/v1/payments/wechat/notify": { body: unknown }
   "POST /api/v1/payments/wechat/refund-notify": { body: unknown }
+  "GET /api/v1/payments/wechat/virtual-notify": { body: unknown }
+  "POST /api/v1/payments/wechat/virtual-notify": { body: unknown }
   "GET /api/v1/scope": { body: unknown }
   "GET /api/v1/scope/available": { body: unknown }
   "GET /api/v1/site/banners/{banner_id}/image": { body: unknown }

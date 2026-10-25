@@ -18,6 +18,8 @@ const enabledCount = computed(() => models.value.filter(model => model.enabled).
 const loading = ref(true), loadError = ref(''), busy = ref(''), message = ref(''), ok = ref(true)
 const baseline = ref(''), clearOpen = ref(false), removeId = ref('')
 const revision = ref(''), conflict = ref(false), reloadOpen = ref(false)
+const fetchedModels = ref<Record<string, string[]>>({})
+const listError = ref('')
 const removeOpen = computed({ get: () => !!removeId.value, set: value => { if (!value) removeId.value = '' } })
 const dirty = computed(() => !!baseline.value && baseline.value !== JSON.stringify(models.value))
 const pageActive = ref(true)
@@ -59,6 +61,35 @@ function add() {
   if (busy.value || models.value.length >= 8) return
   const model = newModel(props.kind)
   models.value.push(model); selectedId.value = model.id; message.value = ''
+}
+function selectModel(id: string) {
+  selectedId.value = id
+  message.value = ''
+  listError.value = ''
+}
+function forgetFetched(id: string) {
+  if (!(id in fetchedModels.value)) return
+  const next = { ...fetchedModels.value }
+  delete next[id]
+  fetchedModels.value = next
+  listError.value = ''
+}
+async function fetchModels() {
+  if (busy.value || loading.value || loadError.value) return
+  const model = selected.value
+  // 模型名称可以稍后再选，但地址、超时和密钥必须先通过校验。
+  const invalid = modelError({ ...model, model: model.model.trim() || 'probe' }, props.kind, true)
+  listError.value = ''
+  if (invalid) { listError.value = invalid; return }
+  busy.value = 'models'
+  try {
+    const result = await api.fetchLlmModels({
+      id: model.id, baseUrl: model.baseUrl.trim(), apiKey: model.apiKey.trim(), timeout: model.timeout,
+    })
+    fetchedModels.value = { ...fetchedModels.value, [model.id]: result.models }
+  } catch (error) {
+    listError.value = error instanceof Error ? error.message : '模型列表拉取失败，请手动填写模型名称'
+  } finally { busy.value = '' }
 }
 function move(index: number, direction: number) {
   if (busy.value || index + direction < 0 || index + direction >= models.value.length) return
@@ -121,7 +152,7 @@ useAdminRefresh(load, () => { loadSequence++; loading.value = false })
           <div class="list-heading"><h3>调用优先级</h3><UTooltip text="添加模型"><UButton icon="i-lucide-plus" aria-label="添加模型" color="neutral" variant="outline" :disabled="!!busy || models.length >= 8" @click="add" /></UTooltip></div>
           <ol class="priority-list">
             <li v-for="(model, index) in models" :key="model.id" :class="{ selected: model.id === selectedId }">
-              <button type="button" class="model-select" :aria-pressed="model.id === selectedId" :disabled="!!busy" @click="selectedId = model.id; message = ''">
+              <button type="button" class="model-select" :aria-pressed="model.id === selectedId" :disabled="!!busy" @click="selectModel(model.id)">
                 <span class="priority-number">{{ index + 1 }}</span>
                 <span class="model-label"><strong>{{ model.name || model.model || '新模型' }}</strong><span>{{ model.enabled ? '已启用' : '已停用' }}</span></span>
               </button>
@@ -137,11 +168,20 @@ useAdminRefresh(load, () => { loadSequence++; loading.value = false })
         <form v-if="selectedId" class="settings-form model-form" @submit.prevent="execute('save')">
           <div class="profile-heading"><h3>模型 {{ models.indexOf(selected) + 1 }}</h3><USwitch v-model="selected.enabled" label="启用" :disabled="!!busy" /></div>
           <UFormField label="备注名称"><UInput v-model="selected.name" :disabled="!!busy" maxlength="80" placeholder="可选" /></UFormField>
-          <UFormField :label="isImage ? '生图接口地址' : '接口地址'" required><UInput v-model="selected.baseUrl" type="url" placeholder="https://api.example.com/v1" :disabled="!!busy" required maxlength="500" icon="i-lucide-globe" /></UFormField>
+          <UFormField :label="isImage ? '生图接口地址' : '接口地址'" required><UInput v-model="selected.baseUrl" type="url" placeholder="https://api.example.com/v1" :disabled="!!busy" required maxlength="500" icon="i-lucide-globe" @update:model-value="forgetFetched(selected.id)" /></UFormField>
           <div class="field-grid">
-            <UFormField :label="isImage ? '生图模型名称' : '模型名称'" required><UInput v-model="selected.model" placeholder="模型 ID" :disabled="!!busy" required maxlength="120" /></UFormField>
+            <UFormField :label="isImage ? '生图模型名称' : '模型名称'" required>
+              <div class="model-name-row">
+                <UInput v-model="selected.model" placeholder="模型 ID" :disabled="!!busy" required maxlength="120" />
+                <UButton v-if="!isImage" label="拉取模型" icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="busy === 'models'" :disabled="!!busy" @click="fetchModels" />
+              </div>
+            </UFormField>
             <UFormField :label="isImage ? '生图超时（秒）' : '超时时间（秒）'"><UInputNumber v-model="selected.timeout" :min="isImage ? 30 : 10" :max="600" :step="10" :disabled="!!busy" /></UFormField>
           </div>
+          <UFormField v-if="!isImage && fetchedModels[selected.id]?.length" label="从拉取结果选择" :description="`已拉取 ${fetchedModels[selected.id]?.length ?? 0} 个模型，选择后会覆盖上方模型名称。`">
+            <USelect v-model="selected.model" :items="fetchedModels[selected.id] ?? []" placeholder="选择模型" :disabled="!!busy" aria-label="从拉取结果选择" />
+          </UFormField>
+          <UAlert v-if="!isImage && listError" :title="listError" color="error" variant="soft" />
           <div v-if="isImage" class="field-grid">
             <UFormField label="图片尺寸"><UInput v-model="selected.size" :disabled="!!busy" required maxlength="30" /></UFormField>
             <UFormField label="图片返回格式"><USelect v-model="selected.responseFormat" :items="formats" :disabled="!!busy" /></UFormField>
@@ -192,6 +232,9 @@ h3 { font-size:14px;font-weight:600; }
 .model-label>span { font-size:12px;color:var(--ui-text-muted); }
 .model-tools { display:flex;justify-content:flex-end;gap:4px;padding:0 8px 8px; }
 .model-form { min-width:0;border-left:1px solid var(--ui-border);padding-left:28px; }
+.model-name-row { display:flex;align-items:center;gap:8px; }
+.model-name-row > :first-child { flex:1;min-width:0; }
+.model-name-row > :last-child { flex:none; }
 .model-actions { margin-top:24px;padding-top:20px;border-top:1px solid var(--ui-border); }
 .empty-models { display:grid;justify-items:center;gap:14px;padding:30px 12px;color:var(--ui-text-muted); }
 @media (max-width: 800px) {
