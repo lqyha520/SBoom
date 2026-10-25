@@ -41,7 +41,7 @@ overrides:
   # https://github.com/ljharb/qs/releases
   "qs@<6.16.0": "6.16.0"
   # https://github.com/expressjs/body-parser/security/advisories
-  "body-parser@<1.20.6": "1.20.6"
+  "body-parser@<1.20.9": "1.20.9"
   # https://github.com/jshttp/proxy-addr/security/advisories
   "proxy-addr@<2.0.8": "2.0.8"
   # https://github.com/postcss/postcss-selector-parser/releases
