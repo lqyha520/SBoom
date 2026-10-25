@@ -265,6 +265,8 @@ async function activate() {
   const run = ++activation
   active = false
   cancelSearch()
+  // 从微信分享等原生浮层返回时，收起可能残留的侧滑操作行。
+  expandedRow.value = ''
   const anonymous = props.view === 'all' && !session.user && (!session.ready || !!session.error)
   const restored = ensureSession()
   if (!anonymous) await restored
@@ -385,7 +387,7 @@ onBeforeUnmount(deactivate)
   <view class="catalog-page" :class="{ 'has-tabbar': hasTabbar, 'batch-mode': selecting, 'empty-favorites': emptyFavorites }">
     <view class="catalog-sticky">
       <PageChrome :back="!hasTabbar" fallback="/pages/account/index" />
-      <view v-if="recordTitle && (view !== 'favorites' || emptyFavorites)" class="content-width record-heading">
+      <view v-if="recordTitle && (view !== 'favorites' || emptyFavorites || !canBrowse)" class="content-width record-heading">
         <view class="record-title-row">
           <text class="page-title">{{ recordTitle }}</text>
           <button
@@ -510,40 +512,44 @@ onBeforeUnmount(deactivate)
       </view>
       <view v-if="!emptyFavorites && !selecting" class="experience-toolbar">
         <text class="result-count" role="status">{{ catalogCountLabel(total, loaded, loading && !appending, error) }}</text>
-        <picker v-if="view === 'all' && !topicId" class="sort-buttons" :range="sorts.map(item => item.label)" :value="Math.max(0, sorts.findIndex(item => item.value === sort))" @change="sort = sorts[Number($event.detail.value)]!.value">
-          <view class="sort-choice" role="button" :aria-label="'排序：' + (sorts.find(item => item.value === sort)?.label || '精选')"><text>{{ sorts.find(item => item.value === sort)?.label || '精选' }}</text><wd-icon name="down" size="12px" /></view>
-        </picker>
-        <button
-          hover-class="control-pressed"
-          :hover-start-time="0"
-          :hover-stay-time="80"
-          role="button"
-          class="filter-free"
-          :class="{ selected: onlyFree }"
-          :aria-pressed="onlyFree"
-          @click="onlyFree = !onlyFree"
-        >
-          仅免费
-        </button>
-        <picker
-          v-if="topics.length && !topicId"
-          class="topic-picker"
-          :range="topicOptions.map((item) => item.title)"
-          :value="
-            Math.max(
-              0,
-              topicOptions.findIndex((item) => item.id === topic),
-            )
-          "
-          @change="topic = topicOptions[Number($event.detail.value)]!.id"
-        >
-          <view class="topic-choice">
-            <text class="topic-choice-label">
-              {{ topicOptions.find((item) => item.id === topic)?.title || '全部专题' }}
-            </text>
-            <text class="topic-choice-arrow">▾</text>
-          </view>
-        </picker>
+        <view class="toolbar-actions">
+          <picker v-if="view === 'all' && !topicId" class="sort-buttons" :range="sorts.map(item => item.label)" :value="Math.max(0, sorts.findIndex(item => item.value === sort))" @change="sort = sorts[Number($event.detail.value)]!.value">
+            <view class="toolbar-chip sort-choice" :class="{ active: sort !== 'featured' }" role="button" :aria-label="'排序：' + (sorts.find(item => item.value === sort)?.label || '精选')"><text>{{ sorts.find(item => item.value === sort)?.label || '精选' }}</text><wd-icon name="down" size="12px" /></view>
+          </picker>
+          <button
+            hover-class="control-pressed"
+            :hover-start-time="0"
+            :hover-stay-time="80"
+            role="button"
+            class="toolbar-chip filter-free"
+            :class="{ selected: onlyFree }"
+            :aria-pressed="onlyFree"
+            @click="onlyFree = !onlyFree"
+          >
+            <wd-icon v-if="onlyFree" name="check" size="11px" />
+            <text>仅免费</text>
+          </button>
+          <picker
+            v-if="topics.length && !topicId"
+            class="topic-picker"
+            :range="topicOptions.map((item) => item.title)"
+            :value="
+              Math.max(
+                0,
+                topicOptions.findIndex((item) => item.id === topic),
+              )
+            "
+            @change="topic = topicOptions[Number($event.detail.value)]!.id"
+          >
+            <view class="toolbar-chip topic-choice" role="button" :aria-label="'专题：' + (topicOptions.find((item) => item.id === topic)?.title || '全部专题')">
+              <wd-icon name="folder" size="13px" />
+              <text class="topic-choice-label">
+                {{ topicOptions.find((item) => item.id === topic)?.title || '全部专题' }}
+              </text>
+              <wd-icon name="down" size="11px" />
+            </view>
+          </picker>
+        </view>
       </view>
       <FavoriteGroups
         ref="groupControl"

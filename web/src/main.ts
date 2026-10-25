@@ -25,8 +25,10 @@ function bootstrap() {
     return !store.ownerId || await store.flushDraft()
   })
   app.mount('#app')
-  try { if (localStorage.getItem('lc_uid')) prefetchWorkspace() } catch { /* 仍可正常登录。 */ }
-  void auth.init()
+  if (!location.hash.startsWith('#/games')) {
+    try { if (localStorage.getItem('lc_uid')) prefetchWorkspace() } catch { /* 仍可正常登录。 */ }
+    void auth.init()
+  }
 }
 
 bootstrap()

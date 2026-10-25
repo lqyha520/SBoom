@@ -47,7 +47,8 @@ class GrowthBase(unittest.TestCase):
         fixtures.PublicCatalogContracts.setUp(self)
         for router in (engagement.router, commerce.router, experience.router):
             self.client.app.include_router(router)
-        for key, value in {"wechat_pay_enabled": False, "wechat_subscribe_template_id": "", "wechat_pay_auto_reconcile": False}.items():
+        # 这些用例固定验证普通微信支付，不随开发机 .env 的虚拟支付开关漂移。
+        for key, value in {"wechat_pay_enabled": False, "wechat_virtual_pay_enabled": False, "wechat_subscribe_template_id": "", "wechat_pay_auto_reconcile": False}.items():
             self.stack.enter_context(patch.object(get_settings(), key, value))
 
     def tag(self, kind, name):
@@ -277,6 +278,66 @@ class CommerceContracts(GrowthBase):
         self.assertEqual(self.client.get('/api/v1/mini/orders/' + order['id']).status_code, 404)
         self.sign_in(self.viewer)
         self.assertEqual(self.client.post('/api/v1/mini/orders', json={'plan_id': self.plan['id'], 'plan_revision': 2, 'request_id': 'tampered-amount', 'amount_fen': 1}).status_code, 422)
+
+    def test_purchase_limit_blocks_repeat_orders_even_after_refund(self):
+        self.configure()
+        trial = mini_orders.save_plan(PlanInput(name='体验卡', days=1, price_fen=100, is_active=True, purchase_limit=1))
+        order = mini_orders.create(self.viewer.id, OrderInput(plan_id=trial['id'], plan_revision=trial['revision'], request_id='trial-card-one'))
+        with self.assertRaises(HTTPException) as pending:
+            mini_orders.create(self.viewer.id, OrderInput(plan_id=trial['id'], plan_revision=trial['revision'], request_id='trial-card-two'))
+        self.assertEqual(pending.exception.status_code, 422)
+        self.assertEqual(pending.exception.detail['code'], 'purchase_limit')
+        self.sign_in(self.viewer)
+        items = {item['id']: item for item in self.client.get('/api/v1/mini/membership/plans').json()['items']}
+        self.assertEqual(items[trial['id']]['purchased'], 0)
+        self.assertEqual(items[trial['id']]['pending'], 1)
+        self.assertEqual(items[trial['id']]['pending_order'], order['id'])
+        self.assertEqual(items[trial['id']]['pending_expires_at'], order['expires_at'])
+        self.assertEqual(items[self.plan['id']]['pending'], 0)
+        self.assertIsNone(items[self.plan['id']]['pending_order'])
+        admin_pending = {item['id']: item for item in mini_orders.plans(True)['items']}
+        self.assertEqual(admin_pending[trial['id']]['purchased'], 0)
+        self.assertEqual(admin_pending[trial['id']]['pending'], 1)
+        raw, headers = self.callback(self.paid_value(order))
+        self.assertEqual(self.client.post('/api/v1/payments/wechat/notify', content=raw, headers=headers).status_code, 204)
+        with database.db() as conn:
+            conn.execute("UPDATE mini_orders SET status = 'refunded' WHERE id = ?", (order['id'],))
+        with self.assertRaises(HTTPException) as refunded:
+            mini_orders.create(self.viewer.id, OrderInput(plan_id=trial['id'], plan_revision=trial['revision'], request_id='trial-card-three'))
+        self.assertEqual(refunded.exception.status_code, 422)
+        self.assertEqual(refunded.exception.detail['code'], 'purchase_limit')
+        self.sign_in(self.viewer)
+        items = {item['id']: item for item in self.client.get('/api/v1/mini/membership/plans').json()['items']}
+        self.assertEqual(items[trial['id']]['purchase_limit'], 1)
+        self.assertEqual(items[trial['id']]['purchased'], 1)
+        self.assertEqual(items[trial['id']]['pending'], 0)
+        self.assertIsNone(items[trial['id']]['pending_order'])
+        self.assertIsNone(items[trial['id']]['pending_expires_at'])
+        self.assertEqual(items[self.plan['id']]['purchase_limit'], 0)
+        self.assertEqual(items[self.plan['id']]['purchased'], 0)
+        admin_items = {item['id']: item for item in mini_orders.plans(True)['items']}
+        self.assertEqual(admin_items[trial['id']]['purchased'], 1)
+        self.assertEqual(admin_items[trial['id']]['pending'], 0)
+        self.assertEqual(admin_items[self.plan['id']]['purchased'], 0)
+
+    def test_unlimited_plan_allows_repeat_orders(self):
+        self.configure()
+        first = self.create_order()
+        second = mini_orders.create(self.viewer.id, OrderInput(plan_id=self.plan['id'], plan_revision=self.plan['revision'], request_id='fixture-order-two'))
+        self.assertNotEqual(first['id'], second['id'])
+
+    def test_payment_rechecks_limit_lowered_after_orders_created(self):
+        self.configure()
+        trial = mini_orders.save_plan(PlanInput(name='体验卡', days=1, price_fen=100, is_active=True))
+        first = mini_orders.create(self.viewer.id, OrderInput(plan_id=trial['id'], plan_revision=trial['revision'], request_id='trial-card-a'))
+        second = mini_orders.create(self.viewer.id, OrderInput(plan_id=trial['id'], plan_revision=trial['revision'], request_id='trial-card-b'))
+        mini_orders.save_plan(PlanInput(name='体验卡', days=1, price_fen=100, is_active=True, purchase_limit=1, revision=trial['revision']), trial['id'])
+        raw, headers = self.callback(self.paid_value(first))
+        self.assertEqual(self.client.post('/api/v1/payments/wechat/notify', content=raw, headers=headers).status_code, 204)
+        with self.assertRaises(HTTPException) as blocked:
+            mini_orders.pay(second['id'], self.viewer.id)
+        self.assertEqual(blocked.exception.status_code, 422)
+        self.assertEqual(blocked.exception.detail['code'], 'purchase_limit')
 
     def test_signed_callback_duplicate_fulfills_once_and_forgery_fails(self):
         self.configure()

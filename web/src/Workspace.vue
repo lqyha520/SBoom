@@ -27,6 +27,14 @@ const imageOpened = ref(false)
 const localUsage = ref<StorageUsage | null>(null)
 const storageLabel = computed(() => localUsage.value ? `本机已用 ${(localUsage.value.usage / 1048576).toFixed(1)} MB / ${(localUsage.value.quota / 1048576).toFixed(0)} MB${localUsage.value.persisted ? ' · 持久保存' : ' · 请定期导出备份'}` : '本机保留最近 10 份闲置草稿、100 份历史（30 天）')
 function openImages() { imageOpened.value = true; imageMode.value = true }
+async function openGames() {
+  if (store.generating) return
+  if (!await store.flushDraft()) {
+    accountError.value = '草稿尚未保存，请稍后再打开游戏'
+    return
+  }
+  location.hash = '/games/little-shop'
+}
 const accountError = ref('')
 const suggestedKeyword = ref((new URLSearchParams(location.search).get('keyword') || '').slice(0, 100))
 function applySuggestedKeyword() { store.keyword = suggestedKeyword.value; store.view = 'build'; suggestedKeyword.value = ''; history.replaceState(null, '', location.pathname) }
@@ -148,6 +156,7 @@ onBeforeUnmount(() => {
             <UIcon name="i-lucide-files" class="size-4" /><span>生成结果</span><span v-if="store.papers.length" class="nav-count">{{ store.papers.length }}</span>
           </button>
           <button :disabled="store.layoutMode" :class="{ active: imageMode }" :aria-current="imageMode ? 'page' : undefined" @click="openImages"><UIcon name="i-lucide-image" class="size-4" /><span>图片出题</span></button>
+          <button :disabled="store.layoutMode || store.generating" @click="openGames"><UIcon name="i-lucide-gamepad-2" class="size-4" /><span>学习游戏</span></button>
         </nav>
         <div class="topbar-actions">
           <template v-if="!imageMode">

@@ -1,6 +1,7 @@
 """Server-priced orders, idempotent payment confirmation and membership fulfillment."""
 
 import hashlib
+import logging
 import re
 import time
 import uuid
@@ -9,13 +10,17 @@ from datetime import date, datetime, timedelta, timezone
 from app.config import get_settings
 from app.db import db
 from app.security import decrypt_secret
-from app.services import membership_ledger, mini_auth
+from app.services import membership_ledger, mini_auth, wechat_virtual_pay
 from app.services.mini_errors import fail
 from app.services.mini_messages import notify
 from app.services.wechat_pay import PaymentError, WeChatPay, configuration
+from app.services.wechat_virtual_pay import VirtualPay
 from app.sql_utils import escape_like
 
-PUBLIC_FIELDS = ("id", "plan_id", "plan_name", "plan_days", "amount_fen", "currency", "status", "revision", "created_at", "expires_at", "paid_at", "closed_at", "updated_at")
+logger = logging.getLogger(__name__)
+
+PUBLIC_FIELDS = ("id", "plan_id", "plan_name", "plan_days", "amount_fen", "currency", "status", "payment_channel", "revision", "created_at", "expires_at", "paid_at", "closed_at", "updated_at")
+ADMIN_FIELDS = ("virtual_env", "virtual_offer_id", "virtual_product_id", "virtual_order_id", "virtual_order_type", "device_platform", "delivered_at")
 REFUND_FIELDS = ("id", "reason", "reply", "status", "revision", "created_at", "updated_at", "completed_at")
 #: 列表查询把退款与下单人一次 LEFT JOIN 带出来（列名加前缀避免和订单列撞名），public_order(joined=True) 直接消费
 JOINED_COLUMNS = ", ".join(f"f.{key} AS refund_{key}" for key in REFUND_FIELDS) + ", u.username AS owner_username, u.nickname AS owner_nickname"
@@ -34,13 +39,15 @@ def public_order(conn, row, admin=False, *, joined=False):
         result["refund"] = {key: row["refund_" + key] for key in REFUND_FIELDS} if row["refund_id"] else None
         if admin:
             result.update(user_id=row["user_id"], username=row["owner_username"] if row["owner_username"] is not None else "已注销用户",
-                          nickname=row["owner_nickname"] if row["owner_username"] is not None else "", transaction_id=row["transaction_id"])
+                          nickname=row["owner_nickname"] if row["owner_username"] is not None else "", transaction_id=row["transaction_id"],
+                          **{key: row[key] for key in ADMIN_FIELDS})
         return result
     refund = conn.execute("SELECT * FROM mini_refunds WHERE order_id = ?", (row["id"],)).fetchone()
     result["refund"] = {key: refund[key] for key in REFUND_FIELDS} if refund else None
     if admin:
         owner = conn.execute("SELECT username, nickname FROM mini_users WHERE id = ?", (row["user_id"],)).fetchone()
-        result.update(user_id=row["user_id"], username=owner["username"] if owner else "已注销用户", nickname=owner["nickname"] if owner else "", transaction_id=row["transaction_id"])
+        result.update(user_id=row["user_id"], username=owner["username"] if owner else "已注销用户", nickname=owner["nickname"] if owner else "",
+                      transaction_id=row["transaction_id"], **{key: row[key] for key in ADMIN_FIELDS})
     return result
 
 
@@ -56,11 +63,45 @@ def detail(identifier, user_id=None):
         return public_order(conn, owned(conn, identifier, user_id), user_id is None)
 
 
-def plans(admin=False):
+def plans(admin=False, user_id=None):
     with db() as conn:
         items = [dict(row) for row in conn.execute("SELECT * FROM mini_membership_plans " + ("" if admin else "WHERE is_active = 1 ") + "ORDER BY sort_order, created_at, id")]
-    status = configuration()
-    return {"items": items, "checkout_enabled": status["ready"], "ios_enabled": status["ios_enabled"], **({"configuration": status} if admin else {})}
+        for item in items:
+            # iPhone 走苹果 IAP，需同时配好 iOS 价与 iOS 道具才能在 iPhone 上架。
+            item["ios_available"] = bool(item["price_fen_ios"] and item["virtual_product_id_ios"])
+        if user_id is not None and items:
+            paid = {row[0]: row[1] for row in conn.execute(
+                "SELECT plan_id, COUNT(*) FROM mini_orders WHERE user_id = ? AND paid_at IS NOT NULL GROUP BY plan_id", (user_id,))}
+            pending: dict[str, int] = {}
+            pending_order: dict[str, str] = {}
+            pending_expiry: dict[str, int] = {}
+            for row in conn.execute("SELECT id, plan_id, expires_at FROM mini_orders WHERE user_id = ? AND paid_at IS NULL AND status IN ('created', 'pending') ORDER BY created_at DESC, id DESC", (user_id,)):
+                pending[row["plan_id"]] = pending.get(row["plan_id"], 0) + 1
+                pending_order.setdefault(row["plan_id"], row["id"])
+                pending_expiry.setdefault(row["plan_id"], row["expires_at"])
+            for item in items:
+                item["purchased"] = paid.get(item["id"], 0)
+                item["pending"] = pending.get(item["id"], 0)
+                item["pending_order"] = pending_order.get(item["id"])
+                item["pending_expires_at"] = pending_expiry.get(item["id"])
+        elif admin and items:
+            # 后台按套餐统计订单量，便于核对限购效果和放弃付款情况。
+            stats = {row[0]: (row[1], row[2]) for row in conn.execute(
+                "SELECT plan_id, SUM(CASE WHEN paid_at IS NOT NULL THEN 1 ELSE 0 END), "
+                "SUM(CASE WHEN paid_at IS NULL AND status IN ('created', 'pending') THEN 1 ELSE 0 END) "
+                "FROM mini_orders GROUP BY plan_id")}
+            for item in items:
+                item["purchased"], item["pending"] = stats.get(item["id"], (0, 0))
+    virtual = wechat_virtual_pay.configuration()
+    ordinary = configuration()
+    channel = "virtual" if virtual["enabled"] else "wechat"
+    ready = virtual["ready"] if channel == "virtual" else ordinary["ready"]
+    result = {"items": items, "checkout_enabled": ready,
+              "ios_enabled": (virtual["ios_enabled"] if channel == "virtual" else ordinary["ios_enabled"]) if ready else False,
+              "checkout_channel": channel}
+    if admin:
+        result.update(configuration=ordinary, virtual_configuration=virtual)
+    return result
 
 
 def save_plan(body, identifier=None):
@@ -74,14 +115,14 @@ def save_plan(body, identifier=None):
                 fail("会员套餐不存在", 404)
             if row[0] != body.revision:
                 fail("套餐已更新，请刷新后重试")
-            conn.execute("UPDATE mini_membership_plans SET name = ?, description = ?, days = ?, price_fen = ?, is_active = ?, sort_order = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
-                         (body.name, body.description, body.days, body.price_fen, int(body.is_active), body.sort_order, now, identifier))
+            conn.execute("UPDATE mini_membership_plans SET name = ?, description = ?, days = ?, price_fen = ?, is_active = ?, sort_order = ?, purchase_limit = ?, virtual_product_id = ?, price_fen_ios = ?, virtual_product_id_ios = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
+                         (body.name, body.description, body.days, body.price_fen, int(body.is_active), body.sort_order, body.purchase_limit, body.virtual_product_id, body.price_fen_ios, body.virtual_product_id_ios, now, identifier))
         else:
             if conn.execute("SELECT COUNT(*) FROM mini_membership_plans").fetchone()[0] >= 100:
                 fail("套餐数量已达上限，请编辑已有套餐", 422)
             identifier = uuid.uuid4().hex
-            conn.execute("INSERT INTO mini_membership_plans(id, name, description, days, price_fen, is_active, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                         (identifier, body.name, body.description, body.days, body.price_fen, int(body.is_active), body.sort_order, now, now))
+            conn.execute("INSERT INTO mini_membership_plans(id, name, description, days, price_fen, is_active, sort_order, purchase_limit, virtual_product_id, price_fen_ios, virtual_product_id_ios, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (identifier, body.name, body.description, body.days, body.price_fen, int(body.is_active), body.sort_order, body.purchase_limit, body.virtual_product_id, body.price_fen_ios, body.virtual_product_id_ios, now, now))
         return dict(conn.execute("SELECT * FROM mini_membership_plans WHERE id = ?", (identifier,)).fetchone())
 
 
@@ -94,7 +135,12 @@ def create(user_id, body):
             if previous["plan_id"] != body.plan_id:
                 fail("请求标识已用于另一套餐，请重新下单")
             return public_order(conn, previous)
-        if not configuration()["ready"]:
+        virtual = wechat_virtual_pay.configuration()
+        channel = "virtual" if virtual["enabled"] else "wechat"
+        if channel == "virtual":
+            if not virtual["ready"]:
+                fail("在线开通暂未开放，请联系客服", 503)
+        elif not configuration()["ready"]:
             fail("在线开通暂未开放，请联系客服", 503)
         user = conn.execute("SELECT * FROM mini_users WHERE id = ? AND is_active = 1", (user_id,)).fetchone()
         if not user:
@@ -109,6 +155,27 @@ def create(user_id, body):
             fail("套餐已下架，请重新选择", 404)
         if plan["revision"] != body.plan_revision:
             fail("套餐价格或权益已更新，请重新确认后下单")
+        limit = plan["purchase_limit"]
+        if limit:
+            # 已付款（含已退款）和未完成订单都占用额度：既防止重复购买，也防止先囤多笔待付款订单。
+            paid = conn.execute("SELECT COUNT(*) FROM mini_orders WHERE user_id = ? AND plan_id = ? AND paid_at IS NOT NULL", (user_id, plan["id"])).fetchone()[0]
+            if paid >= limit:
+                fail(f"该套餐每个账号限购 {limit} 次，你已达到购买上限", 422, "purchase_limit")
+            pending = conn.execute("SELECT COUNT(*) FROM mini_orders WHERE user_id = ? AND plan_id = ? AND paid_at IS NULL AND status IN ('created', 'pending')", (user_id, plan["id"])).fetchone()[0]
+            if paid + pending >= limit:
+                fail(f"该套餐每个账号限购 {limit} 次，请先完成或取消已有的未完成订单", 422, "purchase_limit")
+        # iPhone 只能走苹果 IAP，费率高于安卓，因此按 iOS 价与 iOS 道具单独结算。
+        on_ios = channel == "virtual" and body.platform == "ios"
+        if on_ios and not virtual["ios_enabled"]:
+            fail("iPhone 端在线开通尚未开放，请稍后再试", 422, "ios_unavailable")
+        amount_fen = plan["price_fen_ios"] if on_ios else plan["price_fen"]
+        product_id = ""
+        if channel == "virtual":
+            product_id = plan["virtual_product_id_ios"] if on_ios else plan["virtual_product_id"]
+            if on_ios and not amount_fen:
+                fail("该套餐尚未在 iPhone 上架，请稍后重试", 422, "ios_unavailable")
+            if not product_id:
+                fail("该套餐尚未在 iPhone 上架，请稍后重试" if on_ios else "该套餐尚未配置虚拟支付商品，请联系客服", 422, "ios_unavailable" if on_ios else "")
         if max(now, user["vip_expires_at"] or 0) + plan["days"] * 86400 > 253402300799:
             fail("会员到期日期超出支持范围", 422)
         if conn.execute("SELECT COUNT(*) FROM mini_orders WHERE user_id = ? AND status IN ('created', 'pending')", (user_id,)).fetchone()[0] >= 3:
@@ -117,20 +184,24 @@ def create(user_id, body):
             fail("下单较频繁，请稍后重试", 429)
         identifier = uuid.uuid4().hex
         settings = get_settings()
-        conn.execute("INSERT INTO mini_orders(id, user_id, request_key, plan_id, plan_name, plan_days, amount_fen, appid, mchid, payer_enc, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                     (identifier, user_id, request_key, plan["id"], plan["name"], plan["days"], plan["price_fen"], settings.wechat_app_id, settings.wechat_pay_mchid, user["wechat_openid_enc"], now, now + 900, now))
+        conn.execute("INSERT INTO mini_orders(id, user_id, request_key, plan_id, plan_name, plan_days, amount_fen, appid, mchid, payer_enc, payment_channel, virtual_env, virtual_offer_id, virtual_product_id, device_platform, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (identifier, user_id, request_key, plan["id"], plan["name"], plan["days"], amount_fen, settings.wechat_app_id, settings.wechat_pay_mchid, user["wechat_openid_enc"],
+                      channel, virtual["env"], virtual["offer_id"] if channel == "virtual" else "", product_id, body.platform, now, now + 900, now))
         return public_order(conn, owned(conn, identifier))
 
 
 def ensure_tenant(order):
     settings = get_settings()
-    if order["appid"] != settings.wechat_app_id or order["mchid"] != settings.wechat_pay_mchid:
+    if order["appid"] != settings.wechat_app_id:
         fail("订单所属支付配置已变化，请联系管理员处理", 409)
+    if order["payment_channel"] == "wechat" and order["mchid"] != settings.wechat_pay_mchid:
+        fail("订单所属支付配置已变化，请联系管理员处理", 409)
+    if order["payment_channel"] == "virtual" and order["virtual_env"] != wechat_virtual_pay.configuration()["env"]:
+        fail("订单所属虚拟支付环境已变化，请联系管理员处理", 409)
 
 
 def pay(identifier, user_id):
     now, lease = int(time.time()), uuid.uuid4().hex
-    provider = WeChatPay()
     with db(serialized="accounts") as conn:
         order = owned(conn, identifier, user_id)
         ensure_tenant(order)
@@ -139,10 +210,25 @@ def pay(identifier, user_id):
         user = conn.execute("SELECT * FROM mini_users WHERE id = ? AND is_active = 1", (user_id,)).fetchone()
         if not user or user["membership"] == "vip" and user["vip_expires_at"] is None:
             fail("当前账号无需重复购买，请取消此订单", 422)
+        # 管理员下调限购后可能留下旧订单：阻止继续发起支付；已完成的支付仍照常履约。
+        limit = conn.execute("SELECT purchase_limit FROM mini_membership_plans WHERE id = ?", (order["plan_id"],)).fetchone()
+        if limit and limit[0] and conn.execute("SELECT COUNT(*) FROM mini_orders WHERE user_id = ? AND plan_id = ? AND paid_at IS NOT NULL AND id <> ?", (user_id, order["plan_id"], identifier)).fetchone()[0] >= limit[0]:
+            fail(f"该套餐每个账号限购 {limit[0]} 次，请取消此订单", 422, "purchase_limit")
+        if order["payment_channel"] == "virtual":
+            if not wechat_virtual_pay.configuration()["ready"]:
+                fail("在线开通暂未开放，请联系客服", 503)
+            session_key = decrypt_secret(user["wechat_session_key_enc"])
+            if not session_key:
+                fail("微信支付登录态已过期，请重新进入小程序后重试", 409, "wechat_session_expired")
+            if order["status"] == "created":
+                conn.execute("UPDATE mini_orders SET status = 'pending', revision = revision + 1, updated_at = ? WHERE id = ?", (now, identifier))
+            parameters = VirtualPay().payment_parameters(dict(order), session_key)
+            return {"order": public_order(conn, owned(conn, identifier, user_id)), "payment": parameters}
         if order["lease_until"] > now:
             fail("订单正在处理，请稍后刷新", 409)
         if order["prepay_id"]:
-            return {"order": public_order(conn, order), "payment": provider.payment_parameters(order["prepay_id"])}
+            return {"order": public_order(conn, order), "payment": WeChatPay().payment_parameters(order["prepay_id"])}
+        provider = WeChatPay()
         conn.execute("UPDATE mini_orders SET lease_key = ?, lease_until = ?, status = 'pending', updated_at = ? WHERE id = ?", (lease, now + 45, now, identifier))
         snapshot = dict(order)
     try:
@@ -191,6 +277,8 @@ def confirm_payment(value, event_id=None):
     now = int(time.time())
     with db(serialized="accounts") as conn:
         order = owned(conn, value.get("out_trade_no", ""))
+        if order["payment_channel"] != "wechat":
+            fail("订单支付渠道不一致", 400)
         transaction = validate_payment(order, value)
         if order["paid_at"] is not None:
             if order["transaction_id"] != transaction:
@@ -220,12 +308,130 @@ def confirm_payment(value, event_id=None):
         return public_order(conn, owned(conn, order["id"]))
 
 
+def _virtual_status(value):
+    status = value.get("status")
+    if type(status) is not int or status not in range(0, 11):
+        fail("支付查询结果状态无效", 400)
+    return status
+
+
+def confirm_virtual_payment(value):
+    """由服务端查单结果确认虚拟支付，绝不直接信任消息推送体。"""
+    if not isinstance(value, dict):
+        fail("支付查询结果格式无效", 400)
+    identifier = value.get("order_id")
+    if not isinstance(identifier, str) or not re.fullmatch(r"[0-9a-f]{32}", identifier):
+        fail("支付订单标识无效", 400)
+    status = _virtual_status(value)
+    if status not in (2, 3, 4):
+        fail("支付尚未完成", 409)
+    order_fee, paid_fee = value.get("order_fee"), value.get("paid_fee", value.get("order_fee"))
+    if type(order_fee) is not int or type(paid_fee) is not int or paid_fee != order_fee:
+        fail("支付金额异常", 400)
+    transaction = value.get("wx_order_id") or value.get("wxpay_order_id") or value.get("channel_order_id")
+    if not isinstance(transaction, str) or not 8 <= len(transaction) <= 64:
+        fail("支付交易标识无效", 400)
+    now = int(time.time())
+    paid_at = value.get("paid_time", 0)
+    if type(paid_at) is not int or paid_at < 0 or paid_at > now + 300:
+        fail("支付完成时间无效", 400)
+    paid_at = paid_at or now
+    order_type = value.get("order_type")
+    order_type = order_type if type(order_type) is int else 0
+    provide_time = value.get("provide_time")
+    delivered_at = provide_time if type(provide_time) is int and provide_time > 0 else None
+    if status == 4 and delivered_at is None:
+        delivered_at = paid_at
+    with db(serialized="accounts") as conn:
+        order = owned(conn, identifier)
+        if order["payment_channel"] != "virtual":
+            fail("订单支付渠道不一致", 400)
+        if order_fee != order["amount_fen"]:
+            fail("支付金额与订单不一致", 400)
+        env_type = value.get("env_type")
+        expected_env = 2 if order["virtual_env"] == 1 else 1
+        if env_type not in (None, 0) and env_type != expected_env:
+            fail("支付环境与订单不一致", 400)
+        if paid_at < order["created_at"] - 300:
+            fail("支付完成时间早于下单时间", 400)
+        if order["paid_at"] is not None:
+            if order["transaction_id"] != transaction:
+                fail("订单交易标识不一致", 400)
+            return public_order(conn, order)
+        duplicate = conn.execute("SELECT id FROM mini_orders WHERE transaction_id = ? OR virtual_order_id = ?", (transaction, transaction)).fetchone()
+        if duplicate and duplicate[0] != order["id"]:
+            fail("此支付交易已用于其他订单", 400)
+        conn.execute("UPDATE mini_orders SET status = 'paid', transaction_id = ?, virtual_order_id = ?, virtual_order_type = ?, paid_at = ?, "
+                     "delivered_at = COALESCE(?, delivered_at), revision = revision + 1, updated_at = ? WHERE id = ?",
+                     (transaction, transaction, order_type, paid_at, delivered_at, now, order["id"]))
+        user = conn.execute("SELECT * FROM mini_users WHERE id = ?", (order["user_id"],)).fetchone()
+        if user:
+            before = mini_auth._admin_item(user)
+            membership_ledger.append(conn, user, order["plan_days"], order["id"])
+            after = mini_auth._admin_item(conn.execute("SELECT * FROM mini_users WHERE id = ?", (user["id"],)).fetchone())
+            mini_auth._record_event(conn, None, user["id"], before, {**after, "order_id": order["id"], "paid_fen": order["amount_fen"]})
+            notify(conn, user["id"], "paid:" + order["id"], "order", "会员订单已付款", f"{order['plan_name']}付款成功，请查看会员权益与到期时间。", "order", order["id"])
+        conn.execute("INSERT INTO mini_payment_events(id, order_id, kind, created_at) VALUES (?, ?, 'paid', ?) ON CONFLICT(id) DO NOTHING",
+                     ("virtual-paid:" + transaction, order["id"], now))
+        result = public_order(conn, owned(conn, order["id"]))
+    deliver_virtual(identifier)
+    return result
+
+
+def deliver_virtual(identifier):
+    """通知微信已完成发货；失败只记录日志，由定时任务重试，不影响付款确认。"""
+    with db() as conn:
+        order = dict(owned(conn, identifier))
+        if order["payment_channel"] != "virtual" or order["paid_at"] is None or order["delivered_at"] is not None:
+            return
+    try:
+        VirtualPay().provide_goods(order)
+    except PaymentError as error:
+        logger.warning("虚拟支付发货通知失败 order_id=%s code=%s", identifier, error.code)
+        return
+    with db(serialized="accounts") as conn:
+        conn.execute("UPDATE mini_orders SET delivered_at = COALESCE(delivered_at, ?) WHERE id = ?", (int(time.time()), identifier))
+
+
+def apply_virtual_order(order, value):
+    status = _virtual_status(value)
+    if value.get("order_id") != order["id"]:
+        fail("支付查询结果与订单不一致", 400)
+    if status in (2, 3, 4):
+        return confirm_virtual_payment(value)
+    if status in (5, 7, 8):
+        from app.services import mini_refunds
+        return mini_refunds.settle_virtual(order["id"], value)
+    if status == 6:
+        now = int(time.time())
+        with db(serialized="accounts") as conn:
+            conn.execute("UPDATE mini_orders SET status = 'closed', closed_at = ?, updated_at = ?, revision = revision + 1 "
+                         "WHERE id = ? AND paid_at IS NULL AND status IN ('created', 'pending')", (now, now, order["id"]))
+    return None
+
+
 def sync(identifier, user_id=None):
     with db() as conn:
         order = dict(owned(conn, identifier, user_id))
-        if order["status"] not in ("created", "pending"):
+        now = int(time.time())
+        if order["payment_channel"] == "virtual":
+            if order["status"] not in ("created", "pending") and not (order["status"] == "closed" and order["paid_at"] is None and (order["closed_at"] or 0) > now - 900):
+                return public_order(conn, order, user_id is None)
+        elif order["status"] not in ("created", "pending"):
             return public_order(conn, order, user_id is None)
     ensure_tenant(order)
+    if order["payment_channel"] == "virtual":
+        openid = decrypt_secret(order["payer_enc"])
+        if not openid:
+            fail("订单付款人信息不可用，请联系客服", 422)
+        try:
+            value = VirtualPay().query_order(openid, identifier)
+        except PaymentError as error:
+            if error.code == "XPAY_PENDING":
+                return detail(identifier, user_id)
+            raise
+        apply_virtual_order(order, value)
+        return detail(identifier, user_id)
     value = WeChatPay().query(identifier)
     if value.get("out_trade_no") != identifier or value.get("mchid") != order["mchid"] or value.get("appid") != order["appid"]:
         fail("查询结果与订单不一致", 400)
@@ -248,9 +454,27 @@ def cancel(identifier, user_id=None):
         if order["lease_until"] > time.time():
             fail("订单正在处理，请稍后再取消", 409)
         ensure_tenant(order)
-        if order["status"] == "created" and not order["prepay_id"]:
-            conn.execute("UPDATE mini_orders SET status = 'closed', closed_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?", (int(time.time()), int(time.time()), identifier))
-            return public_order(conn, owned(conn, identifier), user_id is None)
+        if order["payment_channel"] == "virtual":
+            # 虚拟支付没有关单接口：先本地关闭；若用户已确认付款，紧接的查单会补记并履约。
+            openid = decrypt_secret(order["payer_enc"])
+            conn.execute("UPDATE mini_orders SET status = 'closed', closed_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND paid_at IS NULL AND status IN ('created', 'pending')", (now, now, identifier))
+            result = public_order(conn, owned(conn, identifier, user_id))
+            if not openid:
+                return result
+    if order["payment_channel"] == "virtual":
+        try:
+            value = VirtualPay().query_order(openid, identifier)
+        except PaymentError as error:
+            logger.info("虚拟支付取消时查单未完成 order_id=%s code=%s", identifier, error.code)
+            return detail(identifier, user_id)
+        if _virtual_status(value) in (2, 3, 4, 5, 7, 8):
+            apply_virtual_order(dict(owned_in_new_connection(identifier)), value)
+        return detail(identifier, user_id)
+    if order["status"] == "created" and not order["prepay_id"]:
+        with db(serialized="accounts") as conn:
+            conn.execute("UPDATE mini_orders SET status = 'closed', closed_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND paid_at IS NULL AND status IN ('created', 'pending')", (now, now, identifier))
+        return detail(identifier, user_id)
+    with db(serialized="accounts") as conn:
         conn.execute("UPDATE mini_orders SET lease_key = ?, lease_until = ? WHERE id = ?", (lease, now + 45, identifier))
     try:
         try:
@@ -266,6 +490,11 @@ def cancel(identifier, user_id=None):
         with db(serialized="accounts") as conn:
             conn.execute("UPDATE mini_orders SET lease_key = '', lease_until = 0 WHERE id = ? AND lease_key = ?", (identifier, lease))
     return detail(identifier, user_id)
+
+
+def owned_in_new_connection(identifier):
+    with db() as conn:
+        return dict(owned(conn, identifier))
 
 
 def listing(user_id=None, status="", q="", limit=20, offset=0, start_date="", end_date=""):

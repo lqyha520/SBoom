@@ -544,6 +544,21 @@ for (const width of [1280, 390]) {
     expect(calls).toBe(1)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: info.outputPath(`model-result-${width}.png`) })
+
+    // 生成后再提高题数：预览要跟着补齐待生成占位，已生成的正式题目保持不动
+    await page.getByRole('button', { name: '返回搭建', exact: true }).click()
+    if (width < 900) await page.locator('.workspace-tabs').getByRole('tab', { name: '试卷结构', exact: true }).click()
+    await expect(structure.locator('.section-item')).toHaveCount(1)
+    await count.fill('9')
+    await count.press('Tab')
+    await expect(structure.locator('.section-status')).toContainText('待生成 3 道题')
+    if (width >= 900) {
+      await expect(page.locator('.preview-panel .paper-stack .q')).toHaveCount(9)
+      await expect(page.locator('.preview-panel .paper-stack')).toContainText('模型返回的题目 1')
+      await expect(page.locator('.preview-panel .preview-hint')).toContainText('待生成占位')
+    }
+    expect(calls).toBe(1)
+    await page.screenshot({ path: info.outputPath(`raised-count-${width}.png`) })
   })
 }
 

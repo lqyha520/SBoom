@@ -351,7 +351,9 @@ def db(serialized: bool | str | tuple[str, ...] = False, *, content_user: str | 
             conn.commit()
         finally:
             _sample_pool_metrics(pool, returning=True)
-    if scopes or content_user is not None:
+    # 仅独占域写入会改动公开元数据（标签、分类、Banner、字典）；content_user 只取
+    # 共享内容锁并写用户表，不会改这些表，无需在此清空进程级公开缓存。
+    if scopes:
         from app.public_cache import invalidate
         invalidate()
 
@@ -453,7 +455,7 @@ def _verify_schema(conn) -> tuple[list, int]:
     return [t for t in _CORE_TABLES if t not in present], len(present)
 
 
-SCHEMA_VERSION = 2026100501
+SCHEMA_VERSION = 2026102402
 
 
 def init_db(*, migrate: bool | None = None) -> None:

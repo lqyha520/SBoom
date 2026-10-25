@@ -27,6 +27,13 @@ export const uiStubs = {
       value: props.modelValue, onInput: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).value),
     }),
   }),
+  UTextarea: defineComponent({
+    props: ['modelValue', 'disabled'], emits: ['update:modelValue'],
+    setup: (props, { emit }) => () => h('textarea', {
+      value: props.modelValue, disabled: props.disabled,
+      onInput: (event: Event) => emit('update:modelValue', (event.target as HTMLTextAreaElement).value),
+    }),
+  }),
   USelect: defineComponent({
     props: ['modelValue', 'items'], emits: ['update:modelValue'],
     setup: (props, { emit }) => () => h('select', {

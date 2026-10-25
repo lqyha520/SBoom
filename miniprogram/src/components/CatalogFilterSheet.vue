@@ -28,7 +28,7 @@ async function measureOptions() {
   await nextTick()
   if (!props.open || current !== measurement) return
   const info = uni.getWindowInfo()
-  const limit = Math.min(460, info.windowHeight * .48, Math.max(100, info.windowHeight - 280))
+  const limit = Math.min(460, Math.round(info.windowHeight * .56), Math.max(120, info.windowHeight - 260))
   optionsHeight.value = limit
   const applyHeight = (height?: number) => {
     if (props.open && current === measurement && height) optionsHeight.value = Math.min(limit, Math.ceil(height))
@@ -56,13 +56,13 @@ function selectTag(event: { value: (string | number)[] }) { tagDraft[activeTag.v
 
 <template>
   <wd-popup :model-value="open" position="bottom" :z-index="1200" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0" @after-enter="measureOptions" @update:model-value="!$event && emit('close')">
-    <view class="catalog-sheet" role="dialog" aria-modal="true" aria-label="更多筛选">
+    <view class="catalog-sheet" aria-role="dialog" role="dialog" aria-modal="true" aria-label="更多筛选">
       <view class="sheet-handle" /><view class="catalog-sheet-head"><text class="sheet-title">更多筛选</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭筛选" title="关闭筛选" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
       <text class="filter-context">{{ grade || '全部年级' }} · {{ subject || '全部学科' }}</text>
       <scroll-view scroll-y class="filter-options" :style="{ height: optionsHeight + 'px' }">
         <view :id="optionsId" class="filter-options-content">
         <text class="filter-label">习题分类</text>
-        <wd-radio-group v-model="categoryDraft" type="button" direction="horizontal" custom-class="filter-radio-group" role="radiogroup" aria-label="习题分类">
+        <wd-radio-group v-model="categoryDraft" type="button" direction="horizontal" custom-class="filter-radio-group" aria-role="radiogroup" role="radiogroup" aria-label="习题分类">
           <wd-radio value="" custom-class="filter-radio" role="radio" :aria-checked="!categoryDraft">全部分类</wd-radio>
           <wd-radio v-for="item in categories" :key="item.id" :value="item.id" custom-class="filter-radio" role="radio" :aria-checked="categoryDraft === item.id">{{ exerciseText(item.name) }}</wd-radio>
         </wd-radio-group>
@@ -80,12 +80,13 @@ function selectTag(event: { value: (string | number)[] }) { tagDraft[activeTag.v
 .catalog-sheet { display:flex;flex-direction:column;max-width:520px;max-height:90vh;margin:0 auto;padding:12px 22px 24px; }
 .catalog-sheet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .catalog-sheet-head .sheet-title { margin: 0; }
-.filter-options { min-height:0;flex-shrink:1;max-height:48vh; }.filter-options-content { display:flex;flex-direction:column;padding-bottom:2px; }
+.filter-options { min-height:0;flex-shrink:1; }.filter-options-content { display:flex;flex-direction:column;padding-bottom:6px; }
 .filter-context { display:block;color:var(--lc-secondary);font-size:13px;line-height:1.7; }
-.tag-picker { display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;min-height:44px;margin:0;padding:10px 14px;border:0;border-radius:10px;background:var(--lc-background);font-size:13px;line-height:1.5;text-align:left;color:var(--lc-text); }
+.tag-picker { display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;min-height:44px;margin:0;padding:10px 14px;border:1px solid var(--lc-card-line);border-radius:10px;background:var(--lc-surface);font-size:13px;line-height:1.5;text-align:left;color:var(--lc-text); }
 .tag-picker::after { border:0; }
+.tag-picker :deep(.wd-icon) { flex:none;color:var(--lc-muted); }
 .filter-label { display: block; margin: 18px 0 12px; font-size: 13px; font-weight: 600; color: var(--lc-secondary); }
-.filter-sheet-actions { display: grid; grid-template-columns: 1fr 1.5fr; gap: 12px; padding-top: 20px; }
+.filter-sheet-actions { display: grid; grid-template-columns: 1fr 1.5fr; gap: 12px; padding: 14px 0 2px; border-top: 1px solid var(--lc-card-line); background: var(--lc-surface); }
 .reset-all-filters { display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;min-height:44px;margin:10px auto 0;padding:4px 0;background:transparent;color:var(--lc-secondary);font-size:13px;line-height:1.5; }.reset-all-filters text { font-size:12px;color:var(--lc-muted); }
 .catalog-sheet :deep(.filter-radio-group) { display: flex; flex-wrap: wrap; gap: 9px; }
 .catalog-sheet :deep(.filter-radio) { margin: 0 !important; min-width: 76px; max-width: 100%; --wot-radio-button-border-radius: 999px; --wot-radio-button-font-size: 12px; --wot-radio-button-padding: 10px 14px; }

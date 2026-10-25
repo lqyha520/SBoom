@@ -5,11 +5,11 @@ import re
 from urllib.parse import quote
 
 from fastapi import HTTPException
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response
 from PIL import Image
 
 from app.memory_cache import MemoryCache
-from app.services.paper_storage import LocalStorage, storage_for
+from app.services.paper_storage import storage_for
 from app.services.resource_admission import admitted_media
 
 _previews: MemoryCache[bytes] = MemoryCache(ttl=300, max_entries=128, max_weight=8 * 1024 * 1024, weigh=len)
@@ -47,13 +47,9 @@ def asset_response(asset, *, cache_control: str | None = None):
         headers["Content-Disposition"] = "attachment; filename=paper.pdf; filename*=UTF-8''" + quote(title + ".pdf", safe="")
         headers["Content-Security-Policy"] = "sandbox"
     try:
-        if isinstance(storage, LocalStorage):
-            path = storage.path(asset["storage_key"])
-            if not path.is_file():
-                raise FileNotFoundError()
-            return FileResponse(path, media_type=asset["mime_type"], headers=headers)
-        stream = storage.stream(asset["storage_key"])
-        headers["Content-Length"] = str(asset["byte_size"])
-        return StreamingResponse(stream, media_type=asset["mime_type"], headers=headers)
+        path = storage.path(asset["storage_key"])
+        if not path.is_file():
+            raise FileNotFoundError()
+        return FileResponse(path, media_type=asset["mime_type"], headers=headers)
     except Exception as exc:
         raise HTTPException(503, detail={"error": "文件暂不可用，请稍后重试或联系管理员"}) from exc

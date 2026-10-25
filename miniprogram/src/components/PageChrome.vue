@@ -4,7 +4,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import ChromeBack from './ChromeBack.vue'
 import { chromeBar } from '../services/chrome'
 
-const props = withDefaults(defineProps<{ back?: boolean; fallback?: string }>(), { fallback: '/pages/home/index' })
+const props = withDefaults(defineProps<{ back?: boolean; fallback?: string; transparent?: boolean }>(), { fallback: '/pages/home/index', transparent: false })
 const inset = ref(0)
 const backTop = ref(5)
 const online = ref(true)
@@ -35,7 +35,7 @@ function goBack() {
 
 <template>
   <PrivacyConsent />
-  <view class="page-chrome" :style="{ height: height + 'px' }">
+  <view class="page-chrome" :class="{ transparent }" :style="{ height: height + 'px' }">
     <ChromeBack v-if="back" :top="backTop" label="返回上一页" @press="goBack" />
   </view>
   <view v-if="!online" class="offline-notice" role="status">网络已断开，请检查网络连接</view>
@@ -43,5 +43,10 @@ function goBack() {
 
 <style scoped>
 .page-chrome { position: sticky; top:0; z-index:40; background:var(--lc-background); width: 100%; flex: none; }
+.page-chrome.transparent { background: transparent; }
+/* #ifdef H5 */
+.page-chrome { background:rgba(247,249,248,.82);backdrop-filter:saturate(1.5) blur(14px);-webkit-backdrop-filter:saturate(1.5) blur(14px); }
+.page-chrome.transparent { background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
+/* #endif */
 .offline-notice { padding:8px 16px;background:#fff3d6;color:#70521b;font-size:12px;text-align:center; }
 </style>

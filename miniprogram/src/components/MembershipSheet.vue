@@ -46,7 +46,7 @@ async function refresh() {
 
 <template>
   <wd-popup :model-value="open" position="bottom" :z-index="1200" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0" @update:model-value="!$event && emit('close')">
-    <view class="sheet membership-sheet" role="dialog" aria-modal="true" aria-label="会员状态">
+    <view class="sheet membership-sheet" aria-role="dialog" role="dialog" aria-modal="true" aria-label="会员状态">
       <view class="sheet-handle" />
       <view class="sheet-head"><text class="sheet-title">会员状态</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭会员状态" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
       <view class="membership-identity"><view class="membership-symbol"><wd-icon name="star-fill" size="25px" /></view><view class="grow"><text class="membership-name">{{ session.user?.is_vip ? 'VIP 会员' : '普通用户' }}</text><text class="membership-expiry">{{ membershipExpiry(session.user) }}</text></view></view>

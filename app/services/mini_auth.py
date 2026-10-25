@@ -191,7 +191,7 @@ def login_password(username: str, password: str):
         return _session(conn, row["id"], expected_hash=expected_hash)
 
 
-async def exchange_code(code: str, *, with_openid=False):
+async def exchange_code(code: str, *, with_openid=False, with_session=False):
     settings = get_settings()
     if not settings.wechat_app_id or not settings.wechat_app_secret:
         _error("微信登录尚未配置，请联系管理员", 503)
@@ -208,7 +208,25 @@ async def exchange_code(code: str, *, with_openid=False):
     if not isinstance(value, dict) or value.get("errcode") or not isinstance(value.get("openid"), str) or not 1 <= len(value["openid"]) <= 128:
         _error("微信登录凭证无效，请重新登录")
     identity = digest(settings.wechat_app_id + ":" + value["openid"])
+    session_key = value.get("session_key") if isinstance(value.get("session_key"), str) else ""
+    if len(session_key) > 128:
+        session_key = ""
+    if with_session:
+        return identity, value["openid"], session_key
     return (identity, value["openid"]) if with_openid else identity
+
+
+def login_credentials(value):
+    """兼容旧的字符串返回值与新的 (identity, openid, session_key) 元组。"""
+    if isinstance(value, tuple):
+        identity = value[0] if len(value) > 0 else ""
+        openid = value[1] if len(value) > 1 else ""
+        session_key = value[2] if len(value) > 2 else ""
+    else:
+        identity, openid, session_key = value, "", ""
+    if not isinstance(identity, str) or not identity:
+        _error("微信登录凭证无效，请重新登录")
+    return identity, openid if isinstance(openid, str) else "", session_key if isinstance(session_key, str) else ""
 
 
 _NICKNAME_SPIRITS = (
@@ -232,20 +250,22 @@ def _default_username(conn) -> str:
     return "wx" + uuid.uuid4().hex[:24]
 
 
-def _wechat_session(conn, account_id, openid):
+def _wechat_session(conn, account_id, openid, session_key=""):
     if openid:
         conn.execute("UPDATE mini_users SET wechat_openid_enc = ? WHERE id = ?", (encrypt_secret(openid), account_id))
+    if session_key:
+        conn.execute("UPDATE mini_users SET wechat_session_key_enc = ? WHERE id = ?", (encrypt_secret(session_key), account_id))
     return _session(conn, account_id)
 
 
-def login_public_identity(identity: str, openid=""):
+def login_public_identity(identity: str, openid="", session_key=""):
     if openid and digest(get_settings().wechat_app_id + ":" + openid) != identity:
         _error("微信身份不一致，请重新登录")
     # 绝大多数登录是老用户：只读自己的账号行 + 签发会话，不需要 accounts 全局锁。
     with db() as conn:
         account = conn.execute("SELECT id FROM mini_users WHERE wechat_identity = ?", (identity,)).fetchone()
         if account:
-            return _wechat_session(conn, account["id"], openid)
+            return _wechat_session(conn, account["id"], openid, session_key)
     if not get_settings().mini_registration_enabled:
         _error("小程序注册暂未开放，请联系管理员", 403)
     # 首次登录要分配随机登录名（_default_username 的「查可用→插入」依赖串行化），
@@ -253,11 +273,28 @@ def login_public_identity(identity: str, openid=""):
     with db(serialized="accounts") as conn:
         account = conn.execute("SELECT id FROM mini_users WHERE wechat_identity = ?", (identity,)).fetchone()
         if account:
-            return _wechat_session(conn, account["id"], openid)
+            return _wechat_session(conn, account["id"], openid, session_key)
         user_id, now = uuid.uuid4().hex, int(time.time())
         conn.execute("INSERT INTO mini_users(id, username, nickname, wechat_identity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
                      (user_id, _default_username(conn), secrets.choice(_NICKNAME_SPIRITS), identity, now, now))
-        return _wechat_session(conn, user_id, openid)
+        return _wechat_session(conn, user_id, openid, session_key)
+
+
+def refresh_wechat_session(user_id: str, identity: str, openid: str, session_key: str):
+    """用新的 wx.login 凭证刷新当前账号的 openid/session_key，供虚拟支付签名使用。"""
+    if not openid or not session_key:
+        _error("微信登录态已失效，请重新进入小程序", 409, "wechat_session_expired")
+    with db(serialized="accounts") as conn:
+        row = conn.execute("SELECT * FROM mini_users WHERE id = ? FOR UPDATE", (user_id,)).fetchone()
+        if not row:
+            _error()
+        if not row["is_active"]:
+            _error("账号已被禁用，请联系管理员", 403, "account_disabled")
+        if row["wechat_identity"] != identity:
+            _error("当前微信账号与登录账号不一致，请重新登录", 409, "wechat_identity_mismatch")
+        conn.execute("UPDATE mini_users SET wechat_openid_enc = ?, wechat_session_key_enc = ? WHERE id = ?",
+                     (encrypt_secret(openid), encrypt_secret(session_key), user_id))
+    return {"refreshed": True}
 
 
 def update_profile(user_id: str, body: MiniProfileUpdate):

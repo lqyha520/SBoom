@@ -10,6 +10,7 @@ import { textbookGroups } from '../knowledge-points'
 import { fetchImageOptions, imageWorksheetTitle, plannedImageQuestionCount, previewImagePrompt, type ImageWorksheetParams, type WorksheetImage } from '../image-generation'
 import { MAX_WORKSHEET_IMAGES, useImageBatch } from '../image-batch'
 import { publicationUrl, type ImagePublication } from '../image-publication'
+import { triggerDownload } from '../../../shared/download'
 
 const store = useExamStore()
 const auth = useAuthStore()
@@ -245,9 +246,7 @@ async function generate() {
   catch (cause) { if (current()) error.value = cause instanceof Error ? cause.message : '生成失败' }
 }
 function downloadFile(url: string, name: string) {
-  const link = document.createElement('a')
-  link.href = url; link.download = name
-  document.body.append(link); link.click(); link.remove()
+  triggerDownload(url, name)
 }
 function download() {
   if (!imageUrl.value || !result.value || !current()) return

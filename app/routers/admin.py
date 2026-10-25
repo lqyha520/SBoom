@@ -7,6 +7,7 @@
 
 import asyncio
 import ipaddress
+import json
 import logging
 import socket
 from pathlib import Path
@@ -217,6 +218,14 @@ class AdminLlmConfigIn(BaseModel):
     maxTokens: int = Field(default=16384, ge=1024, le=131072)
 
 
+class AdminLlmModelsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str | None = Field(None, max_length=64)
+    baseUrl: str = Field("", max_length=500)
+    apiKey: str = Field("", max_length=4000, repr=False)
+    timeout: int = Field(60, ge=10, le=600)
+
+
 @router.get("/llm-config", summary="获取全局模型配置（不含密钥明文）")
 def get_llm_config(admin: CurrentUser = Depends(require_admin)):
     return app_config.get_admin_config()
@@ -285,6 +294,116 @@ def _pin_public_url(url: str) -> tuple[str, str]:
     return str(_httpx.URL(url).copy_with(host=ip)), host_header
 
 
+def _model_ids(data) -> list[str]:
+    """兼容 OpenAI 的 {"data": [...]}、部分中转站的 {"models": [...]} 与裸数组。"""
+    if isinstance(data, dict):
+        items = data.get("data") if "data" in data else data.get("models")
+    else:
+        items = data
+    if not isinstance(items, list):
+        raise ValueError("模型列表格式错误")
+    identifiers: set[str] = set()
+    for item in items:
+        value = item.get("id") if isinstance(item, dict) else item
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if value and len(value) <= 120:
+            identifiers.add(value)
+    return sorted(identifiers, key=str.casefold)
+
+
+def _stream_reasoning(event: str) -> str:
+    """推理模型会先吐 reasoning_content，同样能证明链路与鉴权已通。"""
+    try:
+        delta = json.loads(event)["choices"][0]["delta"]
+        value = delta.get("reasoning_content")
+        return value if isinstance(value, str) else ""
+    except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+        return ""
+
+
+@router.post("/llm-models", summary="拉取模型服务支持的模型列表")
+async def list_llm_models(req: AdminLlmModelsIn | None = None, admin: CurrentUser = Depends(require_admin)):
+    """用当前表单或已保存的地址与密钥请求 OpenAI 兼容的 GET /models。
+
+    防 SSRF 与密钥借用规则和 test-llm 一致：未保存的地址必须解析到公网 IP；
+    指定了未知 id 时不会借用其他已保存模型的密钥。
+    """
+    import httpx as _httpx
+
+    g = await run_sync(app_config.get_admin_config, with_key=True)
+    managed = g.get("managed", "models" in g) or bool(req and req.id)
+    if req and req.id:
+        g = next((profile for profile in entries(g) if profile["id"] == req.id), {})
+        if not g and not req.apiKey:
+            raise HTTPException(400, detail={"error": "此模型尚未保存密钥，请填写密钥后拉取模型"})
+    elif "models" in g:
+        g = next((profile for profile in g["models"] if profile["enabled"]), {})
+    saved_base = (g.get("baseUrl") or ("" if managed else settings.llm_base_url)).rstrip("/")
+    requested = req.baseUrl.strip().rstrip("/") if req and req.baseUrl else ""
+    base_url = requested or saved_base
+    api_key = (req.apiKey if req and req.apiKey else g.get("api_key")) or ("" if managed else settings.llm_api_key)
+    timeout = (req.timeout if req and req.timeout else g.get("timeout")) or 60
+    if not base_url:
+        raise HTTPException(400, detail={"error": "请先填写接口地址"})
+    if not api_key:
+        raise HTTPException(400, detail={"error": "请先填写此模型的 API 密钥"})
+    request_headers: dict[str, str] = {}
+    extensions: dict = {}
+    from app.provider_policy import require_new_key, validate_endpoint
+    if saved_base:
+        require_new_key(saved_base, base_url, req.apiKey if req else "")
+    if not settings.provider_allow_private:
+        try:
+            base_url, host_header = await run_sync(_pin_public_url, base_url)
+        except (ValueError, HTTPException) as exc:
+            raise HTTPException(status_code=400, detail={"error": "接口地址不允许"}) from exc
+        request_headers["Host"] = host_header
+        extensions["sni_hostname"] = host_header.split(":")[0]
+    else:
+        validate_endpoint(base_url, resolve=False)
+    try:
+        # 模型列表应当很快返回；不跟随表单里可能配置的 300-600s 长超时。
+        wait = min(float(timeout), 60.0)
+        async with asyncio.timeout(wait), _httpx.AsyncClient(
+            base_url=base_url,
+            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+            timeout=_httpx.Timeout(wait, connect=10.0, pool=10.0),
+            trust_env=False,
+        ) as client:
+            async with client.stream(
+                "GET",
+                "/models",
+                headers=request_headers,
+                extensions=extensions,
+            ) as resp:
+                if resp.status_code != 200:
+                    raise HTTPException(
+                        status_code=502,
+                        detail={"error": f"模型服务返回 {resp.status_code}"},
+                    )
+                raw = bytearray()
+                async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                    if len(raw) + len(chunk) > settings.provider_max_response_bytes:
+                        raise HTTPException(502, detail={"code": "provider_response_too_large", "error": "模型列表响应超过安全上限"})
+                    raw.extend(chunk)
+        models = _model_ids(json.loads(raw))
+        if not models:
+            raise HTTPException(502, detail={"error": "模型服务未返回可选的模型，请手动填写模型名称"})
+        return {"status": "ok", "models": models, "count": len(models)}
+    except HTTPException:
+        raise
+    except (TimeoutError, _httpx.TimeoutException):
+        raise HTTPException(status_code=502, detail={"error": "模型列表响应超时，请稍后重试"}) from None
+    except _httpx.TransportError as e:
+        raise HTTPException(status_code=502, detail={"error": "无法连接模型服务，请检查接口地址与网络"}) from e
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=502, detail={"error": "模型列表响应格式异常，请手动填写模型名称"}) from None
+    except Exception as e:
+        raise HTTPException(status_code=502, detail={"error": "模型列表拉取失败"}) from e
+
+
 @router.post("/test-llm", summary="测试模型连通性（流式探测：拿到首个响应即判定成功）")
 async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Depends(require_admin)):
     """连通性测试用流式请求：服务端开始吐第一个 token 就证明链路+鉴权都通。
@@ -339,7 +458,7 @@ async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Dep
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": "回复：ok"}],
-                    "max_tokens": 5,
+                    "max_tokens": 64,
                     "stream": True,
                 },
                 headers=request_headers,
@@ -359,7 +478,8 @@ async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Dep
                     content, reason, _ = parse_stream_chunk(event)
                     if reason == "content_filter":
                         raise HTTPException(502, detail={"error": "模型拒绝了连接测试请求"})
-                    if content.strip():
+                    # 推理模型可能把探测预算全花在 reasoning_content 上，正文为空但链路已通。
+                    if content.strip() or _stream_reasoning(event).strip():
                         return {"status": "ok", "reply": "已连通（流式响应正常）"}
                 raise HTTPException(502, detail={"error": "模型未返回有效的流式文本，请检查接口与模型名称"})
     except HTTPException:

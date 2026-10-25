@@ -53,9 +53,9 @@ def _file_stat(path: str) -> tuple[int, int] | None:
 
 
 class PaymentError(Exception):
-    def __init__(self, code="UNAVAILABLE"):
+    def __init__(self, code="UNAVAILABLE", message=None):
         self.code = code if re.fullmatch(r"[A-Z0-9_]{1,80}", code) else "UNAVAILABLE"
-        super().__init__("微信支付服务暂不可用，请稍后重试")
+        super().__init__(message or "微信支付服务暂不可用，请稍后重试")
 
 
 @lru_cache(maxsize=4)

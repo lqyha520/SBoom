@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import Sortable from 'sortablejs'
+import type Sortable from 'sortablejs'
 import { useExamStore } from '../stores/exam'
 import { MAX_QUESTIONS_PER_TYPE, TYPE_NAME } from '../constants'
 import type { Section } from '../types'
@@ -12,9 +12,14 @@ const layoutSection = ref<Section | null>(null)
 const retryTarget = ref<Section | null>(null)
 const questionTarget = ref('')
 let sortable: Sortable | undefined
-onMounted(() => {
-  if (!list.value) return
-  sortable = new Sortable(list.value, {
+let disposed = false
+onMounted(async () => {
+  const el = list.value
+  if (!el) return
+  // sortablejs 按需加载，不进入工作台首屏 bundle。
+  const { default: SortableCtor } = await import('sortablejs')
+  if (disposed) return
+  sortable = new SortableCtor(el, {
     animation: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 150,
     handle: '.drag-handle', draggable: '.section-item', ghostClass: 'sortable-ghost',
     onEnd: event => {
@@ -23,7 +28,7 @@ onMounted(() => {
   })
 })
 watch(() => store.generating, value => sortable?.option('disabled', value))
-onBeforeUnmount(() => sortable?.destroy())
+onBeforeUnmount(() => { disposed = true; sortable?.destroy() })
 function actions(section: Section, index: number) {
   return [[
     { label: '生成 / 重新生成大题', icon: 'i-lucide-sparkles', onSelect: () => { retryTarget.value = section } },

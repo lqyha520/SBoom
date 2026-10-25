@@ -7,7 +7,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 import * as vue from 'vue'
 import { parse } from 'vue/compiler-sfc'
-import { nicknameError, registrationAccountError } from '../../shared/mini-profile'
+import { clipNickname, nicknameError, registrationAccountError } from '../../shared/mini-profile'
 
 function moduleFixture(file: string, modules: Record<string, unknown>, expose = '', globals: Record<string, unknown> = {}) {
   let source = readFileSync(new URL('../src/' + file, import.meta.url), 'utf8')
@@ -52,22 +52,28 @@ test('修改密码拒绝7位新密码，接受6位旧密码与8位新密码', as
   assert.deepEqual(calls, [['123456', '12345678']])
 })
 
-test('opening a native photo picker keeps the profile draft alive across hide/show', () => {
+test('opening a native photo picker keeps the profile draft alive across hide/show', async () => {
   const hooks: Record<string, () => void> = {}
   const session = vue.reactive({ user: user() })
-  let refreshes = 0
+  let refreshes = 0, summaryRefreshes = 0, pulled = 0
   const page = moduleFixture('pages/account/index.vue', {
-    '@dcloudio/uni-app': { onHide: (fn: () => void) => { hooks.hide = fn }, onShow: (fn: () => void) => { hooks.show = fn }, onUnload: (fn: () => void) => { hooks.unload = fn } },
+    '@dcloudio/uni-app': { onHide: (fn: () => void) => { hooks.hide = fn }, onShow: (fn: () => void) => { hooks.show = fn }, onUnload: (fn: () => void) => { hooks.unload = fn }, onPullDownRefresh: (fn: () => void) => { hooks.pull = fn } },
     '../../services/session': { session, ensureSession: async () => true, refreshMembership: async () => { refreshes++ } },
+    '../../services/api': { errorMessage: String, fetchCatalogSummary: async (options: { force?: boolean }) => { if (options.force) summaryRefreshes++; return {} } },
+    '../../services/growth': { refreshUnread: async () => {} },
     '../../services/latest-request': { createLatestRequest: () => ({ invalidate() {} }) },
     '../../services/tabbar-overlay': { useTabBarOverlay() {} },
-  }, 'exports.profile = { openProfile, profileOpen }', { uni: { $on() {}, $off() {} } })
+  }, 'exports.profile = { openProfile, profileOpen }', { uni: { $on() {}, $off() {}, stopPullDownRefresh() { pulled++ } } })
   page.profile.openProfile()
   hooks.hide!()
   assert.equal(page.profile.profileOpen.value, true)
   hooks.show!()
   assert.equal(page.profile.profileOpen.value, true)
   assert.equal(refreshes, 0)
+  await hooks.pull!()
+  assert.equal(refreshes, 1)
+  assert.equal(summaryRefreshes, 1)
+  assert.equal(pulled, 1)
   hooks.unload!()
   assert.equal(page.profile.profileOpen.value, false)
 })
@@ -103,8 +109,8 @@ async function profileFixture(prepare = async (_path: string) => ({ path: 'wxfil
     '../services/profile-photo': { prepareProfilePhoto: prepare },
     '../services/api': { errorMessage: (cause: Error) => cause.message },
     '../services/tabbar-overlay': { useTabBarOverlay() {} },
-    '../../../shared/mini-profile': { nicknameError },
-  }, 'exports.profile = { nickname, avatar, photo, choosePreset, selectPhoto, save, canSave }', {
+    '../../../shared/mini-profile': { clipNickname, nicknameError },
+  }, 'exports.profile = { nickname, avatar, photo, choosePreset, selectPhoto, save, canSave, editNickname }', {
     defineProps: () => props, defineEmits: () => (event: string) => emitted.push(event),
   })
   props.open = true
@@ -124,6 +130,13 @@ test('choosing a default after a photo saves only the selected preset and edited
   assert.equal(profile.calls[0].payload.avatar, 'rabbit')
   assert.equal(profile.calls[0].payload.nickname, '小兔')
   assert.deepEqual(profile.emitted, ['saved'])
+})
+
+test('pasted nicknames are clipped to 32 code points as they are entered', async () => {
+  const profile = await profileFixture()
+  profile.editNickname({ detail: { value: '😀'.repeat(40) } })
+  assert.equal(profile.nickname.value, '😀'.repeat(32))
+  assert.equal(profile.canSave.value, true)
 })
 
 test('selected photos and nicknames are submitted together and late picker results are ignored', async () => {

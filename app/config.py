@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -98,6 +99,16 @@ class Settings(BaseSettings):
     wechat_pay_notify_origin: str = ""
     wechat_pay_ios_enabled: bool = False
     wechat_pay_auto_reconcile: bool = False
+    # 小程序虚拟支付（XPay）：启用后会员订单改走 wx.requestVirtualPayment。
+    # env=0 使用现网 AppKey，env=1 使用沙箱 AppKey；两者在微信公众平台「虚拟支付」中分别生成。
+    wechat_virtual_pay_enabled: bool = False
+    wechat_virtual_offer_id: str = ""
+    wechat_virtual_app_key: str = ""
+    wechat_virtual_sandbox_app_key: str = ""
+    wechat_virtual_env: int = Field(0, ge=0, le=1)
+    wechat_virtual_ios_enabled: bool = False
+    wechat_virtual_push_token: str = ""
+    wechat_virtual_push_aes_key: str = ""
     wechat_subscribe_template_id: str = ""
     wechat_subscribe_title_field: str = ""
     wechat_subscribe_body_field: str = ""
@@ -149,6 +160,20 @@ class Settings(BaseSettings):
             for field, name in required_pay_fields:
                 if not getattr(self, field):
                     errors.append(f"启用微信支付时必须配置 {name}（{field}）")
+
+        # 虚拟支付相关性检查：AppID/AppSecret 用于 code2session 与 access_token。
+        if self.wechat_virtual_pay_enabled:
+            if not re.fullmatch(r"wx[a-zA-Z0-9]{16}", self.wechat_app_id):
+                errors.append("启用虚拟支付时必须配置正确的小程序 AppID（WECHAT_APP_ID）")
+            if not self.wechat_app_secret:
+                errors.append("启用虚拟支付时必须配置小程序 AppSecret（WECHAT_APP_SECRET）")
+            if not re.fullmatch(r"\d{1,20}", self.wechat_virtual_offer_id):
+                errors.append("启用虚拟支付时必须配置数字 OfferID（WECHAT_VIRTUAL_OFFER_ID）")
+            app_key = self.wechat_virtual_sandbox_app_key if self.wechat_virtual_env == 1 else self.wechat_virtual_app_key
+            if not app_key:
+                errors.append("虚拟支付缺少对应环境的 AppKey（WECHAT_VIRTUAL_APP_KEY / WECHAT_VIRTUAL_SANDBOX_APP_KEY）")
+            if self.wechat_virtual_push_token and len(self.wechat_virtual_push_aes_key) != 43:
+                errors.append("配置虚拟支付消息推送 Token 时必须同时配置 43 位 EncodingAESKey（WECHAT_VIRTUAL_PUSH_AES_KEY）")
 
         # 种子管理员相关性检查
         has_username = bool(self.admin_username)

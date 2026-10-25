@@ -319,6 +319,26 @@ describe('section-safe generation', () => {
     expect(store.papers[0].sections.map(section => section.data.questions.length)).toEqual([4, 6])
   })
 
+  it('截断到只剩一题时再次补齐会原样重发，不再静默卡住', async () => {
+    const store = ready()
+    vi.mocked(api.generateBatch)
+      .mockImplementationOnce(async params => {
+        const partial = result(params).map(section => ({ ...section, questions: section.questions.slice(0, 3), missing_count: 1 }))
+        throw new api.ApiError('缺题', 422, 'generation_incomplete', '', partial)
+      })
+      .mockRejectedValueOnce(new api.ApiError('达到输出上限', 422, 'generation_truncated'))
+    await store.generate()
+    await store.retryFailed()
+    expect(vi.mocked(api.generateBatch).mock.calls.map(([params]) => params.items.map(item => item.question_count))).toEqual([[4], [1]])
+    expect(store.failedCount).toBe(1)
+    await store.retryFailed()
+    const calls = vi.mocked(api.generateBatch).mock.calls
+    expect(calls).toHaveLength(3)
+    expect(calls[2][0].items.map(item => item.question_count)).toEqual([1])
+    expect(store.sections[0].data?.questions).toHaveLength(4)
+    expect(store.failedCount).toBe(0)
+  })
+
   it.each(['retry', 'recover'])('retains truncated sections found during %s status lookup', async mode => {
     const store = ready(); store.addSection('fill_blank', 6)
     vi.mocked(api.generateBatch).mockRejectedValueOnce(new api.ApiError('Network', 0))

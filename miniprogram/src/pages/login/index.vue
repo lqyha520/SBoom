@@ -100,7 +100,7 @@ onUnload(() => { leave(); if (!session.user) clearPaperIntent() })
 <template>
   <view class="login-page">
     <view class="login-intro">
-      <PageChrome back />
+      <PageChrome back transparent />
       <view class="login-art"><image src="/static/illustrations/notebook.png" mode="aspectFit" aria-hidden="true" /></view>
       <text class="login-title">习题库</text><text class="login-subtitle">每天一点进步</text>
     </view>
@@ -123,7 +123,7 @@ onUnload(() => { leave(); if (!session.user) clearPaperIntent() })
     </view>
     <!-- #ifdef H5 -->
     <wd-popup :model-value="accountOpen" position="bottom" :z-index="1200" :close-on-click-modal="!busy" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0" @update:model-value="!$event && closeAccount()">
-      <view class="sheet account-login-sheet" role="dialog" aria-modal="true" aria-label="账号登录">
+      <view class="sheet account-login-sheet" aria-role="dialog" role="dialog" aria-modal="true" aria-label="账号登录">
         <view class="sheet-handle" />
         <view class="sheet-head"><text class="sheet-title">习题库账号</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭账号登录" :disabled="busy" @click="closeAccount"><wd-icon name="close" size="20px" /></button></view>
         <wd-tabs v-model="webMode" line-theme="text" @change="error = ''"><wd-tab name="login" title="登录" :disabled="busy" /><wd-tab name="register" title="注册" :disabled="busy" /></wd-tabs>
@@ -140,6 +140,7 @@ onUnload(() => { leave(); if (!session.user) clearPaperIntent() })
 .account-hint { display:block;margin-top:8px;color:var(--lc-muted);font-size:12px;line-height:1.7; }
 .login-page { display: flex; flex-direction: column; min-height: 100vh; }
 .login-intro { padding: 0 24px 32px; text-align: center; background-color: var(--lc-hero); background-image: radial-gradient(58% 58% at 90% -8%, #ffffff75 0%, #ffffff00 68%), radial-gradient(46% 46% at 4% 106%, #ffffff40 0%, #ffffff00 70%), linear-gradient(168deg, #ebf6ed 0%, #daebde 62%, #e6f2e8 100%); border-radius: 0 0 47% 8% / 0 0 6% 2%; }
+.login-intro :deep(.page-chrome) { width: auto; margin: 0 -24px; }
 .login-art { display: flex; align-items: center; justify-content: center; height: 226px; width: 100%; margin-top: 27px; }
 .login-art image { width: 226px; height: 226px; max-width: 100%; }
 .login-title { display: block; font-size: 26px; line-height: 1.4; font-weight: 650; margin: 10px 0 7px; }

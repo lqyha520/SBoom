@@ -16,6 +16,12 @@ class PlanInput(Input):
     price_fen: int = Field(ge=1, le=10000000)
     is_active: bool = False
     sort_order: int = Field(0, ge=0, le=10000)
+    #: 0 表示不限购；按账号统计该套餐的已付款与未完成订单
+    purchase_limit: int = Field(0, ge=0, le=100)
+    virtual_product_id: str = Field("", max_length=64, pattern=r"^[A-Za-z0-9_-]*$")
+    #: iPhone 走苹果 IAP，费率高于安卓，单独定价；0 表示该套餐不在 iPhone 上架
+    price_fen_ios: int = Field(0, ge=0, le=10000000)
+    virtual_product_id_ios: str = Field("", max_length=64, pattern=r"^[A-Za-z0-9_-]*$")
     revision: int = Field(0, ge=0)
 
 
@@ -23,6 +29,8 @@ class OrderInput(Input):
     plan_id: str = Field(min_length=1, max_length=64)
     plan_revision: int = Field(ge=1)
     request_id: str = Field(min_length=8, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
+    #: 客户端上报的下单设备，只用于选价格和留痕，不作为安全凭证
+    platform: str = Field("", max_length=16, pattern=r"^[a-z]*$")
 
 
 class RefundInput(Input):

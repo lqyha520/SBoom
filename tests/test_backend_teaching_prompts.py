@@ -59,6 +59,20 @@ class TeachingRules(unittest.TestCase):
                     scope.grade, subject, keyword, "medium", [BatchItem(game_type=kind, question_count=2)], scope)):
                 self.assertIn(required, prompt)
 
+    def test_calculation_sections_fix_counts_not_operator_mix(self):
+        scope = KnowledgeScope(grade="小学一年级", subject="数学",
+                               allowed=["20以内的进位加法", "20以内的退位减法"], forbidden=[])
+        keyword = "上册·20以内的进位加法、下册·20以内的退位减法"
+        request = GenerateRequest(grade=scope.grade, subject=scope.subject, keyword=keyword,
+                                  game_type="oral_math", question_count=8)
+        items = [BatchItem(game_type="oral_math", question_count=8, section_id="section-1"),
+                 BatchItem(game_type="fill_blank", question_count=6, section_id="section-2")]
+        for prompt in (prompt_builder.build_system_prompt(request, scope),
+                       prompt_builder.build_batch_prompt(scope.grade, scope.subject, keyword, "medium", items, scope)):
+            self.assertIn("大题只固定题数", prompt)
+            self.assertIn("不预设配比", prompt)
+            self.assertNotIn("多个知识点合理覆盖", prompt)
+
     def test_calculation_format_preserves_model_content_and_existing_equals(self):
         for kind in ("oral_math", "vertical_calc", "recursive_calc", "smart_calc"):
             for stem, expected in (("9＋2", "9＋2 ="), (" 9＋2 ", "9＋2 ="),

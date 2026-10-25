@@ -2,7 +2,9 @@
 import { computed, ref, watch } from 'vue'
 import { onLoad, onShow } from '@dcloudio/uni-app'
 import PageChrome from '../../components/PageChrome.vue'
+import { localDate } from '../../presentation'
 import { errorMessage, fetchSiteDocument } from '../../services/api'
+import { openPrivacy, requirePrivacy } from '../../services/privacy'
 import type { SiteDocument } from '../../types'
 
 type DocKey = 'agreement' | 'privacy'
@@ -53,6 +55,7 @@ const kind = ref<DocKey>('privacy')
 const loaded = ref<Partial<Record<DocKey, SiteDocument>>>({})
 const loading = ref(false)
 const error = ref('')
+const authorizing = ref(false)
 let sequence = 0
 
 const currentDoc = computed(() => loaded.value[kind.value] || null)
@@ -61,7 +64,7 @@ const blocks = computed(() => (currentDoc.value?.body || offline[kind.value].bod
   .split('\n').map(line => line.trim()).filter(Boolean)
   .map(line => (line.startsWith('## ') ? { heading: line.slice(3).trim(), text: '' } : { heading: '', text: line })))
 const updated = computed(() => (currentDoc.value
-  ? new Date(currentDoc.value.updated_at * 1000).toLocaleDateString('zh-CN') + ' 更新'
+  ? localDate(currentDoc.value.updated_at) + ' 更新'
   : '更新日期：2026 年 9 月 16 日'))
 
 async function load() {
@@ -75,6 +78,22 @@ async function load() {
 }
 onLoad(options => { if (options?.kind === 'agreement') kind.value = 'agreement' })
 onShow(load)
+/** 已同意时微信直接返回成功；未同意会弹出授权窗口，由页面的 PrivacyConsent 承接。 */
+async function authorizePrivacy() {
+  if (authorizing.value) return
+  authorizing.value = true
+  try {
+    await requirePrivacy()
+    uni.showToast({ title: '已同意微信隐私授权', icon: 'none' })
+  } catch {
+    uni.showModal({
+      title: '暂时无法完成授权',
+      content: '如果刚才点了「暂不同意」，请等待约 10 秒再试；也可以先查看微信隐私保护指引，确认内容后再授权。',
+      showCancel: false,
+      confirmText: '知道了',
+    })
+  } finally { authorizing.value = false }
+}
 // wd-tabs 的 change 事件先于 v-model 更新触发，用它加载会拿到旧 tab 导致内容与高亮相反；改为 watch kind
 watch(kind, load)
 </script>
@@ -82,6 +101,16 @@ watch(kind, load)
 <template>
   <view class="privacy-page"><view class="page-navigation-sticky"><PageChrome back /></view><view class="page-shell privacy">
     <wd-tabs v-model="kind" line-theme="text"><wd-tab name="agreement" title="用户协议" /><wd-tab name="privacy" title="隐私政策" /></wd-tabs>
+    <!-- #ifdef MP-WEIXIN -->
+    <view class="wx-privacy">
+      <view class="wx-privacy-head"><wd-icon name="safe" size="16px" /><text class="wx-privacy-heading">微信隐私保护指引</text></view>
+      <text class="wx-privacy-note">复制账号、使用头像昵称前，需要先同意微信的用户隐私保护指引，同意一次后长期有效。</text>
+      <view class="wx-privacy-actions">
+        <button class="wx-privacy-btn" hover-class="control-pressed" role="button" aria-label="查看微信隐私保护指引" @click="openPrivacy">查看指引</button>
+        <button class="wx-privacy-btn primary" hover-class="control-pressed" role="button" aria-label="同意微信隐私授权" :disabled="authorizing" @click="authorizePrivacy">{{ authorizing ? '正在授权' : '同意授权' }}</button>
+      </view>
+    </view>
+    <!-- #endif -->
     <view v-if="error" class="error-strip"><text class="grow">{{ error }}</text><wd-button icon="refresh" variant="text" type="danger" role="button" aria-label="重新加载协议内容" @click="load" /></view>
     <text class="page-title legal-title">{{ title }}</text>
     <text class="page-subtitle" role="status">{{ loading && !currentDoc ? '正在加载最新内容…' : currentDoc ? updated : '当前显示离线说明，联网后可重试加载最新版本' }}</text>
@@ -95,7 +124,16 @@ watch(kind, load)
 
 <style scoped>
 .privacy { padding-top: 0; }
-.legal-title { margin-top: 24px; font-size: 23px; }
+.wx-privacy { margin-top: 14px; padding: 14px; border: 1px solid var(--lc-card-line); border-radius: 14px; background: var(--lc-card); }
+.wx-privacy-head { display: flex; align-items: center; gap: 8px; color: var(--lc-primary); }
+.wx-privacy-heading { color: var(--lc-text); font-size: 14px; font-weight: 600; }
+.wx-privacy-note { display: block; margin-top: 6px; color: var(--lc-secondary); font-size: 12px; line-height: 1.7; }
+.wx-privacy-actions { display: flex; gap: 10px; margin-top: 12px; }
+.wx-privacy-btn { flex: 1; min-height: 44px; margin: 0; padding: 0 12px; border: 1px solid var(--lc-border); border-radius: 10px; color: var(--lc-text); background: var(--lc-background); font-size: 13px; line-height: 42px; }
+.wx-privacy-btn::after { border: 0; }
+.wx-privacy-btn.primary { border-color: transparent; color: #fff; background: var(--lc-primary); }
+.wx-privacy-btn[disabled] { opacity: .6; }
+.legal-title { margin-top: 16px; font-size: 23px; }
 .privacy-heading { display: block; margin: 28px 0 12px; font-size: 17px; font-weight: 600; color: var(--lc-text); }
 .privacy-text { display: block; margin-bottom:12px;line-height: 1.95; font-size: 15px; color: var(--lc-text); overflow-wrap: anywhere; }
 .legal-loading { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 26px 0; color: var(--lc-muted); font-size: 12px; }

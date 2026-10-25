@@ -1,4 +1,5 @@
 import { request } from './api'
+import { downloadBlob } from '../../shared/download'
 import type { Page } from './catalog'
 export type TagKind = 'textbook' | 'term' | 'unit' | 'knowledge'
 export const tagKinds: { value: TagKind; label: string }[] = [{ value: 'textbook', label: '教材' }, { value: 'term', label: '学期' }, { value: 'unit', label: '单元' }, { value: 'knowledge', label: '知识点' }]
@@ -10,12 +11,14 @@ export interface Demand { fingerprint: string; title: string; grade: string; sub
 export const requestStatuses = { pending: '待处理', planned: '已安排', fulfilled: '资料已补齐', closed: '已关闭' }
 export interface Closure { id: string; account_name: string; user_id: string | null; reason: string; status: 'pending' | 'cancelled' | 'rejected' | 'completed'; reply: string; revision: number; created_at: number; updated_at: number }
 export const closureStatuses = { pending: '等待审核', cancelled: '已撤回', rejected: '审核未通过', completed: '已注销' }
-export interface Plan { id: string; name: string; description: string; days: number; price_fen: number; is_active: boolean; sort_order: number; revision: number }
+export interface Plan { id: string; name: string; description: string; days: number; price_fen: number; is_active: boolean; sort_order: number; purchase_limit: number; revision: number; virtual_product_id: string; price_fen_ios: number; virtual_product_id_ios: string; ios_available?: boolean; purchased?: number; pending?: number }
 export interface MembershipCard { id: string; code_hint: string; days: number; status: string; redeemed_by: string | null; redeemed_at: number | null; created_at: number; expires_at: number | null }
 export type PlanInput = Omit<Plan, 'id'>
+export type PaymentChannel = 'wechat' | 'virtual'
 export interface PaymentConfig { enabled: boolean; ready: boolean; missing: string[]; ios_enabled: boolean; payment_callback: string; refund_callback: string }
+export interface VirtualPaymentConfig { enabled: boolean; ready: boolean; missing: string[]; env: number; sandbox: boolean; offer_id: string; ios_enabled: boolean; mode: string }
 export interface Refund { id: string; reason: string; reply: string; status: 'requested' | 'processing' | 'success' | 'closed' | 'abnormal' | 'rejected'; revision: number; created_at: number; updated_at: number; completed_at: number | null }
-export interface Order { id: string; user_id: string | null; username: string; nickname: string; plan_name: string; plan_days: number; amount_fen: number; status: 'created' | 'pending' | 'paid' | 'closed' | 'refunded'; revision: number; created_at: number; paid_at: number | null; expires_at: number; transaction_id: string | null; refund: Refund | null }
+export interface Order { id: string; user_id: string | null; username: string; nickname: string; plan_name: string; plan_days: number; amount_fen: number; status: 'created' | 'pending' | 'paid' | 'closed' | 'refunded'; payment_channel: PaymentChannel; virtual_env: number; virtual_offer_id: string; virtual_product_id: string; virtual_order_id: string; virtual_order_type: number; device_platform: string; delivered_at: number | null; revision: number; created_at: number; paid_at: number | null; expires_at: number; transaction_id: string | null; refund: Refund | null }
 export { orderFilterLabels as orderStatuses, adminRefundLabels as refundStatuses } from '../../shared/commerce'
 export interface OrderFilter { status?: string; q?: string; start_date?: string; end_date?: string }
 export interface Reconciliation { id: string; bill_date: string; status: 'running' | 'complete' | 'error'; error: string; created_at: number; summary: { wechat_paid_fen?: number; wechat_refunded_fen?: number; local_paid_fen?: number; local_refunded_fen?: number; differences?: number; wechat_orders?: number; local_orders?: number }; differences?: { order_id: string; refund_id: string; reason: string; remote_fen: number | null; local_fen: number | null }[] }
@@ -35,7 +38,7 @@ export const resolveRequest = (admin: number, item: ResourceRequest) => change<R
 export const getClosures = (status = '', offset = 0) => request<Page<Closure>>(base + '/closures?' + new URLSearchParams({ status, offset: String(offset) }))
 export const reviewClosure = (admin: number, item: Closure, action: 'approve' | 'reject', reply: string, confirm_deletion: boolean) => change<Closure>(base + '/closures/' + item.id, admin, { revision: item.revision, action, reply, confirm_deletion }, 'PUT')
 export const getDelivery = () => request<{ available: boolean; template_id: string; delivery_counts: Record<string, number> }>(base + '/delivery-status')
-export const getPlans = () => request<{ items: Plan[]; checkout_enabled: boolean; configuration: PaymentConfig }>(commerce + '/plans')
+export const getPlans = () => request<{ items: Plan[]; checkout_enabled: boolean; checkout_channel: PaymentChannel; ios_enabled: boolean; configuration: PaymentConfig; virtual_configuration: VirtualPaymentConfig }>(commerce + '/plans')
 export const savePlan = (admin: number, plan: PlanInput, id = '') => change<Plan>(commerce + '/plans' + (id ? '/' + encodeURIComponent(id) : ''), admin, plan, id ? 'PUT' : 'POST')
 export const getCards = (status = '', offset = 0, q = '') => request<{ items: MembershipCard[]; total: number; has_more: boolean }>(commerce + '/cards?' + new URLSearchParams({ status, offset: String(offset), q }))
 export const createCards = (admin: number, days: number, quantity: number, expires_at: number | null) => change<{ items: { code: string; days: number; expires_at: number | null }[] }>(commerce + '/cards', admin, { days, quantity, expires_at })
@@ -48,8 +51,7 @@ export const reviewRefund = (admin: number, refund: Refund, action: 'approve' | 
 export const syncRefund = (admin: number, id: string) => change<Order>(commerce + '/refunds/' + encodeURIComponent(id) + '/sync', admin)
 export async function exportOrders(admin: number, filter: OrderFilter) {
   const blob = await request<Blob>(commerce + '/orders/export?' + new URLSearchParams({ ...filter }), { headers: { 'X-Workspace-User': String(admin) } }, 'blob')
-  const url = URL.createObjectURL(blob), link = document.createElement('a')
-  link.href = url; link.download = 'membership-orders.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 2000)
+  downloadBlob(blob, 'membership-orders.csv', 2000)
 }
 export const getReconciliations = (offset = 0) => request<Page<Reconciliation>>(commerce + '/reconciliations?offset=' + offset)
 export const getReconciliation = (id: string) => request<Reconciliation>(commerce + '/reconciliations/' + encodeURIComponent(id))

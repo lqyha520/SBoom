@@ -99,3 +99,12 @@ function sampleQuestion(type: string, index: number, sectionId: string): Questio
   question._preview = true
   return question
 }
+
+/**
+ * 大题已有正式题目但题数更高时，预览按题数补齐待生成占位。
+ *
+ * 占位同样带 _preview 标记，只服务卷面预览，不参与排版回写。
+ */
+export function previewPendingSamples(type: string, count: number, sectionId = 'section', filled = 0): Question[] {
+  return previewSampleData(type, count, sectionId).questions.slice(Math.max(0, filled))
+}

@@ -62,9 +62,10 @@ export function accountChanged() {
   window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED_EVENT))
 }
 
-/** 默认超时：后台接口均为轻量操作，30s 足够（test-llm 除外，可能要等首 token） */
+/** 默认超时：后台接口均为轻量操作，30s 足够（test-llm / 拉取模型列表除外） */
 const DEFAULT_TIMEOUT_MS = 30_000
 const TEST_LLM_TIMEOUT_MS = 610_000
+const MODEL_LIST_TIMEOUT_MS = 65_000
 
 export async function request<T>(url: string, init?: RequestInit, responseType: 'json' | 'blob' = 'json'): Promise<T> {
   const authEntry = url === '/api/v1/auth/login' || url === '/api/v1/auth/register' || url === '/api/v1/auth/me'
@@ -79,7 +80,7 @@ export async function request<T>(url: string, init?: RequestInit, responseType: 
   let r!: Response
   for (let attempt = 0; attempt < 2; attempt++) {
     if (!authEntry && epoch !== accountEpoch) throw new AuthError('登录账号已变化，请刷新后重试')
-    const timeout = AbortSignal.timeout(url.endsWith('/reconciliations') && init?.method === 'POST' ? 180000 : url.includes('/admin/catalog/import') || url.includes('/editions/import') ? 120000 : url.includes('test-llm') ? TEST_LLM_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
+    const timeout = AbortSignal.timeout(url.endsWith('/reconciliations') && init?.method === 'POST' ? 180000 : url.includes('/admin/catalog/import') || url.includes('/editions/import') ? 120000 : url.includes('test-llm') ? TEST_LLM_TIMEOUT_MS : url.includes('/llm-models') ? MODEL_LIST_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
     try {
       r = await fetch(url, { ...init, headers, signal: init?.signal ? AbortSignal.any([timeout, init.signal]) : timeout })
     } catch (cause) {
@@ -242,5 +243,14 @@ export async function testLlm(cfg?: ApiSchemas["AdminLlmConfigIn"]): Promise<{ r
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(cfg || {}),
+  })
+}
+
+/** 拉取模型服务 GET /models 返回的模型 ID，用于下拉选择；失败时仍可手动填写。 */
+export async function fetchLlmModels(cfg: ApiSchemas["AdminLlmModelsIn"]): Promise<{ models: string[]; count: number }> {
+  return request('/api/v1/admin/llm-models', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
   })
 }

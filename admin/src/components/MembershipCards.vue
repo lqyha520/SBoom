@@ -4,6 +4,7 @@ import { useAdminListRoute } from '../navigation'
 import type { UserInfo } from '../api'
 import { useAdminPage } from '../admin-page'
 import { createCards, disableCard, getCards, type MembershipCard, dateTime } from '../growth'
+import { downloadBlob } from '../../../shared/download'
 const props = defineProps<{ user: UserInfo }>()
 const items = ref<MembershipCard[]>([]), total = ref(0), status = ref('all'), q = ref(''), pageNumber = ref(1)
 const days = ref(30), quantity = ref(1), expires = ref(''), generated = ref<string[]>([])
@@ -33,9 +34,7 @@ async function copy() {
   catch { error.value = '复制失败，请选中文本手动复制' }
 }
 function download() {
-  const url = URL.createObjectURL(new Blob([generated.value.join('\n')], { type: 'text/plain;charset=utf-8' }))
-  const link = document.createElement('a'); link.href = url; link.download = 'membership-cards.txt'; link.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  downloadBlob(new Blob([generated.value.join('\n')], { type: 'text/plain;charset=utf-8' }), 'membership-cards.txt', 1000)
 }
 </script>
 <template>

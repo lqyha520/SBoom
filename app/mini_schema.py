@@ -26,6 +26,7 @@ def init_mini_schema(conn):
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL DEFAULT '',
             wechat_identity TEXT UNIQUE,
+            wechat_session_key_enc TEXT NOT NULL DEFAULT '',
             avatar TEXT NOT NULL DEFAULT '',
             is_active INTEGER NOT NULL DEFAULT 1,
             membership TEXT NOT NULL DEFAULT 'regular',
@@ -89,6 +90,8 @@ def init_mini_schema(conn):
         );
     """)
     _add_avatar_column(conn)
+    # 虚拟支付签名需要最近的微信登录态 session_key；只存密文，重新登录即覆盖。
+    conn.execute("ALTER TABLE mini_users ADD COLUMN IF NOT EXISTS wechat_session_key_enc TEXT NOT NULL DEFAULT ''")
     # Backfill the public type index, never workbench identities or private data.
     rows = conn.execute("SELECT c.id, a.snapshot_json FROM catalog_papers c JOIN paper_archives a ON a.id = c.paper_id "
                         "WHERE NOT EXISTS (SELECT 1 FROM catalog_question_types t WHERE t.catalog_id = c.id)").fetchall()

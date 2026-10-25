@@ -73,9 +73,15 @@ export function homeSelection(papers: PaperSummary[], offset: number) {
   return Array.from({ length: Math.min(2, papers.length) }, (_, index) => papers[(start + index) % papers.length]!)
 }
 
+/** 安卓微信的 Intl 实现不可靠，日期统一按本地时区手拼，避免出现英文月份。 */
+export function localDate(value: number) {
+  const date = new Date(value * 1000)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 export function membershipExpiry(user: User | null) {
   if (!user?.is_vip) return user?.membership_status === 'expired' ? '会员已到期' : '未开通 VIP'
-  return user.vip_expires_at ? new Date(user.vip_expires_at * 1000).toLocaleDateString('zh-CN') + ' 到期' : '长期有效'
+  return user.vip_expires_at ? localDate(user.vip_expires_at) + ' 到期' : '长期有效'
 }
 
 /** 「我的」页概览里那格很窄，只需要一个两三个字的短标签。 */
