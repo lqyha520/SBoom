@@ -28,7 +28,8 @@ test('membership copy distinguishes ordinary, active, permanent and expired acco
   assert.equal(membershipExpiry(user), '未开通 VIP')
   assert.equal(membershipExpiry({ ...user, membership: 'vip', membership_status: 'expired' }), '会员已到期')
   assert.equal(membershipExpiry({ ...user, is_vip: true, membership_status: 'active' }), '长期有效')
-  assert.match(membershipExpiry({ ...user, is_vip: true, membership_status: 'active', vip_expires_at: 1800000000 }), /到期$/)
+  const expiring = new Date(2026, 10, 2, 12).getTime() / 1000
+  assert.equal(membershipExpiry({ ...user, is_vip: true, membership_status: 'active', vip_expires_at: expiring }), '2026-11-02 到期')
 })
 
 test('subject, grade and category entry points clear unrelated filters', () => {

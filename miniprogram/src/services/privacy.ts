@@ -27,6 +27,10 @@ export function resolvePrivacy(agree: boolean) {
 }
 export function openPrivacy() {
   // #ifdef MP-WEIXIN
+  if (typeof wx === 'undefined' || !wx.openPrivacyContract) {
+    uni.showToast({ title: '暂时无法打开隐私指引，请稍后重试', icon: 'none' })
+    return
+  }
   wx.openPrivacyContract({ fail: () => uni.showToast({ title: '暂时无法打开隐私指引，请稍后重试', icon: 'none' }) })
   // #endif
 }
@@ -41,13 +45,43 @@ export async function requirePrivacy(): Promise<void> {
 export function privacyError(cause: { errMsg?: string; errno?: number }) {
   return cause.errno === 112 || /privacy|authorize|隐私/i.test(cause.errMsg || '')
 }
-export function showPrivacyError() { uni.showToast({ title: '请先同意隐私授权，再使用此功能', icon: 'none' }) }
+/** 微信在用户拒绝后约 10 秒内不会再次弹窗，失败时给出可操作的去处。 */
+function showPrivacyGuide() {
+  uni.showModal({
+    title: '需要微信隐私授权',
+    content: '复制会使用微信剪贴板。请在弹出的授权窗口点「同意并继续」；如果刚点了「暂不同意」，请等待约 10 秒再试。',
+    confirmText: '去隐私设置',
+    cancelText: '知道了',
+    success: result => { if (result.confirm) uni.navigateTo({ url: '/subpages/privacy/index?kind=privacy' }) },
+  })
+}
+/**
+ * 隐私接口被拦截有两种原因：用户还没同意授权（可再次弹窗），或后台指引没声明该类信息（errno 112）。
+ * 后者 needAuthorization 为 false，微信不会再弹授权，只能把原始错误留给开发者工具排查。
+ * cause 来自各端事件，形状不一，只用于打日志。
+ */
+export function showPrivacyError(cause?: unknown) {
+  // #ifdef MP-WEIXIN
+  if (typeof wx !== 'undefined' && wx.getPrivacySetting) {
+    wx.getPrivacySetting({
+      success: result => {
+        if (result.needAuthorization) { showPrivacyGuide(); return }
+        console.warn('[privacy] action blocked without pending authorization', cause)
+        uni.showToast({ title: '微信暂不允许复制，请稍后重试', icon: 'none' })
+      },
+      fail: () => { console.warn('[privacy] getPrivacySetting failed', cause); showPrivacyGuide() },
+    })
+    return
+  }
+  // #endif
+  uni.showToast({ title: '请先同意隐私授权，再使用此功能', icon: 'none' })
+}
 export function copyWithPrivacy(options: UniApp.SetClipboardDataOptions) {
   void requirePrivacy().then(() => uni.setClipboardData({ ...options, fail: cause => {
-    if (privacyError(cause)) showPrivacyError()
+    if (privacyError(cause)) showPrivacyError(cause)
     options.fail?.(cause)
-  } })).catch(() => {
-    showPrivacyError()
+  } })).catch((cause: { errMsg?: string }) => {
+    showPrivacyError(cause)
     const failure = { errMsg: 'setClipboardData:fail privacy authorization denied' }
     options.fail?.(failure)
     options.complete?.(failure)

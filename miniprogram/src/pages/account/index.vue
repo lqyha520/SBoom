@@ -233,8 +233,8 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
 .perk-row > view { display:flex;align-items:center;gap:4px;color:#ffffffc7;font-size: 12px; }
 .section-head { display:flex;align-items:flex-end;justify-content:space-between;margin:20px 2px 11px; }
 .section-head > text:first-child { color:var(--lc-text);font-size:16px;font-weight:650; }.section-head > text+text { color:var(--lc-muted);font-size: 12px; }.section-head.compact { margin-top:20px; }
-.service-grid { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;padding:16px 7px;border:1px solid var(--lc-card-line);border-radius:18px;background:var(--lc-card);box-shadow:var(--lc-card-shadow-soft); }
-.service-item { display:flex;flex-direction:column;align-items:center;min-width:0;margin:0;padding:0;background:transparent; }
+.service-grid { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;padding:8px 7px 16px;border:1px solid var(--lc-card-line);border-radius:18px;background:var(--lc-card);box-shadow:var(--lc-card-shadow-soft); }
+.service-item { display:flex;flex-direction:column;align-items:center;min-width:0;margin:0;padding:8px 0 0;background:transparent; }
 .service-icon { position:relative;display:flex;align-items:center;justify-content:center;width:40px;height:40px;margin-bottom:9px;border-radius:13px; }
 .service-icon.message { color:#526eac;background:#e9effb; }.service-icon.request { color:#8b6b36;background:#f7efdf; }.service-icon.order { color:#397761;background:#e5f2eb; }.service-icon.support { color:#92699f;background:#f2eaf5; }
 .service-item > text { overflow:hidden;color:var(--lc-text);font-size:12px;font-weight:600;line-height:1.5;text-overflow:ellipsis;white-space:nowrap; }
@@ -258,7 +258,7 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
   .quick-card { padding-left:2px;padding-right:2px; }.service-grid { padding-right:3px;padding-left:3px; }.service-item > text { font-size: 12px; }
 }
 @media (max-width:359px) {
-  .service-grid { grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 12px;padding:18px 12px; }
+  .service-grid { grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 12px;padding:10px 12px 18px; }
   .service-item { display:grid;grid-template-columns:36px minmax(0,1fr);column-gap:8px;min-height:44px;text-align:left; }
   .service-icon { width:36px;height:36px;margin:0; }
   .unread-badge { right:-3px; }

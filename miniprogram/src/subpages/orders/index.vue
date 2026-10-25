@@ -6,7 +6,7 @@ import { computed, ref, watch } from 'vue'
 import { onHide, onLoad, onReachBottom, onShow, onUnload } from '@dcloudio/uni-app'
 import ServicePage from '../components/ServicePage.vue'
 import { useConsumerPage, type ConsumerTicket } from '../../services/consumer-page'
-import { fetchPlans, fetchOrders, fetchOrder, cancelOrder, syncOrder, requestRefund, syncRefund, orderStatus, refundStatus, yuan, openOrder, type Order } from '../../services/growth'
+import { fetchPlans, fetchOrders, fetchOrder, cancelOrder, syncOrder, requestRefund, syncRefund, orderStatus, refundStatus, yuan, openOrder, type Order, type Refund } from '../../services/growth'
 import { checkout, checkoutSupport, checkoutState, settleCheckout } from '../../services/checkout'
 import { confirmAction } from '../../services/navigation'
 import { refreshMembership, session } from '../../services/session'
@@ -24,6 +24,9 @@ const { error, busy, loading } = page
 const now = ref(Date.now())
 let countdown: ReturnType<typeof setInterval> | undefined
 function payable(order: Order) { return ['created', 'pending'].includes(order.status) && order.expires_at > now.value / 1000 }
+// 列表与详情共用一套状态色：绿=已完成，橙=待处理，红=异常，灰=已结束。
+const orderTone: Record<Order['status'], string> = { created: 'wait', pending: 'wait', paid: 'ok', closed: 'muted', refunded: 'muted' }
+const refundTone: Record<Refund['status'], string> = { requested: 'wait', processing: 'wait', success: 'ok', closed: 'muted', rejected: 'muted', abnormal: 'danger' }
 // 虚拟支付要等客户端拉起收银台后微信侧才有单；created 表示还没发起过支付，查单只会得到“数据不存在”。
 function syncable(order: Order) { return order.status !== 'closed' && !(order.payment_channel === 'virtual' && order.status === 'created') }
 const payRemaining = computed(() => {
@@ -60,6 +63,7 @@ onReachBottom(loadMore)
   <ServicePage
     :title="id ? '订单详情' : '我的订单'"
     description="付款、会员权益和退款状态以订单记录为准。"
+    gate-description="登录后查看会员订单、支付状态和退款进度"
     :error="error"
     :loading="loading"
     @retry="page.refresh"
@@ -69,7 +73,7 @@ onReachBottom(loadMore)
       <view class="service-card">
         <view class="service-row">
           <text class="service-card-title">{{ selected.plan_name }}</text>
-          <wd-tag>{{ orderStatus[selected.status] }}</wd-tag>
+          <text class="order-status" :class="orderTone[selected.status]">{{ orderStatus[selected.status] }}</text>
         </view>
         <text class="order-amount">{{ yuan(selected.amount_fen) }}</text>
         <text class="service-copy">{{ selected.plan_days }} 天会员</text>
@@ -125,7 +129,7 @@ onReachBottom(loadMore)
         <text v-if="payable(selected) && !canPay" class="service-meta">当前设备暂不支持在线付款，可联系客服协助开通。</text>
       </view>
       <view v-if="selected.refund" class="service-card">
-        <text class="service-card-title">{{ refundStatus[selected.refund.status] }}</text>
+        <text class="service-card-title" :class="'tone-' + refundTone[selected.refund.status]">{{ refundStatus[selected.refund.status] }}</text>
         <text class="service-copy">退款原因：{{ selected.refund.reason }}</text>
         <view v-if="selected.refund.reply" class="service-reply">{{ selected.refund.reply }}</view>
         <text class="service-meta">{{ formatDate(selected.refund.updated_at) }}</text>
@@ -177,9 +181,10 @@ onReachBottom(loadMore)
           <text class="service-card-title">{{ order.plan_name }}</text>
           <text class="order-price">{{ yuan(order.amount_fen) }}</text>
         </view>
-        <text class="service-meta">
-          {{ orderStatus[order.status] }}{{ order.refund ? ' · ' + refundStatus[order.refund.status] : '' }}
-        </text>
+        <view class="order-status-row">
+          <text class="order-status" :class="orderTone[order.status]">{{ orderStatus[order.status] }}</text>
+          <text v-if="order.refund" class="order-status" :class="refundTone[order.refund.status]">{{ refundStatus[order.refund.status] }}</text>
+        </view>
         <view class="order-bottom">
           <text class="service-meta">{{ formatDate(order.created_at) }} · {{ order.plan_days }} 天</text>
           <wd-icon name="arrow-right" size="15px" />
@@ -201,4 +206,16 @@ onReachBottom(loadMore)
   </ServicePage>
 </template>
 
-<style scoped>.order-reference { display:flex;align-items:center;gap:12px;margin-top:8px; }.order-reference .service-meta { flex:1;min-width:0;margin-top:0; }.order-reference .section-link { flex:none;color:var(--lc-primary); }.order-price { padding-top:2px;font-size:17px;font-weight:650;white-space:nowrap; }.order-bottom { display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--lc-muted); }.refund-form { margin-top:14px; }.refund-error { color:#a34040;font-size:13px; }.order-amount { display:block;font-size:32px;color:var(--lc-primary);font-weight:650;margin-top:18px; }.order-card { display:block;width:100%;text-align:left;color:var(--lc-text);line-height:1.6; }</style>
+<style scoped>.order-reference { display:flex;align-items:center;gap:12px;margin-top:8px; }.order-reference .service-meta { flex:1;min-width:0;margin-top:0; }.order-reference .section-link { flex:none;color:var(--lc-primary); }.order-price { padding-top:2px;font-size:17px;font-weight:650;white-space:nowrap; }.order-bottom { display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--lc-muted); }.refund-form { margin-top:14px; }.refund-error { color:#a34040;font-size:13px; }.order-amount { display:block;font-size:32px;color:var(--lc-primary);font-weight:650;margin-top:18px; }.order-card { display:block;width:100%;text-align:left;color:var(--lc-text);line-height:1.6; }
+.order-status-row { display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:8px; }
+.order-status { display:inline-flex;align-items:center;padding:2px 7px;border-radius:6px;background:#f0f3f1;color:var(--lc-secondary);font-size:12px;line-height:1.5; }
+.service-row .order-status { flex:none;margin-top:3px; }
+.order-status.ok { background:var(--lc-success-bg);color:var(--lc-success-text); }
+.order-status.wait { background:var(--lc-warning-bg);color:var(--lc-warning); }
+.order-status.danger { background:#f8e9e6;color:#a34040; }
+.order-status.muted { background:#f1f3f2;color:var(--lc-muted); }
+.service-card-title.tone-ok { color:var(--lc-success-text); }
+.service-card-title.tone-wait { color:var(--lc-warning); }
+.service-card-title.tone-danger { color:#a34040; }
+.service-card-title.tone-muted { color:var(--lc-muted); }
+</style>

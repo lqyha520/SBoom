@@ -76,7 +76,7 @@ function loadMore() { if (activeTab.value === 'history' && more.value) void page
 onReachBottom(loadMore)
 </script>
 <template>
-  <ServicePage title="资料需求" description="没找到需要的资料？告诉我们，处理进度会同步到消息中心。每天可新增 5 条需求。" :error="error" :loading="loading" @retry="page.refresh">
+  <ServicePage title="资料需求" description="没找到需要的资料？告诉我们，处理进度会同步到消息中心。每天可新增 5 条需求。" gate-description="登录后查看资料需求的处理进度" :error="error" :loading="loading" @retry="page.refresh">
     <view class="service-tabs" aria-role="group" role="group" aria-label="资料需求内容"><button role="button" hover-class="control-pressed" :class="{ selected: activeTab === 'new' }" :aria-pressed="activeTab === 'new'" :disabled="busy" @click="activeTab = 'new'">提交需求</button><button role="button" hover-class="control-pressed" :class="{ selected: activeTab === 'history' }" :aria-pressed="activeTab === 'history'" :disabled="busy" @click="activeTab = 'history'">我的需求记录</button></view>
     <view v-if="activeTab === 'new'" class="service-card service-fields request-form">
       <view class="request-form-heading"><text class="service-card-title">我需要的资料</text><button class="bare-icon" role="button" aria-label="清空需求草稿" title="清空草稿" :disabled="busy || !(title || grade || subject || details)" @click="clearDraft"><wd-icon name="delete" size="20px" /></button></view>

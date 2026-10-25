@@ -61,7 +61,7 @@ function requestSubscription() {
 onReachBottom(loadMore)
 </script>
 <template>
-  <ServicePage title="消息中心" description="反馈回复、资料更新与会员服务进度。消息保留 180 天。" :error="error" :loading="loading" @retry="page.refresh">
+  <ServicePage title="消息中心" description="反馈回复、资料更新与会员服务进度。消息保留 180 天。" gate-description="登录后查看反馈回复、资料更新和服务提醒" :error="error" :loading="loading" @retry="page.refresh">
     <view v-if="readSync.error" class="error-strip" role="status"><text class="grow">{{ readSync.error }}</text><wd-button role="button" variant="text" :loading="readSync.busy" :disabled="readSync.busy" @click="syncMessageReads">重试同步</wd-button></view>
     <view class="service-tabs" aria-role="group" role="group" aria-label="消息筛选"><button role="button" hover-class="control-pressed" :class="{ selected: !unreadOnly }" :aria-pressed="!unreadOnly" :disabled="busy || loading" @click="filter(false)">全部消息</button><button role="button" hover-class="control-pressed" :class="{ selected: unreadOnly }" :aria-pressed="unreadOnly" :disabled="busy || loading" @click="filter(true)">未读{{ inboxState.unread ? ' · ' + (inboxState.unread > 99 ? '99+' : inboxState.unread) : '' }}</button></view>
     <view class="message-toolbar"><text>{{ inboxState.unread ? inboxState.unread + ' 条消息待查看' : '消息已读完' }}</text><wd-button role="button" size="small" variant="text" :disabled="busy || loading || !inboxState.unread" @click="allRead">全部已读</wd-button></view>
