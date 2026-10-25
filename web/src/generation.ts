@@ -273,11 +273,13 @@ function splitTruncated(chunk: GenerationChunk): GenerationChunk[] {
   const groups: api.BatchItemReq[][] = chunk.items.length > 1 ? pending.map(item => [item]) : []
   if (!groups.length) {
     const item = pending[0]
-    if (item.question_count < 2 || item.game_type === 'reading') {
-      throw new Error('这一部分已达到模型输出上限且无法继续拆分，请减少题量或请管理员提高输出上限后重新生成；已完成的结果仍保留')
+    if (item.question_count >= 2 && item.game_type !== 'reading') {
+      const half = Math.ceil(item.question_count / 2)
+      groups.push([{ ...item, question_count: half }], [{ ...item, question_count: item.question_count - half }])
+    } else {
+      // 只剩一道题或阅读题时无法再拆；换新请求号原样重发一次，避免这个大题永久停在截断态再也发不出去。
+      groups.push([item])
     }
-    const half = Math.ceil(item.question_count / 2)
-    groups.push([{ ...item, question_count: half }], [{ ...item, question_count: item.question_count - half }])
   }
   return [...kept, ...groups.map(items => ({ requestId: randomId(), state: 'new' as const, items }))]
 }
@@ -297,7 +299,9 @@ export async function runGenerationJob(context: GenerationContext, job: Generati
       continue
     }
     // 原请求查询也可能第一次发现截断；先保留完整结果，再准备新的小请求。
-    if (mode === 'retry' && chunk.state !== 'succeeded' && chunk.errorCode === 'generation_truncated') {
+    // 只处理本次点击时已在任务里的那批请求，拆分或原样重发出来的新 chunk 不再二次拆分，避免同一次点击里循环重发。
+    if (mode === 'retry' && chunk.state !== 'succeeded' && chunk.errorCode === 'generation_truncated'
+      && originalRequests.get(chunk) === chunk.requestId) {
       job.chunks.splice(index, 1, ...splitTruncated(chunk))
       index--
     }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { previewSampleData } from '../preview-samples'
+import { previewPendingSamples, previewSampleData } from '../preview-samples'
 
 describe('preview format samples', () => {
   it.each([
@@ -27,5 +27,14 @@ describe('preview format samples', () => {
     expect(previewSampleData('unknown', 20).questions).toHaveLength(20)
     expect(previewSampleData('unknown', 31).questions).toHaveLength(30)
     expect(previewSampleData('unknown', 1).questions[0].stem).toContain('请根据所学知识')
+  })
+
+  it('pads generated sections up to the section count without reusing real numbers', () => {
+    const pending = previewPendingSamples('oral_math', 12, 's1', 8)
+    expect(pending).toHaveLength(4)
+    expect(pending.map(question => question._qid)).toEqual(['preview-s1-9', 'preview-s1-10', 'preview-s1-11', 'preview-s1-12'])
+    expect(pending.every(question => question._preview)).toBe(true)
+    expect(previewPendingSamples('oral_math', 8, 's1', 8)).toHaveLength(0)
+    expect(previewPendingSamples('oral_math', 6, 's1', 8)).toHaveLength(0)
   })
 })
