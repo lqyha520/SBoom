@@ -13,6 +13,8 @@ def init_commerce_schema(conn):
             sort_order INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 1,
             purchase_limit INTEGER NOT NULL DEFAULT 0,
             virtual_product_id TEXT NOT NULL DEFAULT '',
+            price_fen_ios INTEGER NOT NULL DEFAULT 0,
+            virtual_product_id_ios TEXT NOT NULL DEFAULT '',
             created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS mini_orders (
@@ -24,6 +26,7 @@ def init_commerce_schema(conn):
             payment_channel TEXT NOT NULL DEFAULT 'wechat', virtual_env INTEGER NOT NULL DEFAULT 0,
             virtual_offer_id TEXT NOT NULL DEFAULT '', virtual_product_id TEXT NOT NULL DEFAULT '',
             virtual_order_id TEXT NOT NULL DEFAULT '', virtual_order_type INTEGER NOT NULL DEFAULT 0,
+            device_platform TEXT NOT NULL DEFAULT '',
             delivered_at BIGINT,
             prepay_id TEXT NOT NULL DEFAULT '', payer_enc TEXT NOT NULL DEFAULT '',
             lease_key TEXT NOT NULL DEFAULT '', lease_until BIGINT NOT NULL DEFAULT 0,
@@ -79,6 +82,9 @@ def init_commerce_schema(conn):
         ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS virtual_order_id TEXT NOT NULL DEFAULT '';
         ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS virtual_order_type INTEGER NOT NULL DEFAULT 0;
         ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS delivered_at BIGINT;
+        ALTER TABLE mini_membership_plans ADD COLUMN IF NOT EXISTS price_fen_ios INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE mini_membership_plans ADD COLUMN IF NOT EXISTS virtual_product_id_ios TEXT NOT NULL DEFAULT '';
+        ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS device_platform TEXT NOT NULL DEFAULT '';
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_orders_virtual_order ON mini_orders(virtual_order_id) WHERE virtual_order_id <> '';
         CREATE INDEX IF NOT EXISTS idx_mini_orders_channel_status ON mini_orders(payment_channel, status, updated_at);
     """)

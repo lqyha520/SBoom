@@ -1,4 +1,7 @@
 import { payOrder, refreshWechatSession, syncOrder, type CheckoutPayment, type Order, type PaymentParameters, type VirtualPaymentParameters } from './growth'
+import { onIOS } from './platform'
+
+export { onIOS }
 import { refreshMembership } from './session'
 import type { ReadOptions } from './api'
 import { authGeneration } from './api'
@@ -46,7 +49,7 @@ export async function resumeCheckouts() {
 
 export function iosRestricted(iosEnabled: boolean) {
   // #ifdef MP-WEIXIN
-  return uni.getSystemInfoSync().platform === 'ios' && !iosEnabled
+  return onIOS() && !iosEnabled
   // #endif
   // #ifdef H5
   return false
@@ -55,7 +58,7 @@ export function iosRestricted(iosEnabled: boolean) {
 export function checkoutSupport(iosEnabled: boolean) {
   let supported = false
   // #ifdef MP-WEIXIN
-  supported = uni.getSystemInfoSync().platform !== 'ios' || iosEnabled
+  supported = !onIOS() || iosEnabled
   // #endif
   return supported
 }

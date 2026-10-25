@@ -11,7 +11,7 @@ import { fetchPlans, createOrder, requestKey, yuan, openOrder, redeemMembershipC
 import { fetchSupport, openSupport, type SupportSettings } from '../../services/experience'
 import { refreshMembership, session } from '../../services/session'
 import { membershipExpiry } from '../../presentation'
-import { checkoutSupport, iosRestricted } from '../../services/checkout'
+import { checkoutSupport, iosRestricted, onIOS } from '../../services/checkout'
 import { confirmAction } from '../../services/navigation'
 
 const plans = ref<Plan[]>([])
@@ -25,10 +25,14 @@ const redeemedDays = ref(0)
 let attempt = { plan: '', revision: 0, key: '' }
 const restricted = computed(() => iosRestricted(iosEnabled.value))
 const supported = computed(() => checkoutSupport(iosEnabled.value))
+const ios = computed(() => onIOS())
+// iPhone 只能走苹果 IAP，价格与道具都和服务端不同，未配 iOS 价的套餐不展示。
+const listed = computed(() => ios.value ? plans.value.filter(plan => plan.ios_available) : plans.value)
+const priceOf = (plan: Plan) => ios.value ? (plan.price_fen_ios || plan.price_fen) : plan.price_fen
 const lifetime = computed(() => session.user?.is_vip && session.user.vip_expires_at === null)
 const hasContact = computed(() => !!(contact.value?.wechat || contact.value?.phone || contact.value?.email || contact.value?.qr_url))
 const canPurchase = computed(() => enabled.value && supported.value && !!session.user?.has_wechat && !lifetime.value)
-const selectedPlan = computed(() => plans.value.find(plan => plan.id === selectedId.value))
+const selectedPlan = computed(() => listed.value.find(plan => plan.id === selectedId.value))
 const limitReached = (plan: Plan) => !!plan.purchase_limit && (plan.purchased || 0) >= plan.purchase_limit
 // 任何套餐只要还有未付款订单就先去处理它，避免重复点击生成多笔待付款订单。
 const awaitingOrder = (plan: Plan) => !limitReached(plan) && (plan.pending || 0) > 0
@@ -40,12 +44,12 @@ function planLimitLabel(plan: Plan) {
   return (plan.purchased || 0) > 0 ? '已购 ' + plan.purchased + '/' + plan.purchase_limit : '限购 ' + plan.purchase_limit + ' 次'
 }
 const unavailable = (plan: Plan) => limitReached(plan) || awaitingOrder(plan)
-const allBlocked = computed(() => plans.value.length > 0 && plans.value.every(unavailable))
-const allLimited = computed(() => plans.value.length > 0 && plans.value.every(limitReached))
-const awaitingPlan = computed(() => plans.value.find(awaitingOrder))
+const allBlocked = computed(() => listed.value.length > 0 && listed.value.every(unavailable))
+const allLimited = computed(() => listed.value.length > 0 && listed.value.every(limitReached))
+const awaitingPlan = computed(() => listed.value.find(awaitingOrder))
 const canBuySelected = computed(() => canPurchase.value && !!selectedPlan.value && !unavailable(selectedPlan.value))
 const primaryLabel = computed(() => lifetime.value ? '去挑选习题' : canBuySelected.value
-  ? (session.user?.is_vip ? '确认续费' : '确认开通') : awaitingPlan.value ? '查看待付款订单' : '咨询开通')
+  ? (session.user?.is_vip ? '确认续费' : '确认开通') : awaitingPlan.value ? '查看待付款订单' : ios.value ? '联系客服' : '咨询开通')
 
 async function load(valid: ConsumerTicket) {
   action.value = ''
@@ -55,7 +59,7 @@ async function load(valid: ConsumerTicket) {
   else { contact.value = null; contactError.value = true }
   if (catalog.status === 'fulfilled') {
     plans.value = catalog.value.items; enabled.value = catalog.value.checkout_enabled; iosEnabled.value = catalog.value.ios_enabled
-    if (!plans.value.some(plan => plan.id === selectedId.value && !unavailable(plan))) selectedId.value = plans.value.find(plan => !unavailable(plan))?.id || ''
+    if (!listed.value.some(plan => plan.id === selectedId.value && !unavailable(plan))) selectedId.value = listed.value.find(plan => !unavailable(plan))?.id || ''
   } else throw catalog.reason
   if (membership.status === 'rejected') throw membership.reason
 }
@@ -79,19 +83,19 @@ function selectPlan(plan: Plan) {
 function purchase(plan: Plan) {
   if (!canPurchase.value || unavailable(plan)) return
   action.value = 'purchase'
-  let limitConflict = false
+  let needsReload = false
   void page.act(async valid => {
-    if (!await confirmAction('确认会员套餐', plan.name + '：' + plan.days + ' 天，' + yuan(plan.price_fen) + '。确认后生成订单，在订单页完成付款。') || !valid()) return
+    if (!await confirmAction('确认会员套餐', plan.name + '：' + plan.days + ' 天，' + yuan(priceOf(plan)) + '。确认后生成订单，在订单页完成付款。') || !valid()) return
     if (attempt.plan !== plan.id || attempt.revision !== plan.revision) attempt = { plan: plan.id, revision: plan.revision, key: requestKey() }
     try {
       const order = await createOrder(plan, attempt.key)
       if (valid()) { attempt = { plan: '', revision: 0, key: '' }; openOrder(order.id) }
     } catch (cause) {
-      // 另一台设备刚创建了订单等情况：刷新套餐后卡片会变成“有待付款订单”，直接带用户去处理。
-      limitConflict = (cause as { code?: string })?.code === 'purchase_limit'
+      // 另一台设备刚创建了订单、或 iPhone 端刚被下架等情况：刷新套餐列表再提示。
+      needsReload = ['purchase_limit', 'ios_unavailable'].includes((cause as { code?: string })?.code || '')
       throw cause
     }
-  }).then(() => { if (limitConflict) void page.refresh() })
+  }).then(() => { if (needsReload) void page.refresh() })
 }
 function primary() {
   if (restricted.value) return
@@ -155,21 +159,21 @@ function redeem() {
 
         <view v-if="restricted && !lifetime" class="restricted-notice">
           <view class="restricted-icon"><wd-icon name="info-circle-fill" size="18px" /></view>
-          <view class="grow"><text class="restricted-title">当前平台暂不支持开通</text><text class="restricted-copy">已有会员权益可正常使用；如需开通、续费或有其他问题，可以联系客服。</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="restricted-action" role="button" aria-label="联系客服" @click="contactOpen = true"><wd-icon name="headset" size="14px" /><text>联系客服</text></button></view>
+          <view class="grow"><text class="restricted-title">当前平台暂不支持开通</text><text class="restricted-copy">已有会员权益可正常使用；对会员有任何疑问，可以联系客服。</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="restricted-action" role="button" aria-label="联系客服" @click="contactOpen = true"><wd-icon name="headset" size="14px" /><text>联系客服</text></button></view>
         </view>
 
         <view v-if="!lifetime && !restricted" class="plans-section">
           <view class="section-heading"><text class="section-title">选择会员时长</text><text class="section-note">权益相同，按需选择</text></view>
-          <view v-if="plans.length" class="plan-grid" :class="{ single: plans.length === 1, two: plans.length === 2 }" aria-role="radiogroup" role="radiogroup" aria-label="会员套餐">
-            <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="plan in plans" :key="plan.id" class="plan-card" :class="{ selected: selectedId === plan.id, limited: limitReached(plan), awaiting: awaitingOrder(plan) }" role="radio" :aria-label="plan.name + '，' + plan.days + '天，' + yuan(plan.price_fen) + (limitReached(plan) ? '，已达限购' : awaitingOrder(plan) ? (pendingExpired(plan) ? '，订单已超时' : '，有待付款订单') : plan.purchase_limit ? '，每账号限购' + plan.purchase_limit + '次' : '')" :aria-checked="selectedId === plan.id" :disabled="busy || loading || limitReached(plan)" @click="selectPlan(plan)">
-              <text class="plan-name">{{ plan.name }}</text><text class="plan-price">{{ yuan(plan.price_fen) }}</text><text class="plan-duration">{{ plan.days }} 天会员</text>
+          <view v-if="listed.length" class="plan-grid" :class="{ single: listed.length === 1, two: listed.length === 2 }" aria-role="radiogroup" role="radiogroup" aria-label="会员套餐">
+            <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-for="plan in listed" :key="plan.id" class="plan-card" :class="{ selected: selectedId === plan.id, limited: limitReached(plan), awaiting: awaitingOrder(plan) }" role="radio" :aria-label="plan.name + '，' + plan.days + '天，' + yuan(priceOf(plan)) + (limitReached(plan) ? '，已达限购' : awaitingOrder(plan) ? (pendingExpired(plan) ? '，订单已超时' : '，有待付款订单') : plan.purchase_limit ? '，每账号限购' + plan.purchase_limit + '次' : '')" :aria-checked="selectedId === plan.id" :disabled="busy || loading || limitReached(plan)" @click="selectPlan(plan)">
+              <text class="plan-name">{{ plan.name }}</text><text class="plan-price">{{ yuan(priceOf(plan)) }}</text><text class="plan-duration">{{ plan.days }} 天会员</text>
               <text v-if="planLimitLabel(plan)" class="plan-limit">{{ planLimitLabel(plan) }}</text>
               <view v-if="selectedId === plan.id" class="plan-check"><wd-icon name="check" size="11px" /></view>
             </button>
           </view>
-          <view v-else-if="!loading" class="plans-empty"><text>暂时没有可选套餐，可通过下方「咨询开通」了解开通方式。</text></view>
+          <view v-else-if="!loading" class="plans-empty"><text>{{ ios ? 'iPhone 端暂时没有可开通的套餐，可以联系客服了解后续安排。' : '暂时没有可选套餐，可通过下方「咨询开通」了解开通方式。' }}</text></view>
           <text v-if="selectedPlan?.description" class="plan-description">{{ selectedPlan.description }}</text>
-          <text v-if="plans.length" class="plan-tip">{{ allBlocked ? (allLimited ? '可选套餐均已达到限购次数，如需再次开通请联系客服。' : '你还有待付款订单，请先完成或取消后再购买。') : canPurchase ? '有效期自动顺延，无自动续费。确认后在订单页付款。' : '套餐价格供参考，可联系客服了解开通方式。' }}</text>
+          <text v-if="listed.length" class="plan-tip">{{ allBlocked ? (allLimited ? '可选套餐均已达到限购次数，如需再次开通请联系客服。' : '你还有待付款订单，请先完成或取消后再购买。') : canPurchase ? '有效期自动顺延，无自动续费。确认后在订单页付款。' : '套餐价格供参考，可联系客服了解开通方式。' }}</text>
         </view>
 
         <view v-if="!restricted" class="redeem-panel">
@@ -188,14 +192,14 @@ function redeem() {
       </view>
 
       <view v-if="!restricted" class="member-footer">
-        <view class="footer-inner"><button v-if="canPurchase || lifetime" hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="footer-contact" role="button" aria-label="联系客服" @click="contactOpen = true"><wd-icon name="headset" size="22px" /><text>客服</text></button><view class="footer-main"><text v-if="selectedPlan && !lifetime" class="footer-summary">{{ selectedPlan.name }} · {{ selectedPlan.days }} 天 · {{ yuan(selectedPlan.price_fen) }}</text><wd-button role="button" block :loading="busy && action === 'purchase'" :disabled="busy || loading" @click="primary">{{ primaryLabel }}</wd-button></view></view>
+        <view class="footer-inner"><button v-if="canPurchase || lifetime" hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="footer-contact" role="button" aria-label="联系客服" @click="contactOpen = true"><wd-icon name="headset" size="22px" /><text>客服</text></button><view class="footer-main"><text v-if="selectedPlan && !lifetime" class="footer-summary">{{ selectedPlan.name }} · {{ selectedPlan.days }} 天 · {{ yuan(priceOf(selectedPlan)) }}</text><wd-button role="button" block :loading="busy && action === 'purchase'" :disabled="busy || loading" @click="primary">{{ primaryLabel }}</wd-button></view></view>
       </view>
     </template>
 
     <wd-popup v-model="contactOpen" position="bottom" :z-index="1250" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0">
       <view class="sheet contact-sheet" aria-role="dialog" role="dialog" aria-modal="true" aria-label="会员客服">
         <view class="sheet-handle" />
-        <view class="sheet-head"><view><text class="sheet-title">联系客服</text><text class="contact-sheet-intro">开通、兑换或使用问题，都可以问我们</text></view><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭会员客服" @click="contactOpen = false"><wd-icon name="close" size="20px" /></button></view>
+        <view class="sheet-head"><view><text class="sheet-title">联系客服</text><text class="contact-sheet-intro">{{ ios ? '兑换、使用或其他问题，都可以问我们' : '开通、兑换或使用问题，都可以问我们' }}</text></view><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭会员客服" @click="contactOpen = false"><wd-icon name="close" size="20px" /></button></view>
         <text v-if="contact?.hours" class="contact-hours"><wd-icon name="time-line" size="14px" /> 服务时间：{{ contact.hours }}</text>
         <view v-if="contactError" class="contact-empty"><text>联系方式暂时没加载成功，可以重试或留言咨询。</text><wd-button role="button" size="small" variant="text" :loading="loading" @click="page.refresh">重新加载</wd-button></view>
         <text v-else-if="!hasContact" class="contact-empty">可以先留下你的问题，我们会在「服务反馈」中回复。</text>

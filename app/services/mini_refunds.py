@@ -37,7 +37,7 @@ def review(admin_id, identifier, body):
         order = mini_orders.owned(conn, refund["order_id"])
         if order["status"] != "paid":
             fail("订单状态不支持退款", 409)
-        if body.action == "approve" and order["payment_channel"] == "virtual" and order["virtual_order_type"] in (7, 8):
+        if body.action == "approve" and order["payment_channel"] == "virtual" and (order["virtual_order_type"] in (7, 8) or order["device_platform"] == "ios"):
             fail("iOS 虚拟支付订单需由用户在系统内申请退款，管理员不能发起", 422)
         if body.action == "approve" and not body.confirm_refund:
             fail("请确认向原支付账户退还整单金额", 422)

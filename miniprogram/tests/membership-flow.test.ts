@@ -6,7 +6,7 @@ import ts from 'typescript'
 import * as vue from 'vue'
 import { parse } from 'vue/compiler-sfc'
 
-async function fixture(options: { contact?: boolean; ios?: boolean; native?: boolean; enabled?: boolean; hasWechat?: boolean; lifetime?: boolean; confirm?: boolean; supportFails?: boolean; plansFail?: boolean; createError?: { message: string; code: string }; plans?: { id: string; revision: number; name: string; days: number; price_fen: number; purchase_limit?: number; purchased?: number; pending?: number; pending_order?: string | null; pending_expires_at?: number | null }[] } = {}) {
+async function fixture(options: { contact?: boolean; ios?: boolean; device?: 'ios' | 'android'; native?: boolean; enabled?: boolean; hasWechat?: boolean; lifetime?: boolean; confirm?: boolean; supportFails?: boolean; plansFail?: boolean; createError?: { message: string; code: string }; plans?: { id: string; revision: number; name: string; days: number; price_fen: number; price_fen_ios?: number; ios_available?: boolean; purchase_limit?: number; purchased?: number; pending?: number; pending_order?: string | null; pending_expires_at?: number | null }[] } = {}) {
   const session = vue.reactive({ user: { id: 'reader', username: 'wx1234567890', has_wechat: options.hasWechat ?? true, is_vip: !!options.lifetime, vip_expires_at: null as number | null } })
   const plans = options.plans ?? [{ id: 'month', revision: 1, name: '月度会员', days: 30, price_fen: 1990 }, { id: 'quarter', revision: 2, name: '季度会员', days: 90, price_fen: 4990 }]
   const orders: { id: string; key: string }[] = [], confirmations: string[] = [], native: string[] = []
@@ -37,12 +37,12 @@ async function fixture(options: { contact?: boolean; ios?: boolean; native?: boo
       async fetchSupport() { if (options.supportFails) throw new Error('support unavailable'); return { wechat: 'support_demo', phone: '4000000000' } },
       openSupport: (kind: string) => native.push('feedback:' + kind),
     },
-    '../../services/checkout': { iosRestricted: () => !!options.ios, checkoutSupport: () => !options.ios && (options.native ?? true) },
+    '../../services/checkout': { iosRestricted: () => !!options.ios, checkoutSupport: () => !options.ios && (options.native ?? true), onIOS: () => options.device === 'ios' || !!options.ios },
     '../../services/navigation': { async confirmAction(_title: string, message: string) { confirmations.push(message); return options.confirm ?? true } },
   }
   const exports: Record<string, any> = {}
   const source = parse(readFileSync(new URL('../src/subpages/membership/index.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content
-  vm.runInNewContext(ts.transpileModule(source + '\nexports.controls = { load, plans, contact, contactError, selectedId, contactOpen, selectPlan, primary, purchase, cardCode, redeem, redeemedDays, callContact, leaveMessage, planLimitLabel, awaitingOrder, limitReached }', {
+  vm.runInNewContext(ts.transpileModule(source + '\nexports.controls = { load, plans, listed, contact, contactError, selectedId, contactOpen, selectPlan, primary, purchase, cardCode, redeem, redeemedDays, callContact, leaveMessage, planLimitLabel, awaitingOrder, limitReached }', {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText, { exports, require: (id: string) => modules[id] || {}, uni: { switchTab: (value: { url: string }) => native.push(value.url), makePhoneCall: (value: { phoneNumber: string }) => native.push('call:' + value.phoneNumber), showToast() {} } })
   const controls = exports.controls
@@ -77,6 +77,27 @@ test('restricted iOS cannot create orders, open purchase contact, or redeem card
   assert.equal(app.orders.length, 0)
   assert.equal(app.redemptions(), 0)
   assert.equal(app.controls.contactOpen.value, false)
+})
+
+test('iPhone lists only iOS-sellable plans and confirms the iPhone price', async () => {
+  const app = await fixture({ device: 'ios', plans: [
+    { id: 'month', revision: 1, name: '月度会员', days: 30, price_fen: 1990 },
+    { id: 'year', revision: 3, name: '年度会员', days: 365, price_fen: 19900, price_fen_ios: 22800, ios_available: true },
+  ] })
+  assert.deepEqual(app.controls.listed.value.map((plan: { id: string }) => plan.id), ['year'])
+  assert.equal(app.controls.selectedId.value, 'year')
+  app.controls.primary(); await app.finish()
+  assert.match(app.confirmations[0]!, /365 天，¥228\.00/)
+  assert.deepEqual(app.orders, [{ id: 'year', key: 'unique-request' }])
+})
+
+test('iPhone hides plans with no iOS price and never offers the Android price', async () => {
+  const app = await fixture({ device: 'ios', plans: [{ id: 'month', revision: 1, name: '月度会员', days: 30, price_fen: 1990 }] })
+  assert.deepEqual(app.controls.listed.value, [])
+  assert.equal(app.controls.selectedId.value, '')
+  app.controls.primary(); await app.finish()
+  assert.equal(app.orders.length, 0)
+  assert.equal(app.controls.contactOpen.value, true)
 })
 
 test('unsupported checkout, cancellation and leaving the page cannot create an order', async () => {

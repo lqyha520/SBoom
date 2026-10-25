@@ -37,10 +37,12 @@ function fixture(platform = 'MP-WEIXIN', status = 'paid', nativeFailure = '', hi
     const failure = options.virtualErrors?.shift()
     if (failure) request.fail(failure); else request.success()
   }
+  // 沙箱里的 uni 固定报告 iOS 设备。
+  const platformModule = { devicePlatform: () => 'ios', onIOS: () => true }
   vm.runInNewContext(ts.transpileModule(filtered, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
     exports,
     setTimeout: (callback: () => void, delay: number) => { delays.push(delay); queueMicrotask(callback) },
-    require: (id: string) => id === 'vue' ? vue : id === './api' ? { authGeneration: () => epoch } : id === './growth' ? growth : { async refreshMembership() { events.push('membership') } },
+    require: (id: string) => id === 'vue' ? vue : id === './api' ? { authGeneration: () => epoch } : id === './growth' ? growth : id === './platform' ? platformModule : { async refreshMembership() { events.push('membership') } },
     uni: {
       getSystemInfoSync: () => ({ platform: 'ios' }),
       login(options: any) { events.push('wx-login'); options.success({ code: 'fixture-code' }) },

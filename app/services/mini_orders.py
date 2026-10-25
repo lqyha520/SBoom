@@ -20,7 +20,7 @@ from app.sql_utils import escape_like
 logger = logging.getLogger(__name__)
 
 PUBLIC_FIELDS = ("id", "plan_id", "plan_name", "plan_days", "amount_fen", "currency", "status", "payment_channel", "revision", "created_at", "expires_at", "paid_at", "closed_at", "updated_at")
-ADMIN_FIELDS = ("virtual_env", "virtual_offer_id", "virtual_product_id", "virtual_order_id", "virtual_order_type", "delivered_at")
+ADMIN_FIELDS = ("virtual_env", "virtual_offer_id", "virtual_product_id", "virtual_order_id", "virtual_order_type", "device_platform", "delivered_at")
 REFUND_FIELDS = ("id", "reason", "reply", "status", "revision", "created_at", "updated_at", "completed_at")
 #: 列表查询把退款与下单人一次 LEFT JOIN 带出来（列名加前缀避免和订单列撞名），public_order(joined=True) 直接消费
 JOINED_COLUMNS = ", ".join(f"f.{key} AS refund_{key}" for key in REFUND_FIELDS) + ", u.username AS owner_username, u.nickname AS owner_nickname"
@@ -66,10 +66,15 @@ def detail(identifier, user_id=None):
 def plans(admin=False, user_id=None):
     with db() as conn:
         items = [dict(row) for row in conn.execute("SELECT * FROM mini_membership_plans " + ("" if admin else "WHERE is_active = 1 ") + "ORDER BY sort_order, created_at, id")]
+        for item in items:
+            # iPhone 走苹果 IAP，需同时配好 iOS 价与 iOS 道具才能在 iPhone 上架。
+            item["ios_available"] = bool(item["price_fen_ios"] and item["virtual_product_id_ios"])
         if user_id is not None and items:
             paid = {row[0]: row[1] for row in conn.execute(
                 "SELECT plan_id, COUNT(*) FROM mini_orders WHERE user_id = ? AND paid_at IS NOT NULL GROUP BY plan_id", (user_id,))}
-            pending, pending_order, pending_expiry = {}, {}, {}
+            pending: dict[str, int] = {}
+            pending_order: dict[str, str] = {}
+            pending_expiry: dict[str, int] = {}
             for row in conn.execute("SELECT id, plan_id, expires_at FROM mini_orders WHERE user_id = ? AND paid_at IS NULL AND status IN ('created', 'pending') ORDER BY created_at DESC, id DESC", (user_id,)):
                 pending[row["plan_id"]] = pending.get(row["plan_id"], 0) + 1
                 pending_order.setdefault(row["plan_id"], row["id"])
@@ -110,14 +115,14 @@ def save_plan(body, identifier=None):
                 fail("会员套餐不存在", 404)
             if row[0] != body.revision:
                 fail("套餐已更新，请刷新后重试")
-            conn.execute("UPDATE mini_membership_plans SET name = ?, description = ?, days = ?, price_fen = ?, is_active = ?, sort_order = ?, purchase_limit = ?, virtual_product_id = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
-                         (body.name, body.description, body.days, body.price_fen, int(body.is_active), body.sort_order, body.purchase_limit, body.virtual_product_id, now, identifier))
+            conn.execute("UPDATE mini_membership_plans SET name = ?, description = ?, days = ?, price_fen = ?, is_active = ?, sort_order = ?, purchase_limit = ?, virtual_product_id = ?, price_fen_ios = ?, virtual_product_id_ios = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
+                         (body.name, body.description, body.days, body.price_fen, int(body.is_active), body.sort_order, body.purchase_limit, body.virtual_product_id, body.price_fen_ios, body.virtual_product_id_ios, now, identifier))
         else:
             if conn.execute("SELECT COUNT(*) FROM mini_membership_plans").fetchone()[0] >= 100:
                 fail("套餐数量已达上限，请编辑已有套餐", 422)
             identifier = uuid.uuid4().hex
-            conn.execute("INSERT INTO mini_membership_plans(id, name, description, days, price_fen, is_active, sort_order, purchase_limit, virtual_product_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                         (identifier, body.name, body.description, body.days, body.price_fen, int(body.is_active), body.sort_order, body.purchase_limit, body.virtual_product_id, now, now))
+            conn.execute("INSERT INTO mini_membership_plans(id, name, description, days, price_fen, is_active, sort_order, purchase_limit, virtual_product_id, price_fen_ios, virtual_product_id_ios, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (identifier, body.name, body.description, body.days, body.price_fen, int(body.is_active), body.sort_order, body.purchase_limit, body.virtual_product_id, body.price_fen_ios, body.virtual_product_id_ios, now, now))
         return dict(conn.execute("SELECT * FROM mini_membership_plans WHERE id = ?", (identifier,)).fetchone())
 
 
@@ -159,8 +164,18 @@ def create(user_id, body):
             pending = conn.execute("SELECT COUNT(*) FROM mini_orders WHERE user_id = ? AND plan_id = ? AND paid_at IS NULL AND status IN ('created', 'pending')", (user_id, plan["id"])).fetchone()[0]
             if paid + pending >= limit:
                 fail(f"该套餐每个账号限购 {limit} 次，请先完成或取消已有的未完成订单", 422, "purchase_limit")
-        if channel == "virtual" and not plan["virtual_product_id"]:
-            fail("该套餐尚未配置虚拟支付商品，请联系客服", 422)
+        # iPhone 只能走苹果 IAP，费率高于安卓，因此按 iOS 价与 iOS 道具单独结算。
+        on_ios = channel == "virtual" and body.platform == "ios"
+        if on_ios and not virtual["ios_enabled"]:
+            fail("iPhone 端在线开通尚未开放，请稍后再试", 422, "ios_unavailable")
+        amount_fen = plan["price_fen_ios"] if on_ios else plan["price_fen"]
+        product_id = ""
+        if channel == "virtual":
+            product_id = plan["virtual_product_id_ios"] if on_ios else plan["virtual_product_id"]
+            if on_ios and not amount_fen:
+                fail("该套餐尚未在 iPhone 上架，请稍后重试", 422, "ios_unavailable")
+            if not product_id:
+                fail("该套餐尚未在 iPhone 上架，请稍后重试" if on_ios else "该套餐尚未配置虚拟支付商品，请联系客服", 422, "ios_unavailable" if on_ios else "")
         if max(now, user["vip_expires_at"] or 0) + plan["days"] * 86400 > 253402300799:
             fail("会员到期日期超出支持范围", 422)
         if conn.execute("SELECT COUNT(*) FROM mini_orders WHERE user_id = ? AND status IN ('created', 'pending')", (user_id,)).fetchone()[0] >= 3:
@@ -169,9 +184,9 @@ def create(user_id, body):
             fail("下单较频繁，请稍后重试", 429)
         identifier = uuid.uuid4().hex
         settings = get_settings()
-        conn.execute("INSERT INTO mini_orders(id, user_id, request_key, plan_id, plan_name, plan_days, amount_fen, appid, mchid, payer_enc, payment_channel, virtual_env, virtual_offer_id, virtual_product_id, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                     (identifier, user_id, request_key, plan["id"], plan["name"], plan["days"], plan["price_fen"], settings.wechat_app_id, settings.wechat_pay_mchid, user["wechat_openid_enc"],
-                      channel, virtual["env"], virtual["offer_id"] if channel == "virtual" else "", plan["virtual_product_id"] if channel == "virtual" else "", now, now + 900, now))
+        conn.execute("INSERT INTO mini_orders(id, user_id, request_key, plan_id, plan_name, plan_days, amount_fen, appid, mchid, payer_enc, payment_channel, virtual_env, virtual_offer_id, virtual_product_id, device_platform, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (identifier, user_id, request_key, plan["id"], plan["name"], plan["days"], amount_fen, settings.wechat_app_id, settings.wechat_pay_mchid, user["wechat_openid_enc"],
+                      channel, virtual["env"], virtual["offer_id"] if channel == "virtual" else "", product_id, body.platform, now, now + 900, now))
         return public_order(conn, owned(conn, identifier))
 
 

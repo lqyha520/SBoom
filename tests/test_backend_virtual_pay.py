@@ -54,8 +54,8 @@ class VirtualPayContracts(GrowthBase):
             )
         self.plan = mini_orders.save_plan(PlanInput(name="测试月会员", days=30, price_fen=1990, is_active=True, virtual_product_id="lc-month"))
 
-    def create_order(self, key="virtual-order-one"):
-        return mini_orders.create(self.viewer.id, OrderInput(plan_id=self.plan["id"], plan_revision=self.plan["revision"], request_id=key))
+    def create_order(self, key="virtual-order-one", **changes):
+        return mini_orders.create(self.viewer.id, OrderInput(plan_id=self.plan["id"], plan_revision=self.plan["revision"], request_id=key, **changes))
 
     def query_value(self, order, status=2, **changes):
         value = {
@@ -159,6 +159,66 @@ class VirtualPayContracts(GrowthBase):
             self.assertIsNotNone(row["delivered_at"])
             self.assertEqual(row["virtual_order_id"], value["wx_order_id"])
             self.assertEqual(row["virtual_product_id"], "lc-month")
+
+    def test_iphone_orders_use_the_iphone_price_and_product(self):
+        self.configure(wechat_virtual_ios_enabled=True)
+        self.plan = mini_orders.save_plan(PlanInput(name="测试年会员", days=365, price_fen=19900, is_active=True, virtual_product_id="lc-year",
+                                                    price_fen_ios=22800, virtual_product_id_ios="lc-year-ios"))
+        listed = next(item for item in mini_orders.plans(user_id=self.viewer.id)["items"] if item["id"] == self.plan["id"])
+        self.assertTrue(listed["ios_available"])
+        self.assertEqual(listed["price_fen_ios"], 22800)
+
+        order = self.create_order("iphone-order", platform="ios")
+        self.assertEqual(order["amount_fen"], 22800)
+        payment = mini_orders.pay(order["id"], self.viewer.id)["payment"]
+        self.assertEqual(json.loads(payment["signData"]), {
+            "offerId": OFFER_ID, "buyQuantity": 1, "env": 0, "currencyType": "CNY",
+            "productId": "lc-year-ios", "goodsPrice": 22800, "outTradeNo": order["id"], "attach": self.plan["id"],
+        })
+        # 同一套餐在安卓端仍按原价与原道具结算。
+        android = self.create_order("android-order")
+        self.assertEqual(android["amount_fen"], 19900)
+        with database.db() as conn:
+            rows = {row["id"]: dict(row) for row in conn.execute("SELECT id, virtual_product_id, device_platform FROM mini_orders")}
+        self.assertEqual(rows[order["id"]]["virtual_product_id"], "lc-year-ios")
+        self.assertEqual(rows[order["id"]]["device_platform"], "ios")
+        self.assertEqual(rows[android["id"]]["virtual_product_id"], "lc-year")
+        self.assertEqual(rows[android["id"]]["device_platform"], "")
+
+    def test_iphone_orders_need_the_ios_channel_and_an_iphone_listing(self):
+        self.configure()
+        with self.assertRaises(HTTPException) as disabled:
+            self.create_order("iphone-locked", platform="ios")
+        self.assertEqual(disabled.exception.status_code, 422)
+        self.assertEqual(disabled.exception.detail["code"], "ios_unavailable")
+
+        self.configure(wechat_virtual_ios_enabled=True)
+        unlisted = next(item for item in mini_orders.plans()["items"] if item["id"] == self.plan["id"])
+        self.assertFalse(unlisted["ios_available"])
+        with self.assertRaises(HTTPException) as missing_price:
+            self.create_order("iphone-unlisted", platform="ios")
+        self.assertEqual(missing_price.exception.status_code, 422)
+        self.assertEqual(missing_price.exception.detail["code"], "ios_unavailable")
+
+        priced = mini_orders.save_plan(PlanInput(name="只有 iPhone 价", days=30, price_fen=1990, is_active=True,
+                                                 virtual_product_id="lc-month", price_fen_ios=3500))
+        with self.assertRaises(HTTPException) as missing_product:
+            mini_orders.create(self.viewer.id, OrderInput(plan_id=priced["id"], plan_revision=priced["revision"], request_id="iphone-no-product", platform="ios"))
+        self.assertEqual(missing_product.exception.status_code, 422)
+        self.assertEqual(missing_product.exception.detail["code"], "ios_unavailable")
+
+    def test_iphone_virtual_refund_cannot_be_started_by_admin_from_the_device(self):
+        self.configure(wechat_virtual_ios_enabled=True)
+        self.plan = mini_orders.save_plan(PlanInput(name="测试年会员", days=365, price_fen=19900, is_active=True, virtual_product_id="lc-year",
+                                                    price_fen_ios=22800, virtual_product_id_ios="lc-year-ios"))
+        order = self.create_order("iphone-refund", platform="ios")
+        mini_orders.confirm_virtual_payment(self.query_value(order, 2))
+        mini_refunds.request(order["id"], self.viewer.id, RefundInput(reason="iPhone 端买贵了，想退款"))
+        refund = mini_orders.detail(order["id"])["refund"]
+        with self.assertRaises(HTTPException) as approved:
+            mini_refunds.review(self.admin.id, refund["id"], RefundReview(revision=refund["revision"], action="approve", reply="同意退款", confirm_refund=True))
+        self.assertEqual(approved.exception.status_code, 422)
+        self.assertIn("iOS", approved.exception.detail["error"])
 
     def test_ordinary_and_virtual_channels_cannot_confirm_each_others_orders(self):
         self.configure()
