@@ -24,6 +24,14 @@ class PlanInput(Input):
     virtual_product_id_ios: str = Field("", max_length=64, pattern=r"^[A-Za-z0-9_-]*$")
     revision: int = Field(0, ge=0)
 
+    @field_validator("price_fen_ios")
+    @classmethod
+    def valid_ios_price(cls, value: int) -> int:
+        # Apple IAP 单笔最低 1 元
+        if 0 < value < 100:
+            raise ValueError("iPhone 价格最低 1 元")
+        return value
+
 
 class OrderInput(Input):
     plan_id: str = Field(min_length=1, max_length=64)

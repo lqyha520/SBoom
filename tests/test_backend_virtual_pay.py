@@ -185,6 +185,24 @@ class VirtualPayContracts(GrowthBase):
         self.assertEqual(rows[android["id"]]["virtual_product_id"], "lc-year")
         self.assertEqual(rows[android["id"]]["device_platform"], "")
 
+    def test_ios_price_minimum_is_one_yuan(self):
+        with self.assertRaises(ValueError):
+            PlanInput(name="iPhone 体验卡", days=1, price_fen=1, price_fen_ios=99)
+        plan = PlanInput(name="iPhone 体验卡", days=1, price_fen=1, price_fen_ios=100)
+        self.assertEqual(plan.price_fen, 1)
+        self.assertEqual(plan.price_fen_ios, 100)
+
+        self.sign_in(self.admin)
+        rejected = self.client.post("/api/v1/admin/commerce/plans", json={"name": "iPhone 体验卡", "days": 1, "price_fen": 1, "price_fen_ios": 1})
+        self.assertEqual(rejected.status_code, 422)
+        accepted = self.client.post("/api/v1/admin/commerce/plans", json={
+            "name": "iPhone 体验卡", "days": 1, "price_fen": 1, "price_fen_ios": 100,
+            "virtual_product_id": "lc-trial", "virtual_product_id_ios": "lc-trial-ios",
+        })
+        self.assertEqual(accepted.status_code, 201)
+        self.assertEqual(accepted.json()["price_fen"], 1)
+        self.assertEqual(accepted.json()["price_fen_ios"], 100)
+
     def test_iphone_orders_need_the_ios_channel_and_an_iphone_listing(self):
         self.configure()
         with self.assertRaises(HTTPException) as disabled:
