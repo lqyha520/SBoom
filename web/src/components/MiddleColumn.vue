@@ -67,7 +67,7 @@ function pickTemplate(id: string) {
       <RecoveryActions />
       <p class="mb-2 text-xs text-muted">共 {{ store.paperCount * store.totalQuestions }} 题。生成后自动复核答案、解析与教学范围；复核会增加模型用量和等待时间。</p>
       <GenerationTasks />
-      <p v-if="store.usage && store.usage.daily_limit > 0" class="mb-2 text-xs text-muted numeric" title="额度只按成功出图与仍在进行的请求计数；失败或结果待确认的请求不扣次数，但过去 24 小时的失败次数有独立上限。查询原请求不重复计数。">近 24 小时已用 {{ store.usage.quota_used }} / {{ store.usage.daily_limit }} 次<template v-if="store.usage.failed + store.usage.unknown > 0">，失败 {{ store.usage.failed + store.usage.unknown }} 次未扣次数</template></p>
+      <p v-if="store.usage && store.usage.daily_limit > 0" class="mb-2 text-xs text-muted numeric" title="额度只按成功出图与仍在进行的请求计数；失败或结果待确认的请求不扣次数，但过去 24 小时的失败次数有独立上限。查询原请求不重复计数。">近 24 小时已用 {{ store.usage.quota_used }} / {{ store.usage.daily_limit }} 次<template v-if="store.usage.failed + store.usage.unknown > 0">，失败或待确认 {{ store.usage.failed + store.usage.unknown }} 次未扣次数</template></p>
       <div class="flex gap-2">
         <UButton icon="i-lucide-sparkles" :label="store.generating ? store.generateProgress || '正在生成试卷' : '生成试卷'" :loading="store.generating" :disabled="!store.canGenerate || store.layoutMode" block class="min-h-10 whitespace-normal" @click="store.requestGeneration()" />
         <UButton class="mobile-preview" icon="i-lucide-eye" color="neutral" variant="outline" aria-label="卷面预览" @click="emit('preview')" />
