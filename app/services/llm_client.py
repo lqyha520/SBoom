@@ -18,7 +18,7 @@ from app.blocking import run_sync
 from app.config import get_settings
 from app.http_limits import limited_lines
 from app.metrics import observe_provider
-from app.provider_policy import pin_provider_request
+from app.provider_policy import PROVIDER_HEADERS, pin_provider_request
 from app.services.generation_budget import reserve
 from app.services.generation_control import current_usage, record_attempt, record_usage
 
@@ -147,6 +147,7 @@ class LLMClient:
         client = httpx.AsyncClient(
             base_url=base_url,
             headers={
+                **PROVIDER_HEADERS,
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },

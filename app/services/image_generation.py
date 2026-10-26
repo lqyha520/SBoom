@@ -18,7 +18,7 @@ from PIL import Image, UnidentifiedImageError
 from app.blocking import run_sync, run_sync_in
 from app.metrics import observe_provider
 from app.models.image_generation import ImageWorksheetRequest
-from app.provider_policy import origin, validate_endpoint
+from app.provider_policy import origin, pick_reachable_ip, validate_endpoint
 from app.services.generation_control import record_attempt, record_usage
 from app.services.knowledge_scope import knowledge_scope_service
 from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num, _textbook_context
@@ -251,11 +251,11 @@ async def _public_image(url: str) -> bytes:
                     or parts.port not in (None, 443)):
                 raise ValueError("图片下载地址必须为公开 HTTPS 地址")
             addresses = await run_sync(socket.getaddrinfo, parts.hostname, 443, type=socket.SOCK_STREAM)
-            ips = [entry[4][0] for entry in addresses]
+            ips = [str(entry[4][0]) for entry in addresses]
             if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
                 raise ValueError("图片下载地址不能指向本地或内网")
             host = parts.hostname.encode("idna").decode("ascii")
-            target = httpx.URL(url).copy_with(host=ips[0])
+            target = httpx.URL(url).copy_with(host=await pick_reachable_ip(ips, 443))
             async with client.stream("GET", target, headers={"Host": host},
                                      extensions={"sni_hostname": host}) as response:
                 if response.status_code in (301, 302, 303, 307, 308):

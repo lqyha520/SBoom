@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import HTTPException
 
-from app.provider_policy import origin, pin_provider_request, validate_endpoint
+from app.provider_policy import PROVIDER_HEADERS, origin, pin_provider_request, validate_endpoint
 
 _clients: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
@@ -26,7 +26,7 @@ async def borrow_client(kind: str, timeout: float = 30, *, base_url: str | None 
 
         # 一个候选独占一个短生命周期连接池。轮询复用连接，切换、超时或取消都立即关闭。
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10, pool=5), trust_env=False,
-                                     follow_redirects=False,
+                                     follow_redirects=False, headers=PROVIDER_HEADERS,
                                      limits=httpx.Limits(max_connections=1, max_keepalive_connections=1, keepalive_expiry=15),
                                      event_hooks={"request": [pin_same_origin]}) as client:
             yield client
@@ -38,7 +38,8 @@ async def borrow_client(kind: str, timeout: float = 30, *, base_url: str | None 
         # Image providers share a client. Do not reuse an IP connection across
         # different original TLS hostnames after pinning.
         clients[key] = httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10, pool=5), trust_env=False,
-                                        follow_redirects=False, limits=httpx.Limits(max_connections=4, max_keepalive_connections=0 if provider else 2),
+                                        follow_redirects=False, headers=PROVIDER_HEADERS,
+                                        limits=httpx.Limits(max_connections=4, max_keepalive_connections=0 if provider else 2),
                                         event_hooks={"request": [pin_provider_request]} if provider else {})
     yield clients[key]
 
