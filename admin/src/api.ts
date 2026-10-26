@@ -25,8 +25,9 @@ export interface AdminStats {
   feedbacks: number
   feedbacksOob: number
   generationUsage?: {
-    requests: number; succeeded: number; running: number; unknown: number
-    model_calls: number; reported_calls: number; prompt_tokens: number; completion_tokens: number; daily_limit: number
+    requests: number; succeeded: number; failed: number; running: number; unknown: number; quota_used: number
+    model_calls: number; reported_calls: number; prompt_tokens: number; completion_tokens: number
+    daily_limit: number; failure_limit: number
   }
   securityWarnings?: string[]
   server: { model: string; encryption: string; version: string }

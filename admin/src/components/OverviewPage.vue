@@ -20,7 +20,8 @@ const usageSegments = computed(() => {
     { label: '已完成', value: usage.succeeded, color: '#168264' },
     { label: '处理中', value: usage.running, color: '#6ca9d4' },
     { label: '待确认', value: usage.unknown, color: '#ddb45d' },
-    { label: '其他结果', value: Math.max(0, usage.requests - usage.succeeded - usage.running - usage.unknown), color: '#c6d2cc' },
+    { label: '失败（不扣额度）', value: usage.failed, color: '#d4756a' },
+    { label: '其他结果', value: Math.max(0, usage.requests - usage.succeeded - usage.running - usage.unknown - usage.failed), color: '#c6d2cc' },
   ]
 })
 const usageTotal = computed(() => usageSegments.value.reduce((total, segment) => total + segment.value, 0))
@@ -113,7 +114,7 @@ onActivated(refresh)
         <div><dt>模型调用</dt><dd>{{ stats.generationUsage.model_calls }}</dd></div>
         <div><dt>输入 / 输出 Token</dt><dd class="token-count">{{ stats.generationUsage.reported_calls ? stats.generationUsage.prompt_tokens.toLocaleString() + ' / ' + stats.generationUsage.completion_tokens.toLocaleString() : '未上报' }}</dd></div>
       </dl>
-      <div class="usage-caption"><span>{{ stats.generationUsage.daily_limit > 0 ? '每用户每日上限 ' + stats.generationUsage.daily_limit + ' 次' : '每用户每日请求次数不限' }}</span><UBadge v-if="stats.generationUsage.unknown" color="warning" variant="soft">结果待确认 {{ stats.generationUsage.unknown }}</UBadge><span>用量已上报 {{ stats.generationUsage.reported_calls }} 次</span></div>
+      <div class="usage-caption"><span>{{ stats.generationUsage.daily_limit > 0 ? '每用户每日成功额度 ' + stats.generationUsage.daily_limit + ' 次（失败与待确认不扣次数，失败上限 ' + stats.generationUsage.failure_limit + ' 次）' : '每用户每日请求次数不限' }}</span><UBadge v-if="stats.generationUsage.unknown" color="warning" variant="soft">结果待确认 {{ stats.generationUsage.unknown }}</UBadge><span>用量已上报 {{ stats.generationUsage.reported_calls }} 次</span></div>
     </section>
   </section>
 </template>

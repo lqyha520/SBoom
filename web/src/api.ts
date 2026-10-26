@@ -209,13 +209,16 @@ export function fetchGenerationStatus(requestId: string) {
 export interface GenerationUsage {
   requests: number
   succeeded: number
+  failed: number
   running: number
   unknown: number
+  quota_used: number
   model_calls: number
   reported_calls: number
   prompt_tokens: number
   completion_tokens: number
   daily_limit: number
+  failure_limit: number
 }
 
 export function fetchGenerationUsage() {
