@@ -241,6 +241,15 @@ async def _poll_image_task(client: httpx.AsyncClient, data: dict, endpoint: str,
         raise ValueError("异步图片任务状态异常")
 
 
+def _asset_error(message: str, upstream_status: int | None = None) -> dict:
+    """成品下载失败的独立分类：图已在上游生成，与「模型没出图」要分开判读。"""
+    detail: dict[str, object] = {"code": "asset_unreachable", "reason": "asset_unreachable",
+                                 "error": f"{message}；上游可能已计费，请检查该模型的成品托管地址是否可达"}
+    if upstream_status is not None:
+        detail["upstream_status"] = upstream_status
+    return detail
+
+
 async def _public_image(url: str) -> bytes:
     # Provider URLs never receive the provider API key. Resolve and pin each hop
     # to a public IP, including redirects, so DNS rebinding cannot reach local services.
@@ -300,6 +309,8 @@ async def _normalize_when_available(raw: bytes) -> dict:
 @bounded_image_request
 async def generate_image(config: dict, prompt: str) -> dict:
     processing_image = False
+    # 成品下载失败与「上游没出图」是两回事：前者钱已经花了、图也在上游，只是取不回来。
+    fetching_asset = False
     body = {"model": config["model"], "prompt": prompt, "n": 1, "size": config["size"]}
     mode = config.get("requestMode", "auto")
     if mode == "async":
@@ -335,7 +346,9 @@ async def generate_image(config: dict, prompt: str) -> dict:
             if isinstance(item.get("b64_json"), str) and item["b64_json"]:
                 raw = await run_sync_in("media", base64.b64decode, item["b64_json"], validate=True)
             elif isinstance(item.get("url"), str) and item["url"]:
+                fetching_asset = True
                 raw = await _public_image(item["url"])
+                fetching_asset = False
             else:
                 raise ValueError("接口未返回 b64_json 或图片 URL")
             # 归一化会产生新 PNG 和 Base64，提前释放供应商的大响应，减少峰值副本。
@@ -346,13 +359,20 @@ async def generate_image(config: dict, prompt: str) -> dict:
     except httpx.PoolTimeout as exc:
         raise HTTPException(429, detail={"error": "生图连接池繁忙，请稍后重试"}) from exc
     except (TimeoutError, httpx.TimeoutException) as exc:
+        if fetching_asset:
+            raise HTTPException(502, detail=_asset_error("上游已生成图片，但成品地址连接超时；成品可能托管在本机不可达的 CDN")) from exc
         if processing_image:
             raise HTTPException(429, detail={"code": "image_processing_busy",
                 "error": "上游已返回图片，但本地处理超时；重新生成可能产生新的费用"}) from exc
         raise HTTPException(504, detail={"error": "生图等待超时，请查询原请求状态；上游可能已处理并计费"}) from exc
     except httpx.HTTPStatusError as exc:
+        if fetching_asset:
+            raise HTTPException(502, detail=_asset_error(
+                f"上游已生成图片，但成品地址返回 HTTP {exc.response.status_code}", exc.response.status_code)) from exc
         raise HTTPException(502, detail=_provider_error(exc.response.status_code)) from exc
     except (httpx.TransportError, httpx.DecodingError) as exc:
+        if fetching_asset:
+            raise HTTPException(502, detail=_asset_error("上游已生成图片，但成品下载中断；成品可能托管在本机不可达的 CDN")) from exc
         raise HTTPException(502, detail={"error": "生图服务连接中断，请查询原请求状态；上游可能已处理并计费"}) from exc
     except (ValueError, binascii.Error, UnidentifiedImageError, OSError, Image.DecompressionBombError,
             Image.DecompressionBombWarning) as exc:

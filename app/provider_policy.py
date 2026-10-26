@@ -2,6 +2,8 @@
 
 import ipaddress
 import socket
+import time
+from collections import OrderedDict
 from urllib.parse import urlsplit
 
 import httpx
@@ -12,6 +14,39 @@ from app.config import get_settings
 
 # 单条地址的可达性探测上限；只在 DNS 给出多个公网地址时启用。
 CONNECT_PROBE_SECONDS = 2.0
+
+# 同一家 CDN 的 anycast 边缘在境内可达性会分化：某个主机的 DNS 可能全部落在被静默丢包的网段，
+# 而同一时刻另一台边缘是通的。这里记住最近真正建连成功的边缘地址，供这种主机兜底。
+EDGE_CACHE_MAX = 8
+EDGE_CACHE_SECONDS = 900.0
+_edges: OrderedDict[tuple[str, int], float] = OrderedDict()
+
+
+def _remember_edge(ip: str, port: int) -> None:
+    key = (ip, port)
+    _edges[key] = time.monotonic()
+    _edges.move_to_end(key)
+    while len(_edges) > EDGE_CACHE_MAX:
+        _edges.popitem(last=False)
+
+
+def _fallback_edges(port: int, exclude: set[str]) -> list[str]:
+    """种子地址优先，其余按最近成功时间倒序；私网与非法地址直接丢弃。"""
+    now = time.monotonic()
+    learned = [key[0] for key, seen_at in sorted(_edges.items(), key=lambda item: item[1], reverse=True)
+               if key[1] == port and now - seen_at <= EDGE_CACHE_SECONDS]
+    seeds = [item.strip() for item in get_settings().provider_edge_fallback_ips.split(",") if item.strip()]
+    picked: list[str] = []
+    for ip in seeds + learned:
+        if ip in exclude or ip in picked:
+            continue
+        try:
+            if not ipaddress.ip_address(ip).is_global:
+                continue
+        except ValueError:
+            continue
+        picked.append(ip)
+    return picked
 
 # 上游多挂在 Cloudflare/Nginx 之后，默认 python-httpx 指纹容易被按客户端策略区别对待；
 # 生图提交、任务轮询、成品下载与文本模型都统一带上浏览器风格请求头。
@@ -70,6 +105,16 @@ def reachable_ip(ips: list[str], port: int) -> str:
     for ip in ips:
         try:
             with socket.create_connection((ip, port), timeout=CONNECT_PROBE_SECONDS):
+                _remember_edge(ip, port)
+                return ip
+        except OSError:
+            continue
+    # 解析结果整段不通（例如成品托管在 R2，而 r2.dev 只解析到黑洞网段）：
+    # 换已知可达的同 CDN 边缘再试，Host/SNI 与证书校验都保持原主机，所以内容不会被替换。
+    for ip in _fallback_edges(port, set(ips)):
+        try:
+            with socket.create_connection((ip, port), timeout=CONNECT_PROBE_SECONDS):
+                _remember_edge(ip, port)
                 return ip
         except OSError:
             continue
