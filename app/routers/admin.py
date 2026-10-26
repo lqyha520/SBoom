@@ -273,7 +273,8 @@ def _resolve_public_ip(hostname: str, port: int) -> str:
     ips = [str(entry[4][0]).split("%")[0] for entry in addresses]
     if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
         raise ValueError("接口地址不能指向本机、内网或云元数据地址")
-    return ips[0]
+    from app.provider_policy import reachable_ip
+    return reachable_ip(ips, port)
 
 
 def _pin_public_url(url: str) -> tuple[str, str]:

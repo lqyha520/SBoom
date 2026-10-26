@@ -10,6 +10,21 @@ from fastapi import HTTPException
 from app.blocking import run_sync
 from app.config import get_settings
 
+# 单条地址的可达性探测上限；只在 DNS 给出多个公网地址时启用。
+CONNECT_PROBE_SECONDS = 2.0
+
+# 上游多挂在 Cloudflare/Nginx 之后，默认 python-httpx 指纹容易被按客户端策略区别对待；
+# 生图提交、任务轮询、成品下载与文本模型都统一带上浏览器风格请求头。
+PROVIDER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"),
+    "Accept": "application/json, image/*, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Site": "cross-site",
+}
+
 
 def origin(url: str) -> tuple[str, str, int]:
     try:
@@ -47,6 +62,24 @@ def require_new_key(previous: str, requested: str, supplied: str) -> None:
         raise HTTPException(422, detail={"code": "provider_key_required", "error": "更换模型服务的协议、主机或端口后，请重新填写密钥"})
 
 
+def reachable_ip(ips: list[str], port: int) -> str:
+    """在已校验为公网的地址里挑一个真能建连的，全部不通时退回第一个以保持原有报错。"""
+    # 境内访问部分 Cloudflare 段会静默丢包，而 DNS 常把它排在第一个；只钉 ips[0] 会连带可用地址一起失败。
+    if len(ips) == 1:
+        return ips[0]
+    for ip in ips:
+        try:
+            with socket.create_connection((ip, port), timeout=CONNECT_PROBE_SECONDS):
+                return ip
+        except OSError:
+            continue
+    return ips[0]
+
+
+async def pick_reachable_ip(ips: list[str], port: int) -> str:
+    return await run_sync(reachable_ip, ips, port)
+
+
 async def pin_provider_request(request: httpx.Request) -> None:
     """Resolve once per request; retain the original Host and TLS certificate name."""
     # 配置地址仍禁止查询参数；实际请求允许任务查询参数，并继续校验来源及固定公网 IP。
@@ -54,8 +87,9 @@ async def pin_provider_request(request: httpx.Request) -> None:
     if get_settings().provider_allow_private:
         return
     host = request.url.host
+    port = request.url.port or 443
     try:
-        addresses = await run_sync(socket.getaddrinfo, host, request.url.port or 443, type=socket.SOCK_STREAM)
+        addresses = await run_sync(socket.getaddrinfo, host, port, type=socket.SOCK_STREAM)
         ips = [str(entry[4][0]) for entry in addresses]
         if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
             raise ValueError("private address")
@@ -65,4 +99,4 @@ async def pin_provider_request(request: httpx.Request) -> None:
         raise HTTPException(422, detail={"code": "provider_address_rejected", "error": "模型接口当前未解析到公网地址，未发送请求"}) from exc
     request.headers["Host"] = request.url.netloc.decode("ascii")
     request.extensions["sni_hostname"] = host
-    request.url = request.url.copy_with(host=ips[0])
+    request.url = request.url.copy_with(host=await pick_reachable_ip(ips, port))
