@@ -5,12 +5,14 @@ import json
 import socket
 import threading
 import unittest
+from contextlib import asynccontextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import MagicMock, patch
 
 import httpx
 from fastapi import HTTPException
 
+from app import provider_policy
 from app.config import get_settings
 from app.provider_policy import pin_provider_request, reachable_ip
 from app.services import image_generation as service
@@ -189,6 +191,8 @@ class ImageTransport(unittest.IsolatedAsyncioTestCase):
 
 DEAD_IP = "104.21.53.109"
 LIVE_IP = "172.67.212.55"
+# Cloudflare R2 的成品地址只解析到这两个网段，境内整段静默丢包。
+R2_IPS = ["104.18.50.34", "104.18.54.45"]
 
 
 def _probe(address, **kwargs):
@@ -198,7 +202,20 @@ def _probe(address, **kwargs):
     return MagicMock()
 
 
+def _only_live(address, **kwargs):
+    """只有那台已知可达的 CDN 边缘能建连，其余地址全部丢包。"""
+    if address[0] == LIVE_IP:
+        return MagicMock()
+    raise OSError("connection timed out")
+
+
 class ProviderIpFallback(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        provider_policy._edges.clear()
+
+    def tearDown(self):
+        provider_policy._edges.clear()
+
     def test_single_address_needs_no_probe(self):
         with patch.object(socket, "create_connection", side_effect=AssertionError("不应发起探测")) as create:
             self.assertEqual(reachable_ip([LIVE_IP], 443), LIVE_IP)
@@ -212,6 +229,26 @@ class ProviderIpFallback(unittest.IsolatedAsyncioTestCase):
     def test_all_unreachable_keeps_the_first_address(self):
         with patch.object(socket, "create_connection", side_effect=OSError):
             self.assertEqual(reachable_ip([DEAD_IP, LIVE_IP], 443), DEAD_IP)
+
+    def test_whole_blackholed_host_reuses_a_learned_cdn_edge(self):
+        with patch.object(socket, "create_connection", side_effect=_only_live) as create:
+            # 先由多地址主机学到一台真能建连的边缘
+            self.assertEqual(reachable_ip([DEAD_IP, LIVE_IP], 443), LIVE_IP)
+            # 再给一个解析结果整段黑洞的主机（例如 R2 成品地址）
+            self.assertEqual(reachable_ip(R2_IPS, 443), LIVE_IP)
+        self.assertEqual([call.args[0][0] for call in create.call_args_list],
+                         [DEAD_IP, LIVE_IP, *R2_IPS, LIVE_IP])
+
+    def test_configured_seed_edge_covers_a_cold_cache(self):
+        with patch.object(get_settings(), "provider_edge_fallback_ips", LIVE_IP), \
+                patch.object(socket, "create_connection", side_effect=_only_live):
+            self.assertEqual(reachable_ip(R2_IPS, 443), LIVE_IP)
+
+    def test_private_seed_edge_is_never_probed(self):
+        with patch.object(get_settings(), "provider_edge_fallback_ips", "10.0.0.1, 127.0.0.1, not-an-ip"), \
+                patch.object(socket, "create_connection", side_effect=OSError) as create:
+            self.assertEqual(reachable_ip(R2_IPS, 443), R2_IPS[0])
+        self.assertEqual([call.args[0][0] for call in create.call_args_list], R2_IPS)
 
     async def test_provider_request_pins_to_a_reachable_ip(self):
         sent = []
@@ -243,3 +280,54 @@ class ProviderIpFallback(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await service._public_image("https://images.invalid/output.png"), b"fixture")
         self.assertEqual(sent[0].url.host, LIVE_IP)
         self.assertEqual(sent[0].headers["host"], "images.invalid")
+
+
+class AssetDeliveryClassification(unittest.IsolatedAsyncioTestCase):
+    """成品下载失败要与「上游没出图」分开归类，否则后台会误判成模型坏了。"""
+
+    CONFIG = {"model": "fixture", "size": "1024x1536", "responseFormat": "auto", "timeout": 5,
+              "requestMode": "auto", "baseUrl": "https://fixture.invalid/v1", "api_key": "fixture"}
+
+    @staticmethod
+    def _borrow(payload=None, error=None):
+        @asynccontextmanager
+        async def borrow(*args, **kwargs):
+            def handle(request):
+                if error is not None:
+                    raise error
+                return httpx.Response(200, json=payload)
+
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+                yield client
+        return borrow
+
+    async def test_download_failure_is_classified_as_asset_unreachable(self):
+        with patch.object(service, "borrow_client", self._borrow({"data": [{"url": "https://cdn.invalid/a.png"}]})), \
+                patch.object(service, "_public_image", side_effect=httpx.ConnectTimeout("fixture")), \
+                patch("app.services.generation_budget.reserve"):
+            with self.assertRaises(HTTPException) as error:
+                await service.generate_image(self.CONFIG, "fixture")
+        self.assertEqual(error.exception.status_code, 502)
+        self.assertEqual(error.exception.detail["code"], "asset_unreachable")
+        self.assertEqual(error.exception.detail["reason"], "asset_unreachable")
+        self.assertIn("上游已生成图片", error.exception.detail["error"])
+
+    async def test_asset_status_error_keeps_the_upstream_code(self):
+        with patch.object(service, "borrow_client", self._borrow({"data": [{"url": "https://cdn.invalid/a.png"}]})), \
+                patch.object(service, "_public_image",
+                             side_effect=httpx.HTTPStatusError("fixture", request=MagicMock(),
+                                                               response=httpx.Response(404))), \
+                patch("app.services.generation_budget.reserve"):
+            with self.assertRaises(HTTPException) as error:
+                await service.generate_image(self.CONFIG, "fixture")
+        self.assertEqual(error.exception.status_code, 502)
+        self.assertEqual(error.exception.detail["code"], "asset_unreachable")
+        self.assertEqual(error.exception.detail["upstream_status"], 404)
+
+    async def test_submit_timeout_still_reports_gateway_timeout(self):
+        with patch.object(service, "borrow_client", self._borrow(error=httpx.ReadTimeout("fixture"))), \
+                patch("app.services.generation_budget.reserve"):
+            with self.assertRaises(HTTPException) as error:
+                await service.generate_image(self.CONFIG, "fixture")
+        self.assertEqual(error.exception.status_code, 504)
+        self.assertNotIn("code", error.exception.detail)
