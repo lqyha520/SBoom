@@ -2,7 +2,7 @@
 export interface ApiSchemas {
   "AdminCreateUser": { "password": string; "role"?: string; "username": string }
   "AdminLlmConfigIn": { "apiKey"?: string; "baseUrl"?: string; "id"?: (string | null); "maxTokens"?: number; "model"?: string; "timeout"?: number }
-  "AdminLlmModelsIn": { "apiKey"?: string; "baseUrl"?: string; "id"?: (string | null); "timeout"?: number }
+  "AdminLlmModelsIn": { "apiKey"?: string; "baseUrl"?: string; "id"?: (string | null); "kind"?: "text" | "image"; "timeout"?: number }
   "AdminProfileUpdate": { "avatar"?: (string | null); "new_password"?: (string | null); "nickname"?: (string | null); "revision": number; "username"?: (string | null) }
   "AdminUpdateUser": { "is_active"?: (boolean | null); "password"?: (string | null); "role"?: (string | null) }
   "ArchiveUpdate": { "favorite"?: (boolean | null); "folder_id"?: (string | null); "title"?: (string | null) }

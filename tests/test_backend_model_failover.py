@@ -269,6 +269,38 @@ class ModelFailover(unittest.TestCase):
         self.assertEqual(self.calls[0].headers["authorization"], "Bearer secret-second")
         self.assertNotIn("secret-second", result.text)
 
+    def test_image_model_list_uses_the_saved_image_candidate_key(self):
+        self.login_admin()
+        image_config.save_models([ImageModelProfile(id="image", baseUrl="https://provider.invalid/v1",
+                                                    model="image-draft", apiKey="image-secret")])
+        self.outputs = [httpx.Response(200, json={"models": [
+            {"id": "gpt-image-2.5-sunburst"}, {"id": "gpt-image-2"},
+        ]})]
+        result = self.client.post("/api/v1/admin/llm-models", json={"id": "image", "kind": "image"})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json(), {"status": "ok",
+                                        "models": ["gpt-image-2", "gpt-image-2.5-sunburst"], "count": 2})
+        self.assertEqual(self.calls[0].url.path, "/v1/models")
+        self.assertEqual(self.calls[0].headers["authorization"], "Bearer image-secret")
+        self.assertNotIn("image-secret", result.text)
+
+    def test_model_list_never_borrows_keys_across_text_and_image_configs(self):
+        self.login_admin()
+        image_config.save_models([ImageModelProfile(id="image", baseUrl="https://provider.invalid/v1",
+                                                    model="image-draft", apiKey="image-secret")])
+        for payload in ({"id": "image"}, {"id": "image", "kind": "text"}, {"id": "first", "kind": "image"}):
+            with self.subTest(payload=payload):
+                result = self.client.post("/api/v1/admin/llm-models", json=payload)
+                self.assertEqual(result.status_code, 400, result.text)
+        self.assertEqual(len(self.calls), 0)
+        self.outputs = [httpx.Response(200, json={"data": [{"id": "image-draft"}]})]
+        typed = self.client.post("/api/v1/admin/llm-models", json={
+            "id": "image", "kind": "image", "apiKey": "typed-image-key",
+        })
+        self.assertEqual(typed.status_code, 200, typed.text)
+        self.assertEqual(typed.json()["models"], ["image-draft"])
+        self.assertEqual(self.calls[0].headers["authorization"], "Bearer typed-image-key")
+
     def test_model_list_rejects_unknown_ids_and_unusable_responses(self):
         self.login_admin()
         rejected = self.client.post("/api/v1/admin/llm-models", json={

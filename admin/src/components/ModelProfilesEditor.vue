@@ -85,6 +85,7 @@ async function fetchModels() {
   try {
     const result = await api.fetchLlmModels({
       id: model.id, baseUrl: model.baseUrl.trim(), apiKey: model.apiKey.trim(), timeout: model.timeout,
+      kind: props.kind,
     })
     fetchedModels.value = { ...fetchedModels.value, [model.id]: result.models }
   } catch (error) {
@@ -173,15 +174,15 @@ useAdminRefresh(load, () => { loadSequence++; loading.value = false })
             <UFormField :label="isImage ? '生图模型名称' : '模型名称'" required>
               <div class="model-name-row">
                 <UInput v-model="selected.model" placeholder="模型 ID" :disabled="!!busy" required maxlength="120" />
-                <UButton v-if="!isImage" label="拉取模型" icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="busy === 'models'" :disabled="!!busy" @click="fetchModels" />
+                <UButton label="拉取模型" icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="busy === 'models'" :disabled="!!busy" @click="fetchModels" />
               </div>
             </UFormField>
             <UFormField :label="isImage ? '生图超时（秒）' : '超时时间（秒）'"><UInputNumber v-model="selected.timeout" :min="isImage ? 30 : 10" :max="600" :step="10" :disabled="!!busy" /></UFormField>
           </div>
-          <UFormField v-if="!isImage && fetchedModels[selected.id]?.length" label="从拉取结果选择" :description="`已拉取 ${fetchedModels[selected.id]?.length ?? 0} 个模型，选择后会覆盖上方模型名称。`">
+          <UFormField v-if="fetchedModels[selected.id]?.length" label="从拉取结果选择" :description="`已拉取 ${fetchedModels[selected.id]?.length ?? 0} 个模型，选择后会覆盖上方模型名称。`">
             <USelect v-model="selected.model" :items="fetchedModels[selected.id] ?? []" placeholder="选择模型" :disabled="!!busy" aria-label="从拉取结果选择" />
           </UFormField>
-          <UAlert v-if="!isImage && listError" :title="listError" color="error" variant="soft" />
+          <UAlert v-if="listError" :title="listError" color="error" variant="soft" />
           <div v-if="isImage" class="field-grid">
             <UFormField label="图片尺寸"><UInput v-model="selected.size" :disabled="!!busy" required maxlength="30" /></UFormField>
             <UFormField label="图片返回格式"><USelect v-model="selected.responseFormat" :items="formats" :disabled="!!busy" /></UFormField>

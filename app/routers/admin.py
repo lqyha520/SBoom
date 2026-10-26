@@ -11,6 +11,7 @@ import json
 import logging
 import socket
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -24,7 +25,7 @@ from app.http_limits import limited_lines
 from app.models.model_profiles import TextModelProfiles
 from app.security import encryption_backend, security_warnings
 from app.sensitive_config import SensitiveConfigRoute
-from app.services import app_config, user_store
+from app.services import app_config, image_config, user_store
 from app.services.generation_control import usage_summary
 from app.services.llm_client import parse_stream_chunk
 from app.services.model_profiles import entries
@@ -224,6 +225,8 @@ class AdminLlmModelsIn(BaseModel):
     baseUrl: str = Field("", max_length=500)
     apiKey: str = Field("", max_length=4000, repr=False)
     timeout: int = Field(60, ge=10, le=600)
+    # 图片候选的密钥存在图片配置里，按来源取已保存的密钥，避免要求管理员重复输入。
+    kind: Literal["text", "image"] = "text"
 
 
 @router.get("/llm-config", summary="获取全局模型配置（不含密钥明文）")
@@ -324,17 +327,21 @@ def _stream_reasoning(event: str) -> str:
         return ""
 
 
-@router.post("/llm-models", summary="拉取模型服务支持的模型列表")
+@router.post("/llm-models", summary="拉取模型服务支持的模型列表（文本与图片候选共用）")
 async def list_llm_models(req: AdminLlmModelsIn | None = None, admin: CurrentUser = Depends(require_admin)):
     """用当前表单或已保存的地址与密钥请求 OpenAI 兼容的 GET /models。
 
-    防 SSRF 与密钥借用规则和 test-llm 一致：未保存的地址必须解析到公网 IP；
-    指定了未知 id 时不会借用其他已保存模型的密钥。
+    kind=image 时从图片候选配置里取已保存的密钥；防 SSRF 与密钥借用规则和 test-llm 一致：
+    未保存的地址必须解析到公网 IP；指定了未知 id 时不会借用其他模型（含另一类配置）的密钥。
     """
     import httpx as _httpx
 
-    g = await run_sync(app_config.get_admin_config, with_key=True)
-    managed = g.get("managed", "models" in g) or bool(req and req.id)
+    is_image = bool(req and req.kind == "image")
+    if is_image:
+        g = await run_sync(image_config.get_config, with_key=True)
+    else:
+        g = await run_sync(app_config.get_admin_config, with_key=True)
+    managed = is_image or g.get("managed", "models" in g) or bool(req and req.id)
     if req and req.id:
         g = next((profile for profile in entries(g) if profile["id"] == req.id), {})
         if not g and not req.apiKey:
