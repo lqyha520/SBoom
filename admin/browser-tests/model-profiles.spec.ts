@@ -20,8 +20,10 @@ async function fixture(context: BrowserContext, gate = Promise.resolve()) {
       await route.fulfill({ json: { reply: 'offline fixture' } }); return
     }
     if (path.endsWith('/llm-models')) {
-      modelFetches.push(request.postDataJSON())
-      await route.fulfill({ json: { status: 'ok', models: ['text-main', 'backup-model', 'third-model'], count: 3 } }); return
+      const body = request.postDataJSON() as { kind?: string }
+      modelFetches.push(body)
+      const models = body.kind === 'image' ? ['gpt-image-2', 'gpt-image-2.5-sunburst'] : ['text-main', 'backup-model', 'third-model']
+      await route.fulfill({ json: { status: 'ok', models, count: models.length } }); return
     }
     if (!path.endsWith('/llm-config') && !path.endsWith('/image-config')) {
       await route.fulfill({ status: 503, json: { detail: '未启用的离线接口' } }); return
@@ -66,7 +68,7 @@ for (const width of [1440, 390, 320]) {
     await text.locator('.model-select').first().click()
     await text.getByRole('button', { name: '拉取模型', exact: true }).click()
     await expect.poll(() => server.modelFetches.length).toBe(1)
-    expect(server.modelFetches[0]).toMatchObject({ id: 'text-backup', baseUrl: 'https://backup.example.test/v1', apiKey: '' })
+    expect(server.modelFetches[0]).toMatchObject({ id: 'text-backup', baseUrl: 'https://backup.example.test/v1', apiKey: '', kind: 'text' })
     await text.getByRole('combobox', { name: '从拉取结果选择' }).click()
     await page.getByRole('option', { name: 'backup-model', exact: true }).click()
     await expect(text.getByRole('textbox', { name: '模型名称', exact: false })).toHaveValue('backup-model')
@@ -109,9 +111,15 @@ for (const width of [1440, 390, 320]) {
     expect(server.text).toHaveLength(2)
     await page.getByRole('tab', { name: '图片出题' }).click()
     await expect(image.getByRole('textbox', { name: '生图模型名称' })).toHaveValue('image-draft')
+    await image.getByRole('button', { name: '拉取模型', exact: true }).click()
+    await expect.poll(() => server.modelFetches.length).toBe(2)
+    expect(server.modelFetches[1]).toMatchObject({ id: 'image-main', baseUrl: 'https://image.example.test/v1', apiKey: '', kind: 'image' })
+    await image.getByRole('combobox', { name: '从拉取结果选择' }).click()
+    await page.getByRole('option', { name: 'gpt-image-2.5-sunburst', exact: true }).click()
+    await expect(image.getByRole('textbox', { name: '生图模型名称' })).toHaveValue('gpt-image-2.5-sunburst')
     await image.getByRole('button', { name: '保存生图配置', exact: true }).click()
     await expect(image.getByText('模型配置已保存', { exact: true })).toBeVisible()
-    expect(server.image[0]?.model).toBe('image-draft')
+    expect(server.image[0]?.model).toBe('gpt-image-2.5-sunburst')
     await page.screenshot({ path: info.outputPath(`image-models-${width}.png`), fullPage: true, animations: 'disabled' })
   })
 }
