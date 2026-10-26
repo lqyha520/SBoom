@@ -306,8 +306,8 @@ test('保存其他面板时保留修订和打印版本草稿，后续使用最�
 const healthyStats = {
   users: 128, activeUsers: 116, admins: 2, templates: 346, feedbacks: 18, feedbacksOob: 2,
   llmConfigured: 1, server: { model: 'configured-text-model', encryption: '已启用', version: '0.3.0' },
-  generationUsage: { requests: 84, succeeded: 80, running: 3, unknown: 1, model_calls: 92,
-    reported_calls: 92, prompt_tokens: 138240, completion_tokens: 276480, daily_limit: 50 },
+  generationUsage: { requests: 84, succeeded: 76, running: 2, unknown: 1, failed: 5, model_calls: 92,
+    reported_calls: 92, prompt_tokens: 138240, completion_tokens: 276480, daily_limit: 50, failure_limit: 30 },
 }
 
 test('概览显示真实请求分布，空数据不虚构用量，快捷入口可用', async ({ page, context }) => {
@@ -315,12 +315,12 @@ test('概览显示真实请求分布，空数据不虚构用量，快捷入口�
   let empty = false
   await page.route('**/api/v1/admin/stats', route => route.fulfill({ json: {
     ...healthyStats,
-    generationUsage: empty ? { ...healthyStats.generationUsage, requests: 0, succeeded: 0, running: 0, unknown: 0, model_calls: 0, reported_calls: 0 } : healthyStats.generationUsage,
+    generationUsage: empty ? { ...healthyStats.generationUsage, requests: 0, succeeded: 0, running: 0, unknown: 0, failed: 0, model_calls: 0, reported_calls: 0 } : healthyStats.generationUsage,
   } }))
   await page.goto('/admin/#overview')
   const distribution = page.getByLabel('生成请求状态分布', { exact: true })
   await expect(distribution).toContainText('84 次请求')
-  await expect(distribution.locator('li')).toHaveText(['已完成80', '处理中3', '待确认1', '其他结果0'])
+  await expect(distribution.locator('li')).toHaveText(['已完成76', '处理中2', '待确认1', '失败（不扣额度）5', '其他结果0'])
   empty = true
   await page.getByRole('button', { name: '刷新概览', exact: true }).click()
   await expect(distribution).toContainText('0 次请求')
