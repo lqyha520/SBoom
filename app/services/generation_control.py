@@ -157,13 +157,25 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
         active = conn.execute(
             "SELECT COUNT(*) FROM generation_requests WHERE user_id = ? AND status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) >= ?", (user_id, now),
         ).fetchone()[0]
-        if settings.generation_daily_limit > 0:
-            used = conn.execute(
-                "SELECT COUNT(*) FROM generation_requests WHERE user_id = ? AND created_at >= ?",
-                (user_id, now - 86400),
-            ).fetchone()[0]
-            if used >= settings.generation_daily_limit:
-                raise HTTPException(429, detail={"error": "已达到过去 24 小时的生成请求额度", "code": "generation_quota"})
+        # 额度只按「真正出图」计：失败与结果未知的请求退还给用户，
+        # 但另设失败上限，避免上游抖动时被无限重试把全站预算刷穿。
+        if settings.generation_daily_limit > 0 or settings.generation_daily_failure_limit > 0:
+            counted = conn.execute(
+                "SELECT SUM(CASE WHEN status = 'succeeded' "
+                "OR (status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) >= ?) THEN 1 ELSE 0 END) AS charged, "
+                "SUM(CASE WHEN status IN ('failed', 'unknown') "
+                "OR (status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) < ?) THEN 1 ELSE 0 END) AS failed "
+                "FROM generation_requests WHERE user_id = ? AND created_at >= ?",
+                (now, now, user_id, now - 86400),
+            ).fetchone()
+            charged, failed = (counted["charged"] or 0), (counted["failed"] or 0)
+            if settings.generation_daily_limit > 0 and charged >= settings.generation_daily_limit:
+                raise HTTPException(429, detail={"error": "过去 24 小时的成功生成额度已用完；失败请求不扣次数", "code": "generation_quota"})
+            if settings.generation_daily_failure_limit > 0 and failed >= settings.generation_daily_failure_limit:
+                raise HTTPException(429, detail={
+                    "error": "过去 24 小时生成失败次数过多，请稍后再试；失败不计入生成额度",
+                    "code": "generation_failure_quota",
+                })
         if total >= settings.generation_global_concurrency or active >= settings.generation_user_concurrency:
             raise HTTPException(429, detail={"error": "生成任务繁忙，请稍后再试", "code": "generation_busy"}, headers={"Retry-After": "5"})
         if kind == "image":
@@ -290,13 +302,19 @@ def usage_summary(user_id: int | None = None) -> dict:
         row = conn.execute(
             "SELECT COUNT(*) AS requests, "
             "COALESCE(SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END), 0) AS succeeded, "
+            "COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed, "
             "COALESCE(SUM(CASE WHEN status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) >= ? THEN 1 ELSE 0 END), 0) AS running, "
             "COALESCE(SUM(CASE WHEN status = 'unknown' OR (status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) < ?) THEN 1 ELSE 0 END), 0) AS unknown, "
             "COALESCE(SUM(model_calls), 0) AS model_calls, COALESCE(SUM(reported_calls), 0) AS reported_calls, "
             "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, COALESCE(SUM(completion_tokens), 0) AS completion_tokens "
             "FROM generation_requests WHERE " + where, (lease_cutoff, lease_cutoff, *params),
         ).fetchone()
-    return {**dict(row), "daily_limit": get_settings().generation_daily_limit}
+    summary = dict(row)
+    settings = get_settings()
+    # quota_used 与准入判定同口径：成功 + 在途；失败与结果未知已退还，不占额度。
+    summary["quota_used"] = summary["succeeded"] + summary["running"]
+    return {**summary, "daily_limit": settings.generation_daily_limit,
+            "failure_limit": settings.generation_daily_failure_limit}
 
 
 def request_status(user_id: int, request_id: str) -> dict:

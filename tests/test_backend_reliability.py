@@ -66,6 +66,7 @@ class BackendReliability(unittest.TestCase):
         pg_support.case_database(self.stack)
         self.stack.enter_context(patch.object(get_settings(), "generation_repair_limit", 0))
         self.stack.enter_context(patch.object(get_settings(), "generation_daily_limit", 100))
+        self.stack.enter_context(patch.object(get_settings(), "generation_daily_failure_limit", 1000))
         self.stack.enter_context(patch.object(get_settings(), "generation_user_concurrency", 3))
         self.stack.enter_context(patch.object(get_settings(), "generation_global_concurrency", 6))
         self.stack.enter_context(patch.object(generate, "_call_quality_review", new=AsyncMock(side_effect=passed_review)))
@@ -290,6 +291,37 @@ class BackendReliability(unittest.TestCase):
         self.assertEqual(response.status_code, 429)
         mock.assert_not_awaited()
         self.assertEqual(self.client.get("/api/v1/me/usage").json()["requests"], 1)
+
+    def test_failed_requests_return_quota_but_consume_failure_allowance(self):
+        """上游失败要把次数退还用户，但另设失败上限，防止对着坏上游无限重试烧预算。"""
+        settings = get_settings()
+        settings.generation_daily_limit = 2
+        settings.generation_daily_failure_limit = 6
+        now = int(time.time())
+        with database.db() as conn:
+            for index in range(5):
+                conn.execute(
+                    "INSERT INTO generation_requests(user_id,request_id,kind,payload_hash,status,created_at) "
+                    "VALUES (?, ?, 'image', 'old', 'failed', ?)", (self.user.id, f"down-{index}", now),
+                )
+        control._begin(self.user.id, "after-failures", "batch", {})
+        with database.db() as conn:
+            for index in range(2):
+                conn.execute(
+                    "INSERT INTO generation_requests(user_id,request_id,kind,payload_hash,status,created_at) "
+                    "VALUES (?, ?, 'image', 'old', 'succeeded', ?)", (self.user.id, f"done-{index}", now),
+                )
+        with self.assertRaises(HTTPException) as quota:
+            control._begin(self.user.id, "over-quota", "batch", {})
+        self.assertEqual(quota.exception.status_code, 429)
+        self.assertEqual(quota.exception.detail["code"], "generation_quota")
+        settings.generation_daily_limit = 10  # 放开成功额度，让失败上限成为唯一约束
+        settings.generation_daily_failure_limit = 4
+        with self.assertRaises(HTTPException) as cap:
+            control._begin(self.user.id, "over-failures", "batch", {})
+        self.assertEqual(cap.exception.detail["code"], "generation_failure_quota")
+        usage = self.client.get("/api/v1/me/usage").json()
+        self.assertEqual((usage["succeeded"], usage["failed"], usage["quota_used"]), (2, 5, 3))
 
     def test_parallel_admission_is_atomic(self):
         def admit(index):

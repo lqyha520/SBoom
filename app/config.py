@@ -27,7 +27,8 @@ class Settings(BaseSettings):
     # 题目生成
     default_question_count: int = 5
     max_question_count: int = 30
-    generation_daily_limit: int = Field(20, ge=0, le=100000)  # 0 关闭每用户每日请求次数限制
+    generation_daily_limit: int = Field(20, ge=0, le=100000)  # 0 关闭每用户每日成功生成额度（失败与结果未知不再占用）
+    generation_daily_failure_limit: int = Field(30, ge=0, le=100000)  # 0 关闭失败次数上限；失败仍消耗全站预算，所以要有独立闸
     generation_user_concurrency: int = Field(2, ge=1, le=100)
     generation_global_concurrency: int = Field(6, ge=1, le=1000)
     generation_repair_limit: int = Field(3, ge=0, le=10)
