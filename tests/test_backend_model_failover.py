@@ -42,6 +42,8 @@ def stream_event(text="", reason=None, usage=None):
 class ModelFailover(unittest.TestCase):
     def setUp(self):
         fixtures.BackendReliability.setUp(self)
+        # 此类逐项覆盖故障协议；跨请求的冷却/恢复单独由运行策略测试验证。
+        self.stack.enter_context(patch.object(get_settings(), "provider_failure_threshold", 1000))
         self.client.app.include_router(admin.router)
         self.client.app.include_router(image_generation.router)
         self.admin = user_store.create_user("model-admin", "test-password", role="admin")

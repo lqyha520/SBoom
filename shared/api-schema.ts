@@ -1,7 +1,7 @@
 // 自动生成：python scripts/generate_api_types.py；请修改后端模型后重新生成。
 export interface ApiSchemas {
   "AdminCreateUser": { "password": string; "role"?: string; "username": string }
-  "AdminLlmConfigIn": { "apiKey"?: string; "baseUrl"?: string; "id"?: (string | null); "maxTokens"?: number; "model"?: string; "timeout"?: number }
+  "AdminLlmConfigIn": { "apiKey"?: string; "baseUrl"?: string; "id"?: (string | null); "maxTokens"?: number; "model"?: string; "samplingMode"?: "configured" | "omit"; "timeout"?: number; "tokenParameter"?: "max_tokens" | "max_completion_tokens" }
   "AdminLlmModelsIn": { "apiKey"?: string; "baseUrl"?: string; "id"?: (string | null); "kind"?: "text" | "image"; "timeout"?: number }
   "AdminProfileUpdate": { "avatar"?: (string | null); "new_password"?: (string | null); "nickname"?: (string | null); "revision": number; "username"?: (string | null) }
   "AdminUpdateUser": { "is_active"?: (boolean | null); "password"?: (string | null); "role"?: (string | null) }
@@ -66,6 +66,7 @@ export interface ApiSchemas {
   "NoticeUpdate": { "body"?: string; "ends_at"?: number; "is_visible"?: boolean; "level"?: "info" | "warning"; "placement"?: "popup" | "banner"; "revision": number; "starts_at"?: number; "title": string }
   "OrderInput": { "plan_id": string; "plan_revision": number; "platform"?: string; "request_id": string }
   "PaperLabels": { "revision": number; "tag_ids"?: Array<string> }
+  "PayInput": { "platform"?: string }
   "PlanInput": { "days": number; "description"?: string; "is_active"?: boolean; "name": string; "price_fen": number; "price_fen_ios"?: number; "purchase_limit"?: number; "revision"?: number; "sort_order"?: number; "virtual_product_id"?: string; "virtual_product_id_ios"?: string }
   "Question": { "acceptable_answers"?: (Array<string> | null); "analysis"?: string; "answer": (string | number | number | Array<Array<number>>); "difficulty_level"?: (number | null); "expected_time_seconds"?: (number | null); "id"?: (number | null); "left"?: (number | string | null); "left_expr"?: (string | null); "left_items"?: (Array<string> | null); "options"?: (Array<string> | null); "quality_issues"?: Array<string>; "quality_status"?: "unchecked" | "passed" | "needs_review"; "right"?: (number | string | null); "right_expr"?: (string | null); "right_items"?: (Array<string> | null); "stem"?: string; "tags"?: Array<string>; "top"?: (number | string | null); "type"?: string }
   "RefundInput": { "reason": string }
@@ -79,7 +80,7 @@ export interface ApiSchemas {
   "SupportSettings": { "benefits"?: string; "email"?: string; "hours"?: string; "phone"?: string; "qr_url"?: string; "revision"?: number; "wechat"?: string }
   "TagInput": { "is_visible"?: boolean; "kind": "textbook" | "term" | "unit" | "knowledge"; "name": string; "revision"?: number; "sort_order"?: number }
   "TemplateIn": { "expected_revision"?: (number | null); "template": { [key: string]: unknown } }
-  "TextModelProfile": { "apiKey"?: string; "baseUrl": string; "enabled"?: boolean; "id": string; "maxTokens"?: number; "model": string; "name"?: string; "timeout"?: number }
+  "TextModelProfile": { "apiKey"?: string; "baseUrl": string; "enabled"?: boolean; "id": string; "maxTokens"?: number; "model": string; "name"?: string; "samplingMode"?: "configured" | "omit"; "timeout"?: number; "tokenParameter"?: "max_tokens" | "max_completion_tokens" }
   "TextModelProfiles": { "models": Array<ApiSchemas["TextModelProfile"]>; "revision": string }
   "TextbookBook": { "id": string; "semester": string; "series": string; "source_url": string; "units": Array<ApiSchemas["TextbookUnit"]>; "verified_on": string }
   "TextbookUnit": { "page": number; "title": string; "topics"?: Array<string> }
@@ -137,6 +138,7 @@ export interface ApiOperations {
   "PUT /api/v1/admin/engagement/requests/{identifier}": { body: ApiSchemas["RequestResolution"] }
   "GET /api/v1/admin/experience/analytics": { body: unknown }
   "GET /api/v1/admin/experience/feedback": { body: unknown }
+  "GET /api/v1/admin/experience/feedback/{identifier}": { body: unknown }
   "PUT /api/v1/admin/experience/feedback/{identifier}": { body: ApiSchemas["FeedbackUpdate"] }
   "GET /api/v1/admin/experience/support": { body: unknown }
   "PUT /api/v1/admin/experience/support": { body: ApiSchemas["SupportSettings"] }
@@ -161,6 +163,7 @@ export interface ApiOperations {
   "PATCH /api/v1/admin/mini-users/{user_id}": { body: ApiSchemas["AdminProfileUpdate"] }
   "PUT /api/v1/admin/mini-users/{user_id}": { body: ApiSchemas["MembershipUpdate"] }
   "GET /api/v1/admin/mini-users/{user_id}/avatar/{version}": { body: unknown }
+  "GET /api/v1/admin/model-health": { body: unknown }
   "GET /api/v1/admin/site/analytics": { body: unknown }
   "GET /api/v1/admin/site/banners": { body: unknown }
   "POST /api/v1/admin/site/banners": { body: ApiSchemas["BannerInput"] }
@@ -193,6 +196,7 @@ export interface ApiOperations {
   "PUT /api/v1/admin/site/notices/{notice_id}": { body: ApiSchemas["NoticeUpdate"] }
   "GET /api/v1/admin/stats": { body: unknown }
   "POST /api/v1/admin/test-llm": { body: (ApiSchemas["AdminLlmConfigIn"] | null) }
+  "POST /api/v1/admin/test-llm-generation": { body: (ApiSchemas["AdminLlmConfigIn"] | null) }
   "GET /api/v1/admin/users": { body: unknown }
   "POST /api/v1/admin/users": { body: ApiSchemas["AdminCreateUser"] }
   "DELETE /api/v1/admin/users/{user_id}": { body: unknown }
@@ -216,6 +220,7 @@ export interface ApiOperations {
   "POST /api/v1/generate-batch": { body: ApiSchemas["BatchGenerateRequest"] }
   "POST /api/v1/generate-image": { body: ApiSchemas["ImageWorksheetRequest"] }
   "POST /api/v1/generate/stream": { body: ApiSchemas["GenerateRequest"] }
+  "GET /api/v1/generation/options": { body: unknown }
   "GET /api/v1/image-generation/assets/{asset_id}": { body: unknown }
   "GET /api/v1/image-generation/options": { body: unknown }
   "POST /api/v1/image-generation/prompt": { body: ApiSchemas["ImageWorksheetRequest"] }
@@ -274,7 +279,7 @@ export interface ApiOperations {
   "POST /api/v1/mini/orders": { body: ApiSchemas["OrderInput"] }
   "GET /api/v1/mini/orders/{identifier}": { body: unknown }
   "POST /api/v1/mini/orders/{identifier}/cancel": { body: unknown }
-  "POST /api/v1/mini/orders/{identifier}/pay": { body: unknown }
+  "POST /api/v1/mini/orders/{identifier}/pay": { body: (ApiSchemas["PayInput"] | null) }
   "POST /api/v1/mini/orders/{identifier}/refund": { body: ApiSchemas["RefundInput"] }
   "POST /api/v1/mini/orders/{identifier}/sync": { body: unknown }
   "POST /api/v1/mini/password": { body: ApiSchemas["MiniPasswordUpdate"] }

@@ -17,6 +17,7 @@ async function api(context: BrowserContext) {
     else if (path === '/api/v1/scope') data = { allowed: ['加减法'] }
     else if (path === '/api/v1/me/templates') data = { templates: [] }
     else if (path === '/api/v1/me/usage') data = { requests: 0, daily_limit: 0 }
+    else if (path === '/api/v1/generation/options') data = { revision: 'offline-models', timeout_ms: 900000, task_timeout_seconds: 870 }
     else throw new Error(`浏览器用例出现未声明请求：${route.request().method()} ${path}`)
     await route.fulfill({ json: data })
   })

@@ -11,6 +11,7 @@ async function fixture(context: BrowserContext, gate = Promise.resolve()) {
   const versions = { text: 1, image: 1 }
   const writes: { path: string; body: { revision: string; models: Profile[] } }[] = []
   const probes: Record<string, unknown>[] = []
+  const realProbes: Record<string, unknown>[] = []
   const modelFetches: Record<string, unknown>[] = []
   await context.route('**/api/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname
@@ -18,6 +19,18 @@ async function fixture(context: BrowserContext, gate = Promise.resolve()) {
     if (path.endsWith('/test-llm')) {
       probes.push(request.postDataJSON())
       await route.fulfill({ json: { reply: 'offline fixture' } }); return
+    }
+    if (path.endsWith('/test-llm-generation')) {
+      realProbes.push(request.postDataJSON())
+      await route.fulfill({ json: { reply: '真实调用通过，JSON 输出正常', seconds: 0.1 } }); return
+    }
+    if (path.endsWith('/model-health')) {
+      const kind = new URL(request.url()).searchParams.get('kind') === 'image' ? 'image' : 'text'
+      const models = kind === 'image' ? image : text
+      await route.fulfill({ json: { revision: String(versions[kind]), task_timeout_seconds: 870, models: models.map(model => ({
+        id: model.id, state: 'healthy', successes: 9, failures: 1, success_rate: 0.9, average_seconds: 2.5, last_seconds: 2,
+        retry_after_seconds: 0,
+      })) } }); return
     }
     if (path.endsWith('/llm-models')) {
       const body = request.postDataJSON() as { kind?: string }
@@ -53,8 +66,27 @@ async function fixture(context: BrowserContext, gate = Promise.resolve()) {
     }
     await route.fulfill({ json: { ...(models[0] ?? { baseUrl: '', model: '', timeout: 120, hasKey: false }), models, revision: String(versions[kind]) } })
   })
-  return { writes, probes, modelFetches, text, image, changeText: () => { versions.text++; text[0]!.name = '另一窗口已保存' } }
+  return { writes, probes, realProbes, modelFetches, text, image, changeText: () => { versions.text++; text[0]!.name = '另一窗口已保存' } }
 }
+
+test('展示后台等待时限与模型健康，并用当前兼容参数测试真实 JSON 调用', async ({ page, context }) => {
+  const server = await fixture(context)
+  await page.goto('/admin/#llm')
+  const text = page.getByRole('region', { name: '全局模型配置', exact: true })
+  await expect(text.getByText('成功率 90% · 平均 2.5 秒').first()).toBeVisible()
+  await expect(text.getByText(/当前任务上限 870 秒/)).toBeVisible()
+  await text.getByRole('combobox', { name: '采样参数兼容性' }).click()
+  await page.getByRole('option', { name: '省略采样参数（模型默认值）' }).click()
+  await text.getByRole('combobox', { name: '输出 token 参数' }).click()
+  await page.getByRole('option', { name: 'max_completion_tokens', exact: true }).click()
+  await text.getByRole('button', { name: '测试真实 JSON 调用', exact: true }).click()
+  await expect.poll(() => server.realProbes.length).toBe(1)
+  expect(server.realProbes[0]).toMatchObject({ id: 'text-main', apiKey: '', samplingMode: 'omit', tokenParameter: 'max_completion_tokens' })
+  await expect(text.getByText(/真实调用成功/)).toBeVisible()
+  await text.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect.poll(() => server.writes.length).toBe(1)
+  expect(server.writes[0]?.body.models[0]).toMatchObject({ samplingMode: 'omit', tokenParameter: 'max_completion_tokens' })
+})
 
 for (const width of [1440, 390, 320]) {
   test(`多模型排序、停用、增删、标签草稿与保存 ${width}px`, async ({ page, context }, info) => {

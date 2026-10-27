@@ -9,7 +9,7 @@ from app.blocking import run_sync
 from app.deps import require_admin, require_recent_admin
 from app.http_limits import limited_body
 from app.library_deps import no_store, require_mini_user
-from app.models.commerce import BillInput, OrderInput, PlanInput, RefundInput, RefundReview
+from app.models.commerce import BillInput, OrderInput, PayInput, PlanInput, RefundInput, RefundReview
 from app.models.membership_cards import CardCreate, CardRedeem
 from app.services import membership_cards, mini_orders, mini_refunds, payment_bills, wechat_virtual_pay
 from app.services.mini_auth import MiniUser
@@ -68,9 +68,9 @@ def order(identifier: str, user: MiniUser = Depends(require_mini_user)):
 
 
 @router.post("/mini/orders/{identifier}/pay")
-def pay(identifier: str, user: MiniUser = Depends(require_mini_user)):
+def pay(identifier: str, body: PayInput | None = None, user: MiniUser = Depends(require_mini_user)):
     throttle(str(user.id), "pay")
-    return payment_call(mini_orders.pay, identifier, user.id)
+    return payment_call(mini_orders.pay, identifier, user.id, body.platform if body else "")
 
 
 @router.post("/mini/orders/{identifier}/sync")

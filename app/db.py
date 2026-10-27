@@ -193,6 +193,24 @@ CREATE TABLE IF NOT EXISTS app_config (
     updated_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
 );
 
+CREATE TABLE IF NOT EXISTS provider_health (
+    kind TEXT NOT NULL,
+    profile_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    successes BIGINT NOT NULL DEFAULT 0,
+    failures BIGINT NOT NULL DEFAULT 0,
+    fallback_calls BIGINT NOT NULL DEFAULT 0,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    cooldown_until DOUBLE PRECISION NOT NULL DEFAULT 0,
+    probe_until DOUBLE PRECISION NOT NULL DEFAULT 0,
+    total_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+    last_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+    last_status TEXT NOT NULL DEFAULT '',
+    updated_at DOUBLE PRECISION NOT NULL DEFAULT 0,
+    PRIMARY KEY (kind, profile_id, fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_health_updated ON provider_health(updated_at);
+
 CREATE TABLE IF NOT EXISTS feedbacks (
     id         SERIAL PRIMARY KEY,
     user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -433,6 +451,7 @@ def _init_reliability_schema(conn) -> None:
 _CORE_TABLES = (
     "users",
     "generation_requests",
+    "provider_health",
     "paper_archives",
     "catalog_papers",
     "catalog_popularity",
@@ -455,7 +474,7 @@ def _verify_schema(conn) -> tuple[list, int]:
     return [t for t in _CORE_TABLES if t not in present], len(present)
 
 
-SCHEMA_VERSION = 2026102402
+SCHEMA_VERSION = 2026102701
 
 
 def init_db(*, migrate: bool | None = None) -> None:

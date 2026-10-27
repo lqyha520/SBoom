@@ -41,6 +41,7 @@ class ImageGenerationContracts(unittest.TestCase):
         self.addCleanup(self.stack.close)
         pg_support.case_database(self.stack)
         from app.config import get_settings
+        self.stack.enter_context(patch.object(get_settings(), "provider_failure_threshold", 1000))
         self.stack.enter_context(patch.object(get_settings(), "archive_local_dir", self.stack.enter_context(tempfile.TemporaryDirectory(prefix="lc-image-test-"))))
         database.init_db()
         self.user = user_store.create_user("image-teacher", "test-password")

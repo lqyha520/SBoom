@@ -49,6 +49,7 @@ async function fixture(context: BrowserContext, summaryGate = Promise.resolve())
     } else if (path === '/api/v1/admin/experience/topics') data = method === 'POST' ? { id: 'topic', ...request.postDataJSON() } : { items: [] }
     else if (path === '/api/v1/admin/engagement/requests') data = { items: [{ id: 'request', title: '补充数学资料', username: 'reader', nickname: '读者', grade: '三年级', subject: '数学', status: 'pending', reply: '', revision: 1 }], total: 1, demand: [] }
     else if (path === '/api/v1/admin/engagement/requests/request') data = { ...request.postDataJSON(), revision: 2 }
+    else if (path === '/api/v1/admin/model-health') data = { revision: '', timeout_ms: 300000, task_timeout_seconds: 270, models: [] }
     else if (path === '/api/v1/admin/stats') { await route.fulfill({ status: 503, json: { detail: '统计维护中' } }); return }
     else if (path === '/api/v1/admin/experience/feedback') data = { items: [], total: 3 }
     else if (path === '/api/v1/admin/commerce/orders') data = { items: [], total: 2, summary: { orders: 2, paid_fen: 0, refunded_fen: 0 } }

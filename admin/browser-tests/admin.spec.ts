@@ -122,6 +122,8 @@ test('反馈409可核对最新回复且不丢本地草稿', async ({ context, pa
   await api(context)
   const item = { id: 'feedback', revision: 1, status: 'pending', kind: 'other', body: '请求协助', reply: '', internal_note: '', username: 'reader', updated_at: 1 }
   let conflict = true
+  let detailReads = 0
+  const listOffsets: string[] = []
   const writes: Record<string, unknown>[] = []
   await page.route('**/api/v1/admin/experience/**', async route => {
     const path = new URL(route.request().url()).pathname
@@ -132,7 +134,13 @@ test('反馈409可核对最新回复且不丢本地草稿', async ({ context, pa
         Object.assign(item, { revision: 2, reply: '另一位管理员的回复', internal_note: '已电话联系' })
         await route.fulfill({ status: 409, json: { detail: { error: '记录已更新' } } })
       } else await route.fulfill({ json: { ...item, ...route.request().postDataJSON(), revision: 3 } })
-    } else await route.fulfill({ json: { items: [item], total: 1 } })
+    } else if (path.endsWith('/feedback/' + item.id)) {
+      detailReads++
+      await route.fulfill({ json: item })
+    } else {
+      listOffsets.push(new URL(route.request().url()).searchParams.get('offset') || '0')
+      await route.fulfill({ json: { items: [item], total: 100000 } })
+    }
   })
   await page.goto('/admin/#supportCenter')
   await page.getByRole('button', { name: '处理与回复', exact: true }).click()
@@ -145,6 +153,8 @@ test('反馈409可核对最新回复且不丢本地草稿', async ({ context, pa
   await expect(page.getByText('另一位管理员的回复', { exact: true })).toBeVisible()
   await expect(page.getByText('已电话联系', { exact: true })).toBeVisible()
   await expect(page.getByRole('textbox', { name: '回复用户', exact: true })).toHaveValue('我的未保存回复')
+  expect(detailReads).toBe(1)
+  expect(listOffsets.every(offset => offset === '0')).toBe(true)
   conflict = false
   await page.getByRole('button', { name: '保存处理结果' }).click()
   await expect(page.getByRole('dialog', { name: '处理小程序反馈' })).toBeHidden()

@@ -188,6 +188,8 @@ class LLMClient:
         api_key: str | None = None,
         timeout: float | None = None,
         max_attempts: int | None = None,
+        sampling_mode: str = "configured",
+        token_parameter: str = "max_tokens",
     ) -> str:
         """非流式调用，返回完整响应文本。可选传入 base_url/model/api_key/timeout 覆盖默认配置。"""
         url = base_url or settings.llm_base_url
@@ -203,6 +205,11 @@ class LLMClient:
             "top_p": top_p if top_p is not None else settings.llm_top_p,
             "stream": False,
         }
+        if sampling_mode == "omit":
+            payload.pop("temperature")
+            payload.pop("top_p")
+        if token_parameter == "max_completion_tokens":
+            payload["max_completion_tokens"] = payload.pop("max_tokens")
 
         async with self._borrow_client(url, key) as client:
             response_content: bytearray | None = None
@@ -269,6 +276,8 @@ class LLMClient:
         model: str | None = None,
         api_key: str | None = None,
         timeout: float | None = None,
+        sampling_mode: str = "configured",
+        token_parameter: str = "max_tokens",
     ) -> AsyncGenerator[str, None]:
         """流式调用，逐 token 产出文本。可选传入 base_url/model/api_key/timeout 覆盖默认配置。"""
         url = base_url or settings.llm_base_url
@@ -283,6 +292,11 @@ class LLMClient:
             "top_p": top_p if top_p is not None else settings.llm_top_p,
             "stream": True,
         }
+        if sampling_mode == "omit":
+            payload.pop("temperature")
+            payload.pop("top_p")
+        if token_parameter == "max_completion_tokens":
+            payload["max_completion_tokens"] = payload.pop("max_tokens")
 
         async with self._borrow_client(url, key) as client:
             if current_usage.get() is not None:

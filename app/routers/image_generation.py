@@ -9,6 +9,7 @@ from app.models.model_profiles import ImageModelProfiles
 from app.sensitive_config import SensitiveConfigRoute
 from app.services import image_config
 from app.services.generation_control import metered
+from app.services.generation_policy import runtime_config
 from app.services.image_generation import build_prompt, generate_image
 from app.services.model_profiles import entries
 from app.services.provider_failover import run_with_failover
@@ -55,10 +56,11 @@ def preview_prompt(request: ImageWorksheetRequest, user: CurrentUser = Depends(r
 @metered("image")
 async def generate(request: ImageWorksheetRequest, http_request: Request, user: CurrentUser = Depends(require_user)):
     prompt = await run_sync(build_prompt, request)
-    config = await run_sync(image_config.get_config, with_key=True)
+    config = runtime_config("image")
     if not config["api_key"] or not config["baseUrl"] or not config["model"]:
         raise HTTPException(400, detail={"error": "尚未配置生图服务，请在后台「模型配置 → 图片生成服务」中设置"})
-    candidates = [profile for profile in entries(config) if profile["enabled"]]
+    candidates = [{**profile, "_health_kind": "image", "_revision": config["revision"]}
+                  for profile in entries(config) if profile["enabled"]]
     return await run_with_failover(candidates, lambda profile: generate_image(profile, prompt), summarize_failures=True)
 
 

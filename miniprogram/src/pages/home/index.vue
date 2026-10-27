@@ -36,6 +36,8 @@ const grade = ref('')
 const collections = ref<Topic[]>([])
 const feed = ref<'featured' | 'latest'>('featured')
 const offset = ref(0)
+const morePapers = ref(false)
+let pageCursor = '', nextCursor = '', retryAdvance = false
 const loading = ref(true)
 const contentLoading = ref(true)
 const changing = ref('')
@@ -74,27 +76,46 @@ async function recordContentReady() {
   if (active && activation === run) uni.$emit?.('lc-performance', { kind, value: Date.now() - startedAt })
 }
 
-async function loadPapers(reset = false, anonymous = !session.ready || !!session.error) {
+async function loadPapers(reset = false, anonymous = !session.ready || !!session.error, advance = false) {
   if (!active) return
   const current = paperRequests.begin()
   loading.value = true; error.value = ''
   const key = JSON.stringify([grade.value, feed.value])
   reset = reset || key !== papersKey
   papersKey = key
-  if (reset) { items.value = []; total.value = 0; loaded.value = false; offset.value = 0 }
+  if (reset) { items.value = []; total.value = 0; loaded.value = false; offset.value = 0; pageCursor = ''; nextCursor = ''; morePapers.value = false }
   const firstVisible = cards.value[0]?.id
+  let cursor = advance && !reset ? nextCursor : pageCursor
+  const read = (cursor: string) => fetchCatalog({ limit: 4, grade: grade.value, sort: feed.value, pagination: 'cursor', cursor, include_total: !cursor }, { scope: current, anonymous })
   try {
-    const result = await fetchCatalog({ limit: 12, grade: grade.value, sort: feed.value }, { scope: current, anonymous })
+    // 每次只保留两组；用完缓存后再读取后续游标，避免长期循环首页四条资料。
+    let result
+    try { result = await read(cursor) }
+    catch (cause) {
+      if (!current()) return
+      if (!cursor || (cause as { code?: string })?.code !== 'invalid_cursor') throw cause
+      cursor = ''; result = await read(cursor)
+    }
+    // 后续资料全部被下架时回到首组；不无限重试空游标。
+    if (current() && cursor && !result.items.length) { cursor = ''; result = await read(cursor) }
     if (current()) {
-      const previous = result.items.findIndex(item => item.id === firstVisible)
-      items.value = result.items; total.value = result.total ?? result.items.length; loaded.value = true
+      const previous = advance ? -1 : result.items.findIndex(item => item.id === firstVisible)
+      items.value = result.items; total.value = result.total ?? (cursor ? total.value : result.items.length); loaded.value = true
+      pageCursor = cursor; nextCursor = result.next_cursor || ''; morePapers.value = result.has_more && !!nextCursor; retryAdvance = false
       offset.value = previous >= 0 ? previous : 0
       imagesActive.value = true
       void recordContentReady()
     }
-  } catch (cause) { if (current()) error.value = errorMessage(cause) }
+  } catch (cause) { if (current()) { error.value = errorMessage(cause); retryAdvance = advance } }
   finally { if (current()) loading.value = false }
 }
+function changePapers() {
+  if (!active || loading.value || changing.value) return
+  if (offset.value + 2 < items.value.length) { offset.value += 2; return }
+  if (!morePapers.value && !pageCursor) { offset.value = 0; return }
+  void loadPapers(false, !session.ready || !!session.error, true)
+}
+function retryPapers() { void loadPapers(false, !session.ready || !!session.error, retryAdvance) }
 async function loadContent(force = false, anonymous = !session.ready || !!session.error) {
   if (!active) return
   const current = contentRequests.begin()
@@ -159,6 +180,7 @@ watch(() => session.user?.id, (owner, previous) => {
   invalidate(); recentPaper.value = null; items.value = []; total.value = 0; loaded.value = false; summary.value = null; site.value = null; collections.value = []
   error.value = ''; contentError.value = ''; loading.value = false; contentLoading.value = false; changing.value = ''
   q.value = ''; grade.value = ''; gradePicker.value = false; offset.value = 0
+  pageCursor = ''; nextCursor = ''; morePapers.value = false; retryAdvance = false
   scrollTop = 0; imagesActive.value = false; gradeChosen = false
   if (active && previous) void load()
 }, { flush: 'sync' })
@@ -217,7 +239,7 @@ onShareTimeline(() => shareTimeline())
           <view class="feed-title-row">
             <view class="feed-title-group">
               <text class="feed-title">为你精选</text>
-              <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="items.length > 2" class="change-papers" :disabled="loading || !!changing" role="button" aria-label="换一组习题" @click="offset += 2"><wd-icon name="refresh" size="13px" /><text>换一组</text></button>
+              <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="items.length > 2 || morePapers || pageCursor" class="change-papers" :disabled="loading || !!changing" role="button" aria-label="换一组习题" @click="changePapers"><wd-icon name="refresh" size="13px" /><text>换一组</text></button>
             </view>
             <view class="feed-switch" aria-role="group" role="group" aria-label="精选方式">
               <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="feed-tab" :class="{ active: feed === 'featured' }" :aria-pressed="feed === 'featured'" role="button" aria-label="为你精选" @click="selectFeed('featured')"><text>精选</text><view class="feed-tab-mark" aria-hidden="true" /></button>
@@ -225,7 +247,7 @@ onShareTimeline(() => shareTimeline())
             </view>
           </view>
         </view>
-        <view v-if="error" class="error-strip" role="status"><text class="grow">{{ error }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="section-link retry-papers" role="button" :disabled="loading" aria-label="重试加载习题" @click="loadPapers()">{{ loading ? '加载中' : '重试' }}</button></view>
+        <view v-if="error" class="error-strip" role="status"><text class="grow">{{ error }}</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="section-link retry-papers" role="button" :disabled="loading" aria-label="重试加载习题" @click="retryPapers">{{ loading ? '加载中' : '重试' }}</button></view>
         <EnhancedSkeleton v-if="loading && !items.length" :count="2" type="card" />
         <template v-else-if="cards.length">
           <view class="home-cards">
@@ -276,11 +298,13 @@ onShareTimeline(() => shareTimeline())
 .feed-title-group { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .feed-title { flex: none; font-size: 18px; font-weight: 650; line-height: 1.4; color: var(--lc-text); letter-spacing: .1px; }
 .feed-switch { display: flex; align-items: center; gap: 2px; flex: none; margin-right: -8px; }
-.feed-tab { position: relative; display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 36px; margin: 0; padding: 0 8px; border: 0; background: transparent; color: var(--lc-secondary); font-size: 13.5px; font-weight: 500; line-height: 1; letter-spacing: .2px; transition: color .16s ease, opacity .16s ease; }
+.feed-tab { position: relative; display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; margin: 0; padding: 0 8px; border: 0; background: transparent; color: var(--lc-secondary); font-size: 13.5px; font-weight: 500; line-height: 1; letter-spacing: .2px; transition: color .16s ease, opacity .16s ease; }
 .feed-tab.active { color: var(--lc-primary); font-weight: 650; }
-.feed-tab-mark { position: absolute; left: 50%; bottom: 7px; width: 14px; height: 2px; margin-left: -7px; border-radius: 2px; background: var(--lc-primary); opacity: 0; transform: scaleX(.5); transition: opacity .16s ease, transform .16s ease; }
+.feed-tab-mark { position: absolute; left: 50%; bottom: 10px; width: 14px; height: 2px; margin-left: -7px; border-radius: 2px; background: var(--lc-primary); opacity: 0; transform: scaleX(.5); transition: opacity .16s ease, transform .16s ease; }
 .feed-tab.active .feed-tab-mark { opacity: 1; transform: scaleX(1); }
-.change-papers { display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: none; min-height: 30px; margin: 0; padding: 0 10px; border: 1px solid var(--lc-card-line); border-radius: 999px; background: var(--lc-surface); color: var(--lc-secondary); font-size: 12px; line-height: 1; }
+.change-papers { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: none; min-height: 30px; margin: 0; padding: 0 10px; border: 1px solid var(--lc-card-line); border-radius: 999px; background: var(--lc-surface); color: var(--lc-secondary); font-size: 12px; line-height: 1; }
+/* 胶囊保持 30px 高，透明热区补到 44px。 */
+.change-papers::after { content: ''; position: absolute; top: -7px; right: -4px; bottom: -7px; left: -4px; }
 .change-papers:active { border-color: #c9dbce; color: var(--lc-primary); }
 .change-papers[disabled] { opacity: .5; }
 .home-cards { display: flex; flex-direction: column; gap: 10px; }

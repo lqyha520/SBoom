@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from app.blocking import run_sync
 from app.config import get_settings
 from app.deps import require_user
+from app.library_deps import no_store
 from app.metrics import generation_stage
 from app.models import (
     BatchGenerateRequest,
@@ -24,13 +25,13 @@ from app.models import (
     ValidateRequest,
     ValidateResult,
 )
-from app.services import app_config
 from app.services.generation_control import metered
+from app.services.generation_policy import QUALITY_REVIEW_TIMEOUT, load_policy, runtime_config
 from app.services.generation_results import completed_sections, match_sections, normalize_result
 from app.services.knowledge_scope import knowledge_scope_service
 from app.services.llm_client import OutputTruncated, llm_client
 from app.services.prompt_builder import prompt_builder
-from app.services.provider_failover import run_with_failover
+from app.services.provider_failover import run_with_failover, stream_with_health
 from app.services.question_review import previous_question_keys, review_results
 from app.services.rate_limit import allow
 from app.services.user_store import CurrentUser
@@ -38,7 +39,6 @@ from app.services.user_store import CurrentUser
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["生成"])
 settings = get_settings()
-QUALITY_REVIEW_TIMEOUT = 120.0  # 复核超时后保留候选题，不能占满出题模型的长等待窗口。
 
 
 def _object(value) -> dict:
@@ -115,11 +115,14 @@ def _merged_llm_params() -> dict:
     模型配置收归后台管理（/admin 的「模型配置」），全体用户共用，密钥加密存于服务端；
     客户端不可指定接口地址/密钥（防 SSRF 与越权绕过）。
     """
-    g = app_config.get_llm(with_key=True)
+    g = runtime_config("text")
     if "models" in g:
         return {"models": [
             {"base_url": profile["baseUrl"], "model": profile["model"], "api_key": profile["api_key"],
-             "timeout": profile["timeout"], "max_tokens": profile["maxTokens"]}
+             "timeout": profile["timeout"], "max_tokens": profile["maxTokens"],
+             "sampling_mode": profile.get("samplingMode", "configured"),
+             "token_parameter": profile.get("tokenParameter", "max_tokens"),
+             "id": profile["id"], "_health_kind": "text", "_revision": g["revision"]}
             for profile in g["models"] if profile["enabled"]
         ]}
     t = float(g["timeout"] or 0)
@@ -129,6 +132,9 @@ def _merged_llm_params() -> dict:
         "api_key": g["api_key"] or settings.llm_api_key,
         "timeout": t or 120.0,
         "max_tokens": int(g.get("maxTokens") or settings.llm_max_tokens),
+        "sampling_mode": g.get("samplingMode", "configured"),
+        "token_parameter": g.get("tokenParameter", "max_tokens"),
+        "id": "legacy", "_health_kind": "text", "_revision": g["revision"],
     }
 
 
@@ -162,6 +168,8 @@ async def _call_llm_and_parse(system_prompt: str, user_message: str, question_co
                 api_key=candidate["api_key"], timeout=timeout,
                 max_tokens=min(candidate["max_tokens"], 2048 + 400 * question_count), max_attempts=1,
                 temperature=temperature,
+                sampling_mode=candidate.get("sampling_mode", "configured"),
+                token_parameter=candidate.get("token_parameter", "max_tokens"),
             )
             try:
                 result = await run_sync(_extract_json, raw_response)
@@ -237,6 +245,13 @@ async def _call_quality_review(system_prompt: str, user_message: str, question_c
     # 独立请求仍由同一计量、限流和 token 预算约束，不自动重试复核或循环重出。
     return await _call_llm_and_parse(system_prompt, user_message, question_count, temperature=0.1,
                                      expected_key="reviews", time_budget=QUALITY_REVIEW_TIMEOUT)
+
+@router.get("/generation/options", summary="读取由后台模型配置计算的任务等待时限", dependencies=[Depends(no_store)])
+def generation_options(kind: str = "text", user: CurrentUser = Depends(require_user)):
+    if kind not in ("text", "image"):
+        raise HTTPException(422, detail={"error": "不支持的模型类型"})
+    return load_policy(kind).public()
+
 
 @router.post(
     "/generate-batch",
@@ -422,12 +437,14 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
                 messages, base_url=candidate["base_url"], model=candidate["model"],
                 api_key=candidate["api_key"], timeout=candidate["timeout"],
                 max_tokens=min(candidate["max_tokens"], 2048 + 400 * question_count),
+                sampling_mode=candidate.get("sampling_mode", "configured"),
+                token_parameter=candidate.get("token_parameter", "max_tokens"),
             ):
                 yield token
 
     async def tokens():
         if len(candidates) == 1:
-            async for token in candidate_tokens(candidates[0]):
+            async for token in stream_with_health(candidates[0], candidate_tokens):
                 yield token
             return
 

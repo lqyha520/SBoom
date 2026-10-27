@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     llm_top_p: float = 0.9
     provider_allow_private: bool = False  # 内网自建模型需显式启用；默认只允许公网 HTTPS
     provider_max_response_bytes: int = Field(8 * 1024 * 1024, ge=1024, le=64 * 1024 * 1024)
+    provider_failure_threshold: int = Field(2, ge=1, le=1000)
+    provider_cooldown_seconds: int = Field(30, ge=1, le=300)
     # CDN 边缘兜底地址（逗号分隔的公网 IP）：某主机的 DNS 全部落在被丢包的网段时，改用这些地址建连。
     # Host 与 sni_hostname 仍是原主机，TLS 证书校验不变，所以只能拿到该主机自己的内容。
     provider_edge_fallback_ips: str = ""

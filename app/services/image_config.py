@@ -12,6 +12,7 @@ from app.services.model_profiles import (
     public_config,
     public_profile,
     require_legacy_config,
+    revision,
 )
 
 KEY = "image_generation"
@@ -32,9 +33,11 @@ def get_config(with_key=False):
     if "models" in raw:
         models = [public_profile(profile, DEFAULTS, with_key=with_key) for profile in raw["models"]]
         primary = next((profile for profile in models if profile["enabled"]), {})
-        return {**DEFAULTS, "hasKey": False, **({"api_key": ""} if with_key else {}), **primary, "models": models}
+        return {**DEFAULTS, "hasKey": False, **({"api_key": ""} if with_key else {}), **primary,
+                "models": models, "revision": revision(raw)}
     result = {key: raw.get(key, default) for key, default in DEFAULTS.items()}
     result["hasKey"] = bool(raw.get("apiKeyEnc"))
+    result["revision"] = revision(raw)
     if with_key:
         result["api_key"] = decrypt_secret(raw["apiKeyEnc"]) if result["hasKey"] else ""
     return result

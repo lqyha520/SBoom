@@ -154,7 +154,7 @@ function redeem() {
     <AuthGate v-if="!session.user" title="登录查看会员服务" @restored="page.refresh" />
     <template v-else>
       <view class="content-width member-body">
-        <view v-if="error && action !== 'redeem'" class="error-strip" role="alert"><text class="grow">{{ error }}</text><wd-button role="button" aria-label="重新加载会员信息" variant="text" icon="refresh" type="danger" @click="page.refresh" /></view>
+        <view v-if="error && action !== 'redeem'" class="error-strip" role="alert"><text class="grow">{{ error }}</text><wd-button role="button" aria-label="重新加载会员信息" variant="text" icon="refresh" type="danger" @click="page.refresh">重试</wd-button></view>
         <view v-if="loading" class="loading-line"><wd-loading /><text>正在加载会员信息</text></view>
 
         <view v-if="restricted && !lifetime" class="restricted-notice">

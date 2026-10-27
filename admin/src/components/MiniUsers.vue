@@ -14,6 +14,8 @@ const props = defineProps<{ user: UserInfo }>()
 const items = ref<MiniUser[]>([])
 const total = ref(0)
 const page = ref(1)
+// 接口 offset 上限为 100000，避免手工输入的大页码在获取总数前直接报错。
+const pageSize = 20, maxPage = Math.floor(100000 / pageSize) + 1
 const q = ref('')
 const membership = ref('all')
 const loading = ref(false)
@@ -38,7 +40,7 @@ const profileName = ref('')
 const profileAvatarKey = ref('')
 /** 删除是不可恢复的操作，要求先勾选确认 */
 const deleteConfirmed = ref(false)
-let sequence = 0
+let sequence = 0, pendingQuery = ''
 const levels = [{ label: '普通用户', value: 'regular' }, { label: 'VIP 会员', value: 'vip' }]
 const filters = [{ label: '全部用户', value: 'all' }, ...levels, { label: '7 天内到期', value: 'expiring' }, { label: '已到期', value: 'expired' }]
 
@@ -72,13 +74,19 @@ function localInput(stamp: number) {
   return new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
 }
 async function load() {
+  if (page.value > maxPage) page.value = maxPage
+  const query = q.value.trim(), filter = membership.value === 'all' ? '' : membership.value, offset = (page.value - 1) * pageSize
+  const key = JSON.stringify([query, filter, offset])
+  if (loading.value && pendingQuery === key) return
+  pendingQuery = key
   const current = ++sequence
   loading.value = true; error.value = ''
   try {
-    const result = await miniUsers(q.value.trim(), membership.value === 'all' ? '' : membership.value, (page.value - 1) * 20)
+    const result = await miniUsers(query, filter, offset)
     if (current !== sequence) return
     items.value = result.items; total.value = result.total
-    if (!items.value.length && page.value > 1) page.value--
+    const lastPage = Math.max(1, Math.min(maxPage, Math.ceil(result.total / pageSize)))
+    if (page.value > lastPage) page.value = lastPage
   } catch (cause) { if (current === sequence) error.value = message(cause) }
   finally { if (current === sequence) loading.value = false }
 }

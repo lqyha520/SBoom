@@ -22,6 +22,7 @@ from app.blocking import run_sync
 from app.config import APP_VERSION, get_settings
 from app.deps import require_admin, require_recent_admin
 from app.http_limits import limited_lines
+from app.library_deps import no_store
 from app.models.model_profiles import TextModelProfiles
 from app.security import encryption_backend, security_warnings
 from app.sensitive_config import SensitiveConfigRoute
@@ -46,7 +47,7 @@ def stats(admin: CurrentUser = Depends(require_admin)):
     from app.db import db
 
     s = user_store.admin_stats()
-    g = app_config.get_llm()
+    g = app_config.get_llm(fresh=True)
     with db() as conn:
         fb_total = conn.execute("SELECT COUNT(*) c FROM feedbacks").fetchone()["c"]
         fb_oob = conn.execute("SELECT COUNT(*) c FROM feedbacks WHERE is_oob = 1").fetchone()["c"]
@@ -217,6 +218,8 @@ class AdminLlmConfigIn(BaseModel):
     apiKey: str = Field("", max_length=4000, repr=False)   # 空串 = 保留已保存的密钥不变
     timeout: int = Field(60, ge=10, le=600)
     maxTokens: int = Field(default=16384, ge=1024, le=131072)
+    samplingMode: Literal["configured", "omit"] = "configured"
+    tokenParameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
 
 
 class AdminLlmModelsIn(BaseModel):
@@ -249,6 +252,8 @@ def save_llm_config(req: TextModelProfiles | AdminLlmConfigIn, admin: CurrentUse
         api_key=req.apiKey,
         timeout=max(10, min(600, req.timeout or 60)),
         max_tokens=req.maxTokens,
+        sampling_mode=req.samplingMode,
+        token_parameter=req.tokenParameter,
     )
     has_key = app_config.get_llm()["hasKey"]
     logger.info("管理员 id=%s 更新了全局模型配置", admin.id)
@@ -412,16 +417,7 @@ async def list_llm_models(req: AdminLlmModelsIn | None = None, admin: CurrentUse
         raise HTTPException(status_code=502, detail={"error": "模型列表拉取失败"}) from e
 
 
-@router.post("/test-llm", summary="测试模型连通性（流式探测：拿到首个响应即判定成功）")
-async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Depends(require_admin)):
-    """连通性测试用流式请求：服务端开始吐第一个 token 就证明链路+鉴权都通。
-    超时耐心 = 配置的 timeout（中转站拥堵时首 token 可能 20-60s，不宜截断）。
-
-    防 SSRF：只有「已保存的全局配置地址」可以原样探测；表单里填的其他地址必须解析到公网 IP，
-    否则管理员账号（或被盗的管理员会话）可以拿这个接口扫内网 / 读云元数据。
-    """
-    import httpx as _httpx
-
+async def _text_test_config(req: AdminLlmConfigIn | None) -> dict:
     g = await run_sync(app_config.get_admin_config, with_key=True)
     managed = g.get("managed", "models" in g) or bool(req and req.id)
     if req and req.id:
@@ -432,17 +428,90 @@ async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Dep
         g = next((profile for profile in g["models"] if profile["enabled"]), {})
     saved_base = (g.get("baseUrl") or ("" if managed else settings.llm_base_url)).rstrip("/")
     requested = req.baseUrl.strip().rstrip("/") if req and req.baseUrl else ""
-    base_url = requested or saved_base
-    model = (req.model if req and req.model else g.get("model")) or ("" if managed else settings.llm_model)
-    api_key = (req.apiKey if req and req.apiKey else g.get("api_key")) or ("" if managed else settings.llm_api_key)
-    timeout = (req.timeout if req and req.timeout else g.get("timeout")) or 60
-    if not api_key:
+    config: dict = {"base_url": requested or saved_base,
+              "model": (req.model if req and req.model else g.get("model")) or ("" if managed else settings.llm_model),
+              "api_key": (req.apiKey if req and req.apiKey else g.get("api_key")) or ("" if managed else settings.llm_api_key),
+              "timeout": (req.timeout if req and "timeout" in req.model_fields_set else g.get("timeout")) or 60}
+    for public, internal, default in (("samplingMode", "sampling_mode", "configured"),
+                                      ("tokenParameter", "token_parameter", "max_tokens"),
+                                      ("maxTokens", "max_tokens", 16384)):
+        config[internal] = getattr(req, public) if req and public in req.model_fields_set else g.get(public, default)
+    if not config["api_key"]:
         raise HTTPException(400, detail={"error": "请先配置此模型的 API 密钥"})
-    request_headers: dict[str, str] = {}
-    extensions: dict = {}
     from app.provider_policy import require_new_key, validate_endpoint
     if saved_base:
-        require_new_key(saved_base, base_url, req.apiKey if req else "")
+        require_new_key(saved_base, config["base_url"], req.apiKey if req else "")
+    try:
+        validate_endpoint(config["base_url"], resolve=False)
+    except HTTPException as exc:
+        raise HTTPException(400, detail={"error": "接口地址不允许"}) from exc
+    return config
+
+
+@router.post("/test-llm-generation", summary="用真实生成参数测试小型 JSON 输出（会调用模型并可能计费）")
+async def test_llm_generation(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Depends(require_recent_admin)):
+    import httpx
+
+    from app.routers.generate import _extract_json
+    from app.services.llm_client import OutputTruncated, llm_client
+
+    config = await _text_test_config(req)
+    started = asyncio.get_running_loop().time()
+    try:
+        async with asyncio.timeout(config["timeout"]):
+            text = await llm_client.chat(
+                [{"role": "system", "content": '仅输出 JSON 对象 {"ok":true}，不要解释。'},
+                 {"role": "user", "content": "检查 JSON 生成功能。"}],
+                **{**config, "max_tokens": min(config["max_tokens"], 1024)}, max_attempts=1)
+            result = await run_sync(_extract_json, text)
+            if result.get("ok") is not True:
+                raise ValueError("无效的测试结果")
+        return {"status": "ok", "reply": "真实调用通过，JSON 输出正常", "seconds": round(asyncio.get_running_loop().time() - started, 2)}
+    except OutputTruncated:
+        raise HTTPException(422, detail={"error": "测试输出达到 token 上限，请核对模型的推理和输出参数；上游可能已计费"}) from None
+    except HTTPException:
+        raise
+    except (TimeoutError, httpx.TimeoutException):
+        raise HTTPException(504, detail={"error": "真实调用测试超时，上游可能已计费，请核对模型配置"}) from None
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(502, detail={"error": f"真实调用失败（HTTP {exc.response.status_code}），请核对采样参数和 token 参数兼容性"}) from None
+    except (httpx.HTTPError, ValueError, TypeError, RecursionError):
+        raise HTTPException(502, detail={"error": "模型未完成有效的 JSON 输出，请核对调用参数与模型能力"}) from None
+
+
+@router.get("/model-health", summary="按候选配置查询成功率、耗时和冷却状态", dependencies=[Depends(no_store)])
+def model_health(kind: Literal["text", "image"] = "text", admin: CurrentUser = Depends(require_admin)):
+    from app.routers.generate import _merged_llm_params
+    from app.services.generation_policy import current_policy, load_policy
+    from app.services.provider_health import summary
+    policy = load_policy(kind)
+    token = current_policy.set(policy)
+    try:
+        config = policy.config
+        candidates = ([{**profile, "_health_kind": "image", "_revision": config["revision"]} for profile in entries(config)]
+                      if kind == "image" else _merged_llm_params().get("models"))
+        if candidates is None:
+            candidates = [_merged_llm_params()]
+        return {**policy.public(), "models": summary(candidates)}
+    finally:
+        current_policy.reset(token)
+
+
+@router.post("/test-llm", summary="测试模型连通性（流式探测：拿到首个响应即判定成功）")
+async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Depends(require_admin)):
+    """连通性测试用流式请求：服务端开始吐第一个 token 就证明链路+鉴权都通。
+    超时耐心 = 配置的 timeout（中转站拥堵时首 token 可能 20-60s，不宜截断）。
+
+    防 SSRF：只有「已保存的全局配置地址」可以原样探测；表单里填的其他地址必须解析到公网 IP，
+    否则管理员账号（或被盗的管理员会话）可以拿这个接口扫内网 / 读云元数据。
+    """
+    import httpx as _httpx
+
+    config = await _text_test_config(req)
+    base_url, model, api_key, timeout = (config[key] for key in ("base_url", "model", "api_key", "timeout"))
+    request_headers: dict[str, str] = {}
+    extensions: dict = {}
+    from app.provider_policy import validate_endpoint
     if not settings.provider_allow_private:
         try:
             base_url, host_header = await run_sync(_pin_public_url, base_url)

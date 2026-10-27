@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 from app.services import app_config
+from app.services.model_profiles import revision
 
 
 class AppConfigCacheContracts(unittest.TestCase):
@@ -15,7 +16,7 @@ class AppConfigCacheContracts(unittest.TestCase):
         with patch.object(app_config, "_load_llm_raw", return_value={}) as load, \
                 patch.object(app_config.time, "monotonic", return_value=100) as clock:
             for _attempt in range(5):
-                self.assertEqual(app_config.get_llm(), app_config._EMPTY)
+                self.assertEqual(app_config.get_llm(), app_config._EMPTY | {"revision": revision({})})
             self.assertEqual(load.call_count, 1)
             clock.return_value = 160
             app_config.get_llm()
@@ -80,4 +81,4 @@ class AppConfigCacheContracts(unittest.TestCase):
             app_config.clear_llm()
             database.assert_called_once_with(serialized="accounts")
         with patch.object(app_config, "_load_llm_raw", return_value={}):
-            self.assertEqual(app_config.get_llm(), app_config._EMPTY)
+            self.assertEqual(app_config.get_llm(), app_config._EMPTY | {"revision": revision({})})

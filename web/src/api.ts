@@ -22,15 +22,26 @@ export class ApiError extends SharedApiError {
   }
 }
 
-/** 各接口默认超时：生成类请求要等 LLM（可能 2 分钟+），其余接口 30s 足够。
+/** 生成时限从后台模型配置读取，其余接口默认 30s。
  *  无超时的 fetch 会让启动 splash 在后端挂起时无限转圈 */
 const DEFAULT_TIMEOUT_MS = 30_000
-const GENERATE_TIMEOUT_MS = 300_000
+interface GenerationPolicy { revision: string; timeout_ms: number; task_timeout_seconds: number }
 
 export async function request<T>(url: string, init?: RequestInit, timeoutOverrideMs?: number, responseType: 'json' | 'blob' = 'json'): Promise<T> {
   const paid = url.startsWith('/api/v1/generate') || url === '/api/v1/validate'
-  const timeoutMs = timeoutOverrideMs ?? (paid ? GENERATE_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
+  let timeoutMs = timeoutOverrideMs ?? DEFAULT_TIMEOUT_MS
+  let policy: GenerationPolicy | undefined
+  if (paid) {
+    const assertOwner = captureWorkspaceGuard()
+    policy = await request<GenerationPolicy>('/api/v1/generation/options?kind=' + (url === '/api/v1/generate-image' ? 'image' : 'text'), { signal: init?.signal })
+    assertOwner()
+    if (!policy || !Number.isSafeInteger(policy.timeout_ms) || policy.timeout_ms <= 0 || typeof policy.revision !== 'string' || !policy.revision) {
+      throw new ApiError('无法读取模型等待时限，本次未发送生成请求，请刷新后重试', 503, 'model_policy_unavailable')
+    }
+    timeoutMs = policy.timeout_ms
+  }
   const headers = new Headers(init?.headers)
+  if (policy) headers.set('X-Model-Config-Revision', policy.revision)
   if (workspaceOwner && (!url.startsWith('/api/v1/auth/') || url === '/api/v1/auth/logout')) headers.set('X-Workspace-User', workspaceOwner)
   const requestId = headers.get('X-Request-ID') || ''
   let r: Response

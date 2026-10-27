@@ -568,7 +568,7 @@ onBeforeUnmount(deactivate)
       </view>
       <view v-if="error" class="error-strip">
         <text class="grow">{{ error }}</text>
-        <wd-button icon="refresh" type="danger" variant="text" role="button" aria-label="重试加载" @click="refresh()" />
+        <wd-button icon="refresh" type="danger" variant="text" role="button" aria-label="重试加载" @click="refresh()">重试</wd-button>
       </view>
       <view v-if="selecting" class="list-caption"><text class="result-count">{{ catalogCountLabel(total, loaded, loading && !appending, error) }}</text></view>
       <view v-if="!selecting && (filtered || view === 'favorites' && items.length)" class="list-tools">

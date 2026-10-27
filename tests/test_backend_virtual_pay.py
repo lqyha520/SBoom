@@ -225,6 +225,52 @@ class VirtualPayContracts(GrowthBase):
         self.assertEqual(missing_product.exception.status_code, 422)
         self.assertEqual(missing_product.exception.detail["code"], "ios_unavailable")
 
+    def test_order_cannot_be_paid_from_the_other_platform(self):
+        self.configure(wechat_virtual_ios_enabled=True)
+        self.plan = mini_orders.save_plan(PlanInput(name="测试年会员", days=365, price_fen=19900, is_active=True, virtual_product_id="lc-year",
+                                                    price_fen_ios=22800, virtual_product_id_ios="lc-year-ios"))
+        android = self.create_order("android-created", platform="android")
+        self.assertEqual(android["device_platform"], "android")
+        with self.assertRaises(HTTPException) as blocked:
+            mini_orders.pay(android["id"], self.viewer.id, "ios")
+        self.assertEqual(blocked.exception.status_code, 409)
+        self.assertEqual(blocked.exception.detail["code"], "platform_mismatch")
+        self.assertEqual(mini_orders.detail(android["id"])["status"], "created")
+
+        # 同平台续付正常，HTTP 接口也会把请求体里的设备传给服务层。
+        self.sign_in(self.viewer)
+        paid = self.client.post("/api/v1/mini/orders/" + android["id"] + "/pay", json={"platform": "android"})
+        self.assertEqual(paid.status_code, 200, paid.text)
+        self.assertEqual(paid.json()["order"]["status"], "pending")
+        self.assertEqual(paid.json()["order"]["device_platform"], "android")
+        iphone = self.create_order("iphone-created", platform="ios")
+        with self.assertRaises(HTTPException) as reversed_block:
+            mini_orders.pay(iphone["id"], self.viewer.id, "android")
+        self.assertEqual(reversed_block.exception.status_code, 409)
+        payment = mini_orders.pay(iphone["id"], self.viewer.id, "ios")["payment"]
+        self.assertEqual(json.loads(payment["signData"])["goodsPrice"], 22800)
+
+    def test_disabling_ios_blocks_old_orders_but_preserves_payment_confirmation(self):
+        self.configure(wechat_virtual_ios_enabled=True)
+        self.plan = mini_orders.save_plan(PlanInput(name="测试 iPhone 月会员", days=30, price_fen=1990, is_active=True,
+                                                  virtual_product_id="lc-month", price_fen_ios=2280, virtual_product_id_ios="lc-month-ios"))
+        created = self.create_order("ios-switch-created", platform="ios")
+        pending = self.create_order("ios-switch-pending", platform="ios")
+        mini_orders.pay(pending["id"], self.viewer.id, "ios")
+        android = self.create_order("ios-switch-android", platform="android")
+        self.sign_in(self.viewer)
+        with patch.object(get_settings(), "wechat_virtual_ios_enabled", False):
+            for order, status in ((created, "created"), (pending, "pending")):
+                with self.subTest(status=status):
+                    response = self.client.post("/api/v1/mini/orders/" + order["id"] + "/pay", json={"platform": "ios"})
+                    self.assertEqual(response.status_code, 422, response.text)
+                    self.assertEqual(response.json()["detail"]["code"], "ios_unavailable")
+                    self.assertEqual(mini_orders.detail(order["id"])["status"], status)
+            self.assertIsNotNone(mini_orders.pay(android["id"], self.viewer.id, "android")["payment"])
+            with patch.object(VirtualPay, "query_order", return_value=self.query_value(pending)):
+                confirmed = mini_orders.sync(pending["id"], self.viewer.id)
+            self.assertEqual(confirmed["status"], "paid")
+
     def test_iphone_virtual_refund_cannot_be_started_by_admin_from_the_device(self):
         self.configure(wechat_virtual_ios_enabled=True)
         self.plan = mini_orders.save_plan(PlanInput(name="测试年会员", days=365, price_fen=19900, is_active=True, virtual_product_id="lc-year",

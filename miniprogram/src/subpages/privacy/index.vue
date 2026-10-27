@@ -111,7 +111,7 @@ watch(kind, load)
       </view>
     </view>
     <!-- #endif -->
-    <view v-if="error" class="error-strip"><text class="grow">{{ error }}</text><wd-button icon="refresh" variant="text" type="danger" role="button" aria-label="重新加载协议内容" @click="load" /></view>
+    <view v-if="error" class="error-strip"><text class="grow">{{ error }}</text><wd-button icon="refresh" variant="text" type="danger" role="button" aria-label="重新加载协议内容" @click="load">重试</wd-button></view>
     <text class="page-title legal-title">{{ title }}</text>
     <text class="page-subtitle" role="status">{{ loading && !currentDoc ? '正在加载最新内容…' : currentDoc ? updated : '当前显示离线说明，联网后可重试加载最新版本' }}</text>
     <template v-for="(block, index) in blocks" :key="index">

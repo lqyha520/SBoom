@@ -3,8 +3,8 @@
 模型配置收归后台管理：所有用户共用管理员配置的全局 LLM 服务；
 密钥加密存储在 app_config 表，接口绝不回传明文。
 
-读取走 TTL 内存缓存（默认 60s），避免每次生成请求都开新 DB 连接查询；
-管理员保存配置 / 启动迁移时本进程主动失效；其他 worker 最迟 60s 生效。
+普通读取保留 TTL 内存缓存（默认 60s）；新生成任务通过 fresh=True 直接读库，
+随后在任务内复用快照，所有 worker 的新任务立即采用最新配置。
 """
 
 import json
@@ -23,6 +23,7 @@ from app.services.model_profiles import (
     public_config,
     public_profile,
     require_legacy_config,
+    revision,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,8 @@ logger = logging.getLogger(__name__)
 _LLM_KEY = "llm"
 _CACHE_TTL_SECONDS = 60.0
 
-_EMPTY = {"baseUrl": "", "model": "", "timeout": 120, "maxTokens": get_settings().llm_max_tokens, "hasKey": False, "api_key": ""}
+_EMPTY = {"baseUrl": "", "model": "", "timeout": 120, "maxTokens": get_settings().llm_max_tokens,
+          "samplingMode": "configured", "tokenParameter": "max_tokens", "hasKey": False, "api_key": ""}
 
 # ─── 缓存（进程内；管理员保存时失效，重启即空） ───
 #
@@ -95,13 +97,13 @@ def _refresh() -> dict:
 
 # ─── 全局 LLM 配置 ───
 
-def get_llm(with_key: bool = False) -> dict:
+def get_llm(with_key: bool = False, *, fresh: bool = False) -> dict:
     """读取全局 LLM 配置（TTL 缓存，过期后 stale-while-revalidate）。
 
     with_key=True 时附带解密后的 api_key（仅供后端调用 LLM 使用，绝不下发前端）。
     """
-    raw, fresh = _snapshot()
-    if not fresh:
+    raw, cached_fresh = (_load_llm_raw(), True) if fresh else _snapshot()
+    if not cached_fresh:
         if raw is None:
             # 没有任何可用值：排队等首个加载，醒来后先看别人是否已经装好
             with _refresh_lock:
@@ -115,12 +117,12 @@ def get_llm(with_key: bool = False) -> dict:
             finally:
                 _refresh_lock.release()
     if not raw:
-        return dict(_EMPTY)
+        return {**_EMPTY, "revision": revision({})}
     if "models" in raw:
         defaults = {key: value for key, value in _EMPTY.items() if key not in ("hasKey", "api_key")}
         models = [public_profile(profile, defaults, with_key=with_key) for profile in raw["models"]]
         primary = next((profile for profile in models if profile["enabled"]), {})
-        return {**_EMPTY, **primary, "models": models}
+        return {**_EMPTY, **primary, "models": models, "revision": revision(raw)}
     key_enc = raw.get("apiKeyEnc", "")
     return {
         "baseUrl": raw.get("baseUrl", ""),
@@ -129,12 +131,17 @@ def get_llm(with_key: bool = False) -> dict:
         "maxTokens": raw.get("maxTokens", get_settings().llm_max_tokens),
         "hasKey": bool(key_enc),
         "api_key": decrypt_secret(key_enc) if with_key else "",
+        "samplingMode": raw.get("samplingMode", "configured"),
+        "tokenParameter": raw.get("tokenParameter", "max_tokens"),
+        "revision": revision(raw),
     }
 
 
-def _save_llm_raw(conn, base_url: str, model: str, key_enc: str, timeout: int, max_tokens: int | None = None) -> None:
+def _save_llm_raw(conn, base_url: str, model: str, key_enc: str, timeout: int, max_tokens: int | None = None,
+                  sampling_mode: str = "configured", token_parameter: str = "max_tokens") -> None:
     payload = json.dumps(
-        {"baseUrl": base_url, "model": model, "apiKeyEnc": key_enc, "timeout": timeout, "maxTokens": max_tokens or get_settings().llm_max_tokens},
+        {"baseUrl": base_url, "model": model, "apiKeyEnc": key_enc, "timeout": timeout, "maxTokens": max_tokens or get_settings().llm_max_tokens,
+         "samplingMode": sampling_mode, "tokenParameter": token_parameter},
         ensure_ascii=False,
     )
     conn.execute(
@@ -148,7 +155,8 @@ def _save_llm_raw(conn, base_url: str, model: str, key_enc: str, timeout: int, m
     )
 
 
-def save_llm(base_url: str, model: str, api_key: str, timeout: int, max_tokens: int | None = None) -> None:
+def save_llm(base_url: str, model: str, api_key: str, timeout: int, max_tokens: int | None = None,
+             sampling_mode: str = "configured", token_parameter: str = "max_tokens") -> None:
     """保存全局 LLM 配置。api_key 为空字符串表示保留已存密钥不变。
 
     写路径不再持有缓存锁（否则一次 DB 写会卡住所有读请求）；
@@ -167,7 +175,7 @@ def save_llm(base_url: str, model: str, api_key: str, timeout: int, max_tokens: 
         if current.get("apiKeyEnc") or get_settings().llm_api_key:
             require_new_key(current.get("baseUrl") or get_settings().llm_base_url, base_url, api_key)
         key_enc = encrypt_secret(api_key) if api_key else current.get("apiKeyEnc", "")
-        _save_llm_raw(conn, base_url, model, key_enc, timeout, max_tokens)
+        _save_llm_raw(conn, base_url, model, key_enc, timeout, max_tokens, sampling_mode, token_parameter)
     _invalidate_cache()
 
 

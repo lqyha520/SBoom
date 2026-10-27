@@ -34,8 +34,8 @@ withDefaults(defineProps<SkeletonProps>(), {
       <view v-for="index in count" :key="index" class="skeleton-row">
         <view class="skeleton skeleton-thumb"><view class="skeleton-shimmer" /></view>
         <view class="skeleton-row-lines">
-          <view class="skeleton skeleton-labels"><view class="skeleton-shimmer" /></view>
           <view class="skeleton skeleton-name"><view class="skeleton-shimmer" /></view>
+          <view class="skeleton skeleton-labels"><view class="skeleton-shimmer" /></view>
           <view class="skeleton skeleton-meta"><view class="skeleton-shimmer" /></view>
         </view>
       </view>
@@ -62,11 +62,11 @@ withDefaults(defineProps<SkeletonProps>(), {
 .skeleton-title-short { width: 68%; }
 .skeleton-card-meta { height: 14px; width: 46%; margin-top: 3px; border-radius: 6px; }
 
-.skeleton-row { display: flex; align-items: center; gap: 12px; min-height: 120px; padding: 16px 0; }
-.skeleton-thumb { flex: none; width: 56px; height: 78px; }
-.skeleton-row-lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 9px; }
+.skeleton-row { display: flex; align-items: center; gap: 12px; min-height: 112px; padding: 12px 0; }
+.skeleton-thumb { flex: none; width: 60px; height: 84px; }
+.skeleton-row-lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
 .skeleton-labels { height: 12px; width: 38%; border-radius: 6px; }
-.skeleton-name { height: 18px; width: 88%; border-radius: 6px; }
+.skeleton-name { height: 17px; width: 88%; border-radius: 6px; }
 .skeleton-meta { height: 12px; width: 52%; border-radius: 6px; }
 
 .skeleton-shimmer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent); animation: shimmer 1.5s infinite; }
@@ -75,5 +75,5 @@ withDefaults(defineProps<SkeletonProps>(), {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(100%); }
 }
-@media (max-width:359px) { .skeleton-container.is-row { padding:0 10px; }.skeleton-row { gap:10px; }.skeleton-thumb { width:52px;height:74px; }.skeleton-card { gap:10px;padding:9px 10px 9px 9px; }.skeleton-cover { width:64px;height:86px; } }
+@media (max-width:359px) { .skeleton-container.is-row { padding:0 10px; }.skeleton-row { gap:10px;min-height:104px;padding:10px 0; }.skeleton-thumb { width:54px;height:76px; }.skeleton-card { gap:10px;padding:9px 10px 9px 9px; }.skeleton-cover { width:64px;height:86px; } }
 </style>
