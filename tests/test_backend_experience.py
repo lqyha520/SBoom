@@ -128,6 +128,45 @@ class ExperienceContracts(unittest.TestCase):
         self.assertEqual(response.json()['items'][0]['reply'], body['reply'])
         self.assertNotIn('internal-only-marker', response.text)
 
+    def test_admin_feedback_detail_returns_latest_without_scanning_lists(self):
+        self.sign_in(self.viewer)
+        self.client.patch('/api/v1/mini/me', json={'nickname': '反馈用户'}).raise_for_status()
+        response = self.client.post('/api/v1/mini/feedback', json={'kind': 'other', 'body': '需要核实资料内容'})
+        self.assertEqual(response.status_code, 201, response.text)
+        item = response.json()
+        self.sign_in(self.admin)
+        path = '/api/v1/admin/experience/feedback/' + item['id']
+        body = {'revision': item['revision'], 'status': 'resolved', 'reply': '已核对并解决', 'internal_note': '仅管理员可读的备注'}
+        latest = self.client.put(path, json=body)
+        self.assertEqual(latest.status_code, 200, latest.text)
+        with patch.object(mini_experience, 'list_feedback', side_effect=AssertionError('详情接口不得扫描列表')):
+            response = self.client.get(path)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['revision'], item['revision'] + 1)
+        for key in ('status', 'reply', 'internal_note'):
+            self.assertEqual(response.json()[key], body[key])
+        self.assertEqual(response.json()['username'], self.viewer.username)
+        self.assertEqual(response.json()['nickname'], '反馈用户')
+        self.assertEqual(self.client.get('/api/v1/admin/experience/feedback/missing').status_code, 404)
+
+        # 小程序详情依然按账号隔离，并且不返回后台内部备注。
+        self.sign_in(self.viewer)
+        public_path = '/api/v1/mini/feedback/' + item['id']
+        response = self.client.get(public_path)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn('internal_note', response.json())
+        self.sign_in(self.other)
+        self.assertEqual(self.client.get(public_path).status_code, 404)
+
+    def test_admin_feedback_detail_rejects_non_administrators(self):
+        path = '/api/v1/admin/experience/feedback/missing'
+        self.client.cookies.clear()
+        self.assertEqual(self.client.get(path).status_code, 401)
+        self.sign_in(self.viewer)
+        self.assertEqual(self.client.get(path).status_code, 401)
+        self.sign_in(self.author)
+        self.assertEqual(self.client.get(path).status_code, 403)
+
     def test_feedback_validation_and_public_support_settings(self):
         response = self.client.put('/api/v1/admin/experience/support', json={'revision': 0, 'wechat': 'coach-help', 'benefits': '会员资料说明'})
         self.assertEqual(response.status_code, 200, response.text)

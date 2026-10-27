@@ -29,6 +29,12 @@ describe('多模型草稿与请求', () => {
     expect(textPayload([], 'text-revision').revision).toBe('text-revision')
     expect(imagePayload([], 'image-revision').revision).toBe('image-revision')
   })
+  it('按模型保存兼容参数，图片请求不携带文本采样字段', () => {
+    const profile = { ...newModel('text'), samplingMode: 'omit' as const, tokenParameter: 'max_completion_tokens' as const }
+    expect(textPayload([profile]).models[0]).toMatchObject({ samplingMode: 'omit', tokenParameter: 'max_completion_tokens' })
+    expect(imagePayload([profile]).models[0]).not.toHaveProperty('samplingMode')
+    expect(imagePayload([profile]).models[0]).not.toHaveProperty('tokenParameter')
+  })
   it('校验所有模型的地址、密钥与数值，停用项可以没有密钥', () => {
     const valid = { ...newModel('text'), model: 'm', baseUrl: 'https://example.test/v1', apiKey: 'test-key' }
     expect(modelError(valid, 'text')).toBe('')

@@ -120,6 +120,11 @@ def admin_feedback(status: Literal["", "pending", "processing", "resolved", "clo
     return experience.list_feedback(status=status, limit=limit, offset=offset)
 
 
+@router.get("/admin/experience/feedback/{identifier}")
+def admin_feedback_detail(identifier: str, user: CurrentUser = Depends(require_admin)):
+    return experience.admin_feedback_detail(identifier)
+
+
 @router.put("/admin/experience/feedback/{identifier}")
 def update_feedback(identifier: str, body: FeedbackUpdate, user: CurrentUser = Depends(require_admin)):
     return experience.update_feedback(user.id, identifier, body)

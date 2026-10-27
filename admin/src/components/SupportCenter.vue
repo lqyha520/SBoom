@@ -7,6 +7,7 @@ import {
   getSupport,
   saveSupport,
   getFeedback,
+  getFeedbackDetail,
   saveFeedback,
   statusOptions,
   kindLabels,
@@ -80,25 +81,14 @@ async function reloadFeedback() {
   busy.value = true;
   const selectedId = selected.value.id;
   try {
-    // 反馈可能已被其他管理员移到另一状态，逐页查找最新版本。
-    for (let offset = 0; ; offset += 20) {
-      const result = await getFeedback("", offset);
-      const latest = result.items.find(
-        (item) => item.id === selectedId,
-      );
-      if (latest) {
-        latestFeedback.value = latest;
-        if (selected.value?.id !== selectedId) return;
-        selected.value.revision = latest.revision;
-        feedbackConflict.value = false;
-        formError.value = "已载入最新版本，您的修改已保留，请核对后保存";
-        return;
-      }
-      if (offset + result.items.length >= result.total || !result.items.length)
-        throw new Error("该反馈已不存在");
-    }
+    const latest = await getFeedbackDetail(selectedId);
+    if (!active.value || selected.value?.id !== selectedId) return;
+    latestFeedback.value = latest;
+    selected.value.revision = latest.revision;
+    feedbackConflict.value = false;
+    formError.value = "已载入最新版本，您的修改已保留，请核对后保存";
   } catch (cause) {
-    formError.value = message(cause);
+    if (active.value && selected.value?.id === selectedId) formError.value = message(cause);
   } finally {
     busy.value = false;
   }

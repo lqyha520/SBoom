@@ -20,6 +20,29 @@ const baseline = ref(''), clearOpen = ref(false), removeId = ref('')
 const revision = ref(''), conflict = ref(false), reloadOpen = ref(false)
 const fetchedModels = ref<Record<string, string[]>>({})
 const listError = ref('')
+const health = ref<api.ModelHealth[]>([]), healthError = ref(''), healthLoading = ref(false)
+const taskTimeout = ref<number>()
+let healthSequence = 0
+const samplingModes = [{ label: '使用系统采样参数', value: 'configured' }, { label: '省略采样参数（模型默认值）', value: 'omit' }]
+const tokenParameters = [{ label: 'max_tokens', value: 'max_tokens' }, { label: 'max_completion_tokens', value: 'max_completion_tokens' }]
+const healthLabels = { unknown: '暂无调用记录', healthy: '调用正常', degraded: '最近调用失败', cooling: '故障冷却中', probing: '恢复探测中', recovering: '等待恢复探测' }
+function modelHealth(id: string) { return health.value.find(value => value.id === id) }
+async function refreshHealth() {
+  const sequence = ++healthSequence
+  healthLoading.value = true; healthError.value = ''
+  try {
+    const result = await api.fetchModelHealth(props.kind)
+    if (sequence !== healthSequence) return
+    if (result.revision !== revision.value) {
+      health.value = []; taskTimeout.value = undefined
+      healthError.value = '服务器配置已有更新，当前显示的是本地编辑版本，请载入最新配置后查看状态'
+      return
+    }
+    health.value = result.models; taskTimeout.value = result.task_timeout_seconds
+  } catch (error) {
+    if (sequence === healthSequence) healthError.value = error instanceof Error ? error.message : '调用状态读取失败'
+  } finally { if (sequence === healthSequence) healthLoading.value = false }
+}
 const removeOpen = computed({ get: () => !!removeId.value, set: value => { if (!value) removeId.value = '' } })
 const dirty = computed(() => !!baseline.value && baseline.value !== JSON.stringify(models.value))
 const pageActive = ref(true)
@@ -37,6 +60,8 @@ function accept(value: api.GlobalLlmConfig | Awaited<ReturnType<typeof fetchImag
   conflict.value = false
   if (!models.value.some(model => model.id === selectedId.value)) selectedId.value = models.value[0]?.id ?? ''
   baseline.value = JSON.stringify(models.value)
+  health.value = []; taskTimeout.value = undefined
+  void refreshHealth()
 }
 async function reloadLatest() {
   if (busy.value) return
@@ -103,13 +128,13 @@ function remove() {
   if (selectedId.value === removeId.value) selectedId.value = models.value[0]?.id ?? ''
   removeId.value = ''
 }
-async function execute(action: 'save' | 'test' | 'clear') {
+async function execute(action: 'save' | 'test' | 'generation-test' | 'clear') {
   if (busy.value || loading.value || loadError.value) return
   message.value = ''
-  if (action === 'save' || action === 'test') {
-    const candidates = action === 'test' ? [selected.value] : models.value
+  if (action === 'save' || action === 'test' || action === 'generation-test') {
+    const candidates = action === 'save' ? models.value : [selected.value]
     for (const model of candidates) {
-      const error = modelError(model, props.kind, action === 'test')
+      const error = modelError(model, props.kind, action !== 'save')
       if (error) {
         selectedId.value = model.id; ok.value = false; message.value = `模型 ${models.value.indexOf(model) + 1}：${error}`; return
       }
@@ -120,10 +145,11 @@ async function execute(action: 'save' | 'test' | 'clear') {
     if (action === 'save') {
       const result = isImage.value ? await saveImageConfig(imagePayload(models.value, revision.value)) : await api.saveLlmConfig(textPayload(models.value, revision.value))
       accept(result); message.value = '模型配置已保存'
-    } else if (action === 'test' && selected.value) {
+    } else if ((action === 'test' || action === 'generation-test') && selected.value) {
       const model = selected.value
-      const result = await api.testLlm({ id: model.id, baseUrl: model.baseUrl.trim(), model: model.model.trim(), apiKey: model.apiKey.trim(), timeout: model.timeout, maxTokens: model.maxTokens })
-      message.value = '连接成功：' + result.reply
+      const payload = { id: model.id, baseUrl: model.baseUrl.trim(), model: model.model.trim(), apiKey: model.apiKey.trim(), timeout: model.timeout, maxTokens: model.maxTokens, samplingMode: model.samplingMode, tokenParameter: model.tokenParameter }
+      const result = await (action === 'test' ? api.testLlm(payload) : api.testLlmGeneration(payload))
+      message.value = (action === 'test' ? '连接成功：' : '真实调用成功：') + result.reply
     } else if (action === 'clear') {
       const result = await (isImage.value ? clearImageConfig(revision.value) : api.clearLlmConfig(revision.value))
       accept(result)
@@ -136,7 +162,7 @@ async function execute(action: 'save' | 'test' | 'clear') {
   }
   finally { busy.value = '' }
 }
-useAdminRefresh(load, () => { loadSequence++; loading.value = false })
+useAdminRefresh(load, () => { loadSequence++; healthSequence++; loading.value = false; healthLoading.value = false })
 </script>
 
 <template>
@@ -146,6 +172,12 @@ useAdminRefresh(load, () => { loadSequence++; loading.value = false })
       <UBadge :color="enabledCount ? 'success' : 'warning'" variant="subtle">{{ enabledCount ? `${enabledCount} 个已启用` : '未启用模型' }}</UBadge>
     </div>
     <UAlert v-if="loadError" :title="loadError" color="error" :actions="[{ label: '重试', onClick: load }]" />
+    <div v-if="!loading && !loadError" class="actions-row mb-3">
+      <span class="text-sm">配置版本：{{ revision.slice(0, 12) }} · 新任务即时使用，进行中的任务沿用开始时配置</span>
+      <UButton label="刷新调用状态" color="neutral" variant="ghost" :loading="healthLoading" @click="refreshHealth" />
+    </div>
+    <UAlert v-if="healthError" :title="healthError" color="warning" class="mb-3" />
+    <p v-if="taskTimeout" class="text-sm mb-3">当前任务上限 {{ taskTimeout }} 秒（含候选切换{{ isImage ? '' : '、补题与复核' }}），前台自动跟随后台配置。网络传输另留 30 秒。</p>
     <div v-if="loading" role="status" aria-label="正在加载模型配置"><USkeleton v-for="n in 4" :key="n" class="h-14 mb-3" /></div>
     <template v-else-if="!loadError">
       <div class="model-layout">
@@ -155,7 +187,10 @@ useAdminRefresh(load, () => { loadSequence++; loading.value = false })
             <li v-for="(model, index) in models" :key="model.id" :class="{ selected: model.id === selectedId }">
               <button type="button" class="model-select" :aria-pressed="model.id === selectedId" :disabled="!!busy" @click="selectModel(model.id)">
                 <span class="priority-number">{{ index + 1 }}</span>
-                <span class="model-label"><strong>{{ model.name || model.model || '新模型' }}</strong><span>{{ model.enabled ? '已启用' : '已停用' }}</span></span>
+                <span class="model-label"><strong>{{ model.name || model.model || '新模型' }}</strong><span>{{ model.enabled ? '已启用' : '已停用' }} · {{ healthLabels[modelHealth(model.id)?.state ?? 'unknown'] }}</span>
+                  <span v-if="modelHealth(model.id)?.success_rate != null">成功率 {{ ((modelHealth(model.id)!.success_rate ?? 0) * 100).toFixed(0) }}% · 平均 {{ modelHealth(model.id)!.average_seconds?.toFixed(1) }} 秒</span>
+                  <span v-if="modelHealth(model.id)">成功 {{ modelHealth(model.id)!.successes }} · 失败 {{ modelHealth(model.id)!.failures }} · 备用调用 {{ modelHealth(model.id)!.fallback_calls ?? 0 }}</span>
+                </span>
               </button>
               <div class="model-tools">
                 <UTooltip text="提高优先级"><UButton icon="i-lucide-arrow-up" :aria-label="`上移模型 ${index + 1}`" size="xs" color="neutral" variant="ghost" :disabled="!!busy || index === 0" @click="move(index, -1)" /></UTooltip>
@@ -177,7 +212,7 @@ useAdminRefresh(load, () => { loadSequence++; loading.value = false })
                 <UButton label="拉取模型" icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="busy === 'models'" :disabled="!!busy" @click="fetchModels" />
               </div>
             </UFormField>
-            <UFormField :label="isImage ? '生图超时（秒）' : '超时时间（秒）'"><UInputNumber v-model="selected.timeout" :min="isImage ? 30 : 10" :max="600" :step="10" :disabled="!!busy" /></UFormField>
+            <UFormField :label="isImage ? '生图超时（秒）' : '超时时间（秒）'" description="每个候选的最长等待时间；前台等待时限由后台自动计算。"><UInputNumber v-model="selected.timeout" :min="isImage ? 30 : 10" :max="600" :step="10" :disabled="!!busy" /></UFormField>
           </div>
           <UFormField v-if="fetchedModels[selected.id]?.length" label="从拉取结果选择" :description="`已拉取 ${fetchedModels[selected.id]?.length ?? 0} 个模型，选择后会覆盖上方模型名称。`">
             <USelect v-model="selected.model" :items="fetchedModels[selected.id] ?? []" placeholder="选择模型" :disabled="!!busy" aria-label="从拉取结果选择" />
@@ -188,9 +223,15 @@ useAdminRefresh(load, () => { loadSequence++; loading.value = false })
             <UFormField label="图片返回格式"><USelect v-model="selected.responseFormat" :items="formats" :disabled="!!busy" /></UFormField>
           </div>
           <UFormField v-else label="模型最大输出 token"><UInputNumber v-model="selected.maxTokens" :min="1024" :max="131072" :step="1024" :disabled="!!busy" /></UFormField>
+          <div v-if="!isImage" class="field-grid">
+            <UFormField label="采样参数兼容性" description="不支持 temperature 或 top_p 的模型请选择省略。"><USelect v-model="selected.samplingMode" :items="samplingModes" :disabled="!!busy" /></UFormField>
+            <UFormField label="输出 token 参数"><USelect v-model="selected.tokenParameter" :items="tokenParameters" :disabled="!!busy" /></UFormField>
+          </div>
           <UFormField v-if="isImage" label="生图调用方式" description="服务商要求提交任务后查询结果时，选择异步任务。"><USelect v-model="selected.requestMode" :items="requestModes" :disabled="!!busy" /></UFormField>
           <UFormField :label="isImage ? '生图 API 密钥' : 'API 密钥'"><UInput v-model="selected.apiKey" type="password" autocomplete="new-password" :placeholder="selected.hasKey ? '留空保留已保存的密钥' : 'sk-...'" :required="selected.enabled && !selected.hasKey" :disabled="!!busy" maxlength="4000" icon="i-lucide-key-round" /></UFormField>
           <div class="actions-row"><UBadge :color="selected.hasKey ? 'success' : 'warning'" variant="subtle" icon="i-lucide-key-round">{{ selected.hasKey ? '密钥已保存' : '未配置密钥' }}</UBadge><UButton v-if="!isImage" label="测试连接" icon="i-lucide-plug" color="neutral" variant="outline" :loading="busy === 'test'" :disabled="!!busy" @click="execute('test')" /></div>
+          <UButton v-if="!isImage" label="测试真实 JSON 调用" icon="i-lucide-flask-conical" color="neutral" variant="outline" :loading="busy === 'generation-test'" :disabled="!!busy" @click="execute('generation-test')" />
+          <p v-if="!isImage" class="text-sm">连接测试只检查连通性；真实调用按当前参数验证 JSON 输出，最多输出 1024 token，可能产生费用。</p>
           <button type="submit" hidden tabindex="-1" aria-hidden="true" />
         </form>
       </div>

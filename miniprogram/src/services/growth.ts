@@ -28,10 +28,14 @@ export async function readMessages(id = '', remainingPending: () => number = () 
     return finish(result.unread, remainingPending())
   } catch (error) { finish(); throw error }
 }
+const messagePages: Record<string, string> = { paper: 'paper', feedback: 'support', membership: 'membership', request: 'requests', closure: 'closure', order: 'orders' }
 export function messageDestination(message: Pick<Message, 'target_type' | 'target_id'>) {
-  const pages: Record<string, string> = { paper: 'paper', feedback: 'support', membership: 'membership', request: 'requests', closure: 'closure', order: 'orders' }
-  const page = pages[message.target_type]
+  const page = messagePages[message.target_type]
   return safeDestination(page ? '/pages/' + page + '/index' + (message.target_id ? '?id=' + encodeURIComponent(message.target_id) : '') : '/subpages/messages/index')
+}
+const messageNeedsTarget = new Set(['paper', 'request', 'order'])
+export function messageHasDestination(message: Pick<Message, 'target_type' | 'target_id'>) {
+  return !!messagePages[message.target_type] && (!messageNeedsTarget.has(message.target_type) || !!message.target_id)
 }
 export const subscriptionConfig = (options: ReadOptions = {}) => request<{ available: boolean; template_id: string }>('/api/v1/mini/message-subscription', 'GET', undefined, options)
 export const grantSubscription = (template_id: string, request_id: string) => request('/api/v1/mini/message-subscription', 'POST', { template_id, request_id })
@@ -49,7 +53,7 @@ export const cancelClosure = (revision: number) => request<{ request: Closure }>
 export interface Plan { id: string; name: string; description: string; days: number; price_fen: number; revision: number; virtual_product_id?: string; price_fen_ios?: number; ios_available?: boolean; purchase_limit?: number; purchased?: number; pending?: number; pending_order?: string | null; pending_expires_at?: number | null }
 export interface Refund { id: string; reason: string; reply: string; status: 'requested' | 'processing' | 'success' | 'closed' | 'abnormal' | 'rejected'; revision: number; created_at: number; updated_at: number; completed_at: number | null }
 export type PaymentChannel = 'wechat' | 'virtual'
-export interface Order { id: string; plan_id: string; plan_name: string; plan_days: number; amount_fen: number; currency: string; status: 'created' | 'pending' | 'paid' | 'closed' | 'refunded'; payment_channel?: PaymentChannel; created_at: number; expires_at: number; paid_at: number | null; revision: number; refund: Refund | null }
+export interface Order { id: string; plan_id: string; plan_name: string; plan_days: number; amount_fen: number; currency: string; status: 'created' | 'pending' | 'paid' | 'closed' | 'refunded'; payment_channel?: PaymentChannel; device_platform?: string; created_at: number; expires_at: number; paid_at: number | null; revision: number; refund: Refund | null }
 export interface PaymentParameters { timeStamp: string; nonceStr: string; package: string; signType: 'RSA'; paySign: string }
 export interface VirtualPaymentParameters { mode: 'short_series_goods'; signData: string; paySig: string; signature: string }
 export type CheckoutPayment = PaymentParameters | VirtualPaymentParameters
@@ -60,7 +64,7 @@ export const redeemMembershipCard = (code: string) => request<{ user: import('..
 export const createOrder = (plan: Plan, request_id: string) => request<Order>('/api/v1/mini/orders', 'POST', { plan_id: plan.id, plan_revision: plan.revision, request_id, platform: devicePlatform() })
 export const fetchOrders = (offset = 0, options: ReadOptions = {}) => request<Page<Order>>('/api/v1/mini/orders?offset=' + offset, 'GET', undefined, options)
 export const fetchOrder = (id: string, options: ReadOptions = {}) => request<Order>('/api/v1/mini/orders/' + encodeURIComponent(id), 'GET', undefined, options)
-export const payOrder = (id: string) => request<{ order: Order; payment: CheckoutPayment | null }>('/api/v1/mini/orders/' + encodeURIComponent(id) + '/pay', 'POST')
+export const payOrder = (id: string, platform = devicePlatform()) => request<{ order: Order; payment: CheckoutPayment | null }>('/api/v1/mini/orders/' + encodeURIComponent(id) + '/pay', 'POST', { platform })
 export const refreshWechatSession = (code: string) => request<{ refreshed: boolean }>('/api/v1/mini/wechat/session', 'POST', { code })
 export const syncOrder = (id: string) => request<Order>('/api/v1/mini/orders/' + encodeURIComponent(id) + '/sync', 'POST')
 export const cancelOrder = (id: string) => request<Order>('/api/v1/mini/orders/' + encodeURIComponent(id) + '/cancel', 'POST')

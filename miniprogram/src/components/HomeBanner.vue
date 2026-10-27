@@ -99,7 +99,7 @@ function welcomeAction() {
 .banner-body .banner-subtitle { font-size: 12px; margin-top: 2px; -webkit-line-clamp: 1; }
 .banner-cta { display: flex; align-items: center; gap: 4px; max-width: 86px; flex: none; padding: 6px 10px; border-radius: 999px; background: var(--lc-primary-soft, #e9f4eb); font-size: 12px; font-weight: 600; color: var(--lc-primary, #307e61); }
 .banner-cta text { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-.banner-next { position: absolute; right: 8px; top: 104px; width: 36px; height: 36px; padding: 0; background: rgba(255, 255, 255, .92); color: #307e61; border-radius: 50%; box-shadow: 0 2px 8px #1d3a2a1f; z-index: 4; display: flex; align-items: center; justify-content: center; }
+.banner-next { position: absolute; right: 4px; top: 100px; width: 44px; height: 44px; padding: 0; background: rgba(255, 255, 255, .92); color: #307e61; border-radius: 50%; box-shadow: 0 2px 8px #1d3a2a1f; z-index: 4; display: flex; align-items: center; justify-content: center; }
 .text-banner .banner-body { background: transparent; display: block; height: auto; padding: 0; max-width: 80%; }
 .image-banner { background: #f3f7f4; }
 .banner-photo { display: block; width: 100%; height: 100%; }
@@ -116,7 +116,9 @@ function welcomeAction() {
 
 /* —— 轮播点：卡外右上，不受点击层影响 —— */
 .banner-dots { position: absolute; z-index: 4; right: 12px; top: 11px; display: flex; align-items: center; gap: 1px; padding: 2px 5px; border-radius: 999px; background: rgba(20, 40, 28, 0.22); }
-.banner-dot { display: flex; align-items: center; justify-content: center; flex: none; width: 30px; height: 30px; margin: 0; padding: 0; background: transparent; }
+.banner-dot { position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 30px; height: 30px; margin: 0; padding: 0; background: transparent; }
+/* 视觉圆点保持紧凑，纵向点击热区补到 44px。 */
+.banner-dot::after { content: ''; position: absolute; top: -7px; right: 0; bottom: -7px; left: 0; }
 .banner-dot > view { width: 5px; height: 5px; border-radius: 99px; background: rgba(255, 255, 255, 0.6); transition: width .2s; }
 .banner-dot > view.active { width: 13px; background: #fff; }
 

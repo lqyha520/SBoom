@@ -33,6 +33,7 @@ export const saveSupport = (id: number, body: ApiSchemas['SupportSettings']) => 
   return change<SupportSettings>(base + '/support', id, { revision, wechat, phone, email, hours, benefits, qr_url } satisfies ApiSchemas['SupportSettings'], 'PUT')
 }
 export const getFeedback = (status = '', offset = 0) => request<Page<Feedback>>(base + '/feedback?' + new URLSearchParams({ status, offset: String(offset) }))
+export const getFeedbackDetail = (id: string) => request<Feedback>(base + '/feedback/' + encodeURIComponent(id))
 export const saveFeedback = (id: number, item: Feedback) => change<Feedback>(base + '/feedback/' + encodeURIComponent(item.id), id, { revision: item.revision, status: item.status, reply: item.reply, internal_note: item.internal_note } satisfies ApiSchemas['FeedbackUpdate'], 'PUT')
 export const getTopics = () => request<{ items: Topic[] }>(base + '/topics')
 export const saveTopic = (id: number, body: TopicEdit, topicId = '') => change<Topic>(base + '/topics' + (topicId ? '/' + encodeURIComponent(topicId) : ''), id, body, topicId ? 'PUT' : 'POST')

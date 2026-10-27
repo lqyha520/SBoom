@@ -30,7 +30,7 @@ export const fetchImageOptions = () => request<{ configured: boolean }>('/api/v1
 export const previewImagePrompt = (params: ImageWorksheetParams) => request<{ prompt: string }>('/api/v1/image-generation/prompt', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(params) })
 export const generateWorksheetImage = (params: ImageWorksheetParams, requestId: string) => request<WorksheetImage>('/api/v1/generate-image', {
   method: 'POST', headers: { ...jsonHeaders, 'X-Request-ID': requestId }, body: JSON.stringify(params),
-}, 630_000)
+})
 export const fetchImageStatus = (requestId: string, signal?: AbortSignal) => request<ImageGenerationStatus>('/api/v1/me/generations/' + encodeURIComponent(requestId), { signal })
 export const MAX_IMAGE_BYTES = 12 * 1024 * 1024
 

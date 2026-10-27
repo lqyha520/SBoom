@@ -4,7 +4,8 @@ from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 
-_PATHS = {"/api/v1/admin/llm-config", "/api/v1/admin/image-config", "/api/v1/admin/test-llm"}
+_PATHS = {"/api/v1/admin/llm-config", "/api/v1/admin/image-config", "/api/v1/admin/test-llm",
+          "/api/v1/admin/test-llm-generation"}
 
 
 class SensitiveConfigRoute(APIRoute):

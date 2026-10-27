@@ -20,6 +20,7 @@ from app.blocking import run_sync
 from app.config import get_settings
 from app.db import db
 from app.metrics import generation_requests_total, llm_attempts_total, llm_tokens_total, provider_model
+from app.services.generation_policy import current_policy, load_policy
 
 
 @dataclass
@@ -119,7 +120,8 @@ def reserve_repairs(count: int) -> int:
     return count
 
 
-def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | None:
+def _begin(user_id: int, request_id: str, kind: str, payload: dict,
+           expected_revision: str | None = None, config_revision: str | None = None) -> dict | None:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", request_id):
         raise HTTPException(400, detail={"error": "无效的请求 ID"})
     # 空的新增可选字段不改变旧请求指纹，部署后仍能重放原请求。
@@ -153,6 +155,9 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict) -> dict | No
                 "error": "该请求仍在处理或结果尚不确定，不会重复调用模型",
                 "code": "generation_pending", "request_id": request_id,
             })
+        if expected_revision is not None and expected_revision != config_revision:
+            raise HTTPException(409, detail={"code": "model_config_changed",
+                                            "error": "模型配置刚刚更新，本次未调用模型；请重新尝试"})
         total = conn.execute("SELECT COUNT(*) FROM generation_requests WHERE status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) >= ?", (now,)).fetchone()[0]
         active = conn.execute(
             "SELECT COUNT(*) FROM generation_requests WHERE user_id = ? AND status = 'running' AND COALESCE(NULLIF(lease_expires_at, 0), created_at + 90) >= ?", (user_id, now),
@@ -214,8 +219,11 @@ def metered(kind: str):
             user = kwargs["user"]
             request = kwargs["request"]
             request_id = (http_request.headers.get("X-Request-ID") if http_request else None) or uuid.uuid4().hex
+            policy = await run_sync(load_policy, kind)
             try:
-                cached = await run_sync(_begin, user.id, request_id, kind, request.model_dump(mode="json"))
+                cached = await run_sync(_begin, user.id, request_id, kind, request.model_dump(mode="json"),
+                                        http_request.headers.get("X-Model-Config-Revision") if http_request else None,
+                                        policy.config["revision"])
             except HTTPException as exc:
                 detail = exc.detail if isinstance(exc.detail, dict) else {"error": exc.detail}
                 raise HTTPException(exc.status_code, {**detail, "request_id": request_id}, headers=dict(exc.headers) if exc.headers else None) from exc
@@ -224,8 +232,9 @@ def metered(kind: str):
                 return cached
             usage = Usage()
             token = current_usage.set(usage)
+            policy_token = current_policy.set(policy)
             lease_task = asyncio.create_task(heartbeat(user.id, request_id))
-            deadline = asyncio.get_running_loop().time() + get_settings().generation_lease_seconds - 5
+            deadline = asyncio.get_running_loop().time() + policy.timeout_seconds
             try:
                 async with asyncio.timeout_at(deadline):
                     result = await handler(*args, **kwargs)
@@ -234,6 +243,7 @@ def metered(kind: str):
 
                     async def tracked_stream():
                         stream_token = current_usage.set(usage)
+                        stream_policy_token = current_policy.set(policy)
                         stream_lease = asyncio.create_task(heartbeat(user.id, request_id))
                         outcome = "unknown"
                         try:
@@ -249,6 +259,7 @@ def metered(kind: str):
                                     yield chunk
                         finally:
                             current_usage.reset(stream_token)
+                            current_policy.reset(stream_policy_token)
                             stream_lease.cancel()
                             with contextlib.suppress(asyncio.CancelledError):
                                 await stream_lease
@@ -286,6 +297,7 @@ def metered(kind: str):
                 raise
             finally:
                 current_usage.reset(token)
+                current_policy.reset(policy_token)
                 lease_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await lease_task

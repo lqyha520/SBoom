@@ -147,7 +147,7 @@ test('message navigation is immediate even while the read receipt is pending', (
   const app = fixture('subpages/messages/index.vue', {
     '../../services/consumer-page': { useConsumerPage: () => ({ ticket: () => () => true }) },
     '../../services/message-reads': { markMessageRead: () => actions.push('read') },
-    '../../services/growth': { messageDestination: () => '/pages/paper/index?id=paper' },
+    '../../services/growth': { messageDestination: () => '/pages/paper/index?id=paper', messageHasDestination: () => true },
     '../../services/navigation': { visitDestination: (url: string) => actions.push(url) },
   }, 'open')
   try { app.page.open({ id: 'message', read_at: null }); assert.deepEqual(actions, ['read', '/pages/paper/index?id=paper']) } finally { app.dispose() }

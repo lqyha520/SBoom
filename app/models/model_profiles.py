@@ -1,5 +1,7 @@
 """按列表顺序执行的模型配置，ID 用于绑定各自保存的密钥。"""
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.image_generation import ImageModelConfig
@@ -18,6 +20,8 @@ class TextModelProfile(ProfileIdentity):
     apiKey: str = Field("", max_length=4000, repr=False)
     timeout: int = Field(120, ge=10, le=600)
     maxTokens: int = Field(16384, ge=1024, le=131072)
+    samplingMode: Literal["configured", "omit"] = "configured"
+    tokenParameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
 
 
 class ImageModelProfile(ImageModelConfig, ProfileIdentity):

@@ -15,7 +15,7 @@ function runtime() {
   type Options = { url: string; method: string; success(value: { statusCode: number; data: unknown }): void; fail(): void }
   const calls: (Options & { aborted: boolean })[] = []
   const hooks: Record<string, () => unknown> = {}
-  const session = vue.reactive({ user: { id: 'reader' } as { id: string } | null })
+  const session = vue.reactive({ user: { id: 'reader', has_wechat: true } as { id: string; has_wechat?: boolean } | null })
   const uni = { stopPullDownRefresh() {}, $on() {}, $off() {}, request(options: Options) {
     const call = { ...options, aborted: false }; calls.push(call)
     return { abort() { call.aborted = true; options.fail() } }
@@ -26,7 +26,7 @@ function runtime() {
     source = source.replace(/import\.meta\.env/g, "({ VITE_API_BASE_URL: 'https://api.example', DEV: false })")
     const exports = {}
     vm.runInNewContext(ts.transpileModule(source + '\n' + expose, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
-      exports, uni, setTimeout, clearTimeout, defineOptions() {}, require: (name: string) => name === 'vue' ? vue : name === '@dcloudio/uni-app'
+      exports, uni, Error, setTimeout, clearTimeout, defineOptions() {}, require: (name: string) => name === 'vue' ? vue : name === '@dcloudio/uni-app'
         ? Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onReachBottom'].map(hook => [hook, (fn: () => unknown) => {
           const previous = hooks[hook]
           hooks[hook] = () => { const result = previous?.(); const next = fn(); return Promise.all([result, next]) }
@@ -39,7 +39,7 @@ function runtime() {
   const reads = module<typeof import('../src/services/message-reads')>('services/message-reads.ts', { './api': api, './growth': growth })
   const consumer = module<typeof import('../src/services/consumer-page')>('services/consumer-page.ts', { './api': api, './session': { session, ensureSession: async () => true } })
   return { api, growth, reads, consumer, session, module, hooks, calls,
-    reply(index: number, data: unknown) { calls[index].success({ statusCode: 200, data }) },
+    reply(index: number, data: unknown, statusCode = 200) { calls[index].success({ statusCode, data }) },
   }
 }
 
@@ -103,17 +103,19 @@ test('消息列表不等待回执，旧列表不会恢复已读标记，未读�
   await settle()
   try {
     const loading = component.load(valid)
-    assert.equal(calls.length, 2, '回执未响应时，列表请求已经发出')
+    assert.equal(calls.length, 3, '回执未响应时，列表与订阅配置请求已经并行发出')
     reply(0, { unread: 1 }); await reads.syncMessageReads()
-    reply(1, { items: [{ id: 'm1', read_at: null }], unread: 2, has_more: true })
-    await settle(); reply(2, { available: false }); await loading
+    reply(2, { items: [{ id: 'm1', read_at: null }], unread: 2, has_more: true })
+    await settle(); reply(1, { available: false }); await loading
     assert.ok(component.items.value[0].read_at)
     assert.equal(growth.inboxState.unread, 1)
     component.unreadOnly.value = true
     const next = component.load(valid, true)
-    assert.ok(!calls[3].url.includes('offset=1'), '回执改变未读集合后必须重置 offset')
-    reply(3, { items: [{ id: 'm2', read_at: null }], unread: 1, has_more: false })
-    await settle(); reply(4, { available: false }); await next
+    // 回执完成后未读集合版本变化，追加加载会退化为首页读取并重新并行拉订阅配置。
+    assert.equal(calls.length, 5)
+    assert.ok(calls[4].url.includes('unread=true') && !calls[4].url.includes('offset=1'), '回执改变未读集合后必须重置 offset')
+    reply(3, { available: false }); reply(4, { items: [{ id: 'm2', read_at: null }], unread: 1, has_more: false })
+    await settle(); await next
     assert.deepEqual(component.items.value.map(item => item.id), ['m2'])
   } finally { scope.stop() }
 })
@@ -152,6 +154,111 @@ test('离页不会中断已提交的写操作，也不会发出其过期的后�
     reply(0, {}); await operation
     assert.equal(calls.length, 1); assert.equal(page.error.value, '')
   } finally { hooks.onUnload(); scope.stop() }
+})
+
+test('订阅配置未返回时消息已结束加载，筛选可用且旧配置不能覆盖新请求', async () => {
+  const env = runtime(), scope = vue.effectScope()
+  type State = { page: ReturnType<typeof env.consumer.useConsumerPage>; filter(value: boolean): void; subscribe: vue.Ref<{ available: boolean; template_id: string }>; subscriptionLoading: vue.Ref<boolean> }
+  const state = scope.run(() => env.module<{ state: State }>('subpages/messages/index.vue', {
+    '../../services/consumer-page': env.consumer, '../../services/growth': env.growth,
+    '../../services/api': env.api, '../../services/message-reads': env.reads, '../../services/session': { session: env.session },
+  }, 'exports.state = { page, filter, subscribe, subscriptionLoading };'))!.state
+  try {
+    await env.hooks.onShow(); await settle()
+    env.reply(1, { items: [], unread: 0, has_more: false }); await settle()
+    assert.equal(state.page.loading.value, false)
+    assert.equal(state.subscriptionLoading.value, true)
+    state.filter(true); await settle()
+    assert.equal(env.calls.length, 4, '慢订阅请求不阻塞未读筛选')
+    assert.ok(env.calls[3].url.includes('unread=true'))
+    env.reply(0, { available: true, template_id: 'old' }); await settle()
+    assert.equal(state.subscribe.value.available, false, '旧配置不得恢复过期订阅入口')
+    env.reply(2, { available: true, template_id: 'new' })
+    env.reply(3, { items: [], unread: 0, has_more: false }); await settle()
+    assert.equal(state.subscribe.value.template_id, 'new')
+    assert.equal(state.subscriptionLoading.value, false)
+  } finally { env.hooks.onUnload(); scope.stop() }
+})
+
+test('订阅配置失败单独提示和重试，不重复加载消息', async () => {
+  const env = runtime(), scope = vue.effectScope()
+  type State = { page: ReturnType<typeof env.consumer.useConsumerPage>; loadSubscription(valid: ConsumerTicket): Promise<void>; subscriptionError: vue.Ref<string>; subscribe: vue.Ref<{ available: boolean }> }
+  const state = scope.run(() => env.module<{ state: State }>('subpages/messages/index.vue', {
+    '../../services/consumer-page': env.consumer, '../../services/growth': env.growth,
+    '../../services/api': env.api, '../../services/message-reads': env.reads, '../../services/session': { session: env.session },
+  }, 'exports.state = { page, loadSubscription, subscriptionError, subscribe };'))!.state
+  try {
+    await env.hooks.onShow(); await settle()
+    env.reply(0, { detail: 'subscription unavailable' }, 500)
+    env.reply(1, { items: [], unread: 0, has_more: false }); await settle()
+    assert.match(state.subscriptionError.value, /subscription unavailable/)
+    assert.equal(state.page.error.value, '')
+    assert.equal(state.page.loading.value, false)
+    const retry = state.loadSubscription(state.page.ticket())
+    assert.equal(env.calls.length, 3)
+    assert.ok(env.calls[2].url.endsWith('/mini/message-subscription'))
+    env.reply(2, { available: true, template_id: 'recovered' }); await retry
+    assert.equal(state.subscriptionError.value, '')
+    assert.equal(state.subscribe.value.available, true)
+  } finally { env.hooks.onUnload(); scope.stop() }
+})
+
+test('付款配置慢或失败不阻塞订单操作，刷新失败撤销旧付款能力并支持独立重试', async () => {
+  const env = runtime(), scope = vue.effectScope()
+  type State = { page: ReturnType<typeof env.consumer.useConsumerPage>; loadPlans(valid: ConsumerTicket): Promise<void>; plansLoading: vue.Ref<boolean>; plansError: vue.Ref<string>; canPay: vue.Ref<boolean>; online: vue.Ref<boolean> }
+  const state = scope.run(() => env.module<{ state: State }>('subpages/orders/index.vue', {
+    '../../services/consumer-page': env.consumer, '../../services/growth': env.growth,
+    '../../services/api': env.api, '../../services/session': { session: env.session },
+    '../../services/checkout': { checkoutSupport: () => true },
+  }, 'exports.state = { page, loadPlans, plansLoading, plansError, canPay, online };'))!.state
+  try {
+    await env.hooks.onShow(); await settle()
+    env.reply(1, { items: [], has_more: false }); await settle()
+    assert.equal(state.page.loading.value, false)
+    assert.equal(state.plansLoading.value, true)
+    let operations = 0
+    await state.page.act(async () => { operations++ })
+    assert.equal(operations, 1, '订单操作不应等待付款配置')
+    env.reply(0, { checkout_enabled: true, ios_enabled: true }); await settle()
+    assert.equal(state.canPay.value, true)
+    const refresh = state.page.refresh()
+    assert.equal(state.canPay.value, false, '刷新开始即撤销旧配置，不能等待失败后才撤销')
+    env.reply(3, { items: [], has_more: false }); await refresh
+    env.reply(2, { detail: 'payment config unavailable' }, 500); await settle()
+    assert.equal(state.online.value, false)
+    assert.equal(state.canPay.value, false)
+    assert.match(state.plansError.value, /payment config unavailable/)
+    assert.equal(state.page.error.value, '')
+    const retry = state.loadPlans(state.page.ticket())
+    assert.equal(env.calls.length, 5)
+    assert.ok(env.calls[4].url.endsWith('/mini/membership/plans'))
+    env.reply(4, { checkout_enabled: true, ios_enabled: true }); await retry
+    assert.equal(state.plansError.value, '')
+    assert.equal(state.canPay.value, true)
+  } finally { env.hooks.onUnload(); scope.stop() }
+})
+
+test('付款配置的迟到响应不能覆盖新开关，换账号后不恢复付款能力', async () => {
+  const env = runtime(), scope = vue.effectScope()
+  type State = { page: ReturnType<typeof env.consumer.useConsumerPage>; loadPlans(valid: ConsumerTicket): Promise<void>; canPay: vue.Ref<boolean> }
+  const state = scope.run(() => env.module<{ state: State }>('subpages/orders/index.vue', {
+    '../../services/consumer-page': env.consumer, '../../services/growth': env.growth,
+    '../../services/api': env.api, '../../services/session': { session: env.session },
+    '../../services/checkout': { checkoutSupport: () => true },
+  }, 'exports.state = { page, loadPlans, canPay };'))!.state
+  try {
+    await env.hooks.onShow(); await settle()
+    env.reply(1, { items: [], has_more: false }); await settle()
+    const newer = state.loadPlans(state.page.ticket())
+    env.reply(2, { checkout_enabled: false, ios_enabled: false }); await newer
+    env.reply(0, { checkout_enabled: true, ios_enabled: true }); await settle()
+    assert.equal(state.canPay.value, false)
+    const switching = state.loadPlans(state.page.ticket())
+    env.session.user = { id: 'other', has_wechat: true }
+    env.reply(3, { checkout_enabled: true, ios_enabled: true }); await switching
+    assert.equal(env.calls[3].aborted, true)
+    assert.equal(state.canPay.value, false)
+  } finally { env.hooks.onUnload(); scope.stop() }
 })
 
 for (const route of ['orders', 'requests', 'messages', 'membership', 'closure']) test(`${route} 实际页面将生命周期传入读取接口`, async () => {

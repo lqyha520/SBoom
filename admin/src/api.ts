@@ -247,6 +247,27 @@ export async function testLlm(cfg?: ApiSchemas["AdminLlmConfigIn"]): Promise<{ r
   })
 }
 
+export async function testLlmGeneration(cfg: ApiSchemas['AdminLlmConfigIn']): Promise<{ reply: string; seconds: number }> {
+  return request('/api/v1/admin/test-llm-generation', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg),
+  })
+}
+
+export interface ModelHealth {
+  id: string
+  state: 'unknown' | 'healthy' | 'degraded' | 'cooling' | 'probing' | 'recovering'
+  successes: number
+  failures: number
+  fallback_calls: number
+  success_rate: number | null
+  average_seconds: number | null
+  last_seconds: number | null
+  retry_after_seconds: number
+}
+export function fetchModelHealth(kind: 'text' | 'image') {
+  return request<{ revision: string; models: ModelHealth[]; task_timeout_seconds: number }>('/api/v1/admin/model-health?kind=' + kind)
+}
+
 /** 拉取模型服务 GET /models 返回的模型 ID，用于下拉选择；失败时仍可手动填写。 */
 export async function fetchLlmModels(cfg: ApiSchemas["AdminLlmModelsIn"]): Promise<{ models: string[]; count: number }> {
   return request('/api/v1/admin/llm-models', {

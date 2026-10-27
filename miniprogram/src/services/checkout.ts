@@ -31,7 +31,8 @@ export function confirmCheckout(id: string): Promise<Order | null> {
     }
     if (state.epoch !== authGeneration()) return null
     if (confirmed) settleCheckout(confirmed)
-    await refreshMembership({ force: true })
+    // 付款已在服务端确认，会员信息刷新失败不能让收银台误报支付失败。
+    try { await refreshMembership({ force: true }) } catch { /* 下次进页面会重新拉取会员状态。 */ }
     return confirmed
   })().finally(() => {
     if (checkoutState.get(id) === state) {

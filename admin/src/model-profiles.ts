@@ -13,6 +13,8 @@ export interface ModelDraft {
   apiKey: string
   timeout: number
   maxTokens: number
+  samplingMode: 'configured' | 'omit'
+  tokenParameter: 'max_tokens' | 'max_completion_tokens'
   size: string
   responseFormat: ImageModelConfig['responseFormat']
   requestMode: 'auto' | 'sync' | 'async'
@@ -22,7 +24,8 @@ export function newModel(kind: ModelKind): ModelDraft {
   return {
     id: randomId(), name: '', enabled: true, hasKey: false,
     baseUrl: '', model: '', apiKey: '', timeout: kind === 'text' ? 120 : 300,
-    maxTokens: 16384, size: '1024x1536', responseFormat: 'auto', requestMode: 'auto',
+    maxTokens: 16384, samplingMode: 'configured', tokenParameter: 'max_tokens',
+    size: '1024x1536', responseFormat: 'auto', requestMode: 'auto',
   }
 }
 
@@ -37,6 +40,7 @@ export function textPayload(profiles: ModelDraft[], revision = '') {
     id: profile.id, name: profile.name.trim(), enabled: profile.enabled,
     baseUrl: profile.baseUrl.trim(), model: profile.model.trim(), apiKey: profile.apiKey.trim(),
     timeout: profile.timeout, maxTokens: profile.maxTokens,
+    samplingMode: profile.samplingMode, tokenParameter: profile.tokenParameter,
   })) }
 }
 

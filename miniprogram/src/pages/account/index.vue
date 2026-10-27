@@ -123,7 +123,7 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
     <template v-else>
       <view v-if="error" class="content-width"><view class="error-strip"><text class="grow">{{ error }}</text></view></view>
       <view v-for="section in sections" :key="section.key" class="content-width">
-        <view v-if="sectionErrors[section.key]" class="error-strip" role="status"><text class="grow">{{ section.label }}：{{ sectionErrors[section.key] }}</text><wd-button icon="refresh" role="button" variant="text" :aria-label="'重试' + section.label" :loading="sectionLoading[section.key]" :disabled="sectionLoading[section.key]" @click="load(section.key, true)" /></view>
+        <view v-if="sectionErrors[section.key]" class="error-strip" role="status"><text class="grow">{{ section.label }}：{{ sectionErrors[section.key] }}</text><wd-button icon="refresh" role="button" variant="text" :aria-label="'重试' + section.label" :loading="sectionLoading[section.key]" :disabled="sectionLoading[section.key]" @click="load(section.key, true)">重试</wd-button></view>
       </view>
       <view class="content-width dashboard">
         <view class="quick-grid" aria-role="group" role="group" aria-label="个人数据快捷入口">

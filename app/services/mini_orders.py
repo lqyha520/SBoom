@@ -19,7 +19,7 @@ from app.sql_utils import escape_like
 
 logger = logging.getLogger(__name__)
 
-PUBLIC_FIELDS = ("id", "plan_id", "plan_name", "plan_days", "amount_fen", "currency", "status", "payment_channel", "revision", "created_at", "expires_at", "paid_at", "closed_at", "updated_at")
+PUBLIC_FIELDS = ("id", "plan_id", "plan_name", "plan_days", "amount_fen", "currency", "status", "payment_channel", "device_platform", "revision", "created_at", "expires_at", "paid_at", "closed_at", "updated_at")
 ADMIN_FIELDS = ("virtual_env", "virtual_offer_id", "virtual_product_id", "virtual_order_id", "virtual_order_type", "device_platform", "delivered_at")
 REFUND_FIELDS = ("id", "reason", "reply", "status", "revision", "created_at", "updated_at", "completed_at")
 #: 列表查询把退款与下单人一次 LEFT JOIN 带出来（列名加前缀避免和订单列撞名），public_order(joined=True) 直接消费
@@ -200,11 +200,14 @@ def ensure_tenant(order):
         fail("订单所属虚拟支付环境已变化，请联系管理员处理", 409)
 
 
-def pay(identifier, user_id):
+def pay(identifier, user_id, platform=""):
     now, lease = int(time.time()), uuid.uuid4().hex
     with db(serialized="accounts") as conn:
         order = owned(conn, identifier, user_id)
         ensure_tenant(order)
+        # 订单价格和道具按下单平台固化；换平台续付会绕过 iOS 定价，直接拒绝。
+        if platform and order["device_platform"] and platform != order["device_platform"]:
+            fail("该订单由另一平台创建，请取消后在本设备重新下单", 409, "platform_mismatch")
         if order["status"] not in ("created", "pending") or order["expires_at"] <= now:
             fail("订单已付款、关闭或超时，请刷新订单", 409)
         user = conn.execute("SELECT * FROM mini_users WHERE id = ? AND is_active = 1", (user_id,)).fetchone()
@@ -215,8 +218,12 @@ def pay(identifier, user_id):
         if limit and limit[0] and conn.execute("SELECT COUNT(*) FROM mini_orders WHERE user_id = ? AND plan_id = ? AND paid_at IS NOT NULL AND id <> ?", (user_id, order["plan_id"], identifier)).fetchone()[0] >= limit[0]:
             fail(f"该套餐每个账号限购 {limit[0]} 次，请取消此订单", 422, "purchase_limit")
         if order["payment_channel"] == "virtual":
-            if not wechat_virtual_pay.configuration()["ready"]:
+            virtual = wechat_virtual_pay.configuration()
+            if not virtual["ready"]:
                 fail("在线开通暂未开放，请联系客服", 503)
+            # 旧订单续付也遵守当前平台开关；查单和已付款履约不受影响。
+            if order["device_platform"] == "ios" and not virtual["ios_enabled"]:
+                fail("iPhone 端在线开通尚未开放，请稍后再试", 422, "ios_unavailable")
             session_key = decrypt_secret(user["wechat_session_key_enc"])
             if not session_key:
                 fail("微信支付登录态已过期，请重新进入小程序后重试", 409, "wechat_session_expired")

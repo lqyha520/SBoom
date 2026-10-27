@@ -38,6 +38,7 @@ async function imageApi(page: Page, context: BrowserContext, options: { holdFirs
     else if (path === '/api/v1/me/templates') data = { templates: [] }
     else if (path === '/api/v1/me/usage') data = { requests: 0 }
     else if (path === '/api/v1/image-generation/options') data = { configured: options.configured !== false }
+    else if (path === '/api/v1/generation/options') data = { revision: 'offline-images', timeout_ms: 900000, task_timeout_seconds: 870 }
     else if (path === '/api/v1/image-generation/prompt') data = { prompt: '离线出题说明：根据所选知识点生成练习。' }
     else if (path === '/api/v1/generate-image') {
       const id = route.request().headers()['x-request-id']!

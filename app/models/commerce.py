@@ -41,6 +41,11 @@ class OrderInput(Input):
     platform: str = Field("", max_length=16, pattern=r"^[a-z]*$")
 
 
+class PayInput(Input):
+    #: 当前付款设备，只用于阻止跨平台续付，不作为安全凭证
+    platform: str = Field("", max_length=16, pattern=r"^[a-z]*$")
+
+
 class RefundInput(Input):
     reason: str = Field(min_length=5, max_length=500)
 

@@ -54,6 +54,16 @@ def list_feedback(user_id=None, status="", limit=20, offset=0):
     return {"items": [_feedback(row, user_id is None) for row in rows], "total": total, "has_more": offset + len(rows) < total}
 
 
+def admin_feedback_detail(identifier):
+    """管理员直接读取最新反馈，包含回复与内部备注，无需逐页扫描。"""
+    with db() as conn:
+        row = conn.execute("SELECT f.*, u.username, u.nickname FROM mini_feedback f JOIN mini_users u ON u.id = f.user_id "
+                           "WHERE f.id = ?", (identifier,)).fetchone()
+    if not row:
+        fail("反馈记录不存在", 404)
+    return _feedback(row, True)
+
+
 def update_feedback(admin_id, identifier, body):
     with db(serialized=True) as conn:
         row = conn.execute("SELECT * FROM mini_feedback WHERE id = ?", (identifier,)).fetchone()
