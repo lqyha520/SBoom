@@ -24,7 +24,7 @@ export interface WorksheetImage {
   height: number
   prompt: string
 }
-export type ImageGenerationStatus = Omit<GenerationStatus, 'result'> & { kind: string; result: WorksheetImage | null }
+export type ImageGenerationStatus = Omit<GenerationStatus, 'result'> & { kind: string; result: WorksheetImage | null; recoverable?: boolean }
 const jsonHeaders = { 'Content-Type': 'application/json' }
 export const fetchImageOptions = () => request<{ configured: boolean }>('/api/v1/image-generation/options')
 export const previewImagePrompt = (params: ImageWorksheetParams) => request<{ prompt: string }>('/api/v1/image-generation/prompt', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(params) })

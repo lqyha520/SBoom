@@ -106,7 +106,7 @@ export function useImageBatch(storageKey: string, current: () => boolean, onImag
         } catch (cause) {
           if (!active()) break
           // 只有明确的 4xx 拒绝可以判定为失败，其余异常均先查询，避免重复计费。
-          const rejected = cause instanceof ApiError && cause.status >= 400 && cause.status < 500 && cause.code !== 'generation_pending'
+          const rejected = cause instanceof ApiError && cause.status >= 400 && cause.status < 500 && !['generation_pending', 'image_processing_busy'].includes(cause.code || '')
           page.state = generated || !rejected ? 'unknown' : 'failed'
           page.error = cause instanceof Error ? cause.message : '生成失败'
           state.error = `第 ${index + 1} 张：${page.error}`
@@ -156,9 +156,9 @@ export function useImageBatch(storageKey: string, current: () => boolean, onImag
           if (value.kind !== 'image') throw new Error('该请求不是图片生成任务')
           if (value.status === 'succeeded' && value.result) await show(page, value.result, index)
           else {
-            page.state = value.status === 'running' ? 'running' : value.cache_expired ? 'expired' : 'failed'
+            page.state = value.status === 'running' ? 'running' : value.cache_expired ? 'expired' : value.recoverable ? 'unknown' : 'failed'
             page.error = page.state === 'running' ? '' : value.cache_expired ? '图片缓存已过期' : value.error?.error || '本次未取得图片'
-            if (value.status === 'unknown') page.error += '；再次生成可能产生新的费用'
+            if (value.status === 'unknown' && !value.recoverable) page.error += '；再次生成可能产生新的费用'
           }
         } catch (cause) {
           if (!active()) break

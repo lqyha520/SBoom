@@ -61,7 +61,7 @@ def tick():
             with db() as conn:
                 conn.execute("DELETE FROM mini_usage_events WHERE id IN (SELECT id FROM mini_usage_events WHERE created_at < ? ORDER BY created_at LIMIT 500)", (now - 60 * 86400,))
                 conn.execute("DELETE FROM provider_health WHERE (kind, profile_id, fingerprint) IN (SELECT kind, profile_id, fingerprint FROM provider_health WHERE updated_at < ? ORDER BY updated_at LIMIT 100)", (now - 30 * 86400,))
-                conn.execute("UPDATE generation_requests SET result_json = '' WHERE (user_id, request_id) IN (SELECT user_id, request_id FROM generation_requests WHERE result_json <> '' AND finished_at < ? ORDER BY finished_at LIMIT 100)", (now - settings.generation_result_days * 86400,))
+                conn.execute("UPDATE generation_requests SET result_json = '' WHERE (user_id, request_id) IN (SELECT user_id, request_id FROM generation_requests WHERE status <> 'running' AND result_json <> '' AND finished_at < ? ORDER BY finished_at LIMIT 100)", (now - settings.generation_result_days * 86400,))
                 conn.execute("INSERT INTO generation_tombstones(user_id, request_id) SELECT user_id, request_id FROM generation_requests WHERE status <> 'running' AND finished_at < ? ORDER BY finished_at LIMIT 500 ON CONFLICT DO NOTHING", (now - 90 * 86400,))
                 conn.execute("DELETE FROM generation_requests WHERE (user_id, request_id) IN (SELECT user_id, request_id FROM generation_requests WHERE status <> 'running' AND finished_at < ? ORDER BY finished_at LIMIT 500)", (now - 90 * 86400,))
                 conn.execute("DELETE FROM mini_notifications WHERE id IN (SELECT id FROM mini_notifications WHERE created_at < ? ORDER BY created_at LIMIT 500)", (now - 180 * 86400,))

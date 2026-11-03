@@ -26,7 +26,12 @@ async def generation_usage(user: CurrentUser = Depends(require_user)):
 
 @router.get("/generations/{request_id}", summary="查询本人生成请求的状态及结果")
 async def generation_status(request_id: str, user: CurrentUser = Depends(require_user)):
-    return await run_sync(request_status, user.id, request_id)
+    status = await run_sync(request_status, user.id, request_id)
+    if status["kind"] == "image" and status.get("recoverable"):
+        from app.services.image_recovery import schedule
+        await schedule(user.id, request_id)
+        return await run_sync(request_status, user.id, request_id)
+    return status
 
 
 # ─── 每用户模板 ───

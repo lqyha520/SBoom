@@ -20,6 +20,38 @@ CONNECT_PROBE_SECONDS = 2.0
 EDGE_CACHE_MAX = 8
 EDGE_CACHE_SECONDS = 900.0
 _edges: OrderedDict[tuple[str, int], float] = OrderedDict()
+_failed_ips: OrderedDict[tuple[str, str, int], float] = OrderedDict()
+
+
+def record_transport_failure(error: httpx.TransportError) -> None:
+    """TCP 可达不代表 TLS/响应可用；短暂避开真正传输失败的主机地址。"""
+    try:
+        request = error.request
+        ip = request.url.host
+        if not ipaddress.ip_address(ip).is_global:
+            return
+        host = request.extensions.get("sni_hostname")
+        if isinstance(host, bytes):
+            host = host.decode("ascii")
+        if not isinstance(host, str):
+            return
+        key = (host, ip, request.url.port or 443)
+    except (RuntimeError, ValueError, UnicodeError):
+        return
+    _failed_ips[key] = time.monotonic()
+    _failed_ips.move_to_end(key)
+    while len(_failed_ips) > 128:
+        _failed_ips.popitem(last=False)
+
+
+def delivery_ips(ips: list[str], host: str, port: int) -> list[str]:
+    now = time.monotonic()
+    failed = {ip for (name, ip, p), stamp in _failed_ips.items()
+              if name == host and p == port and now - stamp < 90}
+    choices = list(dict.fromkeys(ip for ip in ips if ip not in failed))
+    if choices:
+        return choices
+    return _fallback_edges(port, set(ips) | failed) or list(dict.fromkeys(ips))
 
 
 def _remember_edge(ip: str, port: int) -> None:
@@ -144,4 +176,4 @@ async def pin_provider_request(request: httpx.Request) -> None:
         raise HTTPException(422, detail={"code": "provider_address_rejected", "error": "模型接口当前未解析到公网地址，未发送请求"}) from exc
     request.headers["Host"] = request.url.netloc.decode("ascii")
     request.extensions["sni_hostname"] = host
-    request.url = request.url.copy_with(host=await pick_reachable_ip(ips, port))
+    request.url = request.url.copy_with(host=await pick_reachable_ip(delivery_ips(ips, host, port), port))

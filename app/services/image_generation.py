@@ -6,6 +6,7 @@ import binascii
 import io
 import ipaddress
 import json
+import logging
 import re
 import socket
 import warnings
@@ -18,12 +19,14 @@ from PIL import Image, UnidentifiedImageError
 from app.blocking import run_sync, run_sync_in
 from app.metrics import observe_provider
 from app.models.image_generation import ImageWorksheetRequest
-from app.provider_policy import origin, pick_reachable_ip, validate_endpoint
+from app.provider_policy import delivery_ips, origin, pick_reachable_ip, record_transport_failure, validate_endpoint
 from app.services.generation_control import record_attempt, record_usage
 from app.services.knowledge_scope import knowledge_scope_service
 from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num, _textbook_context
 from app.services.provider_http import borrow_client
 from app.services.resource_admission import bounded_image_request, bounded_media
+
+logger = logging.getLogger(__name__)
 
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_RESPONSE_BYTES = 18 * 1024 * 1024
@@ -152,7 +155,17 @@ def _provider_error(status: int, payload: bytes = b"") -> dict:
 
 async def _provider_json(client: httpx.AsyncClient, method: str, url: str, headers: dict,
                          body: dict | None = None) -> dict:
-    async with client.stream(method, url, headers=headers, json=body) as response:
+    # 单次任务查询不能占满生图总时限；同步提交仍沿用模型配置的等待时间。
+    options = {"timeout": httpx.Timeout(min(client.timeout.read or 20, 20), connect=10, pool=5)} if method == "GET" else {}
+    try:
+        return await _provider_json_response(client, method, url, headers, body, options)
+    except httpx.TransportError as exc:
+        record_transport_failure(exc)
+        raise
+
+
+async def _provider_json_response(client, method, url, headers, body, options) -> dict:
+    async with client.stream(method, url, headers=headers, json=body, **options) as response:
         if response.is_error:
             payload = b""
             try:
@@ -193,11 +206,40 @@ def _task_poll_url(data: dict, endpoint: str) -> tuple[str, str]:
     return task_id, target
 
 
+def _image_task_result(response: dict, task_id: str) -> dict | None:
+    items = response.get("items") if "items" in response else [response]
+    if not isinstance(items, list):
+        raise ValueError("异步图片任务查询格式异常")
+    matches = [item for item in items if isinstance(item, dict) and item.get("id") == task_id]
+    if len(matches) != 1:
+        raise ValueError("未返回指定的异步图片任务")
+    task = matches[0]
+    status = task.get("status")
+    if status in ("queued", "running") and task.get("terminal") is not True:
+        return None
+    if status in ("success", "partial_success", "succeeded", "completed"):
+        results = task.get("results", task.get("data"))
+        if results is None and isinstance(task.get("result"), dict):
+            results = task["result"].get("data")
+        if not isinstance(results, list) or not results or not isinstance(results[0], dict):
+            raise ValueError("异步图片任务未返回成品图片")
+        return {"data": results, "usage": task.get("usage")}
+    if status in ("failed", "cancelled", "text_review"):
+        reason = "content_policy" if status == "text_review" else "generation_failed"
+        hint = "上游内容审核拒绝了图片任务" if reason == "content_policy" else "上游图片任务执行失败，请稍后重试或更换服务商"
+        error = task.get("error")
+        code = task.get("error_code") or (error.get("code") if isinstance(error, dict) else None)
+        if status == "failed" and isinstance(code, str) and code.lower() in MODEL_ERROR_CODES:
+            reason, hint = "model", "上游模型不可用或当前密钥没有该模型的权限，请更换可用型号或联系服务商"
+        raise HTTPException(502, detail={"code": "image_task_failed", "reason": reason,
+                                        "failover_safe": reason == "model", "error": hint})
+    raise ValueError("异步图片任务状态异常")
+
+
 async def _poll_image_task(client: httpx.AsyncClient, data: dict, endpoint: str, headers: dict) -> dict:
     task_id, poll_url = _task_poll_url(data, endpoint)
     transient_errors = 0
     while True:
-        # 只查询已提交任务，绝不在轮询阶段重复发送生成 POST。
         await asyncio.sleep(TASK_POLL_INTERVAL)
         try:
             response = await _provider_json(client, "GET", poll_url, headers)
@@ -210,40 +252,14 @@ async def _poll_image_task(client: httpx.AsyncClient, data: dict, endpoint: str,
             transient_errors += 1
             continue
         transient_errors = 0
-        # 两种已验证协议：批量 items 列表，以及 image.task 单任务对象。
-        items = response.get("items") if "items" in response else [response]
-        if not isinstance(items, list):
-            raise ValueError("异步图片任务查询格式异常")
-        matches = [item for item in items if isinstance(item, dict) and item.get("id") == task_id]
-        if len(matches) != 1:
-            raise ValueError("未返回指定的异步图片任务")
-        task = matches[0]
-        status = task.get("status")
-        if status in ("queued", "running") and task.get("terminal") is not True:
-            continue
-        if status in ("success", "partial_success", "succeeded", "completed"):
-            results = task.get("results", task.get("data"))
-            if results is None and isinstance(task.get("result"), dict):
-                results = task["result"].get("data")
-            if not isinstance(results, list) or not results:
-                raise ValueError("异步图片任务未返回成品图片")
-            return {"data": results, "usage": task.get("usage")}
-        if status in ("failed", "cancelled", "text_review"):
-            reason = "content_policy" if status == "text_review" else "generation_failed"
-            hint = "上游内容审核拒绝了图片任务" if reason == "content_policy" else "上游图片任务执行失败，请稍后重试或更换服务商"
-            error = task.get("error")
-            code = task.get("error_code") or (error.get("code") if isinstance(error, dict) else None)
-            # 服务商可能用笼统的 public_error 覆盖具体原因，保留标准模型错误码的分类。
-            if status == "failed" and isinstance(code, str) and code.lower() in MODEL_ERROR_CODES:
-                reason, hint = "model", "上游模型不可用或当前密钥没有该模型的权限，请更换可用型号或联系服务商"
-            # 任务原始报错可能含提示词或内部地址，不能直接返回给工作台。
-            raise HTTPException(502, detail={"code": "image_task_failed", "reason": reason, "error": hint})
-        raise ValueError("异步图片任务状态异常")
+        result = _image_task_result(response, task_id)
+        if result is not None:
+            return result
 
 
 def _asset_error(message: str, upstream_status: int | None = None) -> dict:
     """成品下载失败的独立分类：图已在上游生成，与「模型没出图」要分开判读。"""
-    detail: dict[str, object] = {"code": "asset_unreachable", "reason": "asset_unreachable",
+    detail: dict[str, object] = {"code": "asset_unreachable", "reason": "asset_unreachable", "failover_safe": False,
                                  "error": f"{message}；上游可能已计费，请检查该模型的成品托管地址是否可达"}
     if upstream_status is not None:
         detail["upstream_status"] = upstream_status
@@ -264,14 +280,24 @@ async def _public_image(url: str) -> bytes:
             if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
                 raise ValueError("图片下载地址不能指向本地或内网")
             host = parts.hostname.encode("idna").decode("ascii")
-            target = httpx.URL(url).copy_with(host=await pick_reachable_ip(ips, 443))
-            async with client.stream("GET", target, headers={"Host": host},
-                                     extensions={"sni_hostname": host}) as response:
-                if response.status_code in (301, 302, 303, 307, 308):
-                    url = urljoin(url, response.headers.get("location", ""))
-                    continue
-                response.raise_for_status()
-                return await _read_limited(response, MAX_IMAGE_BYTES)
+            logger.info("下载生图成品（域名 %s）", host)
+            # 只重试同一成品的 GET；传输失败后重新选地址，Host/SNI/证书校验保持原域名。
+            for attempt in range(3):
+                target = httpx.URL(url).copy_with(host=await pick_reachable_ip(delivery_ips(ips, host, 443), 443))
+                try:
+                    async with client.stream("GET", target, headers={"Host": host},
+                                             extensions={"sni_hostname": host}) as response:
+                        if response.status_code in (301, 302, 303, 307, 308):
+                            url = urljoin(url, response.headers.get("location", ""))
+                            break
+                        response.raise_for_status()
+                        return await _read_limited(response, MAX_IMAGE_BYTES)
+                except httpx.PoolTimeout:
+                    raise
+                except httpx.TransportError as exc:
+                    record_transport_failure(exc)
+                    if attempt == 2:
+                        raise
     raise ValueError("图片下载地址重定向次数过多")
 
 
@@ -308,6 +334,9 @@ async def _normalize_when_available(raw: bytes) -> dict:
 @observe_provider
 @bounded_image_request
 async def generate_image(config: dict, prompt: str) -> dict:
+    from app.services.image_recovery import checkpoint
+    task = None
+    stage = "submission"
     processing_image = False
     # 成品下载失败与「上游没出图」是两回事：前者钱已经花了、图也在上游，只是取不回来。
     fetching_asset = False
@@ -322,6 +351,7 @@ async def generate_image(config: dict, prompt: str) -> dict:
         async with asyncio.timeout(config["timeout"]):
             endpoint = generation_url(config["baseUrl"])
             async with borrow_client("image-generation", config["timeout"], base_url=endpoint) as client:
+                await checkpoint(config, prompt)
                 from app.services.generation_budget import reserve
                 await run_sync(reserve, images=1)
                 record_attempt()
@@ -336,6 +366,11 @@ async def generate_image(config: dict, prompt: str) -> dict:
                     data = await _provider_json(client, "POST", endpoint, headers, {**body, "async": True})
                 # 同步成品也可能附带 task_id/poll_url；仅在尚无图片时进入异步轮询。
                 if not _has_image_result(data) and (data.get("object") == "image_task" or "task_id" in data or "poll_url" in data):
+                    task_id, poll_url = _task_poll_url(data, endpoint)
+                    task = {"task_id": task_id, "poll_url": poll_url}
+                    await checkpoint(config, prompt, task=task)
+                    stage = "task_poll"
+                    logger.info("生图任务已提交，开始查询原任务")
                     data = await _poll_image_task(client, data, endpoint, headers)
             if not isinstance(data, dict) or not isinstance(data.get("data"), list) or not data["data"]:
                 raise ValueError("接口没有返回图片")
@@ -346,6 +381,9 @@ async def generate_image(config: dict, prompt: str) -> dict:
             if isinstance(item.get("b64_json"), str) and item["b64_json"]:
                 raw = await run_sync_in("media", base64.b64decode, item["b64_json"], validate=True)
             elif isinstance(item.get("url"), str) and item["url"]:
+                await checkpoint(config, prompt, task=task, asset_url=item["url"])
+                stage = "asset_download"
+                logger.info("上游生图完成，开始下载成品（域名 %s）", urlsplit(item["url"]).hostname)
                 fetching_asset = True
                 raw = await _public_image(item["url"])
                 fetching_asset = False
@@ -354,26 +392,51 @@ async def generate_image(config: dict, prompt: str) -> dict:
             # 归一化会产生新 PNG 和 Base64，提前释放供应商的大响应，减少峰值副本。
             del item, data
             processing_image = True
+            stage = "image_processing"
             image = await _normalize_when_available(raw)
         return {**image, "prompt": prompt}
     except httpx.PoolTimeout as exc:
-        raise HTTPException(429, detail={"error": "生图连接池繁忙，请稍后重试"}) from exc
+        raise HTTPException(429, detail={"error": "生图连接池繁忙，请稍后重试", "failover_safe": False}) from exc
     except (TimeoutError, httpx.TimeoutException) as exc:
+        logger.warning("生图超时（阶段 %s，异常 %s）", stage, type(exc).__name__)
         if fetching_asset:
             raise HTTPException(502, detail=_asset_error("上游已生成图片，但成品地址连接超时；成品可能托管在本机不可达的 CDN")) from exc
         if processing_image:
             raise HTTPException(429, detail={"code": "image_processing_busy",
-                "error": "上游已返回图片，但本地处理超时；重新生成可能产生新的费用"}) from exc
-        raise HTTPException(504, detail={"error": "生图等待超时，请查询原请求状态；上游可能已处理并计费"}) from exc
+                "failover_safe": False, "error": "上游已返回图片，但本地处理超时；重新生成可能产生新的费用"}) from exc
+        safe = stage == "submission" and isinstance(exc, httpx.ConnectTimeout)
+        raise HTTPException(504, detail={"code": "image_connection_timeout" if safe else "image_result_unknown",
+            "failover_safe": safe, "error": "生图服务连接超时，本模型未发送生图请求" if safe else
+            "生图结果获取超时，已停止切换模型，请查询原请求；上游可能已处理并计费"}) from exc
+    except HTTPException as exc:
+        detail: dict = exc.detail if isinstance(exc.detail, dict) else {"error": "生图请求失败"}
+        logger.warning("生图请求未完成（阶段 %s，分类 %s，HTTP %s）", stage,
+                       detail.get("code", "未知"), detail.get("upstream_status", exc.status_code))
+        if detail.get("code") == "image_task_failed":
+            await checkpoint(config, prompt)
+        if "failover_safe" not in detail:
+            safe = (stage == "submission" and (detail.get("code") == "provider_dns_error"
+                    or (detail.get("code") == "image_provider_error" and detail.get("reason") != "content_policy"
+                        and 400 <= detail.get("upstream_status", 0) < 500)))
+            raise HTTPException(exc.status_code, detail={**detail, "failover_safe": safe}, headers=exc.headers) from exc
+        raise
     except httpx.HTTPStatusError as exc:
         if fetching_asset:
             raise HTTPException(502, detail=_asset_error(
                 f"上游已生成图片，但成品地址返回 HTTP {exc.response.status_code}", exc.response.status_code)) from exc
-        raise HTTPException(502, detail=_provider_error(exc.response.status_code)) from exc
+        raise HTTPException(502, detail={**_provider_error(exc.response.status_code), "failover_safe": False}) from exc
     except (httpx.TransportError, httpx.DecodingError) as exc:
+        logger.warning("生图传输失败（阶段 %s，异常 %s）", stage, type(exc).__name__)
         if fetching_asset:
             raise HTTPException(502, detail=_asset_error("上游已生成图片，但成品下载中断；成品可能托管在本机不可达的 CDN")) from exc
-        raise HTTPException(502, detail={"error": "生图服务连接中断，请查询原请求状态；上游可能已处理并计费"}) from exc
+        safe = stage == "submission" and isinstance(exc, httpx.ConnectError)
+        raise HTTPException(502, detail={"code": "image_connection_failed" if safe else "image_result_unknown",
+            "failover_safe": safe, "error": "生图服务无法建立连接，本模型未发送生图请求" if safe else
+            "生图服务连接中断，已停止切换模型，请查询原请求；上游可能已处理并计费"}) from exc
     except (ValueError, binascii.Error, UnidentifiedImageError, OSError, Image.DecompressionBombError,
             Image.DecompressionBombWarning) as exc:
-        raise HTTPException(502, detail={"error": "生图接口未返回有效图片，请检查返回格式和图片大小"}) from exc
+        logger.warning("生图结果处理失败（阶段 %s，异常 %s）", stage, type(exc).__name__)
+        if fetching_asset and isinstance(exc, OSError):
+            raise HTTPException(502, detail=_asset_error("上游已生成图片，但成品域名解析或读取失败")) from exc
+        raise HTTPException(502, detail={"code": "image_result_invalid", "failover_safe": False,
+            "error": "生图接口未返回有效图片，已停止切换模型；上游可能已计费，请检查返回格式和图片大小"}) from exc

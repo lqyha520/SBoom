@@ -15,6 +15,28 @@ beforeEach(() => {
 })
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
+it('保留可恢复的原图片请求，自动查询直到取回成品，不调用新的生图请求', async () => {
+  vi.useFakeTimers()
+  generate.mockRejectedValueOnce(new ApiError('成品下载暂时失败', 502))
+  const batch = useImageBatch('recoverable-image', () => true, () => {})
+  try {
+    await batch.start(params, 1)
+    const id = batch.state.pages[0].id
+    query.mockResolvedValueOnce({ kind: 'image', status: 'unknown', recoverable: true, result: null,
+      cache_expired: false, error: { error: '正在取回原图' } } as Awaited<ReturnType<typeof fetchImageStatus>>)
+    query.mockResolvedValueOnce({ kind: 'image', status: 'succeeded', result: image(id) } as Awaited<ReturnType<typeof fetchImageStatus>>)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(batch.state.pages[0].state).toBe('unknown')
+    expect(batch.canContinue).toBe(false)
+    await batch.run()
+    expect(generate).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(batch.completed).toBe(1)
+    expect(batch.state.pages[0].id).toBe(id)
+    expect(generate).toHaveBeenCalledOnce()
+  } finally { batch.dispose() }
+})
+
 it('存储不可用时不发送付费请求，恢复后重用尚未发送的 ID', async () => {
   const failure = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new DOMException('Full', 'QuotaExceededError') })
   const batch = useImageBatch('quota', () => true, () => {})

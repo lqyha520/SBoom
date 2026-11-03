@@ -23,6 +23,8 @@ def can_failover(error: Exception) -> bool:
         return True
     if isinstance(error, HTTPException):
         detail: dict = error.detail if isinstance(error.detail, dict) else {}
+        if detail.get("failover_safe") is False or detail.get("code") in ("asset_unreachable", "image_processing_busy"):
+            return False
         return error.status_code in (502, 504) or detail.get("code") == "generation_truncated"
     return False
 

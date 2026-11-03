@@ -49,6 +49,8 @@ async def finish(*args):
 
 
 async def shutdown_generation():
+    from app.services.image_recovery import shutdown
+    await shutdown()
     if _finishes:
         await asyncio.gather(*list(_finishes), return_exceptions=True)
 
@@ -198,11 +200,11 @@ def _finish(user_id: int, request_id: str, usage: Usage, status: str, result=Non
     with db() as conn:
         # 仅原实例可补交清理任务标记为未知的结果，真实终态不会被覆盖。
         completed = conn.execute(
-            "UPDATE generation_requests SET status = ?, finished_at = ?, result_json = ?, "
+            "UPDATE generation_requests SET status = ?, finished_at = ?, result_json = CASE WHEN ? = 'succeeded' THEN ? ELSE result_json END, "
             "error_json = ?, error_status = ?, model_calls = ?, reported_calls = ?, "
             "prompt_tokens = ?, completion_tokens = ? WHERE user_id = ? AND request_id = ? AND instance_id = ? "
             "AND (status = 'running' OR (status = 'unknown' AND error_status = 0 AND error_json = ?)) RETURNING kind",
-            (status, int(time.time()), json.dumps(result, ensure_ascii=False) if result is not None else "",
+            (status, int(time.time()), status, json.dumps(result, ensure_ascii=False) if result is not None else "",
              json.dumps(detail, ensure_ascii=False), error_status, usage.model_calls, usage.reported_calls,
              usage.prompt_tokens, usage.completion_tokens, user_id, request_id, _INSTANCE, LEASE_EXPIRED_ERROR),
         ).fetchone()
@@ -233,6 +235,8 @@ def metered(kind: str):
             usage = Usage()
             token = current_usage.set(usage)
             policy_token = current_policy.set(policy)
+            from app.services.image_recovery import current_request as image_request
+            image_token = image_request.set((user.id, request_id) if kind == "image" else None)
             lease_task = asyncio.create_task(heartbeat(user.id, request_id))
             deadline = asyncio.get_running_loop().time() + policy.timeout_seconds
             try:
@@ -296,6 +300,7 @@ def metered(kind: str):
                 )
                 raise
             finally:
+                image_request.reset(image_token)
                 current_usage.reset(token)
                 current_policy.reset(policy_token)
                 lease_task.cancel()
@@ -344,8 +349,10 @@ def request_status(user_id: int, request_id: str) -> dict:
     if status == "running" and (row["lease_expires_at"] or row["created_at"] + settings.generation_heartbeat_seconds) < now:
         status = "unknown"
     expired = bool(row["finished_at"] and row["finished_at"] < now - settings.generation_result_days * 86400)
+    from app.services.image_recovery import available
     return {"request_id": row["request_id"], "kind": row["kind"], "status": status,
-            "result": json.loads(row["result_json"]) if row["result_json"] and not expired else None,
+            "result": json.loads(row["result_json"]) if status == "succeeded" and row["result_json"] and not expired else None,
+            "recoverable": available(dict(row)),
             "error": json.loads(row["error_json"]) if row["error_json"] else None,
             "error_status": row["error_status"], "cache_expired": expired,
             "usage": {key: row[key] for key in ("model_calls", "reported_calls", "prompt_tokens", "completion_tokens")}}
