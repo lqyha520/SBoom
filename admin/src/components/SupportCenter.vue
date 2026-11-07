@@ -84,7 +84,7 @@ async function reloadFeedback() {
     const latest = await getFeedbackDetail(selectedId);
     if (!active.value || selected.value?.id !== selectedId) return;
     latestFeedback.value = latest;
-    selected.value.revision = latest.revision;
+    selected.value = { ...latest, status: selected.value.status, reply: selected.value.reply, internal_note: selected.value.internal_note };
     feedbackConflict.value = false;
     formError.value = "已载入最新版本，您的修改已保留，请核对后保存";
   } catch (cause) {
@@ -245,6 +245,7 @@ async function inspect() {
           <thead>
             <tr>
               <th>用户</th>
+              <th>当前身份</th>
               <th>问题</th>
               <th>资料</th>
               <th>状态</th>
@@ -255,6 +256,12 @@ async function inspect() {
           <tbody>
             <tr v-for="item in items" :key="item.id">
               <td>{{ item.nickname || item.username }}</td>
+              <td>
+                <UBadge :color="item.is_vip ? 'warning' : 'neutral'" variant="soft">
+                  {{ item.is_vip ? 'VIP 会员' : '普通用户' }}
+                </UBadge>
+                <div v-if="item.membership_status === 'expired'" class="feedback-membership-note">会员已到期</div>
+              </td>
               <td>
                 <strong>{{ kindLabels[item.kind] }}</strong>
                 <div class="feedback-excerpt">{{ item.body }}</div>
@@ -276,7 +283,7 @@ async function inspect() {
               </td>
             </tr>
             <tr v-if="!items.length">
-              <td colspan="6">
+              <td colspan="7">
                 {{ loading ? "正在加载" : "暂无符合条件的反馈" }}
               </td>
             </tr>
@@ -359,6 +366,13 @@ async function inspect() {
               >{{ selected.nickname || selected.username }} ·
               {{ kindLabels[selected.kind] }}</strong
             >
+            <div class="feedback-identity">
+              <span>当前身份</span>
+              <UBadge :color="selected.is_vip ? 'warning' : 'neutral'" variant="soft">
+                {{ selected.is_vip ? 'VIP 会员' : '普通用户' }}
+              </UBadge>
+              <span v-if="selected.membership_status === 'expired'">会员已到期</span>
+            </div>
             <p>{{ selected.body }}</p>
             <p v-if="selected.paper_title">
               关联资料：{{ selected.paper_title }}
@@ -433,6 +447,20 @@ async function inspect() {
 .support-settings {
   max-width: 640px;
   margin-top: 24px;
+}
+.feedback-identity {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+}
+.feedback-membership-note {
+  margin-top: 6px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
 }
 .feedback-excerpt {
   max-width: 300px;
