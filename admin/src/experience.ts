@@ -4,7 +4,7 @@ import type { CatalogDetail, CatalogPaper, Page } from './catalog'
 import type { MiniUser } from './mini'
 
 export interface SupportSettings { revision: number; wechat: string; phone: string; email: string; hours: string; benefits: string; qr_url?: string }
-export interface Feedback {
+export interface Feedback extends Pick<MiniUser, 'membership' | 'is_vip' | 'membership_status' | 'vip_expires_at'> {
   id: string; catalog_id: string | null; paper_title: string; username: string; nickname: string
   kind: 'correction' | 'download' | 'membership' | 'other'; body: string
   status: 'pending' | 'processing' | 'resolved' | 'closed'; reply: string; internal_note: string; revision: number; updated_at: number

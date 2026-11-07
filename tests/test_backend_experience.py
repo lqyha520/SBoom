@@ -128,6 +128,45 @@ class ExperienceContracts(unittest.TestCase):
         self.assertEqual(response.json()['items'][0]['reply'], body['reply'])
         self.assertNotIn('internal-only-marker', response.text)
 
+    def test_feedback_identity_tracks_membership_in_admin_list_detail_and_reply(self):
+        self.sign_in(self.viewer)
+        response = self.client.post('/api/v1/mini/feedback', json={'kind': 'membership', 'body': '咨询会员开通流程'})
+        self.assertEqual(response.status_code, 201, response.text)
+        feedback = response.json()
+        self.sign_in(self.other)
+        response = self.client.post('/api/v1/mini/feedback', json={'kind': 'other', 'body': '请协助核实使用问题'})
+        self.assertEqual(response.status_code, 201, response.text)
+        other_feedback = response.json()
+        self.sign_in(self.admin)
+        now = int(time.time())
+        states = [('regular', None, False, 'regular'), ('vip', now + 3600, True, 'active'),
+                  ('vip', None, True, 'active'), ('vip', now - 1, False, 'expired'), ('vip', now, False, 'expired')]
+        with patch.object(mini_auth.time, 'time', return_value=now):
+            for revision, (membership, expiry, is_vip, status) in enumerate(states, 1):
+                with self.subTest(membership=membership, expiry=expiry):
+                    mini_auth.update_membership(self.admin.id, self.viewer.id, MembershipUpdate(
+                        revision=revision, membership=membership, vip_expires_at=expiry, is_active=True))
+                    result = self.client.get('/api/v1/admin/experience/feedback?status=pending').json()
+                    self.assertEqual(result['total'], 2)
+                    rows = {row['id']: row for row in result['items']}
+                    self.assertFalse(rows[other_feedback['id']]['is_vip'])
+                    self.assertEqual(rows[other_feedback['id']]['membership_status'], 'regular')
+                    path = '/api/v1/admin/experience/feedback/' + feedback['id']
+                    detail = self.client.get(path)
+                    self.assertEqual(detail.status_code, 200, detail.text)
+                    saved = self.client.put(path, json={'revision': revision, 'status': 'pending', 'reply': '已收到反馈'})
+                    self.assertEqual(saved.status_code, 200, saved.text)
+                    expected = {'membership': membership, 'vip_expires_at': expiry, 'is_vip': is_vip, 'membership_status': status}
+                    for row in (rows[feedback['id']], detail.json(), saved.json()):
+                        self.assertEqual({key: row[key] for key in expected}, expected)
+                        self.assertEqual(row['username'], self.viewer.username)
+        self.sign_in(self.viewer)
+        public_rows = [feedback, self.client.get('/api/v1/mini/feedback').json()['items'][0],
+                       self.client.get('/api/v1/mini/feedback/' + feedback['id']).json()]
+        for row in public_rows:
+            for key in ('membership', 'vip_expires_at', 'is_vip', 'membership_status', 'internal_note'):
+                self.assertNotIn(key, row)
+
     def test_admin_feedback_detail_returns_latest_without_scanning_lists(self):
         self.sign_in(self.viewer)
         self.client.patch('/api/v1/mini/me', json={'nickname': '反馈用户'}).raise_for_status()
@@ -176,6 +215,8 @@ class ExperienceContracts(unittest.TestCase):
         self.sign_in(self.viewer)
         self.assertEqual(self.client.post('/api/v1/mini/feedback', json={'kind': 'correction', 'body': '没有关联具体资料'}).status_code, 422)
         self.assertEqual(self.client.post('/api/v1/mini/feedback', json={'kind': 'membership', 'body': '我想续期一个月'}).status_code, 201)
+        self.assertEqual(self.client.post('/api/v1/mini/feedback', json={
+            'kind': 'other', 'body': '尝试自行指定会员身份', 'membership': 'vip', 'is_vip': True}).status_code, 422)
 
     def test_feedback_submission_limit_is_scoped_per_account(self):
         self.sign_in(self.viewer)
