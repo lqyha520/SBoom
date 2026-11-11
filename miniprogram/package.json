@@ -45,7 +45,7 @@
     "tsx": "^4.23.15",
     "typescript": "6.0.3",
     "typescript-eslint": "^8.71.0",
-    "vite": "6.4.4",
+    "vite": "6.4.5",
     "vue-tsc": "3.3.12"
   }
 }
