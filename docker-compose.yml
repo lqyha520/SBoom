@@ -23,7 +23,7 @@ x-logging: &default-logging
 services:
   db:
     # 与 deploy/ 两个 compose 及 CI 的 postgres 服务保持同一 tag
-    image: postgres:16-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67
+    image: postgres:16-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4
     container_name: learncoach-db
     logging: *default-logging
     shm_size: 256m
@@ -45,7 +45,7 @@ services:
 
   test-db:
     profiles: [tests]
-    image: postgres:16-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67
+    image: postgres:16-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4
     init: true
     stop_grace_period: 60s
     pids_limit: 256
