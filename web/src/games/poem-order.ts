@@ -1,3 +1,4 @@
+import { contentDeck,rememberContent,validContentHistory,type ContentHistory } from './challenge-journey'
 import { randomInt, shuffle, type Rng } from './random'
 
 export type PoemDifficulty = 'starter' | 'explorer' | 'master'
@@ -36,7 +37,7 @@ export interface PoemRound {
   finished: boolean
 }
 
-export interface PoemSave {
+export interface PoemSave extends ContentHistory {
   version: 1
   difficulty: PoemDifficulty
   round: PoemRound
@@ -66,6 +67,30 @@ const starterPoems: PoemSource[] = [
   { id: 'qiupuge', title: '秋浦歌', author: '李白', lines: ['白发三千丈', '缘愁似个长', '不知明镜里', '何处得秋霜'] },
   { id: 'jingtingshan', title: '独坐敬亭山', author: '李白', lines: ['众鸟高飞尽', '孤云独去闲', '相看两不厌', '只有敬亭山'] },
   { id: 'xunyinzhe', title: '寻隐者不遇', author: '贾岛', lines: ['松下问童子', '言师采药去', '只在此山中', '云深不知处'] },
+  {"id": "new-starter-1", "title": "绝句·迟日江山丽", "author": "杜甫", "lines": ["迟日江山丽", "春风花草香", "泥融飞燕子", "沙暖睡鸳鸯"]},
+  {"id": "new-starter-2", "title": "绝句·江碧鸟逾白", "author": "杜甫", "lines": ["江碧鸟逾白", "山青花欲燃", "今春看又过", "何日是归年"]},
+  {"id": "new-starter-3", "title": "江上渔者", "author": "范仲淹", "lines": ["江上往来人", "但爱鲈鱼美", "君看一叶舟", "出没风波里"]},
+  {"id": "new-starter-4", "title": "池上", "author": "白居易", "lines": ["小娃撑小艇", "偷采白莲回", "不解藏踪迹", "浮萍一道开"]},
+  {"id": "new-starter-5", "title": "画", "author": "佚名", "lines": ["远看山有色", "近听水无声", "春去花还在", "人来鸟不惊"]},
+  {"id": "new-starter-6", "title": "乐游原", "author": "李商隐", "lines": ["向晚意不适", "驱车登古原", "夕阳无限好", "只是近黄昏"]},
+  {"id": "new-starter-7", "title": "送灵澈上人", "author": "刘长卿", "lines": ["苍苍竹林寺", "杳杳钟声晚", "荷笠带斜阳", "青山独归远"]},
+  {"id": "new-starter-8", "title": "送朱大入秦", "author": "孟浩然", "lines": ["游人五陵去", "宝剑值千金", "分手脱相赠", "平生一片心"]},
+  {"id": "new-starter-9", "title": "宿建德江", "author": "孟浩然", "lines": ["移舟泊烟渚", "日暮客愁新", "野旷天低树", "江清月近人"]},
+  {"id": "new-starter-10", "title": "夜宿山寺", "author": "李白", "lines": ["危楼高百尺", "手可摘星辰", "不敢高声语", "恐惊天上人"]},
+  {"id": "new-starter-11", "title": "古朗月行·节选", "author": "李白", "lines": ["小时不识月", "呼作白玉盘", "又疑瑶台镜", "飞在青云端"]},
+  {"id": "new-starter-12", "title": "竹里馆", "author": "王维", "lines": ["独坐幽篁里", "弹琴复长啸", "深林人不知", "明月来相照"]},
+  {"id": "new-starter-13", "title": "鸟鸣涧", "author": "王维", "lines": ["人闲桂花落", "夜静春山空", "月出惊山鸟", "时鸣春涧中"]},
+  {"id": "new-starter-14", "title": "送别·山中相送罢", "author": "王维", "lines": ["山中相送罢", "日暮掩柴扉", "春草明年绿", "王孙归不归"]},
+  {"id": "new-starter-15", "title": "杂诗·君自故乡来", "author": "王维", "lines": ["君自故乡来", "应知故乡事", "来日绮窗前", "寒梅著花未"]},
+  {"id": "new-starter-16", "title": "终南望余雪", "author": "祖咏", "lines": ["终南阴岭秀", "积雪浮云端", "林表明霁色", "城中增暮寒"]},
+  {"id": "new-starter-17", "title": "渡汉江", "author": "宋之问", "lines": ["岭外音书断", "经冬复历春", "近乡情更怯", "不敢问来人"]},
+  {"id": "new-starter-18", "title": "问刘十九", "author": "白居易", "lines": ["绿蚁新醅酒", "红泥小火炉", "晚来天欲雪", "能饮一杯无"]},
+  {"id": "new-starter-19", "title": "悯农·春种一粒粟", "author": "李绅", "lines": ["春种一粒粟", "秋收万颗子", "四海无闲田", "农夫犹饿死"]},
+  {"id": "new-starter-20", "title": "梅花", "author": "王安石", "lines": ["墙角数枝梅", "凌寒独自开", "遥知不是雪", "为有暗香来"]},
+  {"id": "new-starter-21", "title": "夏日绝句", "author": "李清照", "lines": ["生当作人杰", "死亦为鬼雄", "至今思项羽", "不肯过江东"]},
+  {"id": "new-starter-22", "title": "山中", "author": "王勃", "lines": ["长江悲已滞", "万里念将归", "况属高风晚", "山山黄叶飞"]},
+  {"id": "new-starter-23", "title": "春怨", "author": "金昌绪", "lines": ["打起黄莺儿", "莫教枝上啼", "啼时惊妾梦", "不得到辽西"]},
+  {"id": "new-starter-24", "title": "八阵图", "author": "杜甫", "lines": ["功盖三分国", "名成八阵图", "江流石不转", "遗恨失吞吴"]},
 ]
 
 const explorerPoems: PoemSource[] = [
@@ -81,6 +106,30 @@ const explorerPoems: PoemSource[] = [
   { id: 'jingci', title: '晓出净慈寺送林子方', author: '杨万里', lines: ['毕竟西湖六月中', '风光不与四时同', '接天莲叶无穷碧', '映日荷花别样红'] },
   { id: 'guazhou', title: '泊船瓜洲', author: '王安石', lines: ['京口瓜洲一水间', '钟山只隔数重山', '春风又绿江南岸', '明月何时照我还'] },
   { id: 'yinshi', title: '饮湖上初晴后雨', author: '苏轼', lines: ['水光潋滟晴方好', '山色空蒙雨亦奇', '欲把西湖比西子', '淡妆浓抹总相宜'] },
+  {"id": "new-explorer-1", "title": "赠汪伦", "author": "李白", "lines": ["李白乘舟将欲行", "忽闻岸上踏歌声", "桃花潭水深千尺", "不及汪伦送我情"]},
+  {"id": "new-explorer-2", "title": "九月九日忆山东兄弟", "author": "王维", "lines": ["独在异乡为异客", "每逢佳节倍思亲", "遥知兄弟登高处", "遍插茱萸少一人"]},
+  {"id": "new-explorer-3", "title": "望天门山", "author": "李白", "lines": ["天门中断楚江开", "碧水东流至此回", "两岸青山相对出", "孤帆一片日边来"]},
+  {"id": "new-explorer-4", "title": "小儿垂钓", "author": "胡令能", "lines": ["蓬头稚子学垂纶", "侧坐莓苔草映身", "路人借问遥招手", "怕得鱼惊不应人"]},
+  {"id": "new-explorer-5", "title": "石灰吟", "author": "于谦", "lines": ["千锤万凿出深山", "烈火焚烧若等闲", "粉骨碎身浑不怕", "要留清白在人间"]},
+  {"id": "new-explorer-6", "title": "村居", "author": "高鼎", "lines": ["草长莺飞二月天", "拂堤杨柳醉春烟", "儿童散学归来早", "忙趁东风放纸鸢"]},
+  {"id": "new-explorer-7", "title": "小池", "author": "杨万里", "lines": ["泉眼无声惜细流", "树阴照水爱晴柔", "小荷才露尖尖角", "早有蜻蜓立上头"]},
+  {"id": "new-explorer-8", "title": "惠崇春江晚景", "author": "苏轼", "lines": ["竹外桃花三两枝", "春江水暖鸭先知", "蒌蒿满地芦芽短", "正是河豚欲上时"]},
+  {"id": "new-explorer-9", "title": "春日", "author": "朱熹", "lines": ["胜日寻芳泗水滨", "无边光景一时新", "等闲识得东风面", "万紫千红总是春"]},
+  {"id": "new-explorer-10", "title": "游园不值", "author": "叶绍翁", "lines": ["应怜屐齿印苍苔", "小扣柴扉久不开", "春色满园关不住", "一枝红杏出墙来"]},
+  {"id": "new-explorer-11", "title": "清明", "author": "杜牧", "lines": ["清明时节雨纷纷", "路上行人欲断魂", "借问酒家何处有", "牧童遥指杏花村"]},
+  {"id": "new-explorer-12", "title": "江南春", "author": "杜牧", "lines": ["千里莺啼绿映红", "水村山郭酒旗风", "南朝四百八十寺", "多少楼台烟雨中"]},
+  {"id": "new-explorer-13", "title": "秋夕", "author": "杜牧", "lines": ["银烛秋光冷画屏", "轻罗小扇扑流萤", "天阶夜色凉如水", "坐看牵牛织女星"]},
+  {"id": "new-explorer-14", "title": "题都城南庄", "author": "崔护", "lines": ["去年今日此门中", "人面桃花相映红", "人面不知何处去", "桃花依旧笑春风"]},
+  {"id": "new-explorer-15", "title": "芙蓉楼送辛渐", "author": "王昌龄", "lines": ["寒雨连江夜入吴", "平明送客楚山孤", "洛阳亲友如相问", "一片冰心在玉壶"]},
+  {"id": "new-explorer-16", "title": "出塞", "author": "王昌龄", "lines": ["秦时明月汉时关", "万里长征人未还", "但使龙城飞将在", "不教胡马度阴山"]},
+  {"id": "new-explorer-17", "title": "凉州词·黄河远上", "author": "王之涣", "lines": ["黄河远上白云间", "一片孤城万仞山", "羌笛何须怨杨柳", "春风不度玉门关"]},
+  {"id": "new-explorer-18", "title": "凉州词·葡萄美酒", "author": "王翰", "lines": ["葡萄美酒夜光杯", "欲饮琵琶马上催", "醉卧沙场君莫笑", "古来征战几人回"]},
+  {"id": "new-explorer-19", "title": "墨梅", "author": "王冕", "lines": ["我家洗砚池头树", "朵朵花开淡墨痕", "不要人夸好颜色", "只留清气满乾坤"]},
+  {"id": "new-explorer-20", "title": "竹石", "author": "郑燮", "lines": ["咬定青山不放松", "立根原在破岩中", "千磨万击还坚劲", "任尔东西南北风"]},
+  {"id": "new-explorer-21", "title": "雪梅", "author": "卢钺", "lines": ["梅雪争春未肯降", "骚人阁笔费评章", "梅须逊雪三分白", "雪却输梅一段香"]},
+  {"id": "new-explorer-22", "title": "冬夜读书示子聿", "author": "陆游", "lines": ["古人学问无遗力", "少壮工夫老始成", "纸上得来终觉浅", "绝知此事要躬行"]},
+  {"id": "new-explorer-23", "title": "四时田园杂兴·其三十一", "author": "范成大", "lines": ["昼出耘田夜绩麻", "村庄儿女各当家", "童孙未解供耕织", "也傍桑阴学种瓜"]},
+  {"id": "new-explorer-24", "title": "四时田园杂兴·其二十五", "author": "范成大", "lines": ["梅子金黄杏子肥", "麦花雪白菜花稀", "日长篱落无人过", "惟有蜻蜓蛱蝶飞"]},
 ]
 
 export const poemPools: Record<'starter' | 'explorer', PoemSource[]> = {
@@ -112,8 +161,9 @@ function makeQuestion(difficulty: PoemDifficulty, rng: Rng, used: Set<string>): 
   return { poemId: poem.id, title: poem.title, author: poem.author, lineCount: poem.lines.length, answer, tiles: shuffle(tiles, rng) }
 }
 
-export function newPoemRound(difficulty: PoemDifficulty, rng: Rng = Math.random): PoemRound {
-  const used = new Set<string>()
+export function newPoemRound(difficulty: PoemDifficulty, rng: Rng = Math.random, history: string[] = []): PoemRound {
+  const selected=contentDeck(poolFor(difficulty),POEM_QUESTIONS,item=>item.id,history,rng)
+  const used = new Set(poolFor(difficulty).filter(item=>!selected.includes(item)).map(item=>item.id))
   return {
     version: 1,
     difficulty,
@@ -158,6 +208,13 @@ export function selectPoemTile(save: PoemSave, tileId: string): boolean {
   return true
 }
 
+export function movePoemTile(save: PoemSave, index: number, delta: number): boolean {
+  const round = save.round, target = index+delta
+  if (round.finished || round.solved || !Number.isInteger(index) || ![-1,1].includes(delta) || index < 0 || index >= round.selected.length || target < 0 || target >= round.selected.length) return false
+  ;[round.selected[index],round.selected[target]] = [round.selected[target],round.selected[index]]
+  return true
+}
+
 export function clearPoemSelection(save: PoemSave): void {
   if (save.round.finished || save.round.solved) return
   save.round.selected = []
@@ -167,7 +224,8 @@ export function poemHint(save: PoemSave): string | null {
   const round = save.round
   if (round.finished || round.solved) return null
   const question = round.questions[round.index]
-  const first = question.tiles.find(tile => tile.id === question.answer[0])
+  const index = question.answer.findIndex((id,index)=>round.selected[index]!==id)
+  const first = question.tiles.find(tile => tile.id === question.answer[index])
   if (!first) return null
   round.hints++
   return first.text
@@ -207,12 +265,14 @@ export function advancePoem(save: PoemSave): 'next' | 'finished' | null {
 }
 
 export function restartPoem(save: PoemSave, rng: Rng = Math.random): void {
-  save.round = newPoemRound(save.difficulty, rng)
+  const history=rememberContent(save,save.difficulty,save.round.questions.map(question=>question.poemId))
+  save.round = newPoemRound(save.difficulty, rng,history)
 }
 
 export function switchPoemDifficulty(save: PoemSave, difficulty: PoemDifficulty, rng: Rng = Math.random): void {
+  rememberContent(save,save.difficulty,save.round.questions.map(question=>question.poemId))
   save.difficulty = difficulty
-  save.round = newPoemRound(difficulty, rng)
+  save.round = newPoemRound(difficulty, rng,save.contentHistory?.[difficulty] || [])
 }
 
 function isInt(value: unknown, min: number, max: number): value is number {
@@ -243,7 +303,7 @@ export function restorePoem(raw: string | null): PoemSave | null {
   if (!raw) return null
   try {
     const value = JSON.parse(raw) as PoemSave
-    if (!value || value.version !== 1 || !isPoemDifficulty(value.difficulty)) return null
+    if (!value || !validContentHistory(value.contentHistory) || value.version !== 1 || !isPoemDifficulty(value.difficulty)) return null
     const best = value.best as unknown as Record<string, unknown>
     if (!best || !poemDifficulties.every(item => isInt(best[item.id], 0, 3))) return null
     if (!isInt(value.totalPoems, 0, 1_000_000) || !isInt(value.rounds, 0, 1_000_000)) return null

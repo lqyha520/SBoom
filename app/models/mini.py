@@ -51,6 +51,8 @@ class MiniCredentials(BaseModel):
 
 
 class MiniRegistration(MiniCredentials):
+    referral_visit_id: str = Field(default='', max_length=32, pattern=r'^(?:[0-9a-f]{32})?$')
+    referral_code: str = Field(default='', max_length=32, pattern=r'^(?:[au]_[0-9a-f]{20})?$')
     password: str = Field(min_length=8, max_length=128)
     """New login identifiers are ASCII; existing Chinese accounts can still log in."""
 

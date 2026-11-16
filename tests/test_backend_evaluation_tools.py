@@ -18,10 +18,10 @@ def fixture_run():
 
 
 def test_suite_is_valid_and_plan_or_unconfirmed_run_never_authenticates(monkeypatch, tmp_path, capsys):
-    assert len(evaluation.load_suite(evaluation.SUITE)) == 8
+    assert len(evaluation.load_suite(evaluation.SUITE)) == 16
     monkeypatch.setattr(evaluation, "authenticated", lambda _: pytest.fail("不得联网"))
     assert evaluation.main(["plan"]) == 0
-    assert evaluation.main(["run", "--base-url", "http://localhost", "--directory", str(tmp_path / "run"), "--model-label", "offline"]) == 1
+    assert evaluation.main(["run", "--base-url", "http://localhost", "--directory", str(tmp_path / "run"), "--model-label", "offline", "--build-id", "candidate"]) == 1
     assert not (tmp_path / "run").exists()
 
 
@@ -91,7 +91,7 @@ def test_unsafe_targets_rejected(url):
 def test_device_template_is_not_acceptance(tmp_path):
     result = device.check(device.template(), tmp_path)
     assert not result["passed"]
-    assert len(result["errors"]) == 9
+    assert len(result["errors"]) == 1 + len(device.PROFILES) * (len(device.SCENARIOS) + len(device.FUNCTIONAL_CHECKS))
 
 
 def device_fixture(tmp_path):
@@ -99,6 +99,11 @@ def device_fixture(tmp_path):
     data["build_commit"] = "offline-unit-test-only"
     (tmp_path / "evidence.txt").write_text("OFFLINE TEST, NOT DEVICE EVIDENCE", encoding="utf-8")
     for index, record in enumerate(data["records"]):
+        if record["scenario"] in device.FUNCTIONAL_CHECKS:
+            record.update(device="offline", os="offline", wechat="offline", network="offline", tested_at="offline",
+                          functional_pass=True, evidence=["evidence.txt"],
+                          checks={name: True for name in device.FUNCTIONAL_CHECKS[record["scenario"]]})
+            continue
         metric = device.SCENARIOS[record["scenario"]][0]
         name = f"diagnostic-{index}.json"
         (tmp_path / name).write_text(json.dumps({"version": 2, "events": [], "performance": [
@@ -134,3 +139,15 @@ def test_device_errors_and_missing_evidence_fail_closed(tmp_path):
     name.write_text(json.dumps(saved))
     assert not device.check(data, tmp_path)["passed"]
     assert not device.check({"records": [None]}, tmp_path)["passed"]
+
+
+def test_device_interactions_require_each_check_and_existing_evidence(tmp_path):
+    data = device_fixture(tmp_path)
+    record = next(record for record in data["records"] if record["scenario"] == "sharing")
+    record["checks"]["private_timeline_hidden"] = None
+    assert not device.check(data, tmp_path)["passed"]
+    record["checks"]["private_timeline_hidden"] = True
+    record["evidence"] = []
+    assert not device.check(data, tmp_path)["passed"]
+    record["evidence"] = ["evidence.txt"]
+    assert device.check(data, tmp_path)["passed"]

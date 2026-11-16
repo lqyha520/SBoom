@@ -20,6 +20,29 @@ def oral(stem="8 + 7 =", answer=15):
 
 
 class TeachingRules(unittest.TestCase):
+    def test_phonetic_choices_do_not_require_a_fabricated_third_reading(self):
+        import json
+        scope = KnowledgeScope(grade='小学二年级', subject='语文', allowed=['多音字'], forbidden=[])
+        request = GenerateRequest(grade=scope.grade, subject=scope.subject, keyword='多音字读音', game_type='quiz', question_count=3)
+        single = prompt_builder.build_system_prompt(request, scope)
+        batch = prompt_builder.build_batch_prompt(scope.grade, scope.subject, request.keyword, 'medium',
+                                                 [BatchItem(game_type='quiz', question_count=3)], scope)
+        assert len(json.loads(single.splitlines()[-1])['questions'][0]['options']) == 2
+        assert len(json.loads(batch.splitlines()[-1])['sections'][0]['questions'][0]['options']) == 2
+        assert '不强行凑三个' in single and '不强行凑三个' in batch
+
+    def test_english_pronouns_require_an_explicit_referent(self):
+        scope = KnowledgeScope(grade='小学四年级', subject='英语', allowed=['代词'], forbidden=[])
+        request = GenerateRequest(grade=scope.grade, subject=scope.subject, keyword='代词', game_type='quiz', question_count=3)
+        for prompt in (prompt_builder.build_system_prompt(request, scope), prompt_builder.build_batch_prompt(
+                scope.grade, scope.subject, request.keyword, 'medium', [BatchItem(game_type='quiz', question_count=3)], scope)):
+            assert '不能仅凭两句话相邻默认指代相同' in prompt
+
+    def test_english_colour_questions_do_not_assume_unprovided_images(self):
+        scope = KnowledgeScope(grade='小学三年级', subject='英语', allowed=['颜色'], forbidden=[])
+        request = GenerateRequest(grade=scope.grade, subject=scope.subject, keyword='颜色词汇', game_type='quiz', question_count=3)
+        assert '不能问苹果、书包等物品是什么颜色并凭常见颜色作答' in prompt_builder.build_system_prompt(request, scope)
+
     def test_prompt_examples_use_actual_answer_types(self):
         for kind in ("quiz", "challenge", "reading"):
             fields = _question_fields(kind)
@@ -35,9 +58,12 @@ class TeachingRules(unittest.TestCase):
         self.assertIsNone(question_issue(split))
         self.assertEqual(sum(split[key] == "____" for key in ("top", "left", "right")), 1)
         self.assertIs(type(split["answer"]), int)
+        comparison = _question_fields('compare')
+        self.assertIsNone(question_issue(comparison))
+        self.assertIn(comparison['answer'], ('>', '<', '='))
 
     def test_subject_requirements_agree_across_single_and_batch(self):
-        for subject, phrase in (("数学", "可复算的关键算式"), ("语文", "提供足够语境"), ("英语", "提供足够上下文")):
+        for subject, phrase in (("数学", "核对运算顺序、数值和单位"), ("语文", "提供足够语境"), ("英语", "提供足够上下文")):
             scope = KnowledgeScope(grade="小学三年级", subject=subject, allowed=["专项练习"], forbidden=[])
             request = GenerateRequest(grade=scope.grade, subject=subject, keyword="专项练习", game_type="quiz", question_count=2)
             for prompt in (prompt_builder.build_system_prompt(request, scope), prompt_builder.build_batch_prompt(

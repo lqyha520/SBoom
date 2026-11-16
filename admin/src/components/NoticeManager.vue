@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission, canPermission } from '../permissions'
 import { useDialogDraft } from '../dialog-draft'
 import { useRevisionConflict } from '../revision-conflict'
 import { computed, onActivated, onDeactivated, ref } from 'vue'
@@ -123,7 +124,7 @@ const draft = useDialogDraft(dialog, () => form.value, busy, '公告')
   <section class="admin-section" aria-label="公告与弹窗管理">
     <div class="section-toolbar">
       <p class="section-hint">「启动弹窗」在用户打开小程序时弹一次；「首页公告条」常驻在首页顶部。留空时间即长期有效。</p>
-      <div class="actions-row"><UTooltip text="刷新"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="刷新公告" :loading="loading" @click="load" /></UTooltip><UButton icon="i-lucide-plus" label="新建公告" @click="create" /></div>
+      <div class="actions-row"><UTooltip text="刷新"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="刷新公告" :loading="loading" @click="load" /></UTooltip><UButton v-permission="'notices:create'" icon="i-lucide-plus" label="新建公告" @click="create" /></div>
     </div>
     <UAlert v-if="error" :title="error" color="error" variant="soft" class="notice" />
     <UAlert v-if="notice" :title="notice" color="success" variant="soft" close class="notice" @update:open="notice = ''" />
@@ -134,23 +135,23 @@ const draft = useDialogDraft(dialog, () => form.value, busy, '公告')
         <td><UBadge :color="item.level === 'warning' ? 'warning' : 'neutral'" variant="soft">{{ item.level === 'warning' ? '重要' : '普通' }}</UBadge></td>
         <td class="date-cell">{{ windowText(item) }}</td>
         <td><UBadge :color="stateColors[item.state]" variant="soft">{{ stateLabels[item.state] }}</UBadge></td>
-        <td><div class="row-actions"><UTooltip text="编辑"><UButton icon="i-lucide-pencil" color="neutral" variant="ghost" :aria-label="'编辑 ' + item.title" @click="edit(item)" /></UTooltip><UTooltip :text="item.is_visible ? '关闭' : '启用'"><UButton :icon="item.is_visible ? 'i-lucide-eye-off' : 'i-lucide-eye'" color="neutral" variant="ghost" :aria-label="(item.is_visible ? '关闭 ' : '启用 ') + item.title" @click="toggleVisible(item)" /></UTooltip><UTooltip text="删除"><UButton icon="i-lucide-trash-2" color="error" variant="ghost" :aria-label="'删除 ' + item.title" @click="askRemove(item)" /></UTooltip></div></td>
+        <td><div class="row-actions"><UTooltip text="编辑"><UButton v-permission="'notices:update'" icon="i-lucide-pencil" color="neutral" variant="ghost" :aria-label="'编辑 ' + item.title" @click="edit(item)" /></UTooltip><UTooltip :text="item.is_visible ? '关闭' : '启用'"><UButton v-permission="'notices:update'" :icon="item.is_visible ? 'i-lucide-eye-off' : 'i-lucide-eye'" color="neutral" variant="ghost" :aria-label="(item.is_visible ? '关闭 ' : '启用 ') + item.title" @click="toggleVisible(item)" /></UTooltip><UTooltip text="删除"><UButton v-permission="'notices:delete'" icon="i-lucide-trash-2" color="error" variant="ghost" :aria-label="'删除 ' + item.title" @click="askRemove(item)" /></UTooltip></div></td>
       </tr>
       <tr v-if="!items.length"><td colspan="6"><div class="empty-state"><UIcon :name="loading ? 'i-lucide-loader-circle' : 'i-lucide-megaphone'" class="size-7" :class="{ 'animate-spin': loading }" /><h3>{{ loading ? '正在加载' : '还没有公告' }}</h3></div></td></tr>
     </tbody></table></div>
     <div class="table-footer"><span>共 {{ items.length }} 条公告</span></div>
 
-    <UModal v-model:open="draft.model.value" :title="target ? '编辑公告' : '新建公告'" :dismissible="!busy" :close="!busy"><template #body><form id="notice-form" class="field-stack" @submit.prevent="save">
-      <UFormField label="标题" required><UInput v-model="form.title" maxlength="60" :disabled="busy" required class="w-full" /></UFormField>
-      <UFormField label="正文" hint="换行会原样保留，弹窗内可滚动查看"><UTextarea v-model="form.body" :rows="5" maxlength="2000" :disabled="busy" class="w-full" /></UFormField>
-      <div class="grid-two"><UFormField label="展示位置"><USelect v-model="form.placement" :items="placementOptions" :disabled="busy" class="w-full" /></UFormField><UFormField label="级别"><USelect v-model="form.level" :items="levelOptions" :disabled="busy" class="w-full" /></UFormField></div>
-      <div class="grid-two"><UFormField label="开始时间" hint="留空立即生效"><UInput v-model="form.starts_at" type="datetime-local" :disabled="busy" class="w-full" /></UFormField><UFormField label="结束时间" hint="留空长期有效"><UInput v-model="form.ends_at" type="datetime-local" :disabled="busy" class="w-full" /></UFormField></div>
+    <UModal v-model:open="draft.model.value" :title="target ? '编辑公告' : '新建公告'" :dismissible="!busy" :close="!busy"><template #body><form id="notice-form" class="field-stack" @submit.prevent="canPermission('notices:' + (target ? 'update' : 'create')) && (save())">
+      <UFormField label="标题" required><UInput v-model="form.title" maxlength="60" :disabled="!canPermission('notices:' + (target ? 'update' : 'create')) || (busy)" required class="w-full" /></UFormField>
+      <UFormField label="正文" hint="换行会原样保留，弹窗内可滚动查看"><UTextarea v-model="form.body" :rows="5" maxlength="2000" :disabled="!canPermission('notices:' + (target ? 'update' : 'create')) || (busy)" class="w-full" /></UFormField>
+      <div class="grid-two"><UFormField label="展示位置"><USelect v-model="form.placement" :items="placementOptions" :disabled="!canPermission('notices:' + (target ? 'update' : 'create')) || (busy)" class="w-full" /></UFormField><UFormField label="级别"><USelect v-model="form.level" :items="levelOptions" :disabled="!canPermission('notices:' + (target ? 'update' : 'create')) || (busy)" class="w-full" /></UFormField></div>
+      <div class="grid-two"><UFormField label="开始时间" hint="留空立即生效"><UInput v-model="form.starts_at" type="datetime-local" :disabled="!canPermission('notices:' + (target ? 'update' : 'create')) || (busy)" class="w-full" /></UFormField><UFormField label="结束时间" hint="留空长期有效"><UInput v-model="form.ends_at" type="datetime-local" :disabled="!canPermission('notices:' + (target ? 'update' : 'create')) || (busy)" class="w-full" /></UFormField></div>
       <UAlert v-if="!windowValid" title="结束时间必须晚于开始时间。" color="warning" variant="soft" />
-      <USwitch v-model="form.is_visible" label="启用该公告" :disabled="busy" />
+      <USwitch v-model="form.is_visible" label="启用该公告" :disabled="!canPermission('notices:' + (target ? 'update' : 'create')) || (busy)" />
       <UButton v-if="recovery.conflict.value" label="载入最新并保留我的修改" :loading="recovery.recovering.value" @click="recovery.reload" /><UAlert v-if="formError" :title="formError" color="error" variant="soft" />
-    </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="draft.setOpen(false)" /><UButton type="submit" form="notice-form" :label="target ? '保存' : '创建'" icon="i-lucide-check" :loading="busy" :disabled="busy || !canSave" /></template></UModal>
+    </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="draft.setOpen(false)" /><UButton v-permission="'notices:' + (target ? 'update' : 'create')" type="submit" form="notice-form" :label="target ? '保存' : '创建'" icon="i-lucide-check" :loading="busy" :disabled="busy || !canSave" /></template></UModal>
 
-    <UModal v-model:open="removeOpen" title="删除公告" :dismissible="!busy" :close="!busy"><template #body><div class="field-stack"><p>确认删除「{{ removing?.title }}」？</p></div></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="removeOpen = false" /><UButton label="确认删除" color="error" icon="i-lucide-trash-2" :loading="busy" :disabled="busy" @click="confirmRemove" /></template></UModal>
+    <UModal v-model:open="removeOpen" title="删除公告" :dismissible="!busy" :close="!busy"><template #body><div class="field-stack"><p>确认删除「{{ removing?.title }}」？</p></div></template><template #footer><UButton v-permission="'notices:delete'" label="取消" color="neutral" variant="outline" :disabled="busy" @click="removeOpen = false" /><UButton v-permission="'notices:delete'" label="确认删除" color="error" icon="i-lucide-trash-2" :loading="busy" :disabled="busy" @click="confirmRemove" /></template></UModal>
   </section>
 </template>
 

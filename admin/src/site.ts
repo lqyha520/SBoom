@@ -2,6 +2,7 @@
 
 import type { ApiSchemas } from '../../shared/api-schema'
 import { request } from './api'
+import { optionPath } from './admin-options'
 
 export type AccessLevel = 'inherit' | 'free' | 'vip'
 
@@ -65,7 +66,7 @@ function mutation(method: string, adminId: number, body?: unknown): RequestInit 
 
 /* ── 分类 ── */
 
-export function siteCategories() { return request<{ items: Category[] }>(base + '/categories') }
+export function siteCategories() { return request<{ items: Category[] }>(optionPath('categories', 'categories', base + '/categories')) }
 
 export function createCategory(adminId: number, body: ApiSchemas["CategoryInput"]) {
   return request<Category>(base + '/categories', mutation('POST', adminId, body))
@@ -142,10 +143,10 @@ export function updateDocument(adminId: number, key: string, body: ApiSchemas["D
 
 export function siteDictionary(kind = '', parent = '') {
   const params = new URLSearchParams()
-  if (kind) params.set('kind', kind)
+  if (kind) { params.set('kind', kind); params.set('dictionary_kind', kind) }
   if (parent) params.set('parent', parent)
   const query = params.toString()
-  return request<{ items: DictionaryItem[] }>(base + '/dictionary' + (query ? '?' + query : ''))
+  return request<{ items: DictionaryItem[] }>(optionPath('dictionary', 'dictionary', base + '/dictionary') + (query ? '?' + query : ''))
 }
 
 export function dictionaryLinks() {

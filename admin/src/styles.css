@@ -119,3 +119,5 @@
   .page-heading-icon { display:none; }
   .admin-header { padding:0 12px; }
 }
+
+[data-permission-denied] { display: none !important; }

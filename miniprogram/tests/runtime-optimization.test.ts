@@ -15,7 +15,7 @@ test('真实编译的图片组件默认显示，显式隐藏后释放，再次�
   const descriptor = parse(readFileSync(new URL('../src/components/PrivateImage.vue', import.meta.url), 'utf8')).descriptor
   const exports: any = {}
   vm.runInNewContext(compile(compileScript(descriptor, { id: 'private-image-default' }).content), {
-    exports,
+    exports, setTimeout, clearTimeout, uni: {},
     require: (name: string) => name === 'vue' ? vue : {
       acquireAsset: () => { acquired++; return { ready: Promise.resolve('/temporary'), release: () => { released++ } } },
     },
@@ -114,7 +114,7 @@ test('lazy images release downloaded files offscreen and reacquire before reentr
   const exports: any = {}
   const source = parse(readFileSync(new URL('../src/components/PrivateImage.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content
   scope.run(() => vm.runInNewContext(compile(source + '\nexports.state = { source, visible };'), {
-    exports, defineProps: () => props, withDefaults: (value: unknown) => value,
+    exports, setTimeout, clearTimeout, defineProps: () => props, withDefaults: (value: unknown) => value, defineEmits: () => () => {},
     require: (name: string) => name === 'vue'
       ? { ...vue, getCurrentInstance: () => ({ proxy: {} }), onMounted: (fn: Function) => { mounted = fn }, onUnmounted: (fn: Function) => { dispose = fn } }
       : { acquireAsset: () => { acquired++; return { ready: Promise.resolve('/temporary'), release: () => { released++ } } } },

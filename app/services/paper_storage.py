@@ -50,16 +50,17 @@ def storage_for(name: str | None = None) -> LocalStorage:
     return LocalStorage()
 
 
-def unpack_bundle(data: bytes | BinaryIO) -> list[tuple[str, int, str, bytes]]:
+def unpack_bundle(data: bytes | BinaryIO, *, max_pages: int = MAX_PAGES, separate_answers: bool = False) -> list[tuple[str, int, str, bytes]]:
     """Validate in memory; never extract user-provided ZIP paths to the filesystem."""
     try:
         with zipfile.ZipFile(io.BytesIO(data) if isinstance(data, bytes) else data) as archive:
             entries = archive.infolist()
             names = [entry.filename for entry in entries]
-            if not 2 <= len(entries) <= MAX_PAGES + 1 or len(names) != len(set(names)):
+            pdf_names = {"paper.pdf", "answers.pdf"} if separate_answers else {"paper.pdf"}
+            if not 1 + len(pdf_names) <= len(entries) <= max_pages + len(pdf_names) or len(names) != len(set(names)):
                 raise ValueError("Invalid file count")
-            page_count = len(entries) - 1
-            expected = {"paper.pdf", *(f"page-{i}.jpg" for i in range(1, page_count + 1))}
+            page_count = len(entries) - len(pdf_names)
+            expected = {*pdf_names, *(f"page-{i}.jpg" for i in range(1, page_count + 1))}
             if set(names) != expected:
                 raise ValueError("PDF and consecutive page images are required")
             if sum(entry.file_size for entry in entries) > MAX_EXPANDED_BYTES:
@@ -67,12 +68,19 @@ def unpack_bundle(data: bytes | BinaryIO) -> list[tuple[str, int, str, bytes]]:
             for entry in entries:
                 if entry.is_dir() or entry.flag_bits & 1 or entry.file_size <= 0:
                     raise ValueError("Invalid ZIP entry")
-                if entry.file_size > (32 * 1024 * 1024 if entry.filename == "paper.pdf" else 3 * 1024 * 1024):
+                if entry.file_size > (32 * 1024 * 1024 if entry.filename in pdf_names else 3 * 1024 * 1024):
                     raise ValueError("File is too large")
             pdf = archive.read("paper.pdf")
             if not pdf.startswith(b"%PDF-") or not pdf.rstrip().endswith(b"%%EOF"):
                 raise ValueError("Invalid PDF")
             files = [("pdf", 0, "application/pdf", pdf)]
+            if separate_answers:
+                answers = archive.read("answers.pdf")
+                if not answers.startswith(b"%PDF-") or not answers.rstrip().endswith(b"%%EOF"):
+                    raise ValueError("Invalid answer PDF")
+                from app.services.catalog_import import validate_split_pages
+                validate_split_pages(pdf, answers, page_count, max_pages)
+                files.append(("answers_pdf", 0, "application/pdf", answers))
             for page in range(1, page_count + 1):
                 raw = archive.read(f"page-{page}.jpg")
                 with Image.open(io.BytesIO(raw)) as image:
@@ -85,7 +93,8 @@ def unpack_bundle(data: bytes | BinaryIO) -> list[tuple[str, int, str, bytes]]:
                     files.append(("page", page, "image/jpeg", normalized.getvalue()))
             return files
     except (ValueError, OSError, zipfile.BadZipFile, RuntimeError, NotImplementedError, UnidentifiedImageError) as exc:
-        raise HTTPException(422, detail={"error": "文件包无效：需包含 PDF 与连续的 JPEG 页面，最多 40 页"}) from exc
+        label = "学生卷 PDF、答案 PDF 与连续的学生卷 JPEG 页面" if separate_answers else "PDF 与连续的 JPEG 页面"
+        raise HTTPException(422, detail={"error": f"文件包无效：需包含{label}，合计最多 {max_pages} 页"}) from exc
 
 
 def thumbnail(raw: bytes) -> bytes:

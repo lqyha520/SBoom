@@ -7,11 +7,14 @@ import type { Asset } from '../types'
 import { session } from '../services/session'
 import { chromeBar } from '../services/chrome'
 import { readPosition, rememberPosition } from '../services/reading-position'
+import { acquireAsset } from '../services/assets'
+import type { FileHandle } from '../services/file-pool'
 
 const props = defineProps<{ pages: Asset[]; paperId: string; release: number }>()
 const emit = defineEmits<{ close: [] }>()
 const owner = session.user?.id || ''
 const current = ref(readPosition(owner, props.paperId, props.release, props.pages.length))
+const resumed = ref(current.value > 0)
 const windowSize = 5
 const windowStart = ref(Math.max(0, Math.min(current.value - 2, props.pages.length - windowSize)))
 const visiblePages = computed(() => props.pages.slice(windowStart.value, windowStart.value + windowSize).map((page, index) => ({ page, index: windowStart.value + index })))
@@ -24,6 +27,28 @@ const zoomedCurrent = ref(false)
 const resetKeys = ref<Record<number, number>>({})
 const zoomed = new Set<number>()
 const jumpOpen = ref(false)
+const prefetched = new Map<string, FileHandle>()
+let prefetchActive = true
+function clearPrefetch() { prefetched.forEach(handle => handle.release()); prefetched.clear() }
+function prunePrefetch() {
+  // 翻到在途预取页时保留其句柄，等待当前页组件接手，避免取消后重新下载。
+  const keep = new Set(props.pages.slice(current.value, current.value + 3).map(page => page.url))
+  for (const [url, handle] of prefetched) if (!keep.has(url)) { handle.release(); prefetched.delete(url) }
+}
+function imageLoaded(index: number) {
+  if (!prefetchActive || index !== current.value) return
+  // 当前原图已显示才扩展预取，不与首次打开的原图争抢带宽；只下载，不创建额外图片节点。
+  const next = props.pages.slice(index + 1, index + 3).map(page => page.url)
+  for (const [url, handle] of prefetched) if (!next.includes(url)) { handle.release(); prefetched.delete(url) }
+  for (const url of next) if (!prefetched.has(url)) {
+    const handle = acquireAsset(url, 0)
+    prefetched.set(url, handle)
+    void handle.ready.catch(() => { if (prefetched.get(url) === handle) { handle.release(); prefetched.delete(url) } })
+  }
+}
+watch([current, () => props.pages], prunePrefetch)
+onHide(() => { prefetchActive = false; clearPrefetch() })
+onBeforeUnmount(() => { prefetchActive = false; clearPrefetch() })
 // 顶部栏几何与 PageChrome 共用同一处计算，保证各页返回按钮位置一致。
 // 注意 chromeBar().height 是**含状态栏的总高**（PageChrome 直接拿它当占位高度）；
 // 这里 header 用 paddingTop 顶出状态栏 + border-box，所以 height 直接取总高，
@@ -38,6 +63,7 @@ onHide(savePosition)
 onBeforeUnmount(savePosition)
 function select(index: number, rebase = true) {
   if (!Number.isInteger(index) || index < 0 || index >= props.pages.length) return
+  resumed.value = false
   // Native movable-view retains internal pan/zoom state. Reset only a page
   // that was zoomed, keeping ordinary adjacent images mounted during turns.
   if (zoomed.delete(current.value)) resetKeys.value[current.value] = (resetKeys.value[current.value] || 0) + 1
@@ -82,12 +108,13 @@ watch(() => props.pages.length, count => { if (current.value >= count) current.v
         <movable-area class="reader-area" scale-area>
           <!-- direction 固定为 all：只有放大后才有可移动空间；动态改它会在手势中途打断 movable-view，表现为放大后拖不动 -->
           <movable-view v-if="Math.abs(index - current) <= 1" :key="page.id + ':' + (resetKeys[index] || 0)" class="reader-image" direction="all" scale :scale-min="1" :scale-max="4" :scale-value="1" @scale="resize($event, index)">
-            <PrivateImage :src="page.url" :label="'第 ' + page.page_number + ' 页原稿'" fit :priority="index === current ? 2 : 0" />
+            <PrivateImage :src="page.url" :placeholder-src="index === current ? page.thumbnail_url : null" :label="'第 ' + page.page_number + ' 页原稿'" fit :priority="index === current ? 2 : 0" @load="imageLoaded(index)" />
           </movable-view>
         </movable-area>
       </swiper-item>
     </swiper>
     <view class="reader-footer"><view class="reader-tools"><text class="reader-hint">{{ Math.round(scale * 100) }}%</text><button class="reader-close" role="button" hover-class="control-pressed" title="恢复适宽" aria-label="恢复适宽" @click="fitPage"><wd-icon name="fullscreen" size="20px" /></button></view><view class="reader-controls"><wd-button role="button" variant="text" :disabled="current === 0" @click="select(current - 1)">上一页</wd-button><button class="reader-jump" role="button" hover-class="control-pressed" aria-label="选择预览页码" @click="openChooser">{{ current + 1 }} / {{ pages.length }} 页 <wd-icon name="down" size="12px" /></button><wd-button role="button" variant="text" :disabled="current >= pages.length - 1" @click="select(current + 1)">下一页</wd-button></view></view>
+    <view v-if="resumed" class="reader-resume" role="status"><text>已继续上次第 {{ current + 1 }} 页</text><button class="reader-start" role="button" hover-class="control-pressed" @click="select(0)">从第一页开始</button></view>
     <view v-if="$slots.download" class="reader-download"><slot name="download" /></view>
     <wd-popup v-model="jumpOpen" position="bottom" :z-index="1300" root-portal safe-area-inset-bottom custom-style="border-radius:22px 22px 0 0">
       <view class="sheet">
@@ -115,6 +142,8 @@ watch(() => props.pages.length, count => { if (current.value >= count) current.v
 </template>
 
 <style scoped>
+.reader-resume { display:flex;align-items:center;justify-content:center;gap:12px;flex:none;background:var(--lc-card);font-size:12px;color:var(--lc-secondary); }
+.reader-start { min-height:34px;padding:0 8px;margin:0;background:transparent;font-size:12px;color:var(--lc-primary);line-height:34px; }
 .reader-download { flex:none;padding:0 16px 12px;background:var(--lc-card); }
 .paper-reader { height:100vh;height:100dvh;display:flex;flex-direction:column;background:var(--lc-background);padding-bottom:env(safe-area-inset-bottom);box-sizing:border-box; }
 .reader-header { position:relative;z-index:2;display:flex;align-items:center;justify-content:center;padding:0 12px;flex:none;box-sizing:border-box;background:var(--lc-card); }.reader-title { text-align:center;font-size:18px;font-weight:600;white-space:nowrap; }.reader-close { display:flex;align-items:center;justify-content:center;width:44px;height:44px;margin:0;padding:0;background:transparent;color:var(--lc-text); }

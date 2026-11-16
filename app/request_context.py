@@ -18,7 +18,7 @@ logger = logging.getLogger("app.access")
 
 class RequestIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        record.request_id = request_id.get()
+        record.request_id = getattr(record, "request_id", request_id.get())
         return True
 
 
@@ -32,6 +32,8 @@ class RequestContext:
         headers = Headers(scope=scope)
         supplied = headers.get("x-correlation-id", "")
         identifier = supplied if re.fullmatch(r"[a-zA-Z0-9_-]{8,64}", supplied) else uuid.uuid4().hex
+        # 最外层异常响应在本中间件退出后才生成，不能仅依赖 ContextVar。
+        scope.setdefault("state", {})["request_id"] = identifier
         token = request_id.set(identifier)
         started, status = time.monotonic(), 500
 

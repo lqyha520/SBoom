@@ -87,6 +87,9 @@ def access_token():
 
 
 def destination(message):
+    # 已下线的教材关注历史消息跳转习题库，不再打开旧页面。
+    if message['target_type'] == 'curriculum':
+        return 'pages/library/index'
     routes = {"paper": "pages/paper/index", "feedback": "subpages/support/index", "membership": "subpages/membership/index", "request": "subpages/requests/index", "closure": "subpages/closure/index", "order": "subpages/orders/index"}
     page = routes.get(message["target_type"], "subpages/messages/index")
     identifier = message["target_id"]
@@ -119,6 +122,10 @@ def dispatch_one():
         row = conn.execute("SELECT n.*, u.wechat_openid_enc, u.is_active FROM mini_notice_deliveries d JOIN mini_notifications n ON n.id = d.notification_id JOIN mini_users u ON u.id = n.user_id WHERE d.status = 'pending' ORDER BY n.created_at, n.id LIMIT 1").fetchone()
         if not row:
             return False
+        if row['kind'] == 'curriculum' or row['target_type'] == 'curriculum':
+            # 功能下线后跳过旧待发提醒，不消耗用户授权的订阅额度。
+            conn.execute("UPDATE mini_notice_deliveries SET status='skipped',error_code='FEATURE_RETIRED',updated_at=? WHERE notification_id=?", (now, row['id']))
+            return True
         subscription = conn.execute("SELECT * FROM mini_notice_subscriptions WHERE user_id = ?", (row["user_id"],)).fetchone()
         if not row["is_active"] or not row["wechat_openid_enc"] or not subscription or subscription["credits"] <= 0 or subscription["template_id"] != configuration()["template_id"]:
             conn.execute("UPDATE mini_notice_deliveries SET status = 'skipped', updated_at = ? WHERE notification_id = ?", (now, row["id"]))

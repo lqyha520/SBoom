@@ -12,7 +12,8 @@ from test_backend_catalog_import import tiny_pdf
 from app.config import get_settings
 from app.db import db
 from app.models.catalog import CatalogCreate
-from app.services import catalog_import, file_retention, maintenance, paper_library, public_catalog
+from app.models.mini import MembershipUpdate
+from app.services import catalog_import, file_retention, maintenance, mini_auth, paper_library, public_catalog
 
 
 class OptimizationContracts(unittest.TestCase):
@@ -23,26 +24,46 @@ class OptimizationContracts(unittest.TestCase):
     update = fixtures.PublicCatalogContracts.update
     publish = fixtures.PublicCatalogContracts.publish
 
-    def test_cached_limited_preview_still_checks_permissions_and_withdrawal(self):
-        from app import library_files
-
-        paper = self.publish()
+    def test_preview_is_identical_for_guests_members_and_vip_but_download_stays_restricted(self):
+        source = self.source(ready=False)
+        image = io.BytesIO()
+        Image.effect_noise((1040, 1471), 64).convert("RGB").save(image, "JPEG", quality=90)
+        source = paper_library.publish_bundle(self.admin.id, source["id"], fixtures.bundle({
+            "paper.pdf": b"%PDF-1.4\nfixture\n%%EOF\n", "page-1.jpg": image.getvalue(),
+        }))
+        paper = self.publish(self.draft(source))
         paper = self.update(paper, view_access="free", download_access="vip").json()
+        original = self.client.get(next(asset["url"] for asset in paper["assets"] if asset["kind"] == "page")).content
+        pdf_id = next(asset["id"] for asset in paper["assets"] if asset["kind"] == "pdf")
+        prefix = f"/api/v1/catalog/papers/{paper['id']}"
+        mini_auth.update_membership(self.admin.id, self.other.id, MembershipUpdate(revision=1, membership="vip", is_active=True))
+        for user, download_status in ((None, 401), (self.viewer, 403), (self.other, 200)):
+            with self.subTest(user="guest" if user is None else user.username):
+                if user is None:
+                    self.client.cookies.clear()
+                    self.client.headers.pop("Authorization", None)
+                else:
+                    self.sign_in(user)
+                detail = self.client.get(prefix).json()
+                url = next(asset["url"] for asset in detail["assets"] if asset["kind"] == "page")
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.content, original)
+                self.assertEqual(response.headers["cache-control"], "private, no-store")
+                with Image.open(io.BytesIO(response.content)) as preview:
+                    self.assertEqual(preview.size, (1040, 1471))
+                self.assertEqual(self.client.get(prefix + f"/assets/{pdf_id}").status_code, download_status)
+                self.assertEqual(self.client.post(prefix + "/download").status_code, download_status)
+        self.sign_in(self.admin)
+        paper = self.update(paper, view_access="vip").json()
         self.sign_in(self.viewer)
-        detail = self.client.get(f"/api/v1/catalog/papers/{paper['id']}").json()
-        url = next(asset["url"] for asset in detail["assets"] if asset["kind"] == "page")
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 200)
-        with patch.object(library_files.Image, "open", side_effect=AssertionError("重复图片处理")):
-            self.assertEqual(self.client.get(url).content, response.content)
-            self.sign_in(self.admin)
-            paper = self.update(paper, view_access="vip").json()
-            self.sign_in(self.viewer)
-            self.assertEqual(self.client.get(url).status_code, 403)
-            self.sign_in(self.admin)
-            self.update(paper, status="withdrawn")
-            self.sign_in(self.viewer)
-            self.assertEqual(self.client.get(url).status_code, 404)
+        self.assertEqual(self.client.get(url).status_code, 403)
+        self.sign_in(self.other)
+        self.assertEqual(self.client.get(url).content, original)
+        self.sign_in(self.admin)
+        self.update(paper, status="withdrawn")
+        self.sign_in(self.other)
+        self.assertEqual(self.client.get(url).status_code, 404)
 
     def test_each_page_has_small_private_thumbnail_and_legacy_pages_are_backfilled(self):
         source = self.source(ready=False)

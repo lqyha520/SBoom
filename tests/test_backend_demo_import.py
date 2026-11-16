@@ -4,6 +4,7 @@
 测试在一次性 PG 库的独立 schema 里构造源数据，再导出为 SQLite 源文件。
 """
 
+import json
 import os
 import sqlite3
 import tempfile
@@ -54,6 +55,7 @@ def export_pg_schema_to_sqlite(dsn: str, sqlite_path: Path, tables) -> None:
             conn.execute(f'CREATE TABLE "{table}" ({ddl})')
             rows = pg.execute(f'SELECT * FROM "{table}"').fetchall()
             if rows:
+                rows = [tuple(json.dumps(value) if isinstance(value, (dict, list)) else value for value in row) for row in rows]
                 names = [name for name, _ in columns]
                 placeholders = ", ".join("?" for _ in names)
                 conn.executemany(f'INSERT INTO "{table}" ({", ".join(names)}) VALUES ({placeholders})', rows)

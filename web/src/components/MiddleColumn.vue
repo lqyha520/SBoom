@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useExamStore } from '../stores/exam'
 import { TEMPLATES } from '../constants'
+import { MAX_PAPERS_PER_RUN } from '../generation-limits'
 import TypePicker from './TypePicker.vue'
 import SectionList from './SectionList.vue'
 import PaperTemplateDialog from './PaperTemplateDialog.vue'
@@ -55,7 +56,7 @@ function pickTemplate(id: string) {
     <div class="generation-footer">
       <div class="row-between mb-3">
         <label for="paper-count" class="text-xs text-toned">生成份数</label>
-        <UInputNumber id="paper-count" :model-value="store.paperCount" :min="1" :max="20" :disabled="store.generating" size="sm" class="w-28" @update:model-value="store.paperCount = $event ?? 1" />
+        <UInputNumber id="paper-count" :model-value="store.paperCount" :min="1" :max="MAX_PAPERS_PER_RUN" :disabled="store.generating" size="sm" class="w-28" @update:model-value="store.paperCount = $event ?? 1" />
       </div>
       <div class="row-between mb-4">
         <UCheckbox v-model="store.addDayLabel" label="按天编号" :disabled="store.generating" size="sm" />
@@ -66,6 +67,7 @@ function pickTemplate(id: string) {
       <p v-else-if="missingConditions" class="mb-3 text-xs text-muted">待补充：{{ missingConditions }}</p>
       <RecoveryActions />
       <p class="mb-2 text-xs text-muted">共 {{ store.paperCount * store.totalQuestions }} 题。生成后自动复核答案、解析与教学范围；复核会增加模型用量和等待时间。</p>
+      <p class="mb-2 text-xs text-muted">大题超过 30 题会自动分批生成，合并到同一大题；可随时停止后续任务。阅读题与同一篇文章配套，每个大题最多 30 题。</p>
       <GenerationTasks />
       <p v-if="store.usage && store.usage.daily_limit > 0" class="mb-2 text-xs text-muted numeric" title="额度只按成功出图与仍在进行的请求计数；失败或结果待确认的请求不扣次数，但过去 24 小时的失败次数有独立上限。查询原请求不重复计数。">近 24 小时已用 {{ store.usage.quota_used }} / {{ store.usage.daily_limit }} 次<template v-if="store.usage.failed + store.usage.unknown > 0">，失败或待确认 {{ store.usage.failed + store.usage.unknown }} 次未扣次数</template></p>
       <div class="flex gap-2">

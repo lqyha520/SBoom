@@ -97,5 +97,6 @@ server.pid
 # 截图/压测/回归产物（子目录白名单见上）
 # 生产环境密钥
 artifacts/
+outputs/
 deploy/ops-status/
 /deploy/docker-compose.override.yml

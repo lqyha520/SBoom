@@ -2,7 +2,8 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type Sortable from 'sortablejs'
 import { useExamStore } from '../stores/exam'
-import { MAX_QUESTIONS_PER_TYPE, TYPE_NAME } from '../constants'
+import { TYPE_NAME } from '../constants'
+import { sectionQuestionLimit } from '../generation-limits'
 import type { Section } from '../types'
 import QuestionManager from './QuestionManager.vue'
 
@@ -64,7 +65,7 @@ async function retry() {
         </div>
         <div class="section-controls">
           <span class="text-xs text-muted">题目数量</span>
-          <UInputNumber :model-value="section.count" :min="1" :max="MAX_QUESTIONS_PER_TYPE" size="sm" :disabled="store.generating" :aria-label="'第 ' + (index + 1) + ' 大题题目数量'" class="section-count" @update:model-value="store.setSectionCount(section.id, $event ?? 1)" />
+          <UInputNumber :model-value="section.count" :min="1" :max="sectionQuestionLimit(section.type)" size="sm" :disabled="store.generating" :aria-label="'第 ' + (index + 1) + ' 大题题目数量'" class="section-count" @update:model-value="store.setSectionCount(section.id, $event ?? 1)" />
           <UTooltip text="调整版式"><UButton icon="i-lucide-columns-2" color="neutral" variant="ghost" size="xs" :disabled="store.generating" :aria-label="'第 ' + (index + 1) + ' 大题版式'" @click="layoutSection = section" /></UTooltip>
         </div>
         <div v-if="section.status === 'loading'" class="section-status" role="status"><UIcon name="i-lucide-loader-circle" class="size-3 animate-spin" />正在生成</div>

@@ -131,21 +131,13 @@ async function main() {
     fail = false
     await page.getByRole('button', { name: '重试加载', exact: true }).click()
     await expect(page.locator('.result-count')).toHaveText('共 4 份习题')
-    // 排序改为选择器后，确认选择会发起新请求，免费筛选不会丢失排序。
+    // 排序弹层的选择会发起新请求，免费筛选不会丢失排序。
     await page.getByRole('button', { name: '排序：精选', exact: true }).click()
-    await page.locator('.uni-picker-content:visible').waitFor()
-    await page.waitForTimeout(700) // 等待弹出动画及滚轮尺寸初始化。
     const latestResponse = page.waitForResponse(response => {
       const url = new URL(response.url())
       return url.pathname === '/api/v1/catalog/papers' && url.searchParams.get('sort') === 'latest' && response.ok()
     })
-    const wheel = page.locator('.uni-picker-view-group:visible')
-    if (await wheel.count()) {
-      await wheel.dispatchEvent('wheel', { deltaY: 40 })
-      await page.waitForTimeout(350) // 滚轮完成吸附后提交。
-    } else await page.locator('.uni-picker-item:visible').filter({ hasText: /^最新$/ }).click()
-    const confirmSort = page.locator('.uni-picker-action-confirm:visible')
-    if (await confirmSort.count()) await confirmSort.click()
+    await page.getByRole('button', { name: '最新', exact: true }).click()
     await latestResponse
     await expect(page.getByRole('button', { name: '排序：最新', exact: true })).toBeVisible()
     await expect(page.locator('.paper-row')).toHaveCount(4)
@@ -223,13 +215,13 @@ async function main() {
     await page.getByRole('button', { name: '选择年级', exact: true }).click()
     await page.getByRole('button', { name: '小学三年级', exact: true }).click()
     await page.getByRole('button', { name: '清除其他条件', exact: true }).click()
-    await expect(page.locator('.search-grade-choice')).toContainText('三年级')
+    await expect(page.getByRole('button', { name: '选择年级', exact: true })).toContainText('三年级')
     await expect(page.locator('.search-field input')).toHaveValue('')
     await expect(page.locator('.paper-row')).toHaveCount(4)
     await page.getByRole('button', { name: '更多筛选', exact: true }).click()
     await shot('filter-sheet-320')
     await page.getByRole('button', { name: /重置全部条件/ }).click()
-    await expect(page.locator('.search-grade-choice')).toContainText('全部年级')
+    await expect(page.getByRole('button', { name: '选择年级', exact: true })).toContainText('全部年级')
     await expect(page.locator('.catalog-sheet')).not.toBeVisible()
     check('历史仅聚焦展开，触屏点击搜索生效；快捷清除保留年级，面板全重置清除年级')
 

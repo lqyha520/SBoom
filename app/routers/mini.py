@@ -8,8 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.blocking import run_sync
 from app.db import db
 from app.deps import require_admin
+from app.http_contracts import binary_responses
 from app.http_limits import limited_body
 from app.library_deps import bearer_token, no_store, require_mini_user
+from app.models.consumer_responses import MiniLoginResponse, MiniMeResponse, MiniUserResponse
 from app.models.mini import (
     MAX_AVATAR_BASE64,
     AdminProfileUpdate,
@@ -19,6 +21,17 @@ from app.models.mini import (
     MiniPasswordUpdate,
     MiniProfileUpdate,
     MiniRegistration,
+)
+from app.models.mini_api_responses import (
+    MiniAdminDeleteUserResponse,
+    MiniAdminUpdateProfileResponse,
+    MiniChangePasswordResponse,
+    MiniCreateUserResponse,
+    MiniReferralEntryResponse,
+    MiniReferralStartResponse,
+    MiniRefreshWechatSessionResponse,
+    MiniUpdateUserResponse,
+    MiniUsersResponse,
 )
 from app.services import mini_auth, mini_avatars, mini_messages
 from app.services.mini_auth import MiniUser
@@ -33,21 +46,51 @@ class CodeInput(BaseModel):
     code: str = Field(min_length=1, max_length=256)
 
 
+class LoginCodeInput(CodeInput):
+    referral_visit_id: str = Field(default='', max_length=32, pattern=r'^(?:[0-9a-f]{32})?$')
+    referral_code: str = Field(default='', max_length=32, pattern=r'^(?:[au]_[0-9a-f]{20})?$')
+
+
 def _limit(request: Request, name: str, count=30, seconds=300):
     ip = client_key(request.client.host) if request.client else "unknown"
     if not allow(f"mini:{name}:{ip}", count, seconds):
         mini_auth._error("操作过于频繁，请稍后再试", 429)
 
 
-@router.post("/mini/login")
-@router.post("/mini/login-public")
-async def public_login(body: CodeInput, request: Request):
+class ReferralEntryInput(CodeInput):
+    code: str = Field(pattern=r'^[au]_[0-9a-f]{20}$')
+    entry_key: str = Field(min_length=16, max_length=64, pattern=r'^[a-zA-Z0-9_-]+$')
+
+
+class ReferralStartInput(CodeInput):
+    code: str = ''
+    visit_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+
+
+@router.post('/mini/referral-entry', response_model=MiniReferralEntryResponse, response_model_exclude_unset=True)
+def referral_entry(body: ReferralEntryInput, request: Request):
+    from app.services.referral_growth import enter
+    _limit(request, 'referral-entry', 120, 300)
+    return enter(body.code, body.entry_key)
+
+
+@router.post('/mini/referral-start', response_model=MiniReferralStartResponse, response_model_exclude_unset=True)
+def referral_start(body: ReferralStartInput, request: Request):
+    from app.services.referral_growth import start
+    _limit(request, 'referral-start', 120, 300)
+    return start(body.visit_id)
+
+
+@router.post("/mini/login", response_model=MiniLoginResponse, response_model_exclude_unset=True)
+@router.post("/mini/login-public", response_model=MiniLoginResponse, response_model_exclude_unset=True)
+async def public_login(body: LoginCodeInput, request: Request):
     _limit(request, "login")
     identity = await mini_auth.exchange_code(body.code, with_openid=True, with_session=True)
-    return await run_sync(mini_auth.login_public_identity, *mini_auth.login_credentials(identity))
+    identity_key, openid, session_key = mini_auth.login_credentials(identity)
+    return await run_sync(mini_auth.login_public_identity, identity_key, openid, session_key, body.referral_code, body.referral_visit_id)
 
 
-@router.post("/mini/wechat/session")
+@router.post("/mini/wechat/session", response_model=MiniRefreshWechatSessionResponse, response_model_exclude_unset=True)
 async def refresh_wechat_session(body: CodeInput, request: Request, user: MiniUser = Depends(require_mini_user)):
     """已登录用户重新 wx.login，刷新虚拟支付签名所需的 session_key。"""
     _limit(request, "wechat-session:" + user.id, 20, 300)
@@ -55,20 +98,20 @@ async def refresh_wechat_session(body: CodeInput, request: Request, user: MiniUs
     return await run_sync(mini_auth.refresh_wechat_session, user.id, *mini_auth.login_credentials(identity))
 
 
-@router.post("/mini/login-password")
+@router.post("/mini/login-password", response_model=MiniLoginResponse, response_model_exclude_unset=True)
 def password_login(body: MiniCredentials, request: Request):
     _limit(request, "password")
     _limit(request, "password:" + body.username, 10)
     return mini_auth.login_password(body.username, body.password)
 
 
-@router.post("/mini/register", status_code=201)
+@router.post("/mini/register", status_code=201, response_model=MiniLoginResponse, response_model_exclude_unset=True)
 def register(body: MiniRegistration, request: Request):
     _limit(request, "register", 10, 3600)
-    return mini_auth.register(body.username, body.password)
+    return mini_auth.register(body.username, body.password, referral_code=body.referral_code, referral_visit_id=body.referral_visit_id)
 
 
-@router.get("/mini/me")
+@router.get("/mini/me", response_model=MiniMeResponse, response_model_exclude_unset=True)
 def me(user: MiniUser = Depends(require_mini_user)):
     """账号信息附带未读消息数（走索引的单条 COUNT），小程序不必再为角标单独拉收件箱。"""
     with db() as conn:
@@ -76,15 +119,15 @@ def me(user: MiniUser = Depends(require_mini_user)):
     return {**user.public(), "unread": unread}
 
 
-@router.patch("/mini/me")
-@router.put("/mini/me")
+@router.patch("/mini/me", response_model=MiniUserResponse, response_model_exclude_unset=True)
+@router.put("/mini/me", response_model=MiniUserResponse, response_model_exclude_unset=True)
 def update_me(body: MiniProfileUpdate, request: Request, user: MiniUser = Depends(require_mini_user)):
     """用户自己改昵称与头像。只能改自己的账号——目标由登录态决定，接口不接受 user_id。"""
     _limit(request, "profile:" + user.id, 40, 300)
     return mini_auth.update_profile(user.id, body)
 
 
-@router.post("/mini/me/avatar")
+@router.post("/mini/me/avatar", response_model=MiniUserResponse, response_model_exclude_unset=True)
 async def upload_avatar(request: Request, user: MiniUser = Depends(require_mini_user)):
     _limit(request, "avatar:" + user.id, 20, 300)
     raw = await limited_body(request, MAX_AVATAR_BASE64 + 2048, error="头像不能超过 2 MB，请选择较小的图片")
@@ -100,17 +143,17 @@ def _avatar_response(content: bytes):
     return Response(content, media_type="image/jpeg", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
-@router.get("/mini/me/avatar/{version}")
+@router.get("/mini/me/avatar/{version}", response_class=Response, responses=binary_responses('image/jpeg'))
 def avatar(version: str, user: MiniUser = Depends(require_mini_user)):
     return _avatar_response(mini_avatars.read(user.id, version))
 
 
-@router.get("/admin/mini-users/{user_id}/avatar/{version}")
+@router.get("/admin/mini-users/{user_id}/avatar/{version}", response_class=Response, responses=binary_responses('image/jpeg'))
 def admin_avatar(user_id: str, version: str, user: CurrentUser = Depends(require_admin)):
     return _avatar_response(mini_avatars.read(user_id, version, admin=True))
 
 
-@router.post("/mini/password")
+@router.post("/mini/password", response_model=MiniChangePasswordResponse, response_model_exclude_unset=True)
 def change_password(body: MiniPasswordUpdate, request: Request, authorization: str | None = Header(None),
                     user: MiniUser = Depends(require_mini_user)):
     """改密码；已有密码的账号必须带对当前密码，微信账号则是首次设置密码。"""
@@ -124,32 +167,32 @@ def logout(authorization: str | None = Header(None), user: MiniUser = Depends(re
     return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 
-@router.get("/admin/mini-users")
+@router.get("/admin/mini-users", response_model=MiniUsersResponse, response_model_exclude_unset=True)
 def users(q: str = Query("", max_length=120), membership: Literal["", "regular", "vip", "expiring", "expired"] = "",
           limit: int = Query(20, ge=1, le=50), offset: int = Query(0, ge=0, le=100000),
           user: CurrentUser = Depends(require_admin)):
     return mini_auth.list_users(q, membership, limit, offset)
 
 
-@router.post("/admin/mini-users", status_code=201)
+@router.post("/admin/mini-users", status_code=201, response_model=MiniCreateUserResponse, response_model_exclude_unset=True)
 def create_user(body: MiniRegistration, user: CurrentUser = Depends(require_admin)):
     result = mini_auth.register(body.username, body.password, admin=True)
     mini_auth.logout(result["token"])
     return mini_auth.admin_user(result["user"]["id"])
 
 
-@router.put("/admin/mini-users/{user_id}")
+@router.put("/admin/mini-users/{user_id}", response_model=MiniUpdateUserResponse, response_model_exclude_unset=True)
 def update_user(user_id: str, body: MembershipUpdate, user: CurrentUser = Depends(require_admin)):
     return mini_auth.update_membership(user.id, user_id, body)
 
 
-@router.patch("/admin/mini-users/{user_id}")
+@router.patch("/admin/mini-users/{user_id}", response_model=MiniAdminUpdateProfileResponse, response_model_exclude_unset=True)
 def admin_update_profile(user_id: str, body: AdminProfileUpdate, user: CurrentUser = Depends(require_admin)):
     """管理员改小程序用户的昵称 / 头像 / 重置密码。"""
     return mini_auth.update_admin_profile(user.id, user_id, body)
 
 
-@router.delete("/admin/mini-users/{user_id}")
+@router.delete("/admin/mini-users/{user_id}", response_model=MiniAdminDeleteUserResponse, response_model_exclude_unset=True)
 def admin_delete_user(user_id: str, user: CurrentUser = Depends(require_admin)):
     """彻底删除小程序账号（连带会话、收藏、下载记录），不可恢复。"""
     return mini_auth.delete_user(user.id, user_id)

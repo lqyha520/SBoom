@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import psycopg
+from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -65,10 +66,23 @@ def private_files(conn):
     for ref in REFERENCES:
         exists = conn.execute('SELECT to_regclass(%s)', (ref.table,)).fetchone()
         if exists and exists[0]:
+            # 扩展迁移前的旧素材仍在 BYTEA 中，由 pg_dump 保存；尚无文件引用列。
+            columns = {row[0] for row in conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=%s",
+                (ref.table,)).fetchall()}
+            if not {ref.storage_column, ref.key_column}.issubset(columns):
+                if ref.table == 'xhs_assets' and 'content' in columns:
+                    continue
+                raise RuntimeError('私有文件引用列缺失：' + ref.table)
             # 空后端名等同本地磁盘（Banner 的 image_storage 默认为空串）；没有文件的行不进清单
             selects.append(f"SELECT CASE WHEN {ref.storage_column} = '' THEN 'local' ELSE {ref.storage_column} END, {ref.key_column} "
                            f"FROM {ref.table} WHERE {ref.key_column} <> ''")
     return conn.execute(' UNION '.join(selects)).fetchall() if selects else []
+
+def database_counts(conn):
+    tables = conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename").fetchall()
+    return {name: conn.execute(sql.SQL('SELECT COUNT(*) FROM public.{}').format(sql.Identifier(name))).fetchone()[0] for (name,) in tables}
+
 
 def backup(args):
     root = args.destination.resolve()
@@ -93,6 +107,7 @@ def backup(args):
         for key in LOCKS[1:]:
             conn.execute('SELECT pg_advisory_unlock(%s)', (key,))
         pg_tool(args, dsn, 'pg_dump', root / 'database.dump', snapshot)
+        (root / 'database_counts.json').write_text(json.dumps(database_counts(conn), sort_keys=True), encoding='utf-8')
         for backend, key in records:
             if backend != 'local':
                 raise ValueError('Unsupported storage backend')
@@ -106,6 +121,15 @@ def backup(args):
         extra = getattr(args, 'extra_files_root', None)
         if extra and extra.is_dir():
             shutil.copytree(extra, root / 'wechat')
+        config_root = getattr(args, 'config_root', None)
+        if config_root:
+            for name in ('docker-compose.yml', 'docker-compose.override.yml', 'docker-compose.server.yml', 'docker-compose.prod.yml',
+                         'candidate.json', 'current.json', 'Caddyfile', '.env.production'):
+                source = config_root / name
+                if source.is_file():
+                    target = root / 'deployment' / name
+                    target.parent.mkdir(exist_ok=True)
+                    shutil.copyfile(source, target)
         manifest = {str(path.relative_to(root)).replace('\\','/'): digest(path) for path in root.rglob('*') if path.is_file()}
         (root / 'manifest.json').write_text(json.dumps({'version': 1, 'created_at': int(time.time()), 'sha256': manifest}, indent=2), encoding='utf-8')
         for path in root.rglob('*'):
@@ -138,12 +162,22 @@ def restore(args):
             raise ValueError('Restore target must be empty')
     args.destination.mkdir(mode=0o700, parents=True, exist_ok=False)
     pg_tool(args, dsn, 'pg_restore', args.source / 'database.dump')
+    expected_counts = args.source / 'database_counts.json'
+    if expected_counts.exists():
+        with psycopg.connect(dsn) as conn:
+            if database_counts(conn) != json.loads(expected_counts.read_text(encoding='utf-8')):
+                raise ValueError('Restored database row counts do not match the backup snapshot')
     shutil.copytree(args.source / 'files', args.destination / 'files') if (args.source / 'files').exists() else (args.destination / 'files').mkdir()
     shutil.copyfile(args.source / 'service.env', args.destination / 'service.env')
     if (args.source / 'secret_key.txt').exists():
         shutil.copyfile(args.source / 'secret_key.txt', args.destination / 'secret_key.txt')
     if (args.source / 'wechat').exists():
         shutil.copytree(args.source / 'wechat', args.destination / 'wechat')
+    if (args.source / 'deployment').exists():
+        shutil.copytree(args.source / 'deployment', args.destination / 'deployment')
+    for key, expected in manifest['sha256'].items():
+        if key not in ('database.dump', 'database_counts.json') and digest(safe(args.destination, key)) != expected:
+            raise ValueError('Restored file checksum mismatch: ' + key)
     for path in args.destination.rglob('*'):
         if path.is_file():
             path.chmod(0o600)

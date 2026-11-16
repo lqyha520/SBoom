@@ -23,6 +23,80 @@ def completion(content='{"questions":[]}', reason="stop", **message):
 
 
 class TextTransport(unittest.IsolatedAsyncioTestCase):
+    async def test_single_provider_reconnects_once_only_before_request_is_sent(self):
+        candidate = {"api_key": "fake", "base_url": "https://unused.invalid", "model": "only",
+                     "timeout": 5, "max_tokens": 4096}
+        for error in (httpx.ConnectTimeout, httpx.ConnectError):
+            for recover in (True, False):
+                with self.subTest(error=error.__name__, recover=recover):
+                    calls = []
+
+                    def respond(request, calls=calls, recover=recover, error=error):
+                        calls.append(request)
+                        if len(calls) == 1 or not recover:
+                            raise error('offline connection failure')
+                        return httpx.Response(200, json=completion())
+
+                    usage = control.Usage()
+                    token = control.current_usage.set(usage)
+                    try:
+                        async with httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url=candidate['base_url']) as http:
+                            with patch.object(generate, '_merged_llm_params', return_value=candidate), \
+                                    patch.object(generate.llm_client, '_get_client_for', return_value=http), \
+                                    patch('app.services.llm_client.reserve'), \
+                                    patch('app.services.llm_client.asyncio.sleep', new=AsyncMock()) as backoff:
+                                if recover:
+                                    self.assertEqual(await generate._call_llm_and_parse('system', 'user', 1), {'questions': []})
+                                else:
+                                    with self.assertRaises(HTTPException):
+                                        await generate._call_llm_and_parse('system', 'user', 1)
+                        self.assertEqual(len(calls), 2)
+                        self.assertEqual(usage.model_calls, 2)
+                        self.assertEqual(usage.reported_calls, int(recover))
+                        backoff.assert_awaited_once_with(2)
+                    finally:
+                        control.current_usage.reset(token)
+
+    async def test_single_provider_never_resends_after_read_write_or_protocol_errors(self):
+        candidate = {'api_key': 'fake', 'base_url': 'https://unused.invalid', 'model': 'only', 'timeout': 5, 'max_tokens': 4096}
+        for error in (httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError, httpx.WriteError,
+                      httpx.RemoteProtocolError, httpx.PoolTimeout):
+            calls = []
+
+            def respond(request, calls=calls, error=error):
+                calls.append(request)
+                raise error('offline failure')
+
+            with self.subTest(error=error.__name__):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url=candidate['base_url']) as http:
+                    with patch.object(generate, '_merged_llm_params', return_value=candidate), \
+                            patch.object(generate.llm_client, '_get_client_for', return_value=http), \
+                            patch('app.services.llm_client.asyncio.sleep', new=AsyncMock()) as backoff:
+                        with self.assertRaises(HTTPException):
+                            await generate._call_llm_and_parse('system', 'user', 1)
+                self.assertEqual(len(calls), 1)
+                backoff.assert_not_awaited()
+
+    async def test_single_provider_retry_keeps_original_deadline(self):
+        candidate = {'api_key': 'fake', 'base_url': 'https://unused.invalid', 'model': 'only', 'timeout': 0.05, 'max_tokens': 4096}
+        calls = []
+
+        def respond(request):
+            calls.append(request)
+            raise httpx.ConnectTimeout('offline connection failure')
+
+        async def wait_for_deadline(_seconds):
+            await asyncio.Event().wait()
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url=candidate['base_url']) as http:
+            with patch.object(generate, '_merged_llm_params', return_value=candidate), \
+                    patch.object(generate.llm_client, '_get_client_for', return_value=http), \
+                    patch('app.services.llm_client.asyncio.sleep', side_effect=wait_for_deadline):
+                with self.assertRaises(HTTPException) as caught:
+                    await asyncio.wait_for(generate._call_llm_and_parse('system', 'user', 1), 1)
+        self.assertEqual(caught.exception.status_code, 504)
+        self.assertEqual(len(calls), 1)
+
     async def test_bad_protocol_switches_once_and_counts_both_attempts(self):
         candidates = [{"api_key": "fake", "base_url": "https://unused.invalid", "model": name,
                        "timeout": 5, "max_tokens": 4096} for name in ("first", "second")]
@@ -170,6 +244,7 @@ class TextTransport(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(generate, "_merged_llm_params", return_value={"models": candidates}), \
                 patch.object(generate, "run_sync", side_effect=slow_parse), \
+                patch('app.services.generation_format.run_sync', side_effect=slow_parse), \
                 patch.object(generate.llm_client, "chat", new=AsyncMock(return_value='{"questions":[]}')) as model:
             self.assertEqual(await generate._call_llm_and_parse("system", "user", 2, expected_key="questions"), {"questions": []})
         self.assertEqual([call.kwargs["model"] for call in model.await_args_list], ["first", "second"])
@@ -186,7 +261,7 @@ class TextTransport(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(review["temperature"], 0.1)
         self.assertEqual(review["max_tokens"], first["max_tokens"])
         self.assertEqual(review["model"], "configured")
-        self.assertEqual(review["max_attempts"], 1)
+        self.assertEqual(review["max_attempts"], 2)
 
     async def test_review_reserves_time_for_backup_and_honors_shorter_configured_timeout(self):
         candidates = [{"api_key": "fake", "base_url": "https://unused.invalid", "model": name,

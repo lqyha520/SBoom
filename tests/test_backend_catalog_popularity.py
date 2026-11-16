@@ -34,7 +34,7 @@ class CatalogPopularityContracts(unittest.TestCase):
         with database.db() as conn:
             conn.execute("DELETE FROM mini_users WHERE id = ?", (self.viewer.id,))
         self.assertEqual(self.counts(paper["id"]), (0, 0))
-        public_catalog.delete_paper(paper["id"], paper["revision"])
+        public_catalog.delete_paper(paper["id"], paper["revision"], admin_id=self.admin.id)
         with database.db() as conn:
             self.assertIsNone(conn.execute("SELECT 1 FROM catalog_popularity WHERE catalog_id = ?", (paper["id"],)).fetchone())
 

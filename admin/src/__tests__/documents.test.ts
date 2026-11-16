@@ -12,7 +12,7 @@ it('切换文档和菜单保留草稿，冲突恢复仅更新基线并保留文�
   mocks.list.mockImplementation(async () => ({ items: ['agreement', 'privacy'].map(key => ({ key, title: key, body: '原正文', revision, updated_at: 1 })) }))
   mocks.save.mockRejectedValueOnce(new ApiError('版本已变化', 409))
   const visible = ref(true)
-  const wrapper = mount(defineComponent({ setup: () => () => h(KeepAlive, () => visible.value ? h(DocumentManager, { user: { id: 1, username: 'admin', role: 'admin' } }) : h('div')) }), { global: { stubs: uiStubs } })
+  const wrapper = mount(defineComponent({ setup: () => () => h(KeepAlive, () => visible.value ? h(DocumentManager, { user: { id: 1, username: 'admin', role: 'admin', is_super_admin: true } }) : h('div')) }), { global: { stubs: uiStubs } })
   try {
     await flushPromises()
     await wrapper.get('#doc-body').setValue('我的协议草稿')

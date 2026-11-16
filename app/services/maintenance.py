@@ -76,6 +76,8 @@ def tick():
             scan_orphans()
             drain()
             backfill_thumbnails()
+            from app.services.xhs_asset_storage import migrate_batch
+            migrate_batch()
         finally:
             lease.execute("SELECT pg_advisory_unlock(?)", (MAINTENANCE_LOCK,))
             lease.commit()

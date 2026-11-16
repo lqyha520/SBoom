@@ -6,7 +6,7 @@ import { readAdminRoute } from '../navigation'
 import * as growth from '../growth'
 vi.mock('../growth', async original => ({ ...await original<typeof import('../growth')>(), getOrders: vi.fn(), getOrder: vi.fn(), getPlans: vi.fn() }))
 
-const user = { id: 1, username: 'admin', role: 'admin' }
+const user = { id: 1, username: 'admin', role: 'admin', is_super_admin: true }
 function order(id: string, username: string) {
   return {
     id, user_id: 'u-' + username, username, nickname: '小助手', plan_name: '月会员', plan_days: 30, amount_fen: 3000,

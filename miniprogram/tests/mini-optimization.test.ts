@@ -31,7 +31,7 @@ function component(file: string, modules: Record<string, unknown>, expose: strin
     exports, uni: native, setTimeout, clearTimeout, defineProps: () => props, defineOptions() {}, defineExpose() {},
     defineEmits: () => (...args: unknown[]) => events.push(args),
     require: (id: string) => id === 'vue' ? { ...vue, onBeforeUnmount: (fn: () => void) => (hooks.dispose ||= []).push(fn) }
-      : id === '@dcloudio/uni-app' ? Object.fromEntries(['onLoad', 'onHide', 'onUnload', 'onShow', 'onReachBottom', 'onPullDownRefresh'].map(key => [key, (fn: () => void) => (hooks[key] ||= []).push(fn)]))
+      : id === '@dcloudio/uni-app' ? Object.fromEntries(['onLoad', 'onHide', 'onUnload', 'onShareAppMessage', 'onShow', 'onReachBottom', 'onPullDownRefresh'].map(key => [key, (fn: () => void) => (hooks[key] ||= []).push(fn)]))
       : modules[id] || (id.endsWith('/page-lifecycle') ? { usePageLifecycle } : id.endsWith('/latest-request') ? { createLatestRequest } : id.endsWith('/tabbar-overlay') ? { useTabBarOverlay() {} } : {}),
   }))
   return { page: exports.page, props, events, hook: (name: string, ...args: unknown[]) => hooks[name]?.forEach(fn => fn(...args)), dispose() { hooks.dispose?.forEach(fn => fn()); scope.stop() } }
@@ -211,6 +211,52 @@ test('长资料只创建五个滑动容器与十二个选页项，连续滑动�
       page.change({ detail: { current: index - page.windowStart.value, source: 'touch' } }); page.finishTurn()
       assert.equal(page.current.value, index)
     }
+  } finally { app.dispose() }
+})
+
+test('当前页显示后预取后两页，连续翻页复用在途请求，跳页与关闭释放预取', async () => {
+  const acquired: string[] = [], released: string[] = []
+  const app = component('components/PaperPreview.vue', {
+    '../services/session': { session: { user: { id: 'reader' } } },
+    '../services/chrome': { chromeBar: () => ({ inset: 0, height: 44 }) },
+    '../services/reading-position': { readPosition: () => 0, rememberPosition() {} },
+    '../services/assets': { acquireAsset: (url: string) => {
+      acquired.push(url); return { ready: new Promise<string>(() => {}), release: () => released.push(url) }
+    } },
+  }, 'current, select, imageLoaded, prefetched', {
+    pages: Array.from({ length: 12 }, (_, id) => ({ id, page_number: id + 1, url: '/page/' + id })), paperId: 'long', release: 1,
+  })
+  try {
+    assert.equal(acquired.length, 0, '等待当前原图显示，不提前扩大带宽竞争')
+    app.page.imageLoaded(1); assert.equal(acquired.length, 0, '相邻页加载事件不能启动下一窗口')
+    app.page.imageLoaded(0); app.page.imageLoaded(0)
+    assert.deepEqual(acquired, ['/page/1', '/page/2'])
+    app.page.select(1); await vue.nextTick()
+    assert.deepEqual(released, [], '保留即将由当前页接手的在途预取')
+    app.page.imageLoaded(1)
+    assert.deepEqual(acquired, ['/page/1', '/page/2', '/page/3']); assert.deepEqual(released, ['/page/1'])
+    app.page.select(9); await vue.nextTick()
+    assert.equal(app.page.prefetched.size, 0)
+    app.page.imageLoaded(9); assert.deepEqual(acquired.slice(-2), ['/page/10', '/page/11'])
+    app.hook('onHide'); assert.equal(app.page.prefetched.size, 0)
+    app.page.imageLoaded(9); assert.equal(acquired.length, 5, '隐藏后的迟到 load 不能重新启动下载')
+  } finally { app.dispose() }
+})
+
+test('预取失败释放句柄，后续当前页加载可重新预取而不留下拒绝的缓存项', async () => {
+  let reads = 0
+  const released: string[] = []
+  const app = component('components/PaperPreview.vue', {
+    '../services/session': { session: { user: { id: 'reader' } } },
+    '../services/chrome': { chromeBar: () => ({ inset: 0, height: 44 }) },
+    '../services/reading-position': { readPosition: () => 0, rememberPosition() {} },
+    '../services/assets': { acquireAsset: (url: string) => {
+      reads++; return { ready: Promise.reject(Error('offline')), release: () => released.push(url) }
+    } },
+  }, 'imageLoaded, prefetched', { pages: [{ url: '/0' }, { url: '/1' }], paperId: 'short', release: 1 })
+  try {
+    app.page.imageLoaded(0); await settle(); assert.equal(app.page.prefetched.size, 0)
+    app.page.imageLoaded(0); await settle(); assert.equal(reads, 2); assert.deepEqual(released, ['/1', '/1'])
   } finally { app.dispose() }
 })
 

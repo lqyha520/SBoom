@@ -5,7 +5,9 @@ import hashlib
 import hmac
 import json
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -19,7 +21,8 @@ from app import db as database
 from app import security
 from app.config import get_settings
 from app.models.commerce import OrderInput, PlanInput, RefundInput, RefundReview
-from app.services import mini_auth, mini_orders, mini_refunds, payment_bills, wechat_virtual_pay
+from app.services import mini_auth, mini_jobs, mini_orders, mini_refunds, payment_bills, wechat_virtual_pay
+from app.services.wechat_pay import PaymentError
 from app.services.wechat_virtual_pay import VirtualPay
 
 OFFER_ID = "1450000000"
@@ -29,6 +32,97 @@ SESSION_KEY = "fixture-session-key"
 
 
 class VirtualPayContracts(GrowthBase):
+    def test_delivery_migration_preserves_existing_orders_and_is_idempotent(self):
+        self.configure()
+        order = self.create_order('delivery-migration')
+        mini_orders.confirm_virtual_payment(self.query_value(order))
+        with database.db() as conn:
+            before = conn.execute('SELECT delivered_at FROM mini_orders WHERE id=?', (order['id'],)).fetchone()[0]
+            conn.execute('DROP INDEX IF EXISTS idx_mini_orders_delivery_due')
+            for column in ('delivery_attempts', 'delivery_next_at', 'delivery_lease_key', 'delivery_lease_until'):
+                conn.execute(f'ALTER TABLE mini_orders DROP COLUMN {column}')
+            conn.execute('DELETE FROM schema_migrations WHERE version=?', (database.SCHEMA_VERSION,))
+            conn.execute('INSERT INTO schema_migrations(version) VALUES(2026111502) ON CONFLICT DO NOTHING')
+        database.init_db(migrate=True)
+        database.init_db(migrate=True)
+        with database.db() as conn:
+            migrated = conn.execute('SELECT * FROM mini_orders WHERE id=?', (order['id'],)).fetchone()
+            self.assertEqual(migrated['delivered_at'], before)
+            self.assertEqual(migrated['delivery_attempts'], 0)
+            self.assertEqual(migrated['delivery_next_at'], 0)
+            self.assertEqual(migrated['delivery_lease_key'], '')
+            self.assertIsNotNone(conn.execute("SELECT to_regclass('idx_mini_orders_delivery_due')").fetchone()[0])
+
+    def test_failed_delivery_batch_does_not_starve_later_orders_and_backs_off(self):
+        self.configure()
+        orders = []
+        with patch.object(mini_orders, 'deliver_virtual'):
+            for index in range(11):
+                order = self.create_order(f'delivery-queue-{index}')
+                mini_orders.confirm_virtual_payment(self.query_value(order))
+                orders.append(order['id'])
+        with database.db() as conn:
+            for index, identifier in enumerate(orders):
+                conn.execute('UPDATE mini_orders SET delivery_next_at=? WHERE id=?', (index + 1, identifier))
+        for key in ('maintenance_enabled', 'teaching_jobs_enabled', 'wechat_pay_auto_reconcile'):
+            self.stack.enter_context(patch.object(get_settings(), key, False))
+        self.stack.enter_context(patch.object(mini_jobs, 'configuration', return_value={'ready': False}))
+        self.stack.enter_context(patch.object(mini_jobs.wechat_notices, 'configuration', return_value={'available': False}))
+        now = int(time.time())
+
+        def provide(order):
+            if order['id'] != orders[-1]:
+                raise PaymentError('RETRY_FIXTURE')
+            return {}
+
+        with patch.object(VirtualPay, 'provide_goods', side_effect=provide) as provider, patch('time.time', return_value=now):
+            mini_jobs.tick(threading.Event())
+            mini_jobs.tick(threading.Event())
+            mini_jobs.tick(threading.Event())
+            self.assertEqual(provider.call_count, 11)
+            with database.db() as conn:
+                failed = conn.execute('SELECT * FROM mini_orders WHERE id=?', (orders[0],)).fetchone()
+                self.assertEqual((failed['delivery_attempts'], failed['delivery_next_at']), (1, now + 60))
+                self.assertEqual(failed['delivery_lease_until'], 0)
+                self.assertIsNotNone(conn.execute('SELECT delivered_at FROM mini_orders WHERE id=?', (orders[-1],)).fetchone()[0])
+        with patch.object(VirtualPay, 'provide_goods', side_effect=PaymentError('RETRY_FIXTURE')), patch('time.time', return_value=now + 60):
+            mini_orders.deliver_virtual(orders[0])
+        with database.db() as conn:
+            failed = conn.execute('SELECT delivery_attempts,delivery_next_at FROM mini_orders WHERE id=?', (orders[0],)).fetchone()
+            self.assertEqual((failed['delivery_attempts'], failed['delivery_next_at']), (2, now + 180))
+
+    def test_delivery_lease_excludes_other_workers_and_stale_worker_cannot_clear_it(self):
+        self.configure()
+        order = self.create_order('delivery-concurrency')
+        with patch.object(mini_orders, 'deliver_virtual'):
+            mini_orders.confirm_virtual_payment(self.query_value(order))
+        entered, release = threading.Event(), threading.Event()
+
+        def provide(value):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError('测试等待超时')
+
+        with patch.object(VirtualPay, 'provide_goods', side_effect=provide) as provider, ThreadPoolExecutor(2) as pool:
+            first = pool.submit(mini_orders.deliver_virtual, order['id'])
+            try:
+                self.assertTrue(entered.wait(5))
+                pool.submit(mini_orders.deliver_virtual, order['id']).result(timeout=5)
+                self.assertEqual(provider.call_count, 1)
+                with database.db() as conn:
+                    conn.execute("UPDATE mini_orders SET delivery_lease_key='new-worker' WHERE id=?", (order['id'],))
+            finally:
+                release.set()
+            first.result(timeout=5)
+        with database.db() as conn:
+            row = conn.execute('SELECT delivered_at,delivery_lease_key FROM mini_orders WHERE id=?', (order['id'],)).fetchone()
+            self.assertIsNone(row['delivered_at'])
+            self.assertEqual(row['delivery_lease_key'], 'new-worker')
+            conn.execute('UPDATE mini_orders SET delivery_lease_until=0 WHERE id=?', (order['id'],))
+        mini_orders.deliver_virtual(order['id'])
+        with database.db() as conn:
+            self.assertIsNotNone(conn.execute('SELECT delivered_at FROM mini_orders WHERE id=?', (order['id'],)).fetchone()[0])
+
     def configure(self, **overrides):
         values = {
             "wechat_virtual_pay_enabled": True,

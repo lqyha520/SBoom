@@ -10,6 +10,7 @@
 import { createApp, h } from 'vue'
 import type { PaperData, PaperStyle, PaperTemplate } from './types'
 import type { ArchiveSnapshot } from './library'
+import { archivePapers } from './library'
 import { answerOf, escHtml } from './utils'
 import { measureExport } from './export-performance'
 import { ExportBudget, EXPORT_LIMITS } from './export-budget'
@@ -63,7 +64,7 @@ export function exportScale(): number {
   const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory
   return !memory || memory <= 4 ? 2 : 3
 }
-type ExportControl = { signal?: AbortSignal; isActive?: () => boolean; budget?: ExportBudget }
+type ExportControl = { signal?: AbortSignal; isActive?: () => boolean; budget?: ExportBudget; onPageCount?: (count: number) => void }
 type PageConsumer = (page: HTMLCanvasElement, index: number, total: number) => Promise<void> | void
 /** 每页截图、消费、释放后才处理下一页；页数在创建第一张画布前校验。 */
 async function renderPages(paper: PaperData, template: PaperTemplate, style: PaperStyle,
@@ -76,6 +77,7 @@ async function renderPages(paper: PaperData, template: PaperTemplate, style: Pap
     if (mode !== 'student') prepared.push(await measureExport('layout', () => preparePaper(buildAnswerPaper(paper), template, style, false, assertActive)))
     const pages = prepared.flatMap(value => value.pages)
     validateExportPageCount(pages.length)
+    control.onPageCount?.(pages.length)
     control.budget?.reservePages(pages.length)
     const { default: html2canvas } = await import('html2canvas')
     for (const [index, page] of pages.entries()) {
@@ -170,29 +172,56 @@ function baseTitle(paper: PaperData, template: PaperTemplate): string {
 
 /** 同一页像素用于归档 PDF 和预览图，不同时保留多页 RGBA 画布。 */
 export async function createArchiveBundle(snapshot: ArchiveSnapshot, progress?: (message: string) => void, control: ExportControl = {}): Promise<Blob> {
-  const { paper, template, style, export_options: options } = snapshot
+  const { template, style, export_options: options } = snapshot
+  const papers = archivePapers(snapshot)
+  const budget = new ExportBudget()
   const { default: JSZip } = await import('jszip')
   const zip = new JSZip()
-  const doc = await newPDF()
-  await renderPages(paper, template, style, options.mode, options.addDay, async (page, index, total) => {
-    progress?.(`正在处理第 ${index + 1}/${total} 页`)
-    const ctx = page.getContext('2d')!
-    const pixelsPerMm = page.width / 210
-    ctx.fillStyle = '#000000'
-    ctx.font = `${9 * 25.4 / 72 * pixelsPerMm}px Times New Roman`
-    ctx.textAlign = 'center'
-    ctx.fillText(`- ${index + 1} / ${total} -`, page.width / 2, 292.5 * pixelsPerMm)
-    if (index) doc.addPage()
-    doc.addImage(await jpegBytes(page), 'JPEG', 0, 0, 210, 297)
-    const preview = document.createElement('canvas')
-    preview.width = Math.min(1040, page.width)
-    preview.height = Math.round(preview.width * 297 / 210)
-    try {
-      preview.getContext('2d')!.drawImage(page, 0, 0, preview.width, preview.height)
-      zip.file(`page-${index + 1}.jpg`, await canvasBlob(preview, 'image/jpeg', 0.85))
-    } finally { preview.width = preview.height = 0 }
-  }, control)
-  zip.file('paper.pdf', await measureExport('assemble', async () => doc.output('arraybuffer')))
+  const split = options.separate_answers === true
+  if (split && options.mode !== 'withAnswers') throw new Error('分开保存需要同时选择学生卷和答案')
+  const student = { doc: await newPDF(), count: 0, filename: 'paper.pdf' }
+  const answers = split ? { doc: await newPDF(), count: 0, filename: 'answers.pdf' } : null
+  let pageNumber = 0
+  for (const [paperIndex, paper] of papers.entries()) {
+    // 合并只拼接页面，各份试卷按原数据和用户选择的导出选项渲染。
+    let paperPages = 0
+    const targets = answers ? [{ target: student, mode: 'student' as const, preview: true }, { target: answers, mode: 'answersOnly' as const, preview: false }]
+      : [{ target: student, mode: options.mode, preview: true }]
+    for (const { target, mode, preview: includePreview } of targets) {
+      await renderPages(paper, template, style, mode, options.addDay, async (page, index, total) => {
+        progress?.(`第 ${paperIndex + 1}/${papers.length} 份 · ${split ? includePreview ? '学生卷 · ' : '答案 · ' : ''}正在处理第 ${index + 1}/${total} 页`)
+        const ctx = page.getContext('2d')!
+        const pixelsPerMm = page.width / 210
+        ctx.fillStyle = '#000000'
+        ctx.font = `${9 * 25.4 / 72 * pixelsPerMm}px Times New Roman`
+        ctx.textAlign = 'center'
+        ctx.fillText(`- ${index + 1} / ${total} -`, page.width / 2, 292.5 * pixelsPerMm)
+        if (target.count++) target.doc.addPage()
+        const bytes = await jpegBytes(page)
+        budget.retain(bytes.byteLength)
+        target.doc.addImage(bytes, 'JPEG', 0, 0, 210, 297)
+        if (!includePreview) return
+        pageNumber++
+        const preview = document.createElement('canvas')
+        preview.width = Math.min(1040, page.width)
+        preview.height = Math.round(preview.width * 297 / 210)
+        try {
+          preview.getContext('2d')!.drawImage(page, 0, 0, preview.width, preview.height)
+          const blob = await canvasBlob(preview, 'image/jpeg', 0.85)
+          if (blob.size > 3 * 1024 * 1024) throw new Error('单页预览超过 3 MB，请简化试卷样式后重试')
+          budget.retain(blob.size)
+          zip.file(`page-${pageNumber}.jpg`, blob)
+        } finally { preview.width = preview.height = 0 }
+      }, { ...control, budget, onPageCount: count => { paperPages += count; validateExportPageCount(paperPages) } })
+    }
+  }
+  checkExportActive(control.signal, control.isActive)
+  for (const target of answers ? [student, answers] : [student]) {
+    const pdf = await measureExport('assemble', async () => target.doc.output('arraybuffer'))
+    if (pdf.byteLength > 32 * 1024 * 1024) throw new Error('PDF 超过 32 MB，请减少合并的试卷数量后重试')
+    budget.retain(pdf.byteLength)
+    zip.file(target.filename, pdf)
+  }
   const bundle = await measureExport('assemble', () => zip.generateAsync({ type: 'blob', compression: 'STORE' }, () => checkExportActive(control.signal, control.isActive)))
   checkExportActive(control.signal, control.isActive)
   if (bundle.size > 40 * 1024 * 1024) throw new Error('文件包超过 40 MB，请减少页数后重试')

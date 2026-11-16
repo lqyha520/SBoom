@@ -6,7 +6,7 @@ async function api(context: BrowserContext) {
   const documents = ['agreement', 'privacy'].map(key => ({ key, title: key === 'agreement' ? '用户协议' : '隐私政策', body: '原正文', revision: 1, updated_at: 1 }))
   await context.route('**/api/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname
-    if (path === '/api/v1/auth/me' || path === '/api/v1/auth/login') { await route.fulfill({ json: { id: owner, username: 'admin', role: 'admin' } }); return }
+    if (path === '/api/v1/auth/me' || path === '/api/v1/auth/login') { await route.fulfill({ json: { id: owner, username: 'admin', role: 'admin', is_super_admin: true } }); return }
     if (path === '/api/v1/auth/logout') { await route.fulfill({ json: {} }); return }
     if (path === '/api/v1/admin/site/documents' && request.method() === 'GET') { await route.fulfill({ json: { items: documents } }); return }
     if (path.startsWith('/api/v1/admin/site/documents/') && request.method() === 'PUT') {
@@ -95,7 +95,12 @@ test('手机导航展示全部页面选择，活动页面无需横向寻找', as
   await page.goto('/admin/#documents')
   const select = page.getByLabel('选择管理页面')
   await expect(select).toBeVisible(); await expect(select).toHaveValue('documents')
-  expect(await select.locator('option').count()).toBe(25)
+  await expect(select.locator('option')).toHaveCount(39)
+  await expect(select.locator('option[value="financeLedger"]')).toHaveText('经营账本')
+  await expect(select.locator('option[value="resourceRequests"]')).toHaveText('用户服务中心')
+  await expect(select.locator('option[value="membershipContact"]')).toHaveText('会员与联系设置')
+  await expect(select.locator('option[value="xhsResearch"]')).toHaveText('内容工作台')
+  await expect(select.locator('option[value="xhsAssets"]')).toHaveText('素材库')
   await expect(page.getByRole('navigation', { name: '管理后台导航' })).toBeHidden()
 })
 

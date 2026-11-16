@@ -28,8 +28,9 @@ export async function readMessages(id = '', remainingPending: () => number = () 
     return finish(result.unread, remainingPending())
   } catch (error) { finish(); throw error }
 }
-const messagePages: Record<string, string> = { paper: 'paper', feedback: 'support', membership: 'membership', request: 'requests', closure: 'closure', order: 'orders' }
+const messagePages: Record<string, string> = { paper: 'paper', feedback: 'support', membership: 'membership', request: 'requests', closure: 'closure', order: 'orders', curriculum: 'library' }
 export function messageDestination(message: Pick<Message, 'target_type' | 'target_id'>) {
+  if (message.target_type === 'curriculum') return '/pages/library/index'
   const page = messagePages[message.target_type]
   return safeDestination(page ? '/pages/' + page + '/index' + (message.target_id ? '?id=' + encodeURIComponent(message.target_id) : '') : '/subpages/messages/index')
 }
@@ -50,7 +51,7 @@ export const closureStatus = { pending: '等待审核', cancelled: '已撤回', 
 export const fetchClosure = (options: ReadOptions = {}) => request<{ request: Closure | null }>('/api/v1/mini/closure', 'GET', undefined, options)
 export const applyClosure = (reason: string) => request<{ request: Closure }>('/api/v1/mini/closure', 'POST', { reason, acknowledge: true })
 export const cancelClosure = (revision: number) => request<{ request: Closure }>('/api/v1/mini/closure?revision=' + revision, 'DELETE')
-export interface Plan { id: string; name: string; description: string; days: number; price_fen: number; revision: number; virtual_product_id?: string; price_fen_ios?: number; ios_available?: boolean; purchase_limit?: number; purchased?: number; pending?: number; pending_order?: string | null; pending_expires_at?: number | null }
+export interface Plan { id: string; name: string; description: string; days: number; price_fen: number; revision: number; virtual_product_id?: string; price_fen_ios?: number; ios_available?: boolean; purchase_limit?: number; purchased?: number; pending?: number; pending_order?: string | null; pending_expires_at?: number | null; projected_expires_at?: number | null; renewal_status?: string; renewal_due?: boolean; renewal_label?: string }
 export interface Refund { id: string; reason: string; reply: string; status: 'requested' | 'processing' | 'success' | 'closed' | 'abnormal' | 'rejected'; revision: number; created_at: number; updated_at: number; completed_at: number | null }
 export type PaymentChannel = 'wechat' | 'virtual'
 export interface Order { id: string; plan_id: string; plan_name: string; plan_days: number; amount_fen: number; currency: string; status: 'created' | 'pending' | 'paid' | 'closed' | 'refunded'; payment_channel?: PaymentChannel; device_platform?: string; created_at: number; expires_at: number; paid_at: number | null; revision: number; refund: Refund | null }

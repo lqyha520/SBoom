@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { bindWorkspaceOwner } from '../api'
-import { captureSnapshot, completeArchive, createArchive, patchArchive } from '../library'
+import { archivePapers, captureCollection, captureSnapshot, completeArchive, createArchive, patchArchive } from '../library'
 import type { ArchiveDetail, ArchiveRequest } from '../library'
 import type { PaperData, PaperStyle } from '../types'
 import { DEFAULT_LAYOUT, TEMPLATES } from '../constants'
@@ -37,6 +37,34 @@ describe('cloud archive boundary', () => {
     expect(options.headers.get('X-Workspace-User')).toBe('teacher-1')
     expect(JSON.parse(options.body)).toEqual(request)
   })
+  it('captures all twenty papers with stable collection identity and independent snapshots', async () => {
+    const papers = Array.from({ length: 20 }, (_, index) => ({ ...paper, archiveSourceId: 'source-' + index, title: '第' + index + '天' }))
+    const first = await captureCollection(papers, TEMPLATES[0], style, 'withAnswers', true, '进位加法')
+    expect(first.snapshot.collection_title).toBe('进位加法')
+    expect(first.snapshot.export_options.renderer_version).toBe('web-v2')
+    expect(archivePapers(first.snapshot)).toEqual(papers)
+    const again = await captureCollection(papers, TEMPLATES[0], style, 'student', false, '新标题')
+    expect(first.source_id).toBe(again.source_id)
+    const reordered = await captureCollection([...papers].reverse(), TEMPLATES[0], style, 'student', false, '')
+    expect(reordered.source_id).not.toBe(first.source_id)
+    first.snapshot.additional_papers![0].sections[0].data.questions[0].stem = 'edited'
+    expect(papers[1].sections[0].data.questions[0].stem).toBe('1 + 1')
+    const record = { id: 'merged', file_status: 'pending', snapshot: again.snapshot } as ArchiveDetail
+    vi.mocked(createArchiveBundle).mockResolvedValue(new Blob(['merged PDF and previews']))
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...record, file_status: 'ready' })))
+    vi.stubGlobal('fetch', fetch)
+    await completeArchive(record)
+    expect(createArchiveBundle).toHaveBeenCalledWith(again.snapshot, undefined, expect.any(Object))
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch.mock.calls[0][0]).toBe('/api/v1/library/papers/merged/files')
+  })
+  it('keeps the original complete title as the default file name without numbering or truncation', async () => {
+    const longTitle = '原'.repeat(240)
+    const papers = [{ ...paper, title: longTitle }, { ...paper, title: '第二份自定标题' }]
+    const { snapshot } = await captureCollection(papers, TEMPLATES[0], style, 'student', true, '')
+    expect(snapshot.collection_title).toBe(longTitle)
+    expect(archivePapers(snapshot)).toEqual(papers)
+  })
   it('completed files are reused without rendering or fetching', async () => {
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)
@@ -50,6 +78,11 @@ describe('cloud archive boundary', () => {
     await patchArchive('paper-id', { folder_id: null })
     expect(fetch.mock.calls[0][1].method).toBe('PUT')
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ folder_id: null })
+  })
+  it('directs incomplete image uploads back to their source instead of rendering an empty paper', async () => {
+    const record = { id: 'image-archive', file_status: 'pending', snapshot: { paper: { sections: [] } } } as unknown as ArchiveDetail
+    await expect(completeArchive(record)).rejects.toThrow('请回到图片出题或原上传入口重试保存')
+    expect(createArchiveBundle).not.toHaveBeenCalled()
   })
   it('does not upload a rendered paper into a changed account', async () => {
     const fetch = vi.fn()

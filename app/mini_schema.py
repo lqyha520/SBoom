@@ -102,8 +102,10 @@ def init_mini_schema(conn):
 def index_question_types(conn, catalog_id, snapshot_json):
     snapshot = json.loads(snapshot_json)
     from app.models import GameType
-    kinds = {section["type"] for section in snapshot["paper"]["sections"]}
-    kinds.update(kind for kind in snapshot["paper"].get("declared_question_types", []) if kind in {item.value for item in GameType})
+    from app.models.library import snapshot_papers
+    papers = snapshot_papers(snapshot)
+    kinds = {section["type"] for paper in papers for section in paper["sections"]}
+    kinds.update(kind for paper in papers for kind in paper.get("declared_question_types", []) if kind in {item.value for item in GameType})
     for kind in kinds:
         conn.execute("INSERT INTO catalog_question_types(catalog_id, question_type) VALUES (?, ?) "
                      "ON CONFLICT(catalog_id, question_type) DO NOTHING", (catalog_id, kind))

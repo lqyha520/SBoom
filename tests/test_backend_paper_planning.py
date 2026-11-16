@@ -75,6 +75,17 @@ class PaperRules(unittest.TestCase):
         self.assertTrue(arrange_answers([question("true_false", "正确的陈述", "√")] * 6, "true_false")[1])
         self.assertEqual(arrange_answers(ordered, "reading"), (ordered, []))
 
+    def test_number_split_enumeration_is_shuffled_as_whole_questions(self):
+        values = [question("number_split", "", 10 - part, top=10, left=part, right="____")
+                  for part in range(1, 9)]
+        original = [(item["left"], item["answer"]) for item in values]
+        rng = random.Random(7)
+        with patch("app.services.question_planning.random.shuffle", side_effect=rng.shuffle):
+            result, warnings = arrange_answers(values, "number_split")
+        self.assertNotEqual([(item["left"], item["answer"]) for item in result], original)
+        self.assertCountEqual(result, values)
+        self.assertFalse(warnings)
+
 
 class PaperContracts(unittest.TestCase):
     def setUp(self):

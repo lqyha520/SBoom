@@ -38,6 +38,8 @@ def deployment(tmp_path, monkeypatch):
     state.write_bytes(original_state)
     monkeypatch.setenv('RELEASE_ENV_FILE', str(env_file))
     monkeypatch.setattr(release, 'compose', lambda: ['docker', 'compose'])
+    # 此组覆盖切换/恢复事务；评测拦截由独立测试验证。
+    monkeypatch.setattr(release, 'validate_evaluation', lambda _: {'image': 'sha256:new-image'})
     failures = {}
     calls = []
 
@@ -85,6 +87,22 @@ def test_success_pins_image_and_stops_only_app_before_migration(deployment):
         if env:
             assert env['APP_IMAGE'] == 'sha256:new-image'
         assert 'down' not in command
+
+
+def test_release_requires_evaluation_before_any_host_command(tmp_path, monkeypatch):
+    command = Mock()
+    monkeypatch.setattr(release, 'run', command)
+    with pytest.raises(RuntimeError, match='--manifest'):
+        release.publish(argparse.Namespace(image='app:new', state_dir=tmp_path))
+    command.assert_not_called()
+
+
+def test_release_rejects_another_image_before_backup(deployment, monkeypatch):
+    monkeypatch.setattr(release, 'validate_evaluation', lambda _: {'image': 'sha256:different'})
+    with pytest.raises(RuntimeError, match='候选镜像不一致'):
+        release.publish(deployment.args)
+    deployment.backup.assert_not_called()
+    assert not any('stop' in command for command, _ in deployment.calls)
 
 
 @pytest.mark.parametrize('stage', ['smoke', 'backup'])

@@ -57,8 +57,10 @@ def main():
         with bundle.open('rb') as stream:
             digest = hashlib.file_digest(stream, 'sha256').hexdigest()
         (output / 'images.tar.sha256').write_text(digest + '  images.tar\n', encoding='utf-8')
+        image_ids = [run('docker', 'image', 'inspect', '--format', '{{.Id}}', image) for image in images]
+        # 完整镜像以不可变 ID 绑定候选清单，发布时仍核对实际运行镜像。
         (output / 'release.json').write_text(json.dumps({'commit': commit, 'images': images,
-            'image_ids': [run('docker', 'image', 'inspect', '--format', '{{.Id}}', image) for image in images],
+            'image_ids': image_ids, 'image': image_ids[0], 'build_id': image_ids[0],
             'sha256': digest}, indent=2), encoding='utf-8')
     if args.host:
         subprocess.run(['scp', str(bundle), str(output / 'images.tar.sha256'), str(output / 'release.json'),

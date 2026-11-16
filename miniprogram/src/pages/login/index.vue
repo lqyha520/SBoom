@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { referralPayload, beginReferralRegistration } from '../../services/referral'
 import { navigatePage } from '../../services/page-navigation'
 
 import { hasConsent, rememberConsent, requirePrivacy } from '../../services/privacy'
@@ -55,7 +56,9 @@ async function submitWeb() {
   busy.value = true; error.value = ''
   try {
     const endpoint = webMode.value === 'register' ? '/api/v1/mini/register' : '/api/v1/mini/login-password'
-    const result = await request<Authenticated>(endpoint, 'POST', { username: name, password: password.value })
+    if (webMode.value === 'register') await beginReferralRegistration()
+    if (!active || current !== revision) return
+    const result = await request<Authenticated>(endpoint, 'POST', { username: name, password: password.value, ...(webMode.value === 'register' ? referralPayload() : {}) })
     if (!active || current !== revision) return
     password.value = ''; rememberConsent(); loginMini(result); home()
   } catch (cause) { if (active && current === revision) error.value = errorMessage(cause) }
@@ -73,13 +76,14 @@ async function wechatLogin() {
   busy.value = true; error.value = ''
   try {
     await requirePrivacy()
+    await beginReferralRegistration()
     const wxCode = await new Promise<string>((resolve, reject) => uni.login({
       provider: 'weixin',
       success(result) { result.code ? resolve(result.code) : reject(new Error('未获得微信登录凭证')) },
       fail() { reject(new Error('微信登录未完成，请重试')) },
     }))
     if (!active || current !== revision) return
-    const result = await request<Authenticated>('/api/v1/mini/login', 'POST', { code: wxCode })
+    const result = await request<Authenticated>('/api/v1/mini/login', 'POST', { code: wxCode, ...referralPayload() })
     if (!active || current !== revision) return
     rememberConsent(); loginMini(result); home()
   } catch (cause) { if (active && current === revision) error.value = errorMessage(cause) }

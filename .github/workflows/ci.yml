@@ -72,6 +72,12 @@ jobs:
       - name: Workspace browser regression
         if: matrix.project != 'miniprogram'
         run: pnpm --dir ${{ matrix.project }} test:browser
+      - name: Local account isolation and publication assistance regression
+        if: matrix.project == 'admin'
+        run: |
+          pnpm --dir admin test:xhs-accounts
+          pnpm --dir admin test:xhs-assist
+          pnpm --dir admin test:xhs-collect
       - name: Browser regression evidence
         if: always() && matrix.project != 'miniprogram'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

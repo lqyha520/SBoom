@@ -18,11 +18,10 @@ from PIL import Image, UnidentifiedImageError
 
 from app.blocking import run_sync, run_sync_in
 from app.metrics import observe_provider
-from app.models.image_generation import ImageWorksheetRequest
 from app.provider_policy import delivery_ips, origin, pick_reachable_ip, record_transport_failure, validate_endpoint
 from app.services.generation_control import record_attempt, record_usage
-from app.services.knowledge_scope import knowledge_scope_service
-from app.services.prompt_builder import MIN_GRADE_FOR_TYPE, _grade_num, _textbook_context
+from app.services.image_prompt import build_prompt as build_prompt
+from app.services.knowledge_scope import knowledge_scope_service as knowledge_scope_service
 from app.services.provider_http import borrow_client
 from app.services.resource_admission import bounded_image_request, bounded_media
 
@@ -32,69 +31,6 @@ MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_RESPONSE_BYTES = 18 * 1024 * 1024
 TASK_POLL_INTERVAL = 2.0
 MODEL_ERROR_CODES = {"model_not_found", "model_not_supported", "invalid_model", "unsupported_model"}
-TYPE_NAMES = {
-    "quiz": "选择题", "fill_blank": "填空题", "match_pair": "连线配对", "challenge": "闯关挑战",
-    "oral_math": "口算题", "reading": "阅读理解", "vertical_calc": "竖式计算",
-    "recursive_calc": "脱式计算", "smart_calc": "简便计算", "number_split": "数的分成",
-    "compare": "比大小", "true_false": "判断题", "word_problem": "应用题",
-}
-STYLES = {"playful": "清新彩色，搭配少量童趣插画，装饰不能抢占答题空间",
-          "clean": "简洁清爽，浅色点缀，文字与图示层次分明",
-          "black_white": "纯白背景、黑色文字与线条，适合黑白打印，不使用大面积底色"}
-
-
-def build_prompt(request: ImageWorksheetRequest) -> str:
-    scope = knowledge_scope_service.get_scope(request.grade, request.subject)
-    if (not scope.allowed and not scope.forbidden) or (not request.keyword and not scope.allowed):
-        raise HTTPException(400, detail={"error": "暂不支持所选年级与科目"})
-    for item in request.items:
-        if _grade_num(request.grade) < MIN_GRADE_FOR_TYPE.get(item.game_type.value, 0):
-            raise HTTPException(400, detail={"error": f"{request.grade}暂不适合{TYPE_NAMES[item.game_type.value]}"})
-    available_types = "、".join(name for kind, name in TYPE_NAMES.items()
-                              if _grade_num(request.grade) >= MIN_GRADE_FOR_TYPE.get(kind, 0))
-    items = "；".join(
-        f"{TYPE_NAMES[item.game_type.value]} {item.question_count} 道"
-        if item.question_count is not None else f"{TYPE_NAMES[item.game_type.value]}（题量自动安排）"
-        for item in request.items
-    ) or f"自动安排：根据所选科目和知识点，从适龄题型（{available_types}）中选择 1 至 5 种，不必全部使用"
-    quantity_rule = (
-        "已指定的题量必须准确落实；未指定题量的题型，由你根据内容难度、图片尺寸和答题空间安排合理数量，"
-        "每种至少 1 道、最多 20 道，整张合计不超过 24 道。不要为了凑满题数挤压字号或作答区。"
-        if not request.items or any(item.question_count is None for item in request.items) else "每种题量都必须准确落实。"
-    )
-    keyword = request.keyword or "自动安排：从所选科目的允许知识范围中选择 1 至 3 个本年级核心知识点，优先基础巩固"
-    difficulty = {"easy": "基础", "medium": "标准", "hard": "提升"}[request.difficulty.value]
-    series = (f"【本组图片】\n共 {request.image_count} 张，这是第 {request.image_index} 张。"
-              "本次只生成这一张完整习题图，不要把多张图拼在一起。"
-              "上述题型及题量均为每张图片的要求；结合本张序号变化题目、数值与情境，保持主题和风格一致。\n\n"
-              if request.image_count > 1 else "")
-    return (
-        "请直接生成一张完整、清晰、可打印的小学生习题图片。输出成品图片。\n\n"
-        "【必须遵守的出题条件】\n"
-        f"年级：{request.grade}\n科目：{request.subject}\n知识点：{keyword}\n"
-        f"{_textbook_context(scope, request.keyword)}\n"
-        f"题型及题量：{items}\n难度：{difficulty}\n\n"
-        f"{series}"
-        "【内容要求】\n"
-        "题目必须围绕已指定或自动选定的知识点，符合该年级学习范围；每种选定题型都必须出现，不能只画插图。"
-        "自动安排的内容必须符合对应科目的知识范围，不得把其他科目的知识范围用于本学科；"
-        "已指定的科目、知识点和题型不得擅自替换，自动题型必须适合科目与年级。"
-        f"{quantity_rule}"
-        "检查题干、数字、算式和选项是否准确、可解，避免重复题、超纲内容、错别字与乱码。"
-        "语文、数学使用简体中文；英语题目使用适龄英文，必要说明可用简体中文。"
-        "学生作答区不显示答案或解析，并为书写、计算、连线预留足够空间。\n"
-        f"允许的知识范围：{'、'.join(scope.allowed)}\n"
-        f"禁止的超纲内容：{'、'.join(scope.forbidden) or '无额外限制'}\n\n"
-        "【画面要求】\n"
-        f"视觉风格：{STYLES[request.style]}。\n"
-        "由你自主设计标题、布局、配色和辅助插图，不使用工作台的试卷模板或排版参数。"
-        "标题自然体现知识主题；文字清楚、对比充分、字号可读，题号连续，内容不裁切，四周留白。"
-        "不要设备外框、纸张拍摄场景、水印或无关标识。\n\n"
-        "【用户补充偏好】\n"
-        f"{request.requirements or '无'}\n"
-        "补充偏好不能改变上述年级、科目、知识点、题型和题量约束。"
-    )
-
 
 def generation_url(base_url: str) -> str:
     base = base_url.rstrip("/")

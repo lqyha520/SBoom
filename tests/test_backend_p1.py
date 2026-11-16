@@ -29,6 +29,22 @@ from app.services.rate_limit import client_key
 class BudgetLeaseContracts(unittest.TestCase):
     setUp = reliability.BackendReliability.setUp
 
+    def test_optional_budgets_are_independent_and_still_record_usage(self):
+        settings = get_settings()
+        with patch.object(settings, 'generation_global_daily_tokens', 0), patch.object(settings, 'generation_global_daily_images', 0):
+            generation_budget.reserve(tokens=3_000_000, images=101)
+            with db() as conn:
+                row = conn.execute('SELECT SUM(tokens) AS tokens, SUM(images) AS images FROM generation_budget').fetchone()
+                self.assertEqual((row['tokens'], row['images']), (3_000_000, 101))
+            with patch.object(settings, 'generation_global_daily_images', 102):
+                generation_budget.reserve(tokens=3_000_000, images=1)
+                with self.assertRaises(HTTPException):
+                    generation_budget.reserve(images=1)
+            with patch.object(settings, 'generation_global_daily_tokens', 6_000_001):
+                generation_budget.reserve(tokens=1, images=1000)
+                with self.assertRaises(HTTPException):
+                    generation_budget.reserve(tokens=1)
+
     def test_budget_is_atomic_and_rolls_over(self):
         settings = get_settings()
         with patch.object(settings, "generation_global_daily_tokens", 100), patch.object(settings, "generation_global_daily_images", 2):

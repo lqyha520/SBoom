@@ -50,6 +50,21 @@ onBeforeUnmount(leave)
 onDeactivated(leave)
 const busy = computed(() => !!exporting.value || archiving.value)
 const exportError = ref('')
+const wordOpen = ref(false)
+const wordScope = ref('current')
+const wordMode = ref<'student' | 'withAnswers' | 'answersOnly'>('student')
+const wordModes = [{ label: '仅学生卷', value: 'student' }, { label: '试卷、答案与解析', value: 'withAnswers' }, { label: '仅答案与解析', value: 'answersOnly' }]
+async function downloadWord() {
+  const all = wordScope.value === 'all'
+  if (!qualityReady(all)) { wordOpen.value = false; return }
+  const papers = deepClone(all ? store.papers : [paper.value!]), template = deepClone(store.template), style = deepClone(store.style)
+  const mode = wordMode.value, addDay = store.addDayLabel
+  wordOpen.value = false
+  await run('正在导出 Word', async signal => {
+    const { exportWord } = await import('../word-export')
+    await exportWord(papers, template, style, { mode, addDay, signal })
+  })
+}
 watch(() => store.papers.length, count => { if (selected.value >= count) selected.value = Math.max(0, count - 1) })
 function onTitleEdited(title: string, html: string) {
   if (titleScope.value === 'all') {
@@ -71,18 +86,30 @@ async function run(label: string, job: (signal: AbortSignal) => Promise<void>) {
   catch (e: unknown) { exportError.value = e instanceof DOMException && e.name === 'AbortError' ? '导出已取消' : '导出失败：' + (e instanceof Error ? e.message : String(e)) }
   finally { exporting.value = ''; exportController = undefined }
 }
+function qualityReady(all = false) {
+  const targets = all ? store.papers : paper.value ? [paper.value] : []
+  if (!targets.length || targets.some(value => !value.sections.length || paperQuality(value).some(section => section.missing || section.questions.length || !value.sections[section.sectionIndex]?.data.questions.length))) {
+    exportError.value = '请先补齐题目、答案与解析，并在题目管理中核对通过，再导出或打印。'
+    qualityOpen.value = true
+    return false
+  }
+  return true
+}
 function exportPdf(mode: 'student' | 'withAnswers' | 'answersOnly') {
+  if (!qualityReady()) return
   if (paper.value) { const data = deepClone(paper.value), template = deepClone(store.template), style = deepClone(store.style); run('正在导出 PDF', signal => exporter.exportPDF(data, template, style, mode, signal, message => { exporting.value = message })) }
 }
 function exportPng() {
+  if (!qualityReady()) return
   if (paper.value) { const data = deepClone(paper.value), template = deepClone(store.template), style = deepClone(store.style); run('正在导出 PNG', signal => exporter.exportPNG(data, template, style, signal)) }
 }
 function exportBatch(mergeOnly: boolean) {
+  if (!qualityReady(true)) return
   const papers = deepClone(store.papers), template = deepClone(store.template), style = deepClone(store.style), addDay = store.addDayLabel
   run(mergeOnly ? '正在合并 PDF' : '正在打包 ZIP', signal => exporter.exportBatch(papers, template, style,
     { addDay, mergeOnly, signal }, message => { exporting.value = message }))
 }
-function printPaper() { if (stackEl.value) run('正在准备打印', async () => exporter.printStack(stackEl.value!)) }
+function printPaper() { if (qualityReady() && stackEl.value) run('正在准备打印', async () => exporter.printStack(stackEl.value!)) }
 const pdfMenu = [
   { label: '学生卷 PDF', icon: 'i-lucide-file-text', onSelect: () => exportPdf('student') },
   { label: '试卷与答案 PDF', icon: 'i-lucide-files', onSelect: () => exportPdf('withAnswers') },
@@ -91,7 +118,7 @@ const pdfMenu = [
 const moreExports = computed(() => [
   [{ label: '重新生成', icon: 'i-lucide-refresh-cw', disabled: busy.value || store.generating || store.layoutMode, onSelect: confirmRegenerate },
     { label: '保存到云端', icon: 'i-lucide-cloud-upload', disabled: busy.value || store.generating || store.layoutMode || store.accountChanged, onSelect: () => { showCloudSave.value = true } }],
-  [{ label: '下载 PNG', icon: 'i-lucide-image', onSelect: exportPng }, { label: '打印试卷', icon: 'i-lucide-printer', onSelect: printPaper }],
+  [{ label: '可编辑 Word', icon: 'i-lucide-file-pen-line', onSelect: () => { wordOpen.value = true } }, { label: '下载 PNG', icon: 'i-lucide-image', onSelect: exportPng }, { label: '打印试卷', icon: 'i-lucide-printer', onSelect: printPaper }],
   ...(store.papers.length > 1 ? [[
     { label: '全部试卷 ZIP', icon: 'i-lucide-file-archive', onSelect: () => exportBatch(false) },
     { label: '合并全部 PDF', icon: 'i-lucide-files', onSelect: () => exportBatch(true) },
@@ -134,6 +161,7 @@ function cancelLayout() { store.finishLayout(true); paperViewEl.value?.repaginat
       <UButton class="result-secondary" icon="i-lucide-refresh-cw" label="重新生成" color="neutral" variant="outline" :loading="store.generating" :disabled="busy || store.layoutMode" @click="confirmRegenerate" />
       <UButton class="result-secondary" icon="i-lucide-cloud-upload" label="保存到云端" color="neutral" variant="outline" :loading="archiving" :disabled="busy || store.layoutMode || store.generating || store.accountChanged" @click="showCloudSave = true" />
       <UButton class="result-edit-toggle" icon="i-lucide-sliders-horizontal" aria-label="卷面编辑工具" :aria-expanded="editingOpen" variant="outline" color="neutral" @click="editingOpen = !editingOpen" />
+      <UButton class="result-secondary" icon="i-lucide-file-pen-line" label="导出 Word" variant="outline" color="neutral" :disabled="busy || store.layoutMode || store.generating" @click="wordOpen = true" />
       <UButtonGroup>
         <UButton icon="i-lucide-download" label="下载学生卷" :loading="!!exporting" :disabled="busy || store.layoutMode || store.generating" @click="exportPdf('student')" />
         <UDropdownMenu :items="pdfMenu"><UButton icon="i-lucide-chevron-down" aria-label="PDF 导出选项" :disabled="busy || store.layoutMode || store.generating" /></UDropdownMenu>
@@ -154,6 +182,14 @@ function cancelLayout() { store.finishLayout(true); paperViewEl.value?.repaginat
     </div>
     <div class="preview-footer no-print"><span>A4 <span class="mx-1 text-dimmed">/</span> {{ questionCount }} 道题目</span><ZoomControl :zoom="zoom" :manual="manual" @change="setManual" /></div>
     <CloudSaveDialog v-if="showCloudSave" :open="showCloudSave" :selected="selected" @close="showCloudSave = false" @busy="archiving = $event" @library="showCloudSave = false; emit('library')" />
+    <UModal v-model:open="wordOpen" title="导出可编辑 Word" description="下载 DOCX 文件，在 Word 或 WPS 中继续修改。">
+      <template #body><div class="space-y-4">
+        <UFormField label="导出范围"><USelect v-model="wordScope" aria-label="Word 导出范围" :items="[{ label: '当前试卷', value: 'current' }, { label: `全部 ${store.papers.length} 份（合为一个文件）`, value: 'all' }]" class="w-full" /></UFormField>
+        <UFormField label="文件内容"><USelect v-model="wordMode" aria-label="Word 文件内容" :items="wordModes" class="w-full" /></UFormField>
+        <p class="text-sm text-muted">题干、选项、阅读正文和表格可编辑。含答案时，答案与解析另起一页。Word 会重新分页，装饰背景和自由拖动位置不随文件导出。</p>
+      </div></template>
+      <template #footer><UButton label="取消" color="neutral" variant="outline" @click="wordOpen = false" /><UButton label="下载 Word 文件" :disabled="busy || store.generating || store.layoutMode" @click="downloadWord" /></template>
+    </UModal>
     </template>
   </section>
 </template>

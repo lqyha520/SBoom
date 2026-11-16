@@ -1,3 +1,4 @@
+import { validChallenge, type ChallengeRound } from './challenge-journey'
 import { randomInt, shuffle, type Rng } from './random'
 
 export type MemoryDifficulty = 'cozy' | 'focus' | 'master'
@@ -12,7 +13,7 @@ export interface MemoryCard {
   text: string
 }
 
-export interface MemoryRound {
+export interface MemoryRound extends ChallengeRound {
   version: 1
   difficulty: MemoryDifficulty
   cards: MemoryCard[]
@@ -47,53 +48,38 @@ const configs: Record<MemoryDifficulty, MemoryConfig> = {
 
 export const memoryDifficulties = (['cozy', 'focus', 'master'] as const).map(id => ({ id, ...configs[id] }))
 
-export function memoryConfigFor(difficulty: MemoryDifficulty): MemoryConfig {
-  return configs[difficulty]
+export function memoryConfigFor(difficulty: MemoryDifficulty, stage = 1): MemoryConfig {
+  const config = configs[difficulty], pairs = config.pairs + Math.min(2,Math.floor((stage-1)/3))
+  return {...config,pairs,detail:`${pairs} 对 · ${difficulty === 'cozy' ? '10 以内' : difficulty === 'focus' ? '20 以内' : '乘法'}`}
 }
 
 export function isMemoryDifficulty(value: unknown): value is MemoryDifficulty {
   return value === 'cozy' || value === 'focus' || value === 'master'
 }
 
-function makePairs(difficulty: MemoryDifficulty, rng: Rng): Array<{ expression: string; answer: number }> {
-  const pairs: Array<{ expression: string; answer: number }> = []
-  const answers = new Set<number>()
-  const limit = difficulty === 'cozy' ? 10 : 20
-  for (let attempt = 0; attempt < 1000 && pairs.length < configs[difficulty].pairs; attempt++) {
-    if (difficulty === 'master') {
-      const left = randomInt(rng, 2, 9)
-      const right = randomInt(rng, 2, 9)
-      const answer = left * right
-      if (answers.has(answer)) continue
-      answers.add(answer)
-      pairs.push({ expression: `${left} × ${right}`, answer })
-      continue
+function makePairs(difficulty: MemoryDifficulty, rng: Rng, count: number): Array<{ expression: string; answer: number }> {
+  const groups = new Map<number,string[]>()
+  const limit = difficulty === 'cozy' ? 10 : difficulty === 'focus' ? 20 : 9
+  for (let left=0; left<=limit; left++) for (let right=0; right<=limit; right++) {
+    const operators = difficulty==='master' ? ['×'] : ['+','-']
+    for (const operator of operators) {
+      if (operator==='×' && (left<2 || right<2)) continue
+      const answer = operator==='×' ? left*right : operator==='+' ? left+right : left-right
+      if (answer<1 || operator!=='×' && answer>limit) continue
+      const entries=groups.get(answer)||[];entries.push(`${left} ${operator} ${right}`);groups.set(answer,entries)
     }
-    const answer = randomInt(rng, 1, limit)
-    if (answers.has(answer)) continue
-    let expression: string
-    if (rng() < 0.5) {
-      const left = answer > 1 ? randomInt(rng, 1, answer - 1) : 0
-      expression = `${left} + ${answer - left}`
-    } else {
-      if (answer >= limit) continue
-      const left = randomInt(rng, answer + 1, limit)
-      expression = `${left} - ${left - answer}`
-    }
-    answers.add(answer)
-    pairs.push({ expression, answer })
   }
-  if (pairs.length !== configs[difficulty].pairs) throw new Error('记忆配对牌生成失败')
+  const pairs=shuffle([...groups],rng).slice(0,count).map(([answer,expressions])=>({answer,expression:expressions[randomInt(rng,0,expressions.length-1)]}))
   return pairs
 }
 
-export function newMemoryRound(difficulty: MemoryDifficulty = 'cozy', rng: Rng = Math.random): MemoryRound {
-  const deck = makePairs(difficulty, rng).flatMap<Omit<MemoryCard, 'id'>>((pair, index) => [
+export function newMemoryRound(difficulty: MemoryDifficulty = 'cozy', rng: Rng = Math.random, stage = 1): MemoryRound {
+  const deck = makePairs(difficulty, rng, memoryConfigFor(difficulty,stage).pairs).flatMap<Omit<MemoryCard, 'id'>>((pair, index) => [
     { pairId: `p${index}`, face: 'expression', text: pair.expression },
     { pairId: `p${index}`, face: 'answer', text: String(pair.answer) },
   ])
   const cards = shuffle(deck, rng).map((card, index) => ({ ...card, id: index }))
-  return { version: 1, difficulty, cards, flipped: [], matched: [], moves: 0, finished: false }
+  return { version: 1, difficulty, stage, cards, flipped: [], matched: [], moves: 0, finished: false }
 }
 
 export function newMemory(difficulty: MemoryDifficulty = 'cozy', rng: Rng = Math.random): MemorySave {
@@ -149,12 +135,12 @@ export function resolveMemory(save: MemorySave): ResolveResult {
 }
 
 export function restartMemory(save: MemorySave, rng: Rng = Math.random): void {
-  save.round = newMemoryRound(save.difficulty, rng)
+  save.round = newMemoryRound(save.difficulty, rng, save.rounds+1)
 }
 
 export function switchMemoryDifficulty(save: MemorySave, difficulty: MemoryDifficulty, rng: Rng = Math.random): void {
   save.difficulty = difficulty
-  save.round = newMemoryRound(difficulty, rng)
+  save.round = newMemoryRound(difficulty, rng, save.rounds+1)
 }
 
 function isInt(value: unknown, min: number, max: number): value is number {
@@ -181,8 +167,8 @@ export function restoreMemory(raw: string | null): MemorySave | null {
     if (!best || !(['cozy', 'focus', 'master'] as const).every(id => isInt(best[id], 0, 3))) return null
     if (!isInt(value.totalMatches, 0, 1_000_000) || !isInt(value.rounds, 0, 1_000_000)) return null
     const round = value.round
-    if (!round || round.version !== 1 || round.difficulty !== value.difficulty) return null
-    const pairs = configs[value.difficulty].pairs
+    if (!round || !validChallenge(round) || round.version !== 1 || round.difficulty !== value.difficulty) return null
+    const pairs = memoryConfigFor(value.difficulty,round.stage || 1).pairs
     if (!Array.isArray(round.cards) || round.cards.length !== pairs * 2) return null
     if (!round.cards.every((card, index) => card && card.id === index
       && typeof card.pairId === 'string' && (card.face === 'expression' || card.face === 'answer')

@@ -105,9 +105,9 @@ def _number(value) -> Fraction | None:
         return None
 
 
-def filled_math_stem(question: dict) -> str:
+def filled_math_stem(question: dict, *, preserve_lines: bool = False) -> str:
     """依空格顺序代入数字答案；不能明确对应时返回空字符串。"""
-    stem = re.sub(r"\s+", "", math_symbols(str(question.get("stem", ""))))
+    stem = re.sub(r"[^\S\n]+" if preserve_lines else r"\s+", "", math_symbols(str(question.get("stem", ""))))
     blank = re.compile(r"_+|[?？]+")
     if not blank.search(stem):
         return stem
@@ -195,17 +195,35 @@ def question_issue(
     if kind == "fill_blank":
         text = re.sub(r"\s+", "", math_symbols(stem or ""))
         numeric_fill = bool(re.fullmatch(r"[0-9.+*/()=_\-?]+", text) and re.search(r"[_?]", text) and "=" in text)
-        process_fill = allow_fill_blank_steps and numeric_fill and "\n" in (stem or "") and text.count("=") > 1
+        lines = [line.strip() for line in (stem or "").splitlines() if line.strip()]
+        process_fill = (allow_fill_blank_steps and 2 <= len(lines) <= 4 and text.count("=") > 1
+                        and all(len(line) <= 24 for line in lines) and bool(re.search(r"[_?]", text)))
         # 仅生成普通数学填空时限制题干长度；换行不能绕过限制。
         if compact_fill_blank and not process_fill and len(str(stem or "").strip()) > 24:
             return "填空题题干过长"
         if compact_fill_blank and re.match(r"在\s*_+\s*里填", str(stem or "").strip()):
             return "填空题含多余说明性前缀"
-        if numeric_fill:
-            filled_stem = filled_math_stem(question)
-            values = [arithmetic_value(part) for part in filled_stem.split("=")] if filled_stem else []
-            if not values or any(value is None for value in values) or len(set(values)) != 1:
+        if numeric_fill or process_fill:
+            filled_stem = filled_math_stem(question, preserve_lines=True)
+            if not filled_stem:
                 return "填空题答案与算式不一致或多空答案不完整"
+            chains: list[str] = []
+            for line in filled_stem.splitlines():
+                # 行首等号延续前一条算式；独立步骤不能拼接成1010这样的错误数字。
+                if line.startswith('=') and chains:
+                    chains[-1] += line
+                else:
+                    chains.append(line)
+            for chain in chains:
+                if '=' not in chain:
+                    if numeric_fill and arithmetic_value(chain) is None:
+                        return "填空题答案与算式不一致或多空答案不完整"
+                    continue
+                if not re.fullmatch(r"[0-9.+*/()=\-]+", chain):
+                    continue  # 文字拆分步骤由独立模型复核，不猜测其语义。
+                values = [arithmetic_value(part) for part in chain.split('=')]
+                if any(value is None for value in values) or len(set(values)) != 1:
+                    return "填空题答案与算式不一致或多空答案不完整"
     if kind == "number_split":
         if any(key not in question for key in ("top", "left", "right")):
             return "数的分成字段缺失"
@@ -239,6 +257,8 @@ def question_issue(
                 return "配对题计算结果与连线答案不一致"
             if len(set(right_values)) != len(right_values):
                 return "配对题存在等值项目，无法唯一配对"
+    if (split_issue := number_split_analysis_issue(question)):
+        return split_issue
     if analysis_issue(str(question.get("analysis", ""))):
         return "解析包含不成立的计算等式"
     return None
@@ -268,6 +288,76 @@ def analysis_issue(analysis: str) -> bool:
         if all(value is not None for value in values) and len(set(values)) != 1:
             return True
     return False
+
+
+_ANALYSIS_NUMBER = r"(?:\d+(?:\.\d+)?|[零〇一二两三四五六七八九十百]+)"
+
+
+def _analysis_number(value: str) -> Fraction | None:
+    """Parse the small Arabic/Chinese numbers commonly used in explanations."""
+    if value.isdigit() or re.fullmatch(r"\d+(?:\.\d+)?", value):
+        return _number(value)
+    digits = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    if value == "十":
+        return Fraction(10)
+    if "十" in value and all(char in digits or char == "十" for char in value):
+        parts = value.split("十")
+        if len(parts) == 2 and (not parts[0] or parts[0] in digits) and (not parts[1] or parts[1] in digits):
+            return Fraction((digits.get(parts[0], 1) * 10) + digits.get(parts[1], 0))
+    if len(value) == 1 and value in digits:
+        return Fraction(digits[value])
+    return None
+
+
+def number_split_analysis_issue(question: dict) -> str | None:
+    """Reject explanations that state a different total or a different split."""
+    if question.get("type") != "number_split":
+        return None
+    analysis = str(question.get("analysis", ""))
+    if not analysis.strip():
+        return None
+    values = [_number(question.get(key)) for key in ("top", "left", "right")]
+    answer = _number(question.get("answer"))
+    if values.count(None) != 1 or answer is None:
+        return None
+    resolved = [answer if value is None else value for value in values]
+    top = resolved[0]
+    parts = sorted(resolved[1:])
+
+    total_pattern = re.compile(rf"(?:总数|一共|合起来|合计|共有|共)\s*(?:是|为|等于|有)?\s*({_ANALYSIS_NUMBER})")
+    for match in total_pattern.finditer(analysis):
+        # “总数为5+4=9”的第一个数是算式操作数，不是宣称总数为5。
+        tail = analysis[match.end():].lstrip()
+        # “总数等于两部分之和”里的“两”描述组成部分的数量，不是总数。
+        if re.match(r'(?:个\s*)?(?:部分|加数|数|项|边)', tail):
+            continue
+        if re.match(r'[+＋\-－×*÷/]|加|减|乘|除', tail):
+            expression = re.split(r'[。；;，,\n]', analysis[match.start(1):], maxsplit=1)[0]
+            expression = math_symbols(expression)
+            for word, symbol in (('等于', '='), ('乘以', '*'), ('除以', '/'), ('加', '+'), ('减', '-')):
+                expression = expression.replace(word, symbol)
+            calculated = arithmetic_value(expression.split('=')[0])
+            if calculated is not None and calculated != top:
+                return '数的分成解析总数与题目不一致'
+            continue
+        stated = _analysis_number(match[1])
+        if stated is not None and stated != top:
+            return "数的分成解析总数与题目不一致"
+
+    split_patterns = (
+        re.compile(rf"(?:把)?\s*({_ANALYSIS_NUMBER})\s*(?:分成|分为|拆成)\s*({_ANALYSIS_NUMBER})\s*(?:和|与|、)\s*({_ANALYSIS_NUMBER})"),
+        re.compile(rf"({_ANALYSIS_NUMBER})\s*(?:和|与|、)\s*({_ANALYSIS_NUMBER})\s*(?:组成|合成)\s*({_ANALYSIS_NUMBER})"),
+    )
+    for pattern_index, pattern in enumerate(split_patterns):
+        for match in pattern.finditer(analysis):
+            parsed = [_analysis_number(value) for value in match.groups()]
+            stated_total = parsed[0] if pattern_index == 0 else parsed[2]
+            stated_parts = parsed[1:] if pattern_index == 0 else parsed[:2]
+            if stated_total is not None and all(value is not None for value in stated_parts):
+                if stated_total != top or sorted(value for value in stated_parts if value is not None) != parts:
+                    return "数的分成解析与题目分解关系不一致"
+    return None
 
 
 def exact_question_key(question: dict, passage: str = "") -> str:

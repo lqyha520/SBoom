@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission, canPermission, canAdmin } from '../permissions'
 import { useDialogDraft } from "../dialog-draft";
 import { computed, ref, watch } from "vue";
 import { catalogDetail, type CatalogPaper } from "../catalog";
@@ -202,10 +203,10 @@ const draft = useDialogDraft(computed({ get: () => props.open, set: value => { i
     :ui="{ content: 'max-w-3xl' }"
     @update:open="draft.setOpen($event)"
     ><template #body
-      ><form id="batch-catalog" class="field-stack" @submit.prevent="save">
+      ><form id="batch-catalog" class="field-stack" @submit.prevent="canPermission('papers:update') && (save())">
         <p>已选择 {{ items.length }} 份资料</p>
         <USelect
-          v-model="action"
+ :disabled="!canPermission('papers:update')"          v-model="action"
           aria-label="批量操作类型"
           :items="[
             { label: '修改分类', value: 'category' },
@@ -213,12 +214,12 @@ const draft = useDialogDraft(computed({ get: () => props.open, set: value => { i
             { label: '发布', value: 'published' },
             { label: '下架', value: 'withdrawn' },
             { label: '修改访问权限', value: 'access' },
-          ]"
+          ].filter(item => !['published', 'withdrawn'].includes(item.value) || canAdmin('papers', 'publish'))"
         /><UFormField v-if="action === 'category'" label="目标分类"
           ><USelect
             v-model="category"
             :items="categories"
-            :disabled="!categories.length"
+            :disabled="!canPermission('papers:update') || (!categories.length)"
             placeholder="选择分类"
           />
           <p v-if="!categories.length" class="text-sm text-muted mt-2">
@@ -237,14 +238,14 @@ const draft = useDialogDraft(computed({ get: () => props.open, set: value => { i
               :key="kind.value"
               :label="kind.label + '（不选则保留原值）'"
               ><USelect
-                v-model="singles[kind.value]"
+ :disabled="!canPermission('papers:update')"                v-model="singles[kind.value]"
                 :items="tagOptions(kind.value)"
                 class="w-full"
             /></UFormField>
           </div>
           <UFormField label="知识点（追加到所选资料，合并后每份最多 20 个）"
             ><UInput
-              v-model="knowledgeQuery"
+ :disabled="!canPermission('papers:update')"              v-model="knowledgeQuery"
               placeholder="搜索知识点"
               class="w-full mb-3"
             />
@@ -254,7 +255,7 @@ const draft = useDialogDraft(computed({ get: () => props.open, set: value => { i
                 :key="tag.id"
                 :label="tag.name + (tag.is_visible ? '' : '（隐藏）')"
                 :model-value="knowledgePicked.includes(tag.id)"
-                :disabled="busy"
+                :disabled="!canPermission('papers:update') || (busy)"
                 @update:model-value="toggleKnowledge(tag.id, $event)"
               />
               <p
@@ -270,14 +271,14 @@ const draft = useDialogDraft(computed({ get: () => props.open, set: value => { i
           </p></template
         ><template v-if="action === 'access'"
           ><UFormField label="原稿观看"
-            ><USelect v-model="viewAccess" :items="policies" /></UFormField
+            ><USelect :disabled="!canPermission('papers:update')" v-model="viewAccess" :items="policies" /></UFormField
           ><UFormField label="下载 / 获取链接权限"
             ><USelect
               v-model="downloadAccess"
               :items="policies"
-              :disabled="viewAccess === 'vip'" /></UFormField></template
+              :disabled="!canPermission('papers:update') || (viewAccess === 'vip')" /></UFormField></template
         ><UCheckbox
-          v-if="action === 'published'"
+ :disabled="!canPermission('papers:update')"          v-if="action === 'published'"
           v-model="confirmed"
           label="已核对所选资料原稿与普通用户/VIP 权限，确认发布"
         />
@@ -296,7 +297,7 @@ const draft = useDialogDraft(computed({ get: () => props.open, set: value => { i
         color="neutral"
         variant="outline"
         :disabled="busy"
-        @click="draft.setOpen(false)" /><UButton
+        @click="draft.setOpen(false)" /><UButton v-permission="'papers:update'"
         label="应用到所选资料"
         type="submit"
         form="batch-catalog"

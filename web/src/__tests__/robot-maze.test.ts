@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  compileProgram, levels, moveRobot, newMaze, restoreMaze, resultOf, starsFor, startRobot,
+  compileProgram, MAX_CARDS, levels, moveRobot, newMaze, restoreMaze, resultOf, starsFor, startRobot,
   type Command, type Instruction,
 } from '../games/robot-maze'
 
@@ -24,13 +24,13 @@ const solutions: Instruction[][] = [
 describe('机器人闯迷宫', () => {
   it.each(levels.map((level, index) => ({ level, index })))('第 $index 关存在符合三星积木预算的路线', ({ level, index }) => {
     let robot = startRobot(level)
-    for (const { command } of compileProgram(solutions[index])) {
+    for (const { command } of compileProgram(level.reference || solutions[index])) {
       const next = moveRobot(level, robot, command)
       expect(next.blocked).toBe(false)
       robot = next.robot
     }
     expect(resultOf(level, robot)).toBe('success')
-    expect(starsFor(level, solutions[index], 0)).toBe(3)
+    expect(starsFor(level, level.reference || solutions[index], 0)).toBe(3)
     expect(robot.collected).toHaveLength(level.gears.length)
   })
 
@@ -91,7 +91,7 @@ describe('机器人闯迷宫', () => {
     for (const value of [
       null, [], { ...initial, version: 2 }, { ...initial, level: 1 },
       { ...initial, stars: [0, 3, ...Array(7).fill(0)] }, { ...initial, hints: [] },
-      { ...initial, program: commands(l) }, { ...initial, program: Array(13).fill({ type: f }) },
+      { ...initial, program: commands(l) }, { ...initial, program: Array(MAX_CARDS+1).fill({ type: f }) },
       { ...unlocked, program: [{ type: 'repeat', count: 1000, body: [f] }] },
       { ...unlocked, program: [{ type: 'repeat', count: 2, body: [repeat(2, f)] }] },
       { ...unlocked, program: [{ type: 'repeat', count: 2, body: Array(7).fill(f) }] },

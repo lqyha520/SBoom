@@ -190,7 +190,7 @@ def _seed_documents(conn, now: int) -> None:
             (key, doc["title"], doc["body"], now),
         )
         row = conn.execute("SELECT title, body, revision FROM site_documents WHERE key = ?", (key,)).fetchone()
-        if row["revision"] == 1 and row["title"] == doc["title"] and hashlib.sha256(row["body"].encode()).hexdigest() == PREVIOUS_DOCUMENT_HASHES.get(key):
+        if row["revision"] == 1 and row["title"] == doc["title"] and hashlib.sha256(row["body"].encode()).hexdigest() in PREVIOUS_DOCUMENT_HASHES.get(key, set()):
             conn.execute("UPDATE site_documents SET body = ?, revision = revision + 1, updated_at = ? WHERE key = ? AND revision = 1",
                          (doc["body"], now, key))
 

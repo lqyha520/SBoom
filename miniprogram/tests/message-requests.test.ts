@@ -10,7 +10,15 @@ import { parse } from 'vue/compiler-sfc'
 import { createUnreadTracker } from '../src/services/unread-tracker'
 import type { ConsumerTicket } from '../src/services/consumer-page'
 
+test('已下线的教材关注历史消息打开习题库，不再进入旧页面', () => {
+  const env = runtime()
+  const legacy = { target_type: 'curriculum', target_id: 'old-subscription' }
+  assert.equal(env.growth.messageDestination(legacy), '/pages/library/index')
+  assert.equal(env.growth.messageHasDestination(legacy), true)
+})
+
 const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }
+function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
 function runtime() {
   type Options = { url: string; method: string; success(value: { statusCode: number; data: unknown }): void; fail(): void }
   const calls: (Options & { aborted: boolean })[] = []
@@ -42,6 +50,49 @@ function runtime() {
     reply(index: number, data: unknown, statusCode = 200) { calls[index].success({ statusCode, data }) },
   }
 }
+
+test('服务页先读取数据，不等待后台查单；查单完成补刷新，隐藏后忽略迟到确认', async () => {
+  const env = runtime(), scope = vue.effectScope(), confirmation = deferred<boolean>()
+  const consumer = env.module<typeof env.consumer>('services/consumer-page.ts', {
+    './api': env.api, './session': { session: env.session, ensureSession: async () => true },
+    './checkout': { resumeCheckouts: () => confirmation.promise },
+  })
+  let reads = 0
+  const page = scope.run(() => consumer.useConsumerPage(async () => { reads++ }, () => {}))!
+  try {
+    await env.hooks.onShow(); await settle()
+    assert.equal(reads, 1); assert.equal(page.loading.value, false)
+    confirmation.resolve(true); await settle(); assert.equal(reads, 2)
+    env.hooks.onHide(); await settle(); assert.equal(reads, 2)
+  } finally { env.hooks.onUnload(); scope.stop() }
+
+  const hidden = runtime(), hiddenScope = vue.effectScope(), late = deferred<boolean>()
+  const another = hidden.module<typeof hidden.consumer>('services/consumer-page.ts', {
+    './api': hidden.api, './session': { session: hidden.session, ensureSession: async () => true },
+    './checkout': { resumeCheckouts: () => late.promise },
+  })
+  let hiddenReads = 0
+  hiddenScope.run(() => another.useConsumerPage(async () => { hiddenReads++ }, () => {}))
+  try {
+    await hidden.hooks.onShow(); await settle(); hidden.hooks.onHide()
+    late.resolve(true); await settle(); assert.equal(hiddenReads, 1)
+  } finally { hidden.hooks.onUnload(); hiddenScope.stop() }
+})
+
+test('登录恢复期间离开再返回，旧 onShow 不启动重复读取', async () => {
+  const env = runtime(), scope = vue.effectScope(), recovered = deferred<boolean>()
+  const consumer = env.module<typeof env.consumer>('services/consumer-page.ts', {
+    './api': env.api, './session': { session: env.session, ensureSession: () => recovered.promise },
+    './checkout': { resumeCheckouts: async () => false },
+  })
+  let reads = 0
+  scope.run(() => consumer.useConsumerPage(async () => { reads++ }, () => {}))
+  try {
+    const first = env.hooks.onShow(); env.hooks.onHide(); const second = env.hooks.onShow()
+    recovered.resolve(true); await Promise.all([first, second]); await settle()
+    assert.equal(reads, 1)
+  } finally { env.hooks.onUnload(); scope.stop() }
+})
 
 test('全部已读后，写入前和写入期间发起的迟到未读查询都不能恢复旧角标', async () => {
   const { growth, reply } = runtime()

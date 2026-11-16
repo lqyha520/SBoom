@@ -40,6 +40,15 @@ def tick(stop):
             maintenance_failures.inc()
             logger.exception("Storage maintenance failed; continuing payment jobs")
     now = int(time.time())
+    if get_settings().teaching_jobs_enabled and not stop.is_set():
+        from app.services.catalog_operations import schedule_tick
+        for operation in (schedule_tick,):
+            try:
+                operation(now)
+            except Exception:
+                from app.metrics import maintenance_failures
+                maintenance_failures.inc()
+                logger.exception('Teaching maintenance failed: %s', operation.__name__)
     # 过期会话清理从登录路径挪到这里：每轮最多删 500 条，走 expires_at 索引，普通事务即可
     with db() as conn:
         mini_auth.sweep_expired_sessions(conn, now)
@@ -59,7 +68,9 @@ def tick(stop):
                 refunds += [row[0] for row in conn.execute("SELECT f.id FROM mini_refunds f JOIN mini_orders o ON o.id = f.order_id WHERE o.payment_channel = 'wechat' AND f.status IN ('processing', 'abnormal') AND f.lease_until < ? ORDER BY f.updated_at, f.id LIMIT 10", (now,))]
             if virtual:
                 refunds += [row[0] for row in conn.execute("SELECT f.id FROM mini_refunds f JOIN mini_orders o ON o.id = f.order_id WHERE o.payment_channel = 'virtual' AND f.status IN ('processing', 'abnormal') AND f.lease_until < ? ORDER BY f.updated_at, f.id LIMIT 10", (now,))]
-            deliveries = [row[0] for row in conn.execute("SELECT id FROM mini_orders WHERE payment_channel = 'virtual' AND paid_at IS NOT NULL AND delivered_at IS NULL ORDER BY updated_at, id LIMIT 10", ())] if virtual else []
+            deliveries = [row[0] for row in conn.execute(
+                "SELECT id FROM mini_orders WHERE payment_channel = 'virtual' AND paid_at IS NOT NULL AND delivered_at IS NULL "
+                "AND delivery_next_at <= ? AND delivery_lease_until <= ? ORDER BY delivery_next_at, id LIMIT 10", (now, now))] if virtual else []
         for function, identifiers in ((mini_orders.cancel, expiring), (mini_orders.sync, synchronizing), (mini_refunds.sync, refunds)):
             for identifier in identifiers:
                 if stop.is_set():
@@ -116,5 +127,5 @@ def start():
                     break
                 await asyncio.sleep(1)
     settings = get_settings()
-    task = asyncio.create_task(run()) if settings.maintenance_enabled or settings.wechat_pay_enabled or settings.wechat_virtual_pay_enabled or settings.wechat_subscribe_template_id else None
+    task = asyncio.create_task(run()) if settings.teaching_jobs_enabled or settings.maintenance_enabled or settings.wechat_pay_enabled or settings.wechat_virtual_pay_enabled or settings.wechat_subscribe_template_id else None
     return stop, task

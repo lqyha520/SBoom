@@ -1,3 +1,4 @@
+import { extraMazeLevels } from './robot-levels'
 export type Command = 'forward' | 'left' | 'right'
 export type Instruction = { type: Command } | { type: 'repeat'; count: number; body: Command[] }
 export type Direction = 0 | 1 | 2 | 3
@@ -15,6 +16,7 @@ export interface Level {
   repeat: boolean
   budget: number
   hint: string
+  reference?: Instruction[]
 }
 
 // 地图中的 . 是可行走地面，# 是石块，~ 是水面；坐标从左上角开始。
@@ -28,18 +30,22 @@ export const levels: Level[] = [
   { name: '重复的魔法', chapter: 2, concept: '循环', description: '把一样的动作放进重复积木。', rows: ['~~~~~~', '......', '######', '~~~~~~', '~~~~~~'], start: { x: 0, y: 1, direction: 1 }, goal: { x: 4, y: 1 }, gears: [{ x: 1, y: 1 }, { x: 3, y: 1 }], commands: ['forward', 'left', 'right'], repeat: true, budget: 1, hint: '加入一块「重复 4 次」，在里面放一个「前进」。这 1 块积木会执行 4 步。' },
   { name: '阶梯小径', chapter: 2, concept: '循环', description: '找到小路里重复出现的走法。', rows: ['~~..~', '~..~~', '..~~~', '~~~~~', '~~~~~'], start: { x: 0, y: 2, direction: 1 }, goal: { x: 3, y: 0 }, gears: [{ x: 1, y: 1 }, { x: 2, y: 0 }], commands: ['forward', 'left', 'right'], repeat: true, budget: 2, hint: '重复 2 次「前进、左转、前进、右转」，就能走过两级台阶。最后再前进一格。' },
   { name: '环岛收集站', chapter: 2, concept: '循环与规划', description: '绕小岛一圈，把零件都带回起点。', rows: ['~~~~~', '....~', '.##.~', '.##.~', '....~'], start: { x: 0, y: 4, direction: 0 }, goal: { x: 0, y: 4 }, gears: [{ x: 0, y: 1 }, { x: 3, y: 1 }, { x: 3, y: 4 }], commands: ['forward', 'left', 'right'], repeat: true, budget: 1, hint: '小岛四条边一样长。重复 4 次「前进、前进、前进、右转」，就能绕岛一圈。' },
+  ...extraMazeLevels,
 ]
 export const chapters = [
   { name: '初次启航', subtitle: '按顺序安排动作', icon: 'i-lucide-footprints' },
   { name: '转弯的学问', subtitle: '观察方向，规划路线', icon: 'i-lucide-route' },
   { name: '循环实验室', subtitle: '用重复积木简化程序', icon: 'i-lucide-repeat-2' },
+  { name: '森林岔路', subtitle: '规划岔路中的收集顺序', icon: 'i-lucide-git-branch' },
+  { name: '巡回收集', subtitle: '用循环安排较长路线', icon: 'i-lucide-route' },
+  { name: '长程调度', subtitle: '收齐多个目标再返回', icon: 'i-lucide-map' },
 ]
 export const commandInfo: Record<Command, { name: string; icon: string; description: string }> = {
   forward: { name: '前进', icon: 'i-lucide-arrow-up', description: '沿朝向走一格' },
   left: { name: '左转', icon: 'i-lucide-corner-up-left', description: '原地向左转' },
   right: { name: '右转', icon: 'i-lucide-corner-up-right', description: '原地向右转' },
 }
-export const MAX_CARDS = 12
+export const MAX_CARDS = 24
 export const MAX_BODY = 6
 export interface CompiledStep { command: Command; card: number; inner: number | null; iteration: number }
 export function compileProgram(program: Instruction[]): CompiledStep[] {
@@ -93,10 +99,10 @@ export function restoreMaze(raw: string | null): MazeSave | null {
   try {
     const v = JSON.parse(raw) as MazeSave
     if (!v || v.version !== 1 || !Number.isInteger(v.level) || v.level < 0 || v.level >= levels.length
-      || !Array.isArray(v.stars) || v.stars.length !== levels.length || !v.stars.every(n => Number.isInteger(n) && n >= 0 && n <= 3)
-      || !Array.isArray(v.hints) || v.hints.length !== levels.length || !v.hints.every(n => Number.isSafeInteger(n) && n >= 0 && n <= 1_000_000)
+      || !Array.isArray(v.stars) || ![9,levels.length].includes(v.stars.length) || v.level>=v.stars.length || !v.stars.every(n => Number.isInteger(n) && n >= 0 && n <= 3)
+      || !Array.isArray(v.hints) || v.hints.length !== v.stars.length || !v.hints.every(n => Number.isSafeInteger(n) && n >= 0 && n <= 1_000_000)
       || v.stars.some((n, i) => n > 0 && i > 0 && v.stars[i - 1] === 0)
       || (v.level > 0 && v.stars[v.level - 1] === 0) || !isProgram(v.program, levels[v.level])) return null
-    return { version: 1, level: v.level, program: v.program, stars: v.stars, hints: v.hints }
+    return { version: 1, level: v.level, program: v.program, stars: [...v.stars,...Array(levels.length-v.stars.length).fill(0)], hints: [...v.hints,...Array(levels.length-v.hints.length).fill(0)] }
   } catch { return null }
 }

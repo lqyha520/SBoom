@@ -15,7 +15,7 @@ async function fixture(context: BrowserContext, gate = Promise.resolve()) {
   const modelFetches: Record<string, unknown>[] = []
   await context.route('**/api/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname
-    if (path.endsWith('/auth/me')) { await route.fulfill({ json: { id: 1, username: 'admin', role: 'admin' } }); return }
+    if (path.endsWith('/auth/me')) { await route.fulfill({ json: { id: 1, username: 'admin', role: 'admin', is_super_admin: true } }); return }
     if (path.endsWith('/test-llm')) {
       probes.push(request.postDataJSON())
       await route.fulfill({ json: { reply: 'offline fixture' } }); return

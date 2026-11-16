@@ -73,18 +73,20 @@ def fill_plan_gaps(questions: list[dict], count: int, subject: str, keyword: str
     return gaps, warnings
 
 
-def planning_prompt(subject: str, keyword: str, items, grade: str = "") -> str:
+def planning_prompt(subject: str, keyword: str, items, grade: str = "", *, include_analysis: bool = True) -> str:
     if subject != "数学":
         return ""
     if is_make_ten_practice(grade, subject, keyword):
         goals = {
-            "oral_math": "练习一位数加一位数的进位加法，题干只写原算式，拆数过程写在analysis。",
+            "oral_math": "练习一位数加一位数的进位加法，题干只写原算式。"
+                         + ("拆数过程写在analysis。" if include_analysis else "答案只写计算结果。"),
             "fill_blank": "围绕同一教学目标安排求和、凑十所需数、求未知加数或方法填空；"
                           "按题量适度搭配，不强制凑够考法种数。题量足够时可安排少量方法填空："
                           "从原来的两数加法开始，依次呈现拆分、凑十、合成；过程必须写在stem中，"
                           "可用JSON的\\n分行，多个空的answer按顺序用逗号分隔，不省略必要步骤。",
             "number_split": "为凑十做准备：将10以内的数分成两个正整数，或由两部分组成10以内的数。"
-                            "只考数的分成与组成，题面没有给出的原算式不要在解析里凭空补设。",
+                            "只考数的分成与组成，题面没有给出的原算式不要在解析里凭空补设。"
+                            "题目顺序要打散，不按总数、左边数或右边数的递增/递减顺序枚举。",
             "compare": "比较一个两数进位加法算式与20以内的数，或比较两个这样的算式；"
                        "每侧至多一个加号，不用三项连加增加运算负担。",
             "true_false": "检查两数进位加法的结果或简单的拆数、凑十方法；"
@@ -148,15 +150,62 @@ def _order_penalty(questions: list[dict]) -> int:
     return repeats + 4 * cycles
 
 
+def _number_split_key(question: dict) -> tuple:
+    values = [_number(question.get(key)) for key in ("top", "left", "right")]
+    answer = _number(question.get("answer"))
+    top = values[0] if values[0] is not None else float("inf")
+    parts = sorted(value for value in (values[1], values[2], answer) if value is not None)
+    return (top, *parts) if parts else (top, float("inf"), float("inf"))
+
+
+def _number_split_penalty(questions: list[dict]) -> int:
+    """Score long monotonic runs in split targets/parts, which are easy to guess."""
+    keys = [_number_split_key(question) for question in questions]
+    if len(keys) < 2:
+        return 0
+    increasing = decreasing = 1
+    longest_increasing = longest_decreasing = 1
+    for previous, current in zip(keys, keys[1:], strict=False):
+        if current > previous:
+            increasing += 1
+            decreasing = 1
+        elif current < previous:
+            decreasing += 1
+            increasing = 1
+        else:
+            increasing = decreasing = 1
+        longest_increasing = max(longest_increasing, increasing)
+        longest_decreasing = max(longest_decreasing, decreasing)
+    return max(0, longest_increasing - 3) + max(0, longest_decreasing - 3)
+
+
 def arrange_answers(questions: list[dict], game_type: str) -> tuple[list[dict], list[str]]:
-    """只调整独立判断/比较题的顺序，题干、答案、解析始终整体移动。"""
-    if game_type not in ("true_false", "compare") or len(questions) < 4:
+    """调整明显有答案规律的独立题，题干、答案、解析始终整体移动。"""
+    if game_type not in ("true_false", "compare", "number_split") or len(questions) < 4:
         return questions, []
     # 有承接关系的题不能重排；此类大题应由老师核对。
     if any(re.search(r"上[一道题述面]|前[一道题述面]|第[一二三四五六七八九十\d]+题|接着|据此|由此|同上",
                      str(question.get("stem", ""))) or question.get("difficulty_level") is not None
            for question in questions):
         return questions, ["题目含承接关系或关卡顺序，未自动调整答案排列，请核对"]
+    if game_type == "number_split":
+        score = _number_split_penalty(questions)
+        if not score:
+            return questions, []
+        best = questions
+        for _ in range(256):
+            candidate = list(questions)
+            random.shuffle(candidate)
+            penalty = _number_split_penalty(candidate)
+            if penalty < score:
+                best, score = candidate, penalty
+            if score == 0:
+                break
+        warnings = []
+        if score:
+            warnings.append("数的分成题目顺序仍存在规律，请核对题目搭配")
+        return best, warnings
+
     counts = Counter(_answer_key(question) for question in questions)
     warnings = []
     if max(counts.values()) > (len(questions) + 1) // 2:

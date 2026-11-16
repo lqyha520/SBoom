@@ -9,6 +9,8 @@ from app.services import app_config, image_config
 from app.services.model_profiles import entries
 
 QUALITY_REVIEW_TIMEOUT = 120.0
+ANALYSIS_BATCH_SIZE = 6
+MAX_ANALYSIS_BATCHES = (30 + ANALYSIS_BATCH_SIZE - 1) // ANALYSIS_BATCH_SIZE
 TRANSPORT_GRACE_SECONDS = 30
 
 
@@ -17,6 +19,9 @@ class GenerationPolicy:
     kind: Literal["text", "image"]
     config: dict
     timeout_seconds: float
+    deadline: float | None = None
+    format_retries_remaining: int = 1
+    image_review_config: dict | None = None
 
     def public(self) -> dict:
         return {"revision": self.config["revision"],
@@ -46,8 +51,17 @@ def load_policy(kind: str) -> GenerationPolicy:
     chain = sum(float(profile["timeout"]) for profile in candidates) or float(config["timeout"])
     if category == "text" and "models" not in config:
         chain = float(config.get("timeout") or 120)
-    # 一次出题 + 受现有上限约束的补题 + 独立复核，另留本地整理时间。
+    # 一次出题 + 有限补题 + 最多五批解析与复核，另留本地整理时间。
     seconds = chain if kind in ("image", "validate", "stream") else (
-        chain * (1 + get_settings().generation_repair_limit) + min(chain, QUALITY_REVIEW_TIMEOUT))
+        chain * (1 + get_settings().generation_repair_limit) + MAX_ANALYSIS_BATCHES * min(chain, QUALITY_REVIEW_TIMEOUT))
+    if kind == "analysis":
+        seconds = MAX_ANALYSIS_BATCHES * min(chain, QUALITY_REVIEW_TIMEOUT)
+    review = None
+    if kind == "image":
+        review = next((p for p in entries(latest_config("text"))
+                       if p.get("enabled", True) and p.get("imageReview") and p.get("api_key")), None)
+        if review:
+            seconds += min(float(review.get("timeout", 90)), 90)
     seconds = min(seconds + TRANSPORT_GRACE_SECONDS, get_settings().generation_lease_seconds - 5)
-    return GenerationPolicy(category, config, seconds)
+    return GenerationPolicy(category, config, seconds, format_retries_remaining=min(1, get_settings().generation_repair_limit),
+                            image_review_config=review)

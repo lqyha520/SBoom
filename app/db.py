@@ -332,13 +332,18 @@ def close_pg_pool() -> None:
 
 
 @contextmanager
-def db(serialized: bool | str | tuple[str, ...] = False, *, content_user: str | None = None, ddl: bool = False):
+def db(serialized: bool | str | tuple[str, ...] = False, *, content_user: str | None = None,
+       lock_key: tuple[str, str] | None = None, ddl: bool = False, read_only_snapshot: bool = False,
+       invalidate_public: bool = False):
     """从连接池取连接；正常退出 commit，异常回滚（连接归还池时自动清理）。
 
     True 兼容内容域；字符串指定业务域，元组用于跨域事务。
+    lock_key 在共享业务域内按账号或记录串行；与迁移的独占域锁互斥。
     事务锁跨 worker 生效，固定排序避免交叉获取锁导致死锁。
     ddl=True 仅供启动建表：解除本事务的 statement/lock 超时——大表补索引可能远超 30s，
     多 worker 同时启动时排队等 schema 锁也不该被 lock_timeout 打断。
+    read_only_snapshot=True 使用一致的只读快照，适合多条查询组成的财务预览。
+    invalidate_public=True 由公开资料、标签和首页配置的写入声明，提交时广播失效并清理本进程缓存。
     """
     from app.db_admission import admission
     from app.metrics import db_wait
@@ -346,7 +351,9 @@ def db(serialized: bool | str | tuple[str, ...] = False, *, content_user: str | 
     timeout = 30.0 if ddl else max(0.1, get_settings().db_lock_timeout_ms / 1000)
     pool = _get_pg_pool()
     started = time.perf_counter()
-    with admission(tuple(scopes), content_user, timeout), pool.connection() as conn:
+    with admission(tuple(scopes), content_user, timeout, lock_key), pool.connection() as conn:
+        if read_only_snapshot:
+            conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
         db_wait.labels("pool").observe(time.perf_counter() - started)
         _sample_pool_metrics(pool)
         started = time.perf_counter()
@@ -357,23 +364,32 @@ def db(serialized: bool | str | tuple[str, ...] = False, *, content_user: str | 
         locks = {_LOCK_IDS[scope]: False for scope in scopes}
         if content_user is not None:
             locks.setdefault(_LOCK_IDS["content"], True)
+        if lock_key is not None:
+            locks.setdefault(_LOCK_IDS[lock_key[0]], True)
         for lock_id, shared in sorted(locks.items()):
             function = "pg_advisory_xact_lock_shared" if shared else "pg_advisory_xact_lock"
             conn.execute(f"SELECT {function}(%s)", (lock_id,))
         if content_user is not None:
             user_key = int.from_bytes(sha256(str(content_user).encode()).digest()[:4], signed=True)
             conn.execute("SELECT pg_advisory_xact_lock(%s, %s)", (_LOCK_IDS["content"], user_key))
+        if lock_key is not None:
+            domain, key = lock_key
+            resource_key = int.from_bytes(sha256(key.encode()).digest()[:4], signed=True)
+            conn.execute("SELECT pg_advisory_xact_lock(%s, %s)", (_LOCK_IDS[domain], resource_key))
         db_wait.labels("lock").observe(time.perf_counter() - started)
         try:
             yield _PgConn(conn)
+            if invalidate_public or ddl:
+                from app.public_cache_sync import publish_invalidation
+                publish_invalidation(conn)
             conn.commit()
+            # 锁域不代表缓存依赖；账本、会话、反馈等写入不应驱逐公开内容。
+            # 通知和本地清理均以提交成功为边界，回滚不会清缓存。
+            if invalidate_public or ddl:
+                from app.public_cache import invalidate
+                invalidate()
         finally:
             _sample_pool_metrics(pool, returning=True)
-    # 仅独占域写入会改动公开元数据（标签、分类、Banner、字典）；content_user 只取
-    # 共享内容锁并写用户表，不会改这些表，无需在此清空进程级公开缓存。
-    if scopes:
-        from app.public_cache import invalidate
-        invalidate()
 
 
 def database_ready() -> bool:
@@ -431,6 +447,8 @@ def _init_reliability_schema(conn) -> None:
         );
         ALTER TABLE generation_requests ADD COLUMN IF NOT EXISTS lease_expires_at BIGINT NOT NULL DEFAULT 0;
         ALTER TABLE generation_requests ADD COLUMN IF NOT EXISTS instance_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE generation_requests ADD COLUMN IF NOT EXISTS trace_json TEXT NOT NULL DEFAULT '';
+        ALTER TABLE generation_requests ADD COLUMN IF NOT EXISTS replay_count INTEGER NOT NULL DEFAULT 0;
         CREATE TABLE IF NOT EXISTS generation_budget (
             id TEXT PRIMARY KEY, created_at BIGINT NOT NULL, tokens BIGINT NOT NULL, images INTEGER NOT NULL
         );
@@ -442,6 +460,35 @@ def _init_reliability_schema(conn) -> None:
             user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             revision BIGINT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS generation_review_items (
+            request_user_id INTEGER NOT NULL,
+            request_id TEXT NOT NULL,
+            question_index INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            note TEXT NOT NULL DEFAULT '',
+            reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            updated_at BIGINT NOT NULL,
+            PRIMARY KEY (request_user_id, request_id, question_index),
+            FOREIGN KEY (request_user_id, request_id) REFERENCES generation_requests(user_id, request_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_generation_review_status ON generation_review_items(status, updated_at DESC);
+        ALTER TABLE generation_review_items ADD COLUMN IF NOT EXISTS section_index INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE generation_review_items ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE generation_review_items DROP CONSTRAINT IF EXISTS generation_review_items_pkey;
+        ALTER TABLE generation_review_items ADD PRIMARY KEY (request_user_id, request_id, section_index, question_index);
+        CREATE TABLE IF NOT EXISTS generation_review_audit (
+            id BIGSERIAL PRIMARY KEY,
+            request_user_id INTEGER NOT NULL,
+            request_id TEXT NOT NULL,
+            section_index INTEGER NOT NULL,
+            question_index INTEGER NOT NULL,
+            reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            before_json TEXT NOT NULL,
+            after_json TEXT NOT NULL,
+            note TEXT NOT NULL,
+            created_at BIGINT NOT NULL,
+            FOREIGN KEY (request_user_id, request_id) REFERENCES generation_requests(user_id, request_id) ON DELETE CASCADE
+        );
     """)
     conn.execute("ALTER TABLE user_templates ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1")
 
@@ -451,9 +498,14 @@ def _init_reliability_schema(conn) -> None:
 _CORE_TABLES = (
     "users",
     "generation_requests",
+    "generation_review_queue",
     "provider_health",
     "paper_archives",
     "catalog_papers",
+    "catalog_schedules",
+    "mini_curriculum_subscriptions",
+    "question_bank",
+    "game_progress",
     "catalog_popularity",
     "mini_users",
     "mini_catalog_favorites",
@@ -462,6 +514,20 @@ _CORE_TABLES = (
     "site_dict_links",
     "mini_orders",
     "mini_membership_grants",
+    "referral_settlement_requests",
+    "referral_ledger_events",
+    "referral_monthly_reports",
+    "referral_payout_batches",
+    "referral_disputes",
+    "referral_campaign_expenses",
+    "xhs_research_tasks",
+    "xhs_research_notes",
+    "xhs_research_observations",
+    "xhs_research_marks",
+    "xhs_workflow_records",
+    "xhs_workflow_versions",
+    "xhs_workflow_metrics",
+    "xhs_assets",
 )
 
 
@@ -474,7 +540,7 @@ def _verify_schema(conn) -> tuple[list, int]:
     return [t for t in _CORE_TABLES if t not in present], len(present)
 
 
-SCHEMA_VERSION = 2026102701
+SCHEMA_VERSION = 2026111601
 
 
 def init_db(*, migrate: bool | None = None) -> None:
@@ -504,6 +570,8 @@ def init_db(*, migrate: bool | None = None) -> None:
         conn.executescript(_SCHEMA)
         _migrate_pg(conn)
         _init_reliability_schema(conn)
+        from app.generation_review_schema import migrate as generation_review_schema
+        generation_review_schema(conn)
         init_library_schema(conn)
         init_site_schema(conn)
         init_experience_schema(conn)
@@ -518,6 +586,30 @@ def init_db(*, migrate: bool | None = None) -> None:
         archive_metadata(conn)
         from app.services.workspace_sessions import migrate as session_schema
         session_schema(conn)
+        from app.services.admin_mfa import migrate as mfa_schema
+        mfa_schema(conn)
+        from app.finance_ledger_schema import migrate as finance_ledger_schema
+        finance_ledger_schema(conn)
+        from app.xhs_research_schema import migrate as xhs_research_schema
+        xhs_research_schema(conn)
+        from app.xhs_workflow_schema import migrate as xhs_workflow_schema
+        xhs_workflow_schema(conn)
+        from app.admin_access_schema import migrate as admin_access_schema
+        admin_access_schema(conn)
+        from app.referral_schema import migrate as referral_schema
+        referral_schema(conn)
+        from app.settlement_schema import migrate as settlement_schema
+        settlement_schema(conn)
+        from app.referral_operations_schema import migrate as referral_operations_schema
+        referral_operations_schema(conn)
+        from app.referral_growth_schema import migrate as referral_growth_schema
+        referral_growth_schema(conn)
+        from app.promotion_finance_schema import migrate as promotion_finance_schema
+        promotion_finance_schema(conn)
+        from app.teaching_schema import migrate as teaching_schema
+        teaching_schema(conn)
+        from app.game_progress_schema import migrate as game_progress_schema
+        game_progress_schema(conn)
         conn.execute("INSERT INTO schema_migrations(version) VALUES (?)", (SCHEMA_VERSION,))
     # 事务已提交，另起一个连接读真实落库结果（不是"没抛异常"就算成功）
     with db() as conn:

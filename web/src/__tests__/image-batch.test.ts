@@ -15,6 +15,229 @@ beforeEach(() => {
 })
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
+function holdRequests() {
+  const pending: { id: string; resolve: (image: WorksheetImage) => void; reject: (error: Error) => void }[] = []
+  generate.mockImplementation((_, id) => new Promise((resolve, reject) => { pending.push({ id, resolve, reject }) }))
+  return pending
+}
+
+it('fills two slots independently and retains original page order when results arrive out of order', async () => {
+  const pending = holdRequests(), shown = vi.fn()
+  const batch = useImageBatch('parallel', () => true, shown, () => 2)
+  const task = batch.start(params, 4)
+  expect(pending).toHaveLength(2)
+  const ids = batch.state.pages.map(page => page.id)
+  const recorded = JSON.parse(localStorage.getItem('parallel')!)
+  expect(recorded.pages.slice(0, 2).map((page: { state: string }) => page.state)).toEqual(['running', 'running'])
+  await batch.run(); await batch.start(params, 4)
+  expect(pending).toHaveLength(2)
+  pending[1].resolve(image(pending[1].id))
+  await vi.waitFor(() => expect(pending).toHaveLength(3))
+  expect(batch.state.busy).toBe(true)
+  pending[2].resolve(image(pending[2].id))
+  await vi.waitFor(() => expect(pending).toHaveLength(4))
+  pending[3].resolve(image(pending[3].id))
+  await vi.waitFor(() => expect(batch.completed).toBe(3))
+  pending[0].resolve(image(pending[0].id))
+  await task
+  expect(batch.state.pages.map(page => page.image?.request_id)).toEqual(ids)
+  expect(shown.mock.calls).toEqual([[1], [2], [3], [0]])
+  expect(new Set(generate.mock.calls.map(([, id]) => id)).size).toBe(4)
+  expect(generate.mock.calls.map(([body]) => body.image_index)).toEqual([1, 2, 3, 4])
+  batch.dispose()
+})
+
+it('pauses new dispatches immediately, waits for both sent images and resumes only queued pages', async () => {
+  const pending = holdRequests()
+  let slots = 2
+  const batch = useImageBatch('parallel-pause', () => true, () => {}, () => slots)
+  const task = batch.start(params, 5)
+  batch.pause()
+  pending[0].resolve(image(pending[0].id))
+  await vi.waitFor(() => expect(batch.completed).toBe(1))
+  expect(batch.state.busy).toBe(true)
+  expect(batch.canContinue).toBe(false)
+  expect(pending).toHaveLength(2)
+  pending[1].resolve(image(pending[1].id))
+  await task
+  expect(batch.state.paused).toBe(true)
+  expect(batch.completed).toBe(2)
+  slots = 1
+  generate.mockImplementation(async (_, id) => image(id))
+  await batch.run()
+  expect(batch.completed).toBe(5)
+  expect(generate.mock.calls.map(([body]) => body.image_index)).toEqual([1, 2, 3, 4, 5])
+  batch.dispose()
+})
+
+it.each([400, 504])('continues dispatch after an isolated %s page error and retains its result state', async status => {
+  const pending = holdRequests()
+  const batch = useImageBatch('parallel-failure', () => true, () => {}, () => 2)
+  const task = batch.start(params, 4)
+  pending[0].reject(new ApiError('接口暂时不可用', status))
+  await vi.waitFor(() => expect(pending).toHaveLength(3))
+  expect(batch.state.error).toContain('第 1 张')
+  pending[1].resolve(image(pending[1].id))
+  await vi.waitFor(() => expect(pending).toHaveLength(4))
+  pending[2].resolve(image(pending[2].id)); pending[3].resolve(image(pending[3].id))
+  await task
+  expect(batch.completed).toBe(3)
+  expect(batch.state.pages.slice(1).map(page => page.state)).toEqual(['ready', 'ready', 'ready'])
+  if (status === 504) {
+    expect(batch.canContinue).toBe(false)
+    await batch.run()
+    query.mockResolvedValue({ request_id: pending[0].id, kind: 'image', status: 'succeeded', result: image(pending[0].id), error_status: 0, cache_expired: false })
+    await batch.recover()
+    expect(batch.completed).toBe(4)
+    expect(generate).toHaveBeenCalledTimes(4)
+  } else {
+    expect(batch.canContinue).toBe(true)
+    generate.mockImplementation(async (_, id) => image(id))
+    await batch.run()
+    expect(batch.completed).toBe(4)
+    expect(generate).toHaveBeenCalledTimes(5)
+    expect(generate.mock.calls[4][1]).not.toBe(pending[0].id)
+  }
+  batch.dispose()
+})
+
+it('stops a 100-page batch at the 13th quota rejection and preserves completed and queued pages', async () => {
+  generate.mockImplementation(async (body, id) => {
+    if (body.image_index === 13) throw new ApiError('失败次数过多', 429, 'generation_failure_quota')
+    return image(id)
+  })
+  const batch = useImageBatch('quota-stop', () => true, () => {})
+  await batch.start(params, 100)
+  expect(generate).toHaveBeenCalledTimes(13)
+  expect(batch.completed).toBe(12)
+  expect(batch.state.dispatchStopped).toBe(true)
+  expect(batch.state.error).toContain('第 13 张')
+  expect(batch.state.error).toContain('已暂停后续图片')
+  expect(batch.state.pages.slice(13).every(page => page.state === 'queued')).toBe(true)
+  const firstIds = batch.state.pages.slice(0, 12).map(page => page.id)
+  generate.mockImplementation(async (_, id) => image(id))
+  await batch.run()
+  expect(batch.completed).toBe(100)
+  expect(batch.state.pages.slice(0, 12).map(page => page.id)).toEqual(firstIds)
+  expect(generate).toHaveBeenCalledTimes(101)
+  batch.dispose()
+})
+
+it.each(['generation_busy', 'provider_cooling', 'generation_quota'])('stops dispatch on %s while still collecting the other sent image', async code => {
+  const pending = holdRequests()
+  const batch = useImageBatch('blocked-parallel', () => true, () => {}, () => 2)
+  const task = batch.start(params, 5)
+  pending[0].reject(new ApiError('请稍后重试', 429, code))
+  await vi.waitFor(() => expect(batch.state.dispatchStopped).toBe(true))
+  expect(pending).toHaveLength(2)
+  expect(batch.state.busy).toBe(true)
+  pending[1].resolve(image(pending[1].id))
+  await task
+  expect(batch.completed).toBe(1)
+  expect(batch.state.pages.map(page => page.state)).toEqual(['failed', 'ready', 'queued', 'queued', 'queued'])
+  expect(batch.canContinue).toBe(true)
+  batch.dispose()
+})
+
+it('pauses after three consecutive upstream errors and queries original requests before allowing a retry', async () => {
+  const pending = holdRequests()
+  const batch = useImageBatch('upstream-outage', () => true, () => {}, () => 2)
+  const task = batch.start(params, 100)
+  for (let index = 0; index < 3; index++) {
+    pending[index].reject(new ApiError('生图服务暂不可用', 502, 'image_provider_error'))
+    await vi.waitFor(() => expect(batch.state.pages[index].state).toBe('unknown'))
+  }
+  expect(pending).toHaveLength(4)
+  expect(batch.state.dispatchStopped).toBe(true)
+  expect(batch.state.busy).toBe(true)
+  pending[3].resolve(image(pending[3].id))
+  await task
+  expect(batch.completed).toBe(1)
+  expect(batch.state.error).toContain('连续 3 张未能完成')
+  expect(batch.canContinue).toBe(false)
+  expect(batch.state.pages.slice(4).every(page => page.state === 'queued')).toBe(true)
+  query.mockImplementation(async id => ({ request_id: id, kind: 'image', status: 'succeeded', result: image(id), error_status: 0, cache_expired: false }))
+  await batch.recover()
+  expect(query.mock.calls.map(([id]) => id)).toEqual(pending.slice(0, 3).map(request => request.id))
+  expect(batch.completed).toBe(4)
+  expect(generate).toHaveBeenCalledTimes(4)
+  expect(batch.canContinue).toBe(true)
+  batch.dispose()
+})
+
+it('resets the consecutive error count after a successful image', async () => {
+  generate.mockImplementation(async (body, id) => {
+    if ([1, 2, 4, 5].includes(body.image_index!)) throw new ApiError('暂时失败', 400)
+    return image(id)
+  })
+  const batch = useImageBatch('isolated-errors', () => true, () => {})
+  await batch.start(params, 6)
+  expect(generate).toHaveBeenCalledTimes(6)
+  expect(batch.completed).toBe(2)
+  expect(batch.state.dispatchStopped).toBe(false)
+  batch.dispose()
+})
+
+it('does not publish late parallel results or dispatch more work after leaving the account', async () => {
+  const pending = holdRequests(), shown = vi.fn()
+  const batch = useImageBatch('parallel-dispose', () => true, shown, () => 2)
+  const task = batch.start(params, 4)
+  const recorded = localStorage.getItem('parallel-dispose')
+  batch.dispose()
+  pending.forEach(request => request.resolve(image(request.id)))
+  await task
+  expect(generate).toHaveBeenCalledTimes(2)
+  expect(shown).not.toHaveBeenCalled()
+  expect(URL.createObjectURL).not.toHaveBeenCalled()
+  expect(localStorage.getItem('parallel-dispose')).toBe(recorded)
+})
+
+it('stops the other worker from dispatching when request persistence fails', async () => {
+  const pending = holdRequests()
+  const batch = useImageBatch('parallel-storage', () => true, () => {}, () => 2)
+  const nativeSet = localStorage.setItem.bind(localStorage)
+  vi.spyOn(localStorage, 'setItem').mockImplementation((key, value) => {
+    if (generate.mock.calls.length >= 1) throw new Error('storage unavailable')
+    nativeSet(key, value)
+  })
+  const task = batch.start(params, 4)
+  expect(pending).toHaveLength(1)
+  pending[0].resolve(image(pending[0].id))
+  await task
+  expect(generate).toHaveBeenCalledOnce()
+  expect(batch.completed).toBe(1)
+  expect(batch.state.pages.slice(1).map(page => page.state)).toEqual(['queued', 'queued', 'queued'])
+  batch.dispose()
+})
+
+it('generates a hundred pages sequentially and restores a large history batch without regenerating', async () => {
+  const key = 'large-image-batch'
+  let running = 0
+  generate.mockImplementation(async (_, id) => {
+    expect(++running).toBe(1)
+    await Promise.resolve()
+    running--
+    return image(id)
+  })
+  const batch = useImageBatch(key, () => true, () => {})
+  query.mockImplementation(async id => ({ request_id: id, kind: 'image', status: 'succeeded', result: image(id), error_status: 0, cache_expired: false }))
+  await batch.start(params, 100)
+  expect(batch.completed).toBe(100)
+  expect(generate.mock.calls[99][0]).toMatchObject({ image_count: 100, image_index: 100 })
+  const ids = batch.state.pages.map(page => page.id)
+  await batch.start(params, 1)
+  batch.dispose()
+  const restored = useImageBatch(key, () => true, () => {})
+  try {
+    await restored.restore()
+    expect(restored.history).toHaveLength(1)
+    await restored.selectHistory(restored.history[0].id)
+    expect(restored.state.pages.map(page => page.id)).toEqual(ids)
+    expect(restored.completed).toBe(100)
+    expect(generate).toHaveBeenCalledTimes(101)
+  } finally { restored.dispose() }
+})
+
 it('保留可恢复的原图片请求，自动查询直到取回成品，不调用新的生图请求', async () => {
   vi.useFakeTimers()
   generate.mockRejectedValueOnce(new ApiError('成品下载暂时失败', 502))
@@ -102,22 +325,41 @@ it('generates each page once, in order, keeping every selected condition and sep
   batch.dispose(); expect(URL.revokeObjectURL).toHaveBeenCalledTimes(3)
 })
 
-it('stops on timeout, preserves earlier results, queries before resuming and never automatically retries a paid call', async () => {
+it('regenerates only the selected completed page with a new request ID', async () => {
+  const batch = useImageBatch('single-regenerate', () => true, () => {})
+  await batch.start(params, 3)
+  const originalIds = batch.state.pages.map(page => page.id)
+  generate.mockClear()
+  await batch.regenerate(1)
+  expect(generate).toHaveBeenCalledTimes(1)
+  expect(generate.mock.calls[0][0]).toEqual({ ...params, image_count: 3, image_index: 2 })
+  expect(generate.mock.calls[0][1]).not.toBe(originalIds[1])
+  expect(batch.state.pages[0].id).toBe(originalIds[0])
+  expect(batch.state.pages[2].id).toBe(originalIds[2])
+  expect(batch.state.pages[0].image?.request_id).toBe(originalIds[0])
+  expect(batch.state.pages[1].image?.request_id).toBe(generate.mock.calls[0][1])
+  expect(batch.state.pages[2].image?.request_id).toBe(originalIds[2])
+  expect(batch.completed).toBe(3)
+  batch.dispose()
+})
+
+it('continues other pages after a timeout, then queries the original request before retrying it', async () => {
   generate.mockImplementationOnce(async (_, id) => image(id)).mockRejectedValueOnce(new ApiError('timeout', 504))
   const batch = useImageBatch('batch', () => true, () => {})
   await batch.start(params, 3)
-  expect(batch.completed).toBe(1); expect(generate).toHaveBeenCalledTimes(2)
+  expect(batch.completed).toBe(2); expect(generate).toHaveBeenCalledTimes(3)
+  expect(batch.state.pages[2].state).toBe('ready')
   expect(batch.unresolved).toBe(true); expect(batch.canContinue).toBe(false)
-  await batch.run(); expect(generate).toHaveBeenCalledTimes(2)
+  await batch.run(); expect(generate).toHaveBeenCalledTimes(3)
   const failedId = batch.state.pages[1].id
   query.mockResolvedValue({ kind: 'image', status: 'unknown', result: null, cache_expired: false } as Awaited<ReturnType<typeof fetchImageStatus>>)
   await batch.recover()
-  expect(query).toHaveBeenCalledWith(failedId, expect.any(AbortSignal)); expect(generate).toHaveBeenCalledTimes(2)
+  expect(query).toHaveBeenCalledWith(failedId, expect.any(AbortSignal)); expect(generate).toHaveBeenCalledTimes(3)
   expect(batch.state.pages[1].error).toContain('费用')
   await batch.run()
   expect(generate).toHaveBeenCalledTimes(4); expect(batch.completed).toBe(3)
-  expect(generate.mock.calls[2][1]).not.toBe(failedId)
-  expect(generate.mock.calls[2][0].image_index).toBe(2)
+  expect(generate.mock.calls[3][1]).not.toBe(failedId)
+  expect(generate.mock.calls[3][0].image_index).toBe(2)
   batch.dispose()
 })
 
@@ -153,7 +395,7 @@ it('supports an older single-image request and ignores malformed or oversized sa
   localStorage.setItem('batch', 'old-request')
   const old = useImageBatch('batch', () => true, () => {}); await old.restore()
   expect(old.completed).toBe(1); old.dispose(); query.mockClear()
-  for (const raw of ['{', JSON.stringify({ version: 1, pages: Array.from({ length: 11 }, (_, i) => ({ id: 'page-' + i, state: 'ready' })) })]) {
+  for (const raw of ['{', JSON.stringify({ version: 1, pages: Array.from({ length: 101 }, (_, i) => ({ id: 'page-' + i, state: 'ready' })) })]) {
     localStorage.setItem('batch', raw)
     const batch = useImageBatch('batch', () => true, () => {}); await batch.restore()
     expect(batch.state.pages).toHaveLength(0); batch.dispose()
@@ -173,7 +415,7 @@ it('does not continue the batch or expose images after the account changes', asy
 
 it('bounds the requested count before sending requests', async () => {
   const batch = useImageBatch('batch', () => true, () => {})
-  for (const count of [0, 11, 1.5]) await expect(batch.start(params, count)).rejects.toThrow('1 至 10')
+  for (const count of [0, 101, 1.5]) await expect(batch.start(params, count)).rejects.toThrow('1 至 100')
   expect(generate).not.toHaveBeenCalled(); batch.dispose()
 })
 
@@ -196,7 +438,7 @@ it('keeps a completed paid request recoverable when its separate file download f
   } finally { globalThis.fetch = nativeFetch }
 })
 
-it('断线后自动查询原请求，逐步降低频率，找回图片后不自动生成下一张', async () => {
+it('断线后继续生成其他页面，并自动查询原请求，逐步降低查询频率', async () => {
   vi.useFakeTimers()
   generate.mockRejectedValueOnce(new ApiError('网络中断', 0))
   const batch = useImageBatch('auto-recover', () => true, () => {})
@@ -213,16 +455,16 @@ it('断线后自动查询原请求，逐步降低频率，找回图片后不自�
     expect(query).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1)
     expect(query).toHaveBeenCalledTimes(2)
-    expect(batch.completed).toBe(1)
-    expect(batch.canContinue).toBe(true)
+    expect(batch.completed).toBe(2)
+    expect(batch.canContinue).toBe(false)
     await vi.advanceTimersByTimeAsync(120_000)
     expect(query).toHaveBeenCalledTimes(2)
-    expect(generate).toHaveBeenCalledTimes(1)
-    expect(batch.state.pages[1].state).toBe('queued')
+    expect(batch.state.pages[1].state).toBe('ready')
+    expect(generate).toHaveBeenCalledTimes(2)
   } finally { batch.dispose() }
 })
 
-it('后台和离线暂停自动查询，回到页面后继续；销毁后移除监听和计时器', async () => {
+it('后台和离线暂停自动查询，回到页面后查询原请求；销毁后移除监听和计时器', async () => {
   vi.useFakeTimers()
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
   const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)

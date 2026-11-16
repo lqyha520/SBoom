@@ -1,14 +1,13 @@
 import { defineStore } from 'pinia'
 import {
   DEFAULT_LAYOUT,
-  MAX_QUESTIONS_PER_TYPE,
-  MAX_GENERATION_TYPES,
   LS,
   TEMPLATES,
   TYPE_DEFAULT,
   TYPE_GROUPS_BY_GRADE,
   TYPE_GROUPS_DEFAULT,
 } from '../constants'
+import { sectionQuestionLimit, MAX_PAPER_SECTIONS, MAX_PAPER_QUESTIONS, MAX_PAPERS_PER_RUN } from '../generation-limits'
 import * as api from '../api'
 import type { CustomType, GameData, PaperTemplate, PaperStyle, SecLayout, Section, PaperSection } from '../types'
 import { ensureQids, gradeNumOf, uid } from '../utils'
@@ -89,11 +88,13 @@ export const useExamStore = defineStore('exam', {
     },
     generationIssue(state): string {
       if (state.keyword.length > 100) return '已选知识点超过100字，请缩小本次出题范围'
-      if (state.sections.some((s) => !Number.isInteger(s.count) || s.count < 1 || s.count > MAX_QUESTIONS_PER_TYPE)) {
-        return `每个大题需设置 1 至 ${MAX_QUESTIONS_PER_TYPE} 道题`
+      if (!Number.isInteger(state.paperCount) || state.paperCount < 1 || state.paperCount > MAX_PAPERS_PER_RUN) {
+        return `每批可生成 1 至 ${MAX_PAPERS_PER_RUN} 份试卷`
       }
-      if (new Set(state.sections.map((s) => s.type)).size > MAX_GENERATION_TYPES) {
-        return `一次最多生成 ${MAX_GENERATION_TYPES} 种题型`
+      const invalid = state.sections.find(s => !Number.isInteger(s.count) || s.count < 1 || s.count > sectionQuestionLimit(s.type))
+      if (invalid) return `每个${invalid.type === 'reading' ? '阅读' : ''}大题需设置 1 至 ${sectionQuestionLimit(invalid.type)} 道题`
+      if (state.sections.length > MAX_PAPER_SECTIONS || state.sections.reduce((sum, s) => sum + s.count, 0) > MAX_PAPER_QUESTIONS) {
+        return `一份试卷最多 ${MAX_PAPER_SECTIONS} 个大题、${MAX_PAPER_QUESTIONS} 道题，请拆成多份试卷`
       }
       return ''
     },
@@ -286,7 +287,7 @@ export const useExamStore = defineStore('exam', {
     addSection(type: string, count?: number, customName?: string) {
       if (this.generating || this.accountChanged) return
       this.recordEdit()
-      const cnt = Math.min(MAX_QUESTIONS_PER_TYPE, Math.max(1, Math.round(count || TYPE_DEFAULT[type] || 4)))
+      const cnt = Math.min(sectionQuestionLimit(type), Math.max(1, Math.round(count || TYPE_DEFAULT[type] || 4)))
       const sec: Section = {
         id: uid('s'),
         type,
@@ -319,7 +320,7 @@ export const useExamStore = defineStore('exam', {
       const sec = this.sections.find((s) => s.id === id)
       if (!sec || !sec.data) return
       this.recordEdit()
-      n = Math.min(MAX_QUESTIONS_PER_TYPE, Math.max(1, Math.round(n) || 1))
+      n = Math.min(sectionQuestionLimit(sec.type), Math.max(1, Math.round(n) || 1))
       if (sec.data.questions.slice(n).some((question) => question._locked)) {
         this.generateError = '减少题数会移除已锁定题目，请先在管理题目中解锁'
         return

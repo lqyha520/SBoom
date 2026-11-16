@@ -1,4 +1,5 @@
-import { randomInt, shuffle, type Rng } from './random'
+import { contentDeck, rememberContent, validContentHistory, type ContentHistory } from './challenge-journey'
+import { shuffle, type Rng } from './random'
 
 export type { Rng } from './random'
 
@@ -27,7 +28,7 @@ export interface RocketFlight {
   finished: boolean
 }
 
-export interface RocketSave {
+export interface RocketSave extends ContentHistory {
   version: 1
   difficulty: RocketDifficulty
   flight: RocketFlight
@@ -47,45 +48,31 @@ export function isRocketDifficulty(value: unknown): value is RocketDifficulty {
   return value === 'starter' || value === 'explorer' || value === 'pilot'
 }
 
-function makeQuestion(difficulty: RocketDifficulty, rng: Rng, used: Set<string>): RocketQuestion {
-  for (let attempt = 0; attempt < 80; attempt++) {
-    let left: number
-    let right: number
-    let operator: RocketOperator
-    let maxAnswer: number
-    if (difficulty === 'starter') {
-      operator = rng() < 0.5 ? '+' : '-'
-      maxAnswer = 20
-      if (operator === '+') {
-        left = randomInt(rng, 1, 10)
-        right = randomInt(rng, 1, 20 - left)
-      } else {
-        left = randomInt(rng, 2, 20)
-        right = randomInt(rng, 1, left - 1)
-      }
-    } else if (difficulty === 'explorer') {
-      operator = rng() < 0.5 ? '+' : '-'
-      maxAnswer = 100
-      if (operator === '+') {
-        left = randomInt(rng, 10, 70)
-        right = randomInt(rng, 5, 99 - left)
-      } else {
-        left = randomInt(rng, 30, 99)
-        right = randomInt(rng, 5, left - 1)
-      }
-    } else {
-      operator = '×'
-      left = randomInt(rng, 2, 9)
-      right = randomInt(rng, 2, 9)
-      maxAnswer = 81
+function questionPool(difficulty: RocketDifficulty): Array<Omit<RocketQuestion,'options'>> {
+  const pool: Array<Omit<RocketQuestion,'options'>> = []
+  const max = difficulty === 'starter' ? 20 : difficulty === 'explorer' ? 99 : 9
+  for (let left = difficulty === 'pilot' ? 2 : 1; left <= max; left++) for (let right = difficulty === 'pilot' ? 2 : 1; right <= max; right++) {
+    const operators: RocketOperator[] = difficulty === 'pilot' ? ['×'] : ['+','-']
+    for (const operator of operators) {
+      const answer = operator === '+' ? left+right : operator === '-' ? left-right : left*right
+      if (answer < 1 || (operator !== '×' && answer > max)) continue
+      pool.push({left,right,operator,answer,expression:`${left} ${operator} ${right}`})
     }
-    const answer = operator === '+' ? left + right : operator === '-' ? left - right : left * right
-    const expression = `${left} ${operator} ${right}`
-    if (used.has(expression)) continue
-    used.add(expression)
-    return { left, right, operator, expression, answer, options: buildOptions(answer, maxAnswer, operator, rng) }
   }
-  throw new Error('口算题生成失败')
+  return pool
+}
+
+export function rocketExplanation(question: RocketQuestion): string {
+  const {left,right,operator,answer} = question
+  if (operator === '×') return `每组 ${left} 个，共 ${right} 组：${left} × ${right} = ${answer}。也可以用 ${left} × ${right-1} + ${left} = ${answer} 检查。`
+  if (operator === '+') {
+    const bridge = Math.ceil(left/10)*10-left
+    if (bridge > 0 && right > bridge) return `先凑整十：${left} + ${bridge} = ${left+bridge}，再加剩下的 ${right-bridge}，得到 ${answer}。`
+    return `${left} 和 ${right} 合起来是 ${answer}，用 ${answer} − ${right} = ${left} 检查。`
+  }
+  const ones = left%10
+  if (right > ones && ones > 0) return `先减 ${ones} 到整十 ${left-ones}，再减剩下的 ${right-ones}，得到 ${answer}。`
+  return `从 ${left} 去掉 ${right}，剩下 ${answer}；用 ${answer} + ${right} = ${left} 检查。`
 }
 
 function buildOptions(answer: number, maxAnswer: number, operator: RocketOperator, rng: Rng): number[] {
@@ -97,16 +84,18 @@ function buildOptions(answer: number, maxAnswer: number, operator: RocketOperato
     const value = answer + offset
     if (value > 0 && value <= maxAnswer) candidates.add(value)
   }
-  while (candidates.size < 3) candidates.add(randomInt(rng, 1, maxAnswer))
+  for (let value = 1; candidates.size < 3 && value <= maxAnswer; value++) if (value !== answer) candidates.add(value)
   return shuffle([answer, ...shuffle([...candidates], rng).slice(0, 3)], rng)
 }
 
-export function newFlight(difficulty: RocketDifficulty, rng: Rng = Math.random): RocketFlight {
-  const used = new Set<string>()
+export function newFlight(difficulty: RocketDifficulty, rng: Rng = Math.random, history: string[] = []): RocketFlight {
+  const pool = questionPool(difficulty)
+  const selected = difficulty === 'pilot' ? contentDeck(pool,ROCKET_QUESTIONS,q=>q.expression,history,rng) : ['+','-'].flatMap(operator=>contentDeck(pool.filter(q=>q.operator===operator),ROCKET_QUESTIONS/2,q=>q.expression,history,rng))
+  const questions = shuffle(selected,rng).map(q=>({...q,options:buildOptions(q.answer,difficulty === 'starter' ? 20 : difficulty === 'explorer' ? 100 : 81,q.operator,rng)}))
   return {
     version: 1,
     difficulty,
-    questions: Array.from({ length: ROCKET_QUESTIONS }, () => makeQuestion(difficulty, rng, used)),
+    questions,
     index: 0,
     correct: 0,
     mistakes: 0,
@@ -166,12 +155,15 @@ export function advanceRocket(save: RocketSave): 'next' | 'finished' | null {
 }
 
 export function restartRocket(save: RocketSave, rng: Rng = Math.random): void {
-  save.flight = newFlight(save.difficulty, rng)
+  const id = save.difficulty === 'pilot' ? 'master' : save.difficulty
+  const history = rememberContent(save,id,save.flight.questions.map(q=>q.expression))
+  save.flight = newFlight(save.difficulty, rng, history)
 }
 
 export function switchRocketDifficulty(save: RocketSave, difficulty: RocketDifficulty, rng: Rng = Math.random): void {
+  rememberContent(save,save.difficulty === 'pilot' ? 'master' : save.difficulty,save.flight.questions.map(q=>q.expression))
   save.difficulty = difficulty
-  save.flight = newFlight(difficulty, rng)
+  save.flight = newFlight(difficulty, rng, save.contentHistory?.[difficulty === 'pilot' ? 'master' : difficulty] || [])
 }
 
 function isInt(value: unknown, min: number, max: number): value is number {
@@ -195,7 +187,7 @@ export function restoreRocket(raw: string | null): RocketSave | null {
   if (!raw) return null
   try {
     const value = JSON.parse(raw) as RocketSave
-    if (!value || value.version !== 1 || !isRocketDifficulty(value.difficulty)) return null
+    if (!validContentHistory(value.contentHistory) || !value || value.version !== 1 || !isRocketDifficulty(value.difficulty)) return null
     const best = value.best as unknown as Record<string, unknown>
     if (!best || !rocketDifficulties.every(item => isInt(best[item.id], 0, 3))) return null
     if (!isInt(value.totalCorrect, 0, 1_000_000) || !isInt(value.flights, 0, 1_000_000)) return null

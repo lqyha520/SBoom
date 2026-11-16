@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { writeGameSave } from './game-storage'
 import { computed, ref, watch } from 'vue'
 import GameNav from './GameNav.vue'
 import { englishWord } from './english-words'
@@ -54,7 +55,7 @@ function applyDifficulty() {
   resetDifficulty.value = null
 }
 watch(save, value => {
-  try { localStorage.setItem(props.storageKey, JSON.stringify(value)); saveError.value = false }
+  try { writeGameSave(props.storageKey, value); saveError.value = false }
   catch { saveError.value = true }
 }, { deep: true, immediate: true, flush: 'post' })
 watch(() => props.storageKey, () => { save.value = readSave() || newMarket() })
@@ -87,17 +88,17 @@ watch(() => props.storageKey, () => { save.value = readSave() || newMarket() })
 
       <section v-if="!finished" class="market-stall">
         <div class="stall-awning" aria-hidden="true" />
-        <div class="stall-meta"><span class="stall-number">第 {{ round.index + 1 }} / {{ MARKET_QUESTIONS }} 个单词</span><span class="stall-badge"><UIcon name="i-lucide-tag" />看图片，找单词</span></div>
+        <div class="stall-meta"><span class="stall-number">第 {{ round.index + 1 }} / {{ MARKET_QUESTIONS }} 个单词</span><span class="stall-badge"><UIcon name="i-lucide-tag" />{{ question.direction==='meaning'?'看单词，找词义':'看图片，找单词' }}</span></div>
         <div class="stall-card">
           <div class="prompt-card">
-            <span class="prompt-emoji" role="img" :aria-label="source.meaning">{{ source.emoji }}</span>
-            <div class="prompt-copy"><span>这个词的意思是</span><strong>{{ source.meaning }}</strong><small>{{ source.word.length }} 个字母</small></div>
+            <span v-if="question.direction!=='meaning'" class="prompt-emoji" role="img" :aria-label="source.meaning">{{ source.emoji }}</span>
+            <div class="prompt-copy"><span>{{ question.direction==='meaning'?'这个英文单词是什么意思？':'这个词的意思是' }}</span><strong>{{ question.direction==='meaning'?source.word:source.meaning }}</strong><small v-if="question.direction!=='meaning'">{{ source.word.length }} 个字母</small><button v-else class="speak-button" :aria-label="`朗读单词 ${source.word}`" @click="speak(source.word)"><UIcon name="i-lucide-volume-2" /></button></div>
           </div>
           <div class="prompt-arrow" aria-hidden="true"><UIcon name="i-lucide-arrow-right" /></div>
           <div class="word-options" role="group" aria-label="英文单词选项">
-            <button v-for="(word, index) in question.options" :key="word" class="word-option" :class="{ right: answered !== null && word === question.wordId, wrong: answered === word && word !== question.wordId }" :data-word="word" :disabled="answered !== null" :aria-label="`选择单词 ${word}`" @click="choose(word)">
+            <button v-for="(word, index) in question.options" :key="word" class="word-option" :class="{ right: answered !== null && word === question.wordId, wrong: answered === word && word !== question.wordId }" :data-word="word" :disabled="answered !== null" :aria-label="`选择单词 ${question.direction==='meaning'?englishWord(round.difficulty,word)?.meaning:word}`" @click="choose(word)">
               <span class="option-label">{{ String.fromCharCode(65 + index) }}</span>
-              <strong>{{ word }}</strong>
+              <strong>{{ question.direction==='meaning'?englishWord(round.difficulty,word)?.meaning:word }}</strong>
               <UIcon v-if="answered !== null && word === question.wordId" name="i-lucide-circle-check" class="option-mark" />
               <UIcon v-else-if="answered === word" name="i-lucide-x" class="option-mark" />
             </button>
@@ -108,7 +109,7 @@ watch(() => props.storageKey, () => { save.value = readSave() || newMarket() })
           <div><strong>{{ isCorrect ? '找到啦，单词和图片是好朋友！' : '再认一认，这个单词是这样写的。' }}</strong><p><span class="feedback-emoji" aria-hidden="true">{{ source.emoji }}</span>{{ question.wordId }} · {{ source.meaning }}</p></div>
           <button class="speak-button" :aria-label="`朗读单词 ${question.wordId}`" @click="speak(question.wordId)"><UIcon name="i-lucide-volume-2" /></button>
         </div>
-        <p v-else class="market-tip"><UIcon name="i-lucide-mouse-pointer-2" />读一读四个单词，选出和图片意思相配的那一个。</p>
+        <p v-else class="market-tip"><UIcon name="i-lucide-mouse-pointer-2" />{{ question.direction==='meaning'?'读一读英文，也可以听读音，选出对应的中文意思。':'读一读四个单词，选出和图片意思相配的那一个。' }}</p>
         <button v-if="answered !== null" class="primary-action" @click="next">{{ round.index === MARKET_QUESTIONS - 1 ? '查看集市成绩' : '下一个单词' }}<UIcon name="i-lucide-arrow-right" /></button>
       </section>
 
@@ -129,7 +130,7 @@ watch(() => props.storageKey, () => { save.value = readSave() || newMarket() })
       <footer class="market-footer"><span><UIcon name="i-lucide-heart" />每一次尝试，都是成长</span><span role="status" aria-label="进度保存状态"><UIcon :name="saveError ? 'i-lucide-cloud-off' : 'i-lucide-cloud-check'" />{{ saveError ? '本机暂时无法保存进度' : '进度已保存在本机' }}</span></footer>
     </main>
 
-    <UModal :open="helpOpen" title="逛集市，认单词" description="看看图片和中文，从四个英文单词里选出正确的那个。" :close="{ 'aria-label': '关闭玩法说明' }" :ui="{ content: 'game-modal' }" @update:open="helpOpen = $event"><template #body><ol class="help-list"><li>先看摊位上的图片和中文意思，猜一猜对应的英文单词。</li><li>四个单词里只有一个意思是对的，细心读一读再点选。</li><li>选好后会显示完整的单词和意思。点小喇叭还可以听一听读音。</li><li>八个单词逛完就能看到成绩。全部一次选对可以获得三颗星。</li></ol><button class="primary-action" @click="helpOpen = false">明白了，去逛集市<UIcon name="i-lucide-store" /></button></template></UModal>
+    <UModal :open="helpOpen" title="逛集市，认单词" description="看看图片和中文，从四个英文单词里选出正确的那个。" :close="{ 'aria-label': '关闭玩法说明' }" :ui="{ content: 'game-modal' }" @update:open="helpOpen = $event"><template #body><ol class="help-list"><li>先看摊位上的图片和中文意思，猜一猜对应的英文单词。</li><li>四个单词里只有一个意思是对的，细心读一读再点选。</li><li>进阶和挑战会交替出现“看中文找英文”和“看英文找中文”，把词义和读音一起记住。</li><li>选好后会显示完整的单词和意思。点小喇叭还可以听一听读音。</li><li>八个单词逛完就能看到成绩。全部一次选对可以获得三颗星。</li></ol><button class="primary-action" @click="helpOpen = false">明白了，去逛集市<UIcon name="i-lucide-store" /></button></template></UModal>
     <UModal :open="resetDifficulty !== null" :title="resetDifficulty === save.difficulty ? '重新开始逛集市？' : '切换游戏难度？'" description="新的一轮会从第一个单词开始，当前进度会清空，最佳记录会保留。" :close="{ 'aria-label': '关闭难度确认' }" :ui="{ content: 'game-modal' }" @update:open="!$event && (resetDifficulty = null)"><template #body><div class="modal-actions"><button class="secondary-action" @click="resetDifficulty = null">继续当前集市</button><button class="primary-action" @click="applyDifficulty">{{ resetDifficulty === save.difficulty ? '重新开始' : '切换并开始' }}<UIcon name="i-lucide-arrow-right" /></button></div></template></UModal>
   </div>
 </template>

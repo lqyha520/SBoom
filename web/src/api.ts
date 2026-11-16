@@ -1,3 +1,4 @@
+import type { ApiResponse, ApiSchemas } from '../../shared/api-schema'
 import { ApiError as SharedApiError, AuthError, parseErrorDetail, retryableIdempotent, backoff } from '../../shared/http'
 export { AuthError } from '../../shared/http'
 import type { Difficulty, MyTemplate, Question, ScopeData } from './types'
@@ -25,10 +26,10 @@ export class ApiError extends SharedApiError {
 /** 生成时限从后台模型配置读取，其余接口默认 30s。
  *  无超时的 fetch 会让启动 splash 在后端挂起时无限转圈 */
 const DEFAULT_TIMEOUT_MS = 30_000
-interface GenerationPolicy { revision: string; timeout_ms: number; task_timeout_seconds: number }
+type GenerationPolicy = ApiResponse<'GET /api/v1/generation/options'>
 
 export async function request<T>(url: string, init?: RequestInit, timeoutOverrideMs?: number, responseType: 'json' | 'blob' = 'json'): Promise<T> {
-  const paid = url.startsWith('/api/v1/generate') || url === '/api/v1/validate'
+  const paid = url.startsWith('/api/v1/generate') || url === '/api/v1/validate' || url === '/api/v1/retry-analysis'
   let timeoutMs = timeoutOverrideMs ?? DEFAULT_TIMEOUT_MS
   let policy: GenerationPolicy | undefined
   if (paid) {
@@ -70,7 +71,7 @@ export async function request<T>(url: string, init?: RequestInit, timeoutOverrid
     if (r.status === 401) {
       // 登录/注册接口的 401 是「用户名或密码错误」，要展示后端原文并提示可注册；
       // 其余接口的 401 才是会话过期，转为「请先登录」让 App 弹登录页
-      if (url === '/api/v1/auth/login' || url === '/api/v1/auth/register') {
+      if (url === '/api/v1/auth/login' || url === '/api/v1/auth/register' || url === '/api/v1/auth/mfa/verify') {
         const e = await r.json().catch(() => ({} as any))
         const d = e?.detail
         const parsed = parseErrorDetail(e, '登录失败，请重试')
@@ -108,12 +109,17 @@ export async function register(username: string, password: string): Promise<User
   })
 }
 
-export async function login(username: string, password: string): Promise<UserInfo> {
-  return request<UserInfo>('/api/v1/auth/login', {
+export type MfaChallenge = ApiSchemas['MfaChallengeResponse']
+export async function login(username: string, password: string): Promise<UserInfo | MfaChallenge> {
+  return request<UserInfo | MfaChallenge>('/api/v1/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
   })
+}
+
+export function verifyMfa(challenge: string, code: string) {
+  return request<UserInfo>('/api/v1/auth/mfa/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge, code }) })
 }
 
 export async function logout(): Promise<void> {
@@ -143,14 +149,22 @@ export async function fetchScope(grade: string, subject: string): Promise<ScopeD
 /* ── 批量生成（整卷一次请求）。模型配置由管理员在后台统一管理，请求不携带密钥 ── */
 export interface BatchItemReq { game_type: string; question_count: number; section_id: string }
 
-export interface BatchRespSection {
-  game_type: string
-  section_id?: string | null
-  topic?: string
-  passage?: string
-  questions: Question[]
-  missing_count?: number
-  quality_warnings?: string[]
+type GeneratedSection = ApiResponse<'POST /api/v1/generate'>
+export type BatchRespSection = Pick<GeneratedSection, 'game_type'> & Partial<Pick<GeneratedSection, 'section_id' | 'topic' | 'missing_count' | 'quality_warnings'>> & { passage?: string; questions: Question[] }
+
+/** 服务端 nullable 字段转换为编辑器的可选字段，界面运行时属性不进入 HTTP 契约。 */
+export function generatedSection(value: GeneratedSection): BatchRespSection {
+  return { ...value, passage: value.passage ?? undefined, questions: value.questions.map(generatedQuestion) }
+}
+function generatedQuestion(value: ApiSchemas['Question']): Question {
+  return {
+    ...value, answer: Array.isArray(value.answer) ? value.answer.map(pair => [pair[0], pair[1]] as [number, number]) : value.answer,
+    id: value.id ?? undefined, options: value.options ?? undefined, acceptable_answers: value.acceptable_answers ?? undefined,
+    left_items: value.left_items ?? undefined, right_items: value.right_items ?? undefined,
+    top: value.top ?? undefined, left: value.left ?? undefined, right: value.right ?? undefined,
+    left_expr: value.left_expr ?? undefined, right_expr: value.right_expr ?? undefined,
+    difficulty_level: value.difficulty_level ?? undefined, expected_time_seconds: value.expected_time_seconds ?? undefined,
+  }
 }
 
 export interface BatchParams {
@@ -171,12 +185,12 @@ export async function generateBatch(params: BatchParams, requestId: string = ran
     items: params.items,
     ...(params.previous_request_ids?.length ? { previous_request_ids: params.previous_request_ids } : {}),
   }
-  const d = await request<{ sections: BatchRespSection[] }>('/api/v1/generate-batch', {
+  const d = await request<ApiResponse<'POST /api/v1/generate-batch'>>('/api/v1/generate-batch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Request-ID': requestId },
     body: JSON.stringify(body),
   })
-  return d.sections || []
+  return (d.sections || []).map(generatedSection)
 }
 
 /* ── 单题型生成（重试用） ── */
@@ -196,14 +210,17 @@ export async function generateOne(params: {
     difficulty: params.difficulty,
     question_count: params.question_count,
   }
-  return request<BatchRespSection>('/api/v1/generate', {
+  const result = await request<ApiResponse<'POST /api/v1/generate'>>('/api/v1/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Request-ID': requestId },
     body: JSON.stringify(body),
   })
+  return generatedSection(result)
 }
 
 export interface GenerationStatus {
+  trace?: import('../../shared/generation-trace').GenerationTrace | null
+  replay_count?: number
   request_id: string
   status: 'running' | 'succeeded' | 'failed' | 'unknown'
   result: { sections: BatchRespSection[] } | null
@@ -217,20 +234,7 @@ export function fetchGenerationStatus(requestId: string) {
   return request<GenerationStatus>('/api/v1/me/generations/' + encodeURIComponent(requestId))
 }
 
-export interface GenerationUsage {
-  requests: number
-  succeeded: number
-  failed: number
-  running: number
-  unknown: number
-  quota_used: number
-  model_calls: number
-  reported_calls: number
-  prompt_tokens: number
-  completion_tokens: number
-  daily_limit: number
-  failure_limit: number
-}
+export type GenerationUsage = ApiResponse<'GET /api/v1/me/usage'>
 
 export function fetchGenerationUsage() {
   return request<GenerationUsage>('/api/v1/me/usage')
@@ -265,3 +269,11 @@ export async function bulkUploadTemplates(templates: MyTemplate[]): Promise<numb
   return d.imported || 0
 }
 /* 后台管理功能在独立系统 /admin（admin/ 前端应用），此处不包含管理端 API */
+
+export async function retryAnalysis(sourceRequestId: string, requestId: string) {
+  const result = await request<ApiResponse<'POST /api/v1/retry-analysis'>>('/api/v1/retry-analysis', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Request-ID': requestId },
+    body: JSON.stringify({ source_request_id: sourceRequestId }),
+  })
+  return { ...result, sections: (result.sections || []).map(generatedSection) }
+}

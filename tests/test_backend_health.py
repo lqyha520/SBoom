@@ -42,6 +42,8 @@ class HealthContracts(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.client.get("/health/detail")).status_code, 200)
 
     async def test_import_finalization_keeps_liveness_responsive(self):
+        from fastapi.responses import JSONResponse
+
         from app.deps import require_admin
         from app.routers import catalog
         self.app.include_router(catalog.admin_router)
@@ -50,7 +52,8 @@ class HealthContracts(unittest.IsolatedAsyncioTestCase):
         def finalize(*args):
             entered.set()
             self.assertTrue(release.wait(2))
-            return {"id": "catalog"}
+            # 此处只隔离最终入库的阻塞边界；目录字段由真实目录接口测试覆盖。
+            return JSONResponse({"id": "catalog"}, status_code=201)
         with patch.object(catalog.catalog_import, "import_paper", return_value={"id": "archive", "title": "test"}), patch.object(catalog.catalog, "create_paper", side_effect=finalize):
             job = asyncio.create_task(self.client.post("/api/v1/admin/catalog/import?grade=三年级&subject=数学", content=b"%PDF-test", headers={"Content-Type": "application/pdf"}))
             try:
@@ -87,7 +90,7 @@ class HealthContracts(unittest.IsolatedAsyncioTestCase):
                 def slow(*args, entered=entered, resumed_before_return=resumed_before_return, release=release, route=route, **kwargs):
                     entered.set()
                     resumed_before_return.append(release.wait(1))
-                    return (SimpleNamespace(id=1, username="worker-user") if route == "register" else
+                    return (auth.user_store.CurrentUser(id=1, username="worker-user") if route == "register" else
                             {"grade": "小学一年级", "subject": "数学", "allowed": [], "forbidden": []})
                 target, name = (auth.user_store, "create_user") if route == "register" else (generate.knowledge_scope_service, "get_scope")
                 with patch.object(target, name, side_effect=slow), patch.object(auth.user_store, "get_user_by_username", return_value=None), \

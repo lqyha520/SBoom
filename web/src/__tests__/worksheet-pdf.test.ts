@@ -25,9 +25,20 @@ it('supports an older single image without adding a blank page', async () => {
 })
 
 it('rejects empty, oversized or broken image groups and never returns a partial PDF after cancellation', async () => {
-  await expect(buildWorksheetPdf([])).rejects.toThrow('1 至 10')
-  await expect(buildWorksheetPdf(Array.from({ length: 11 }, () => image()))).rejects.toThrow('1 至 10')
+  await expect(buildWorksheetPdf([])).rejects.toThrow('1 至 40')
+  await expect(buildWorksheetPdf(Array.from({ length: 41 }, () => image()))).rejects.toThrow('1 至 40')
   await expect(buildWorksheetPdf([image(btoa('broken'))])).rejects.toThrow()
   let cancelled = false
   await expect(buildWorksheetPdf([image(), image(wide)], () => { cancelled = true }, () => cancelled)).rejects.toThrow('已停止导出')
+})
+
+it('exports forty images with exactly forty pages', async () => {
+  const pdf = await buildWorksheetPdf(Array.from({ length: 40 }, () => image()))
+  expect((await pdf.text()).match(/\/Type \/Page\b/g)).toHaveLength(40)
+})
+
+it('rejects excessive total source bytes before decoding or assembling the images', async () => {
+  const blob = new Blob(['fixture'], { type: 'image/png' })
+  Object.defineProperty(blob, 'size', { value: 8 * 1024 * 1024 })
+  await expect(buildWorksheetPdf(Array.from({ length: 5 }, () => ({ ...image(), blob })))).rejects.toThrow('32 MB')
 })

@@ -14,7 +14,8 @@ import GradePicker from '../../components/GradePicker.vue'
 import { errorMessage, favoriteCatalogPaper, fetchCatalog, fetchCatalogSummary, fetchSiteHome } from '../../services/api'
 import { ensureSession, requireLogin, session } from '../../services/session'
 import { rememberPaperIntent } from '../../services/paper-intent'
-import { openCatalog } from '../../services/navigation'
+import { openCatalog, visitDestination } from '../../services/navigation'
+import { cancelReferralLanding, takeReferralLanding } from '../../services/referral'
 import { createLatestRequest } from '../../services/latest-request'
 import { exerciseText, homeSelection, subjectTone } from '../../presentation'
 import { fetchTopics, type Topic } from '../../services/experience'
@@ -26,12 +27,22 @@ import { shareCard, shareTimeline } from '../../services/return-route'
 import { captureScroll } from '../../services/page-lifecycle'
 
 const items = ref<PaperSummary[]>([])
+const landingRequests = createLatestRequest()
+function cancelLanding() { landingRequests.invalidate(); cancelReferralLanding() }
+onShow(() => {
+  const current = landingRequests.begin()
+  void takeReferralLanding({ scope: current }).then(target => {
+    const pages = getCurrentPages()
+    if (current() && target && pages[pages.length - 1]?.route === 'pages/home/index') visitDestination(target)
+  })
+})
 const recentPaper = ref<PaperSummary | null>(null)
 const total = ref(0)
 const loaded = ref(false)
 const summary = ref<CatalogSummary | null>(null)
 const site = ref<SiteHome | null>(null)
 const q = ref('')
+watch(q, cancelLanding)
 const grade = ref('')
 const collections = ref<Topic[]>([])
 const feed = ref<'featured' | 'latest'>('featured')
@@ -110,6 +121,7 @@ async function loadPapers(reset = false, anonymous = !session.ready || !!session
   finally { if (current()) loading.value = false }
 }
 function changePapers() {
+  cancelLanding()
   if (!active || loading.value || changing.value) return
   if (offset.value + 2 < items.value.length) { offset.value += 2; return }
   if (!morePapers.value && !pageCursor) { offset.value = 0; return }
@@ -139,6 +151,7 @@ async function load(force = false, anonymous = !session.ready || !!session.error
   if (active) uni.stopPullDownRefresh()
 }
 async function favorite(paper: PaperSummary) {
+  cancelLanding()
   if (loading.value || changing.value) return
   if (!session.user) rememberPaperIntent({ paperId: paper.id, action: 'favorite', edition: 'original' })
   if (!requireLogin('/pages/paper/index?id=' + encodeURIComponent(paper.id))) return
@@ -155,10 +168,12 @@ async function favorite(paper: PaperSummary) {
   finally { if (current()) changing.value = '' }
 }
 function search() {
+  cancelLanding()
   if (session.user && q.value.trim()) writePreferences(session.user.id, rememberSearch(readPreferences(session.user.id), q.value))
   openCatalog({ q: q.value, grade: grade.value })
 }
 function byGrade(next: string) {
+  cancelLanding()
   if (changing.value) return
   gradePicker.value = false
   if (grade.value === next) return
@@ -169,6 +184,7 @@ function byGrade(next: string) {
   void loadPapers(true, !session.ready || !!session.error)
 }
 function selectFeed(value: 'featured' | 'latest') {
+  cancelLanding()
   if (value === feed.value || changing.value) return
   feed.value = value; scrollTop = 0; void loadPapers(true, !session.ready || !!session.error)
 }
@@ -203,7 +219,7 @@ onShow(async () => {
     void load()
   }
 })
-function leave() { active = false; activation++; imagesActive.value = false; invalidate(); loading.value = false; contentLoading.value = false; changing.value = ''; gradePicker.value = false; uni.stopPullDownRefresh() }
+function leave() { cancelLanding(); active = false; activation++; imagesActive.value = false; invalidate(); loading.value = false; contentLoading.value = false; changing.value = ''; gradePicker.value = false; uni.stopPullDownRefresh() }
 onHide(() => {
   leave()
   const owner = session.user?.id, run = activation
@@ -223,7 +239,7 @@ onShareTimeline(() => shareTimeline())
 </script>
 
 <template>
-  <view class="home-page has-tabbar">
+  <view class="home-page has-tabbar" @touchstart="cancelLanding">
     <PageChrome />
     <view class="content-width home-search-row"><SearchGradeBar v-model="q" :grade="grade" placeholder="搜知识点、习题" :disabled="!!changing" @search="search" @select-grade="gradePicker = true" /></view>
     <HomeBanner :banners="banners" :mode="site?.banner_mode || 'welcome'" :grade="grade" :recent="recentPaper" :loading="contentLoading && !site" :active="imagesActive" @select-grade="gradePicker = true" />

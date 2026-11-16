@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { request } from '../api'
+import { request, type MfaChallenge } from '../api'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -11,6 +11,8 @@ const confirmation = ref('')
 const visible = ref(false)
 const busy = ref(false)
 const error = ref('')
+const mfa = ref<MfaChallenge | null>(null)
+const code = ref('')
 const sessionNotice = ref('')
 try { sessionNotice.value = sessionStorage.getItem('lc_session_notice') || ''; sessionStorage.removeItem('lc_session_notice') } catch { /* 登录仍可继续。 */ }
 const registrationEnabled = ref(false)
@@ -24,19 +26,23 @@ async function loadCapabilities() {
   } catch { capabilitiesError.value = true }
 }
 onMounted(loadCapabilities)
-watch(mode, () => { error.value = ''; confirmation.value = '' })
+watch(mode, () => { error.value = ''; confirmation.value = ''; mfa.value = null; code.value = '' })
 async function submit() {
   if (busy.value) return
   error.value = ''
   const name = username.value.trim()
-  if (!name || !password.value) { error.value = '请输入用户名和密码'; return }
+  if (mfa.value ? !/^\d{6}$/.test(code.value) : !name || !password.value) { error.value = mfa.value ? '请输入 6 位动态验证码' : '请输入用户名和密码'; return }
   if (mode.value === 'register') {
     if (password.value.length < 8) { error.value = '密码至少需要 8 位'; return }
     if (password.value !== confirmation.value) { error.value = '两次输入的密码不一致'; return }
   }
   busy.value = true
   try {
-    if (mode.value === 'login') await auth.login(name, password.value)
+    if (mfa.value) await auth.verifyMfa(mfa.value.challenge, code.value)
+    else if (mode.value === 'login') {
+      const result = await auth.login(name, password.value)
+      if (result) { mfa.value = result; password.value = '' }
+    }
     else await auth.register(name, password.value)
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : '登录失败，请重试'
@@ -63,15 +69,17 @@ async function submit() {
         <UButton v-if="capabilitiesError" label="重新获取注册状态" icon="i-lucide-refresh-cw" variant="link" @click="loadCapabilities" />
         <p v-else-if="!registrationEnabled" class="text-sm text-muted">账号由管理员开通</p>
         <form @submit.prevent="submit">
-          <UFormField label="用户名" name="username" required><UInput v-model="username" autocomplete="username" placeholder="输入用户名" maxlength="32" size="lg" icon="i-lucide-user-round" :disabled="busy" /></UFormField>
-          <UFormField label="密码" name="password" required>
+          <UFormField label="用户名" name="username" required><UInput v-model="username" autocomplete="username" placeholder="输入用户名" maxlength="32" size="lg" icon="i-lucide-user-round" :disabled="busy || !!mfa" /></UFormField>
+          <UFormField v-if="!mfa" label="密码" name="password" required>
             <UInput v-model="password" :type="visible ? 'text' : 'password'" :autocomplete="mode === 'login' ? 'current-password' : 'new-password'" placeholder="输入密码" size="lg" icon="i-lucide-lock-keyhole" :disabled="busy">
               <template #trailing><UButton :icon="visible ? 'i-lucide-eye-off' : 'i-lucide-eye'" :aria-label="visible ? '隐藏密码' : '显示密码'" color="neutral" variant="link" size="xs" @click="visible = !visible" /></template>
             </UInput>
           </UFormField>
+          <UFormField v-else label="动态验证码" required><UInput v-model="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="验证器中的 6 位验证码" :disabled="busy" /></UFormField>
+          <UButton v-if="mfa" label="返回账号密码登录" variant="link" :disabled="busy" @click="mfa = null; code = ''; error = ''" />
           <UFormField v-if="mode === 'register'" label="确认密码" name="confirmation" required><UInput v-model="confirmation" type="password" autocomplete="new-password" placeholder="再次输入密码" size="lg" icon="i-lucide-lock-keyhole" :disabled="busy" /></UFormField>
           <UAlert v-if="error" :title="error" color="error" variant="soft" icon="i-lucide-circle-alert" role="alert" />
-          <UButton type="submit" :loading="busy" :disabled="busy" :label="mode === 'login' ? '登录工作台' : '注册并登录'" trailing-icon="i-lucide-arrow-right" size="lg" block class="mt-2" />
+          <UButton type="submit" :loading="busy" :disabled="busy" :label="mfa ? '验证并登录' : mode === 'login' ? '登录工作台' : '注册并登录'" trailing-icon="i-lucide-arrow-right" size="lg" block class="mt-2" />
         </form>
       </div>
     </main>

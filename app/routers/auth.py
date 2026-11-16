@@ -9,6 +9,7 @@
 import logging
 import re
 import time
+from typing import Literal
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
 from psycopg.errors import UniqueViolation
@@ -16,14 +17,16 @@ from pydantic import BaseModel, Field
 
 from app.blocking import run_sync, run_sync_in
 from app.config import get_settings
-from app.deps import SESSION_COOKIE, require_user
+from app.deps import SESSION_COOKIE, require_admin_identity, require_recent_admin_identity, require_user
+from app.library_deps import no_store
+from app.models.consumer_responses import StatusResponse
 from app.security import create_token, parse_token
 from app.services import user_store
 from app.services.rate_limit import allow, client_key
 from app.services.user_store import CurrentUser
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/v1/auth", tags=["认证"])
+router = APIRouter(prefix="/api/v1/auth", tags=["认证"], dependencies=[Depends(no_store)])
 settings = get_settings()
 
 _USERNAME_RE = re.compile(r"^[\w\u4e00-\u9fa5-]{2,32}$")
@@ -41,8 +44,36 @@ class Credentials(BaseModel):
 class Registration(Credentials):
     password: str = Field(min_length=8, max_length=128)
 
+
+class MfaCode(BaseModel):
+    code: str = Field(min_length=6, max_length=6, pattern=r'^\d{6}$')
+
 class AuthCapabilities(BaseModel):
     registration_enabled: bool
+
+
+class AuthUserInfo(BaseModel):
+    id: int
+    username: str
+    role: str
+    is_super_admin: bool
+    admin_permissions: dict[str, list[str]]
+    permissions_revision: int
+
+
+class MfaChallengeResponse(BaseModel):
+    mfa_required: Literal[True]
+    challenge: str
+    username: str
+
+
+class MfaStatusResponse(BaseModel):
+    enabled: bool
+
+
+class MfaSetupResponse(BaseModel):
+    secret: str
+    otpauth_url: str
 
 
 @router.get("/capabilities", response_model=AuthCapabilities)
@@ -51,9 +82,11 @@ def capabilities(response: Response):
     return AuthCapabilities(registration_enabled=settings.registration_enabled)
 
 
-def _set_session_cookie(response: Response, user_id: int, issued_after: int = 0, expected_hash: str | None = None) -> str:
+def _set_session_cookie(response: Response, user_id: int, issued_after: int = 0, expected_hash: str | None = None,
+                        user_agent: str = '', client_ip: str = '', mfa_verified: bool = False) -> str:
     from app.services.workspace_sessions import create
-    token = create_token(user_id, session_id=create(user_id, expected_hash=expected_hash, expected_after=issued_after), issued_after=issued_after)
+    token = create_token(user_id, session_id=create(user_id, expected_hash=expected_hash, expected_after=issued_after,
+                         user_agent=user_agent, client_ip=client_ip, mfa_verified=mfa_verified), issued_after=issued_after)
     response.set_cookie(
         SESSION_COOKIE,
         token,
@@ -66,7 +99,7 @@ def _set_session_cookie(response: Response, user_id: int, issued_after: int = 0,
     return token
 
 
-@router.post("/register", summary="注册新用户")
+@router.post("/register", response_model=AuthUserInfo, summary="注册新用户")
 def register(req: Registration, request: Request, response: Response):
     if not settings.registration_enabled:
         raise HTTPException(status_code=403, detail={"error": "注册已关闭，请联系管理员开通账号"})
@@ -88,10 +121,10 @@ def register(req: Registration, request: Request, response: Response):
         raise HTTPException(status_code=409, detail={"error": "用户名已被占用"}) from None
     _set_session_cookie(response, user.id)
     logger.info(f"新用户注册: {user.username} (id={user.id}, role={role})")
-    return {"id": user.id, "username": user.username, "role": role}
+    return user_store.user_info(user)
 
 
-@router.post("/login", summary="登录")
+@router.post("/login", response_model=AuthUserInfo | MfaChallengeResponse, summary="登录")
 async def login(req: Credentials, request: Request, response: Response):
     # 防爆破：按 IP+用户名 组合限流（5 分钟内最多 10 次），也按 IP 全局限流兜底
     ip = _client_ip(request)
@@ -104,12 +137,63 @@ async def login(req: Credentials, request: Request, response: Response):
         raise HTTPException(status_code=401, detail={"error": "用户名或密码错误"})
     if not row["is_active"]:
         raise HTTPException(status_code=403, detail={"error": "账号已被禁用，请联系管理员"})
-    await run_sync(_set_session_cookie, response, row["id"], int(row["token_valid_after"] or 0), row["password_hash"])
+    if row["role"] == "admin":
+        from app.services import admin_mfa
+        if await run_sync(admin_mfa.enabled, row["id"]):
+            return {"mfa_required": True, "challenge": await run_sync(admin_mfa.challenge, row["id"], row['password_hash'], int(row['token_valid_after'] or 0)), "username": row["username"]}
+    await run_sync(_set_session_cookie, response, row["id"], int(row["token_valid_after"] or 0), row["password_hash"], request.headers.get('user-agent', ''), ip)
     logger.info(f"用户登录: {row['username']} (id={row['id']}, role={row['role']})")
-    return {"id": row["id"], "username": row["username"], "role": row["role"]}
+    return user_store.user_info(user_store.from_row(row))
 
 
-@router.post("/logout", summary="登出")
+class MfaVerify(BaseModel):
+    challenge: str = Field(min_length=20, max_length=120)
+    code: str = Field(min_length=6, max_length=6, pattern=r'^\d{6}$')
+
+
+@router.post('/mfa/verify', response_model=AuthUserInfo, summary='完成管理员 MFA 登录')
+async def verify_mfa(body: MfaVerify, request: Request, response: Response):
+    from app.services import admin_mfa
+    if not allow(f'mfa-ip:{_client_ip(request)}', 30, 300):
+        raise HTTPException(429, detail={'error': '验证码尝试过多，请稍后重试'})
+    verified = await run_sync(admin_mfa.consume, body.challenge, body.code)
+    row = await run_sync(user_store.get_user_by_id, verified['user_id'])
+    if row is None or not row.is_active or row.role != 'admin':
+        raise HTTPException(401, detail={'error': '管理员账号不可用'})
+    await run_sync(_set_session_cookie, response, row.id, verified['valid_after'], verified['password_hash'], request.headers.get('user-agent', ''), _client_ip(request), True)
+    return user_store.user_info(row)
+
+
+@router.get('/mfa/status', response_model=MfaStatusResponse, summary='读取当前管理员 MFA 状态')
+async def mfa_status(user: CurrentUser = Depends(require_admin_identity)):
+    from app.services import admin_mfa
+    return {'enabled': await run_sync(admin_mfa.enabled, user.id)}
+
+
+@router.post('/mfa/setup', response_model=MfaSetupResponse, summary='初始化管理员 MFA')
+async def mfa_setup(user: CurrentUser = Depends(require_recent_admin_identity)):
+    from app.services import admin_mfa
+    return await run_sync(admin_mfa.begin_setup, user.id, user.username)
+
+
+@router.post('/mfa/confirm', response_model=MfaStatusResponse, summary='启用管理员 MFA')
+async def mfa_confirm(body: MfaCode, token: str | None = Cookie(None, alias=SESSION_COOKIE), user: CurrentUser = Depends(require_recent_admin_identity)):
+    from app.services import admin_mfa
+    if not allow(f'mfa-manage:{user.id}', 10, 300):
+        raise HTTPException(429, detail={'error': '验证码尝试过多，请稍后重试'})
+    payload = parse_token(token) if token else None
+    return await run_sync(admin_mfa.confirm, user.id, body.code, (payload or {}).get('sid', ''))
+
+
+@router.post('/mfa/disable', response_model=MfaStatusResponse, summary='关闭管理员 MFA')
+async def mfa_disable(body: MfaCode, user: CurrentUser = Depends(require_recent_admin_identity)):
+    from app.services import admin_mfa
+    if not allow(f'mfa-manage:{user.id}', 10, 300):
+        raise HTTPException(429, detail={'error': '验证码尝试过多，请稍后重试'})
+    return await run_sync(admin_mfa.disable, user.id, body.code)
+
+
+@router.post("/logout", summary="登出", response_model=StatusResponse, response_model_exclude_unset=True)
 async def logout(response: Response, token: str | None = Cookie(None, alias=SESSION_COOKIE),
                  workspace_user: str | None = Header(None, alias="X-Workspace-User")):
     """删 Cookie 的同时在服务端吊销该会话：旧 Cookie 即使被复制走也不能再用。
@@ -132,6 +216,6 @@ async def logout(response: Response, token: str | None = Cookie(None, alias=SESS
     return {"status": "ok"}
 
 
-@router.get("/me", summary="当前登录用户")
+@router.get("/me", response_model=AuthUserInfo, summary="当前登录用户")
 async def me(user: CurrentUser = Depends(require_user)):
-    return {"id": user.id, "username": user.username, "role": user.role}
+    return user_store.user_info(user)

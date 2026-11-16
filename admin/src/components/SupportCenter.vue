@@ -1,27 +1,23 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission, canPermission } from '../permissions'
 import { useAdminLeaveGuard, useAdminListRoute } from "../navigation";
 import { computed, onActivated, onDeactivated, ref, watch } from "vue";
 import { ApiError, type UserInfo } from "../api";
 import { useBeforeUnload } from "../unsaved";
 import {
-  getSupport,
-  saveSupport,
   getFeedback,
   getFeedbackDetail,
   saveFeedback,
   statusOptions,
   kindLabels,
   type Feedback,
-  type SupportSettings,
 } from "../experience";
 import { catalogDetail, type CatalogDetail } from "../catalog";
 const props = defineProps<{ user: UserInfo }>();
-const tab = ref("feedback");
 const status = ref("pending");
 const page = ref(1);
 const total = ref(0);
 const items = ref<Feedback[]>([]);
-const settings = ref<SupportSettings | null>(null);
 const selected = ref<Feedback | null>(null);
 const dialog = ref(false);
 const preview = ref<CatalogDetail | null>(null);
@@ -32,23 +28,15 @@ const error = ref("");
 const formError = ref("");
 const notice = ref("");
 let sequence = 0;
-let settingsSequence = 0;
-const settingsBaseline = ref("");
-const contactConflict = ref(false);
 const feedbackConflict = ref(false);
 const latestFeedback = ref<Feedback | null>(null);
-const settingsDirty = computed(
-  () =>
-    !!settings.value &&
-    JSON.stringify(settings.value) !== settingsBaseline.value,
-);
 const feedbackBaseline = ref("");
 const feedbackValue = () => selected.value ? JSON.stringify([selected.value.status, selected.value.reply, selected.value.internal_note]) : "";
 const feedbackDirty = computed(() => feedbackValue() !== feedbackBaseline.value);
-const dirty = computed(() => settingsDirty.value || feedbackDirty.value);
+const dirty = feedbackDirty;
 const active = ref(true);
 useBeforeUnload(computed(() => active.value && dirty.value));
-useAdminLeaveGuard(() => !active.value || (!busy.value && (!dirty.value || window.confirm('有未保存的服务设置或反馈回复，确认离开？'))));
+useAdminLeaveGuard(() => !active.value || (!busy.value && (!dirty.value || window.confirm('有未保存的反馈回复，确认离开？'))));
 function closeFeedback() {
   if (busy.value || (feedbackDirty.value && !window.confirm("放弃尚未保存的反馈回复？"))) return;
   selected.value = null;
@@ -58,24 +46,6 @@ function closeFeedback() {
 function handleDialogOpenChange(value: boolean) {
   if (!value) closeFeedback();
 }
-function updateContact(field: Exclude<keyof SupportSettings, 'revision'>, value: string | number | undefined) {
-  if (settings.value) settings.value[field] = String(value ?? '');
-}
-async function loadSettings(preserve = false) {
-  const id = ++settingsSequence;
-  try {
-    const latest = await getSupport();
-    if (id !== settingsSequence) return;
-    if (preserve && settings.value) {
-      settings.value.revision = latest.revision;
-      contactConflict.value = false;
-      notice.value = '已载入最新版本，您的修改已保留，请核对后保存';
-    } else if (!settingsDirty.value) settings.value = latest;
-    settingsBaseline.value = JSON.stringify(latest);
-  } catch (cause) {
-    error.value = message(cause);
-  }
-}
 async function reloadFeedback() {
   if (!selected.value || busy.value) return;
   busy.value = true;
@@ -84,7 +54,7 @@ async function reloadFeedback() {
     const latest = await getFeedbackDetail(selectedId);
     if (!active.value || selected.value?.id !== selectedId) return;
     latestFeedback.value = latest;
-    selected.value.revision = latest.revision;
+    selected.value = { ...latest, status: selected.value.status, reply: selected.value.reply, internal_note: selected.value.internal_note };
     feedbackConflict.value = false;
     formError.value = "已载入最新版本，您的修改已保留，请核对后保存";
   } catch (cause) {
@@ -117,12 +87,10 @@ async function load() {
 onActivated(() => {
   active.value = true;
   void load();
-  void loadSettings();
 });
 onDeactivated(() => {
   active.value = false;
   sequence++;
-  settingsSequence++;
   dialog.value = false;
   previewOpen.value = false;
 });
@@ -171,30 +139,6 @@ async function save() {
     busy.value = false;
   }
 }
-async function saveContact() {
-  if (busy.value || !settings.value) return;
-  if (
-    settings.value.phone &&
-    !/^[0-9+() -]{0,40}$/.test(settings.value.phone)
-  ) {
-    error.value = "联系电话只能包含数字、空格和 + ( ) -，最多 40 位";
-    return;
-  }
-  busy.value = true;
-  error.value = "";
-  notice.value = "";
-  try {
-    settings.value = await saveSupport(props.user.id, settings.value);
-    settingsBaseline.value = JSON.stringify(settings.value);
-    contactConflict.value = false;
-    notice.value = "会员权益和联系方式已更新";
-  } catch (cause) {
-    contactConflict.value = cause instanceof ApiError && cause.status === 409;
-    error.value = message(cause);
-  } finally {
-    busy.value = false;
-  }
-}
 async function inspect() {
   if (!selected.value?.catalog_id) return;
   formError.value = "";
@@ -208,26 +152,13 @@ async function inspect() {
 </script>
 <template>
   <section class="admin-section">
-    <UTabs
-      v-model="tab"
-      :items="[
-        { label: '小程序反馈', value: 'feedback' },
-        { label: '会员与联系设置', value: 'support' },
-      ]"
-      :content="false"
-    />
-    <UButton
-      v-if="contactConflict"
-      label="载入最新并保留我的修改"
-      @click="loadSettings(true)"
-    /><UAlert v-if="error" :title="error" color="error" class="notice" /><UAlert
+    <UAlert v-if="error" :title="error" color="error" class="notice" /><UAlert
       v-if="notice"
       :title="notice"
       color="success"
       class="notice"
     />
-    <template v-if="tab === 'feedback'"
-      ><div class="section-toolbar">
+    <div class="section-toolbar">
         <USelect
           v-model="status"
           :items="[{ label: '全部状态', value: 'all' }, ...statusOptions]"
@@ -245,6 +176,7 @@ async function inspect() {
           <thead>
             <tr>
               <th>用户</th>
+              <th>当前身份</th>
               <th>问题</th>
               <th>资料</th>
               <th>状态</th>
@@ -255,6 +187,12 @@ async function inspect() {
           <tbody>
             <tr v-for="item in items" :key="item.id">
               <td>{{ item.nickname || item.username }}</td>
+              <td>
+                <UBadge :color="item.is_vip ? 'warning' : 'neutral'" variant="soft">
+                  {{ item.is_vip ? 'VIP 会员' : '普通用户' }}
+                </UBadge>
+                <div v-if="item.membership_status === 'expired'" class="feedback-membership-note">会员已到期</div>
+              </td>
               <td>
                 <strong>{{ kindLabels[item.kind] }}</strong>
                 <div class="feedback-excerpt">{{ item.body }}</div>
@@ -276,7 +214,7 @@ async function inspect() {
               </td>
             </tr>
             <tr v-if="!items.length">
-              <td colspan="6">
+              <td colspan="7">
                 {{ loading ? "正在加载" : "暂无符合条件的反馈" }}
               </td>
             </tr>
@@ -289,58 +227,7 @@ async function inspect() {
         :total="total"
         :items-per-page="20"
         class="mt-4"
-    /></template>
-    <form
-      v-else-if="settings"
-      class="field-stack support-settings"
-      @submit.prevent="saveContact"
-    >
-      <UFormField label="会员权益说明"
-        ><UTextarea
-          :model-value="settings?.benefits"
-          @update:model-value="updateContact('benefits', $event)"
-          :rows="5"
-          :maxlength="2000"
-          class="w-full" /></UFormField
-      ><UFormField label="客服微信号"
-        ><UInput
-          :model-value="settings?.wechat"
-          @update:model-value="updateContact('wechat', $event)"
-          maxlength="80"
-          class="w-full" /></UFormField
-      ><UFormField label="联系电话"
-        ><UInput
-          :model-value="settings?.phone"
-          @update:model-value="updateContact('phone', $event)"
-          maxlength="40"
-          class="w-full" /></UFormField
-      ><UFormField label="联系邮箱"
-        ><UInput
-          :model-value="settings?.email"
-          @update:model-value="updateContact('email', $event)"
-          type="email"
-          maxlength="120"
-          class="w-full" /></UFormField
-      ><UFormField label="客服二维码地址"
-        ><UInput
-          :model-value="settings?.qr_url"
-          @update:model-value="updateContact('qr_url', $event)"
-          maxlength="500"
-          placeholder="https://... 或本地可访问地址"
-          class="w-full" /></UFormField
-      ><UFormField label="服务时间"
-        ><UInput
-          :model-value="settings?.hours"
-          @update:model-value="updateContact('hours', $event)"
-          maxlength="120"
-          placeholder="例如：工作日 9:00-18:00"
-          class="w-full"
-      /></UFormField>
-      <p class="text-sm text-muted">
-        联系方式可以留空；配置二维码地址后，小程序会员页会直接展示二维码。
-      </p>
-      <UButton type="submit" label="保存服务信息" :loading="busy" />
-    </form>
+    />
     <UModal
       :open="dialog"
       @update:open="handleDialogOpenChange"
@@ -352,18 +239,25 @@ async function inspect() {
           v-if="selected"
           id="feedback-reply"
           class="field-stack"
-          @submit.prevent="save"
+          @submit.prevent="canPermission('supportCenter:update') && (save())"
         >
           <div class="feedback-original">
             <strong
               >{{ selected.nickname || selected.username }} ·
               {{ kindLabels[selected.kind] }}</strong
             >
+            <div class="feedback-identity">
+              <span>当前身份</span>
+              <UBadge :color="selected.is_vip ? 'warning' : 'neutral'" variant="soft">
+                {{ selected.is_vip ? 'VIP 会员' : '普通用户' }}
+              </UBadge>
+              <span v-if="selected.membership_status === 'expired'">会员已到期</span>
+            </div>
             <p>{{ selected.body }}</p>
             <p v-if="selected.paper_title">
               关联资料：{{ selected.paper_title }}
             </p>
-            <UButton
+            <UButton v-permission="'papers:view'"
               v-if="selected.catalog_id"
               label="查看关联资料"
               variant="outline"
@@ -372,18 +266,18 @@ async function inspect() {
           </div>
           <UFormField label="处理状态"
             ><USelect
-              v-model="selected.status"
+ :disabled="!canPermission('supportCenter:update')"              v-model="selected.status"
               :items="statusOptions" /></UFormField
           ><UFormField label="回复用户"
             ><UTextarea
-              v-model="selected.reply"
+ :disabled="!canPermission('supportCenter:update')"              v-model="selected.reply"
               :maxlength="2000"
               :rows="4"
               class="w-full"
               placeholder="这段回复会显示在用户的小程序中" /></UFormField
           ><UFormField label="内部处理备注"
             ><UTextarea
-              v-model="selected.internal_note"
+ :disabled="!canPermission('supportCenter:update')"              v-model="selected.internal_note"
               :maxlength="2000"
               :rows="3"
               class="w-full"
@@ -407,7 +301,7 @@ async function inspect() {
           label="取消"
           color="neutral"
           :disabled="busy"
-          @click="closeFeedback" /><UButton
+          @click="closeFeedback" /><UButton v-permission="'supportCenter:update'"
           type="submit"
           form="feedback-reply"
           label="保存处理结果"
@@ -430,9 +324,19 @@ async function inspect() {
   </section>
 </template>
 <style scoped>
-.support-settings {
-  max-width: 640px;
-  margin-top: 24px;
+.feedback-identity {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+}
+.feedback-membership-note {
+  margin-top: 6px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
 }
 .feedback-excerpt {
   max-width: 300px;

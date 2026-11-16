@@ -12,12 +12,24 @@ from app.services import public_catalog as catalog
 from app.services.mini_errors import fail
 from app.services.mini_messages import notify
 
+_FEEDBACK_SELECT = (
+    "SELECT f.*, u.username, u.nickname, u.membership, u.vip_expires_at "
+    "FROM mini_feedback f JOIN mini_users u ON u.id = f.user_id "
+)
+
 
 def _feedback(row, admin=False):
     item = dict(row)
-    if not admin:
+    if admin:
+        user = mini_auth.MiniUser(item["user_id"], item["username"], item["membership"], item["vip_expires_at"])
+        identity = user.public()
+        for key in ("is_vip", "membership_status"):
+            item[key] = identity[key]
+    else:
         item.pop("internal_note", None)
         item.pop("admin_id", None)
+        item.pop("membership", None)
+        item.pop("vip_expires_at", None)
     return item
 
 
@@ -49,16 +61,15 @@ def list_feedback(user_id=None, status="", limit=20, offset=0):
     where = " AND ".join(clauses) or "1=1"
     with db() as conn:
         total = conn.execute(f"SELECT COUNT(*) FROM mini_feedback f WHERE {where}", args).fetchone()[0]
-        rows = conn.execute("SELECT f.*, u.username, u.nickname FROM mini_feedback f JOIN mini_users u ON u.id = f.user_id "
-                            f"WHERE {where} ORDER BY f.updated_at DESC, f.id DESC LIMIT ? OFFSET ?", [*args, limit, offset]).fetchall()
+        rows = conn.execute(_FEEDBACK_SELECT + f"WHERE {where} ORDER BY f.updated_at DESC, f.id DESC LIMIT ? OFFSET ?",
+                            [*args, limit, offset]).fetchall()
     return {"items": [_feedback(row, user_id is None) for row in rows], "total": total, "has_more": offset + len(rows) < total}
 
 
 def admin_feedback_detail(identifier):
     """管理员直接读取最新反馈，包含回复与内部备注，无需逐页扫描。"""
     with db() as conn:
-        row = conn.execute("SELECT f.*, u.username, u.nickname FROM mini_feedback f JOIN mini_users u ON u.id = f.user_id "
-                           "WHERE f.id = ?", (identifier,)).fetchone()
+        row = conn.execute(_FEEDBACK_SELECT + "WHERE f.id = ?", (identifier,)).fetchone()
     if not row:
         fail("反馈记录不存在", 404)
     return _feedback(row, True)
@@ -77,7 +88,7 @@ def update_feedback(admin_id, identifier, body):
         if body.reply and (body.reply != row["reply"] or body.status != row["status"]):
             notify(conn, row["user_id"], f"feedback:{identifier}:{body.revision + 1}", "feedback", "你的反馈有新回复",
                    body.reply, "feedback", identifier)
-        return _feedback(conn.execute("SELECT * FROM mini_feedback WHERE id = ?", (identifier,)).fetchone(), True)
+        return _feedback(conn.execute(_FEEDBACK_SELECT + "WHERE f.id = ?", (identifier,)).fetchone(), True)
 
 
 def feedback_detail(user_id, identifier):

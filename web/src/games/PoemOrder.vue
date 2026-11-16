@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import { writeGameSave } from './game-storage'
 import { computed, ref, watch } from 'vue'
 import GameNav from './GameNav.vue'
 import {
-  advancePoem, checkPoem, clearPoemSelection, newPoem, poemDifficulties, poemHint,
+  movePoemTile, advancePoem, checkPoem, clearPoemSelection, newPoem, poemDifficulties, poemHint,
   poemStars, POEM_QUESTIONS, restartPoem, restorePoem, selectPoemTile, switchPoemDifficulty,
   type PoemDifficulty, type PoemTile,
 } from './poem-order'
@@ -16,7 +17,7 @@ const resetDifficulty = ref<PoemDifficulty | null>(null)
 const helpOpen = ref(false)
 const saveError = ref(false)
 const feedback = ref('')
-const hint = ref('')
+const hint = ref(''), hintPosition = ref(1)
 const round = computed(() => save.value.round)
 const question = computed(() => round.value.questions[round.value.index])
 const difficulty = computed(() => poemDifficulties.find(item => item.id === save.value.difficulty)!)
@@ -47,9 +48,10 @@ function check() {
   }
   const result = checkPoem(save.value)
   if (result === null) return
+  const wrong = round.value.selected.findIndex((id,index)=>id!==question.value.answer[index])
   feedback.value = result
     ? `排对啦！这是${question.value.author}的《${question.value.title}》。`
-    : '顺序还不太对，试着从第一句开始，顺着读一读。'
+    : `第 ${wrong+1} 句开始顺序不对。可以用下方顺序调整，只交换这两句再读一遍。`
   if (result) hint.value = ''
 }
 function clearAll() {
@@ -57,6 +59,7 @@ function clearAll() {
   feedback.value = ''
 }
 function showHint() {
+  hintPosition.value=question.value.answer.findIndex((id,index)=>round.value.selected[index]!==id)+1
   const text = poemHint(save.value)
   if (text) hint.value = text
 }
@@ -83,7 +86,7 @@ function applyDifficulty() {
   hint.value = ''
 }
 watch(save, value => {
-  try { localStorage.setItem(props.storageKey, JSON.stringify(value)); saveError.value = false }
+  try { writeGameSave(props.storageKey, value); saveError.value = false }
   catch { saveError.value = true }
 }, { deep: true, immediate: true, flush: 'post' })
 watch(() => props.storageKey, () => {
@@ -143,7 +146,7 @@ watch(() => props.storageKey, () => {
         </article>
 
         <aside class="tile-tray" aria-label="诗句纸条">
-          <div class="tray-heading"><div><UIcon name="i-lucide-notes" /><h2>诗句纸条</h2></div><span>{{ trayCount }} 张</span></div>
+          <div class="tray-heading"><div><UIcon name="i-lucide-notebook-text" /><h2>诗句纸条</h2></div><span>{{ trayCount }} 张</span></div>
           <p class="tray-copy">{{ save.difficulty === 'master' ? '有一句不属于这首诗，排的时候要把它留下来。' : '读一读每张纸条，把它们排成一首完整的诗。' }}</p>
           <div class="tile-list" role="group" aria-label="诗句纸条">
             <button v-for="tile in question.tiles" :key="tile.id" class="poem-tile" :class="{ picked: round.selected.includes(tile.id), hinted: hint && tile.text === hint }" :data-tile-id="tile.id" :aria-pressed="round.selected.includes(tile.id)" :aria-label="`诗句 ${tile.text}`" :disabled="round.solved" @click="pick(tile.id)">
@@ -152,7 +155,7 @@ watch(() => props.storageKey, () => {
               <span v-if="round.selected.includes(tile.id)" class="tile-order">{{ round.selected.indexOf(tile.id) + 1 }}</span>
             </button>
           </div>
-          <div v-if="hint && !round.solved" class="tray-hint" role="status"><UIcon name="i-lucide-lightbulb" />第一句是「{{ hint }}」</div>
+          <div v-if="hint && !round.solved" class="tray-hint" role="status"><UIcon name="i-lucide-lightbulb" />第 {{ hintPosition }} 句是「{{ hint }}」</div>
           <div class="tray-actions">
             <button class="ghost-button" :disabled="!round.selected.length || round.solved" @click="clearAll"><UIcon name="i-lucide-undo-2" />全部取下</button>
             <button class="hint-button" :disabled="round.solved" @click="showHint"><UIcon name="i-lucide-lightbulb" />{{ hint ? '再提示一次' : '给我提示' }}</button>
@@ -162,7 +165,9 @@ watch(() => props.storageKey, () => {
         </aside>
       </section>
 
-      <section v-else class="poem-report">
+      <details v-if="!finished && selectedTiles.length>1 && !round.solved" class="sequence-adjust"><summary>调整诗句顺序</summary><div v-for="(tile,index) in selectedTiles" :key="tile.id"><span>{{ index+1 }} · {{ tile.text }}</span><button :disabled="index===0" :aria-label="`第 ${index+1} 个诗句前移`" @click="movePoemTile(save,index,-1);feedback=''">前移</button><button :disabled="index===selectedTiles.length-1" :aria-label="`第 ${index+1} 个诗句后移`" @click="movePoemTile(save,index,1);feedback=''">后移</button></div></details>
+
+      <section v-if="finished" class="poem-report">
         <div class="report-stars" :aria-label="`本局获得${stars}颗星`"><UIcon v-for="n in 3" :key="n" name="i-lucide-star" :class="{ earned: n <= stars }" /></div>
         <span class="eyebrow">第 {{ save.rounds }} 次诗会 · {{ difficulty.name }}</span>
         <h2>{{ stars === 3 ? '一字不差，小诗人真棒！' : '诗都排好啦，再读一遍会更熟！' }}</h2>
@@ -185,6 +190,7 @@ watch(() => props.storageKey, () => {
 </template>
 
 <style scoped>
+.sequence-adjust{margin:16px 0;padding:14px;border:1px solid #dfdfcf;border-radius:9px;background:white;font-size:12px}.sequence-adjust summary{cursor:pointer}.sequence-adjust>div{display:flex;gap:8px;align-items:center;margin-top:10px}.sequence-adjust span{flex:1;min-width:0}.sequence-adjust button{padding:8px;border:1px solid #ddd;border-radius:6px}.sequence-adjust button:disabled{opacity:.4}
 .poem-game { --poem-ink: #3d3a31; --poem-muted: #948c7b; --poem-green: #557862; --poem-red: #b2553e; --poem-border: #e6ddca; min-height: 100dvh; background: #f8f3e7; color: var(--poem-ink); font-family: var(--font-ui); letter-spacing: 0; }
 .poem-game button { cursor: pointer; transition: background .16s, transform .16s, box-shadow .16s; }
 .poem-game button:disabled { cursor: default; }

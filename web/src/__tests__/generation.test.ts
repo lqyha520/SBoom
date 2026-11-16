@@ -40,6 +40,62 @@ beforeEach(() => {
 afterEach(() => useExamStore().disposePersistence())
 
 describe('section-safe generation', () => {
+  it('rejects invalid imported section counts before splitting or making a paid request', async () => {
+    const store = ready()
+    for (const count of [0, 101, Infinity, NaN, 2.5]) {
+      store.sections[0].count = count
+      await store.retrySection(store.sections[0].id)
+      expect(store.sections[0].status).toBe('error')
+      expect(store.sections[0].error).toBeTruthy()
+    }
+    expect(api.generateBatch).not.toHaveBeenCalled()
+  })
+  it('generates a hundred questions in bounded requests and merges them into the original section', async () => {
+    const store = ready()
+    store.setSectionCount(store.sections[0].id, 100)
+    store.addSection('reading', 2)
+    await store.generate()
+    const calls = vi.mocked(api.generateBatch).mock.calls
+    expect(calls.map(([params]) => params.items.reduce((sum, item) => sum + item.question_count, 0))).toEqual([30, 30, 30, 12])
+    expect(new Set(calls.map(([, id]) => id)).size).toBe(4)
+    expect(calls[3][0].previous_request_ids).toEqual(calls.slice(0, 3).map(([, id]) => id))
+    expect(store.papers[0].sections.map(section => section.data.questions.length)).toEqual([100, 2])
+    expect(store.papers[0].sections[1].data.passage).toBe('Original passage')
+    expect(store.pendingRun).toBeNull()
+  })
+
+  it('keeps successful parts of a large section and only retries the missing part, preserving edits', async () => {
+    const store = ready()
+    store.setSectionCount(store.sections[0].id, 100)
+    vi.mocked(api.generateBatch).mockImplementationOnce(async params => result(params))
+      .mockImplementationOnce(async params => {
+        const partial = result(params)
+        partial[0].questions = []
+        partial[0].missing_count = 30
+        throw new api.ApiError('缺少30道题', 422, 'generation_incomplete', '', partial)
+      })
+    await store.generate()
+    expect(store.papers[0].sections[0].data.questions).toHaveLength(70)
+    expect(store.papers[0].sections[0].data.missing_count).toBe(30)
+    store.papers[0].sections[0].data.questions[0].stem = '已编辑的题目'
+    await store.retryFailed()
+    expect(api.generateBatch).toHaveBeenCalledTimes(5)
+    expect(vi.mocked(api.generateBatch).mock.calls[4][0].items[0].question_count).toBe(30)
+    expect(store.papers[0].sections[0].data.questions).toHaveLength(100)
+    expect(store.papers[0].sections[0].data.questions[0].stem).toBe('已编辑的题目')
+    expect(store.pendingRun).toBeNull()
+  })
+
+  it('generates one hundred queued papers without silently truncating at twenty', async () => {
+    const store = ready()
+    store.paperCount = 100
+    await store.generate()
+    expect(api.generateBatch).toHaveBeenCalledTimes(100)
+    expect(store.papers).toHaveLength(100)
+    expect(store.papers[99].day).toBe(100)
+    expect(store.pendingRun).toBeNull()
+  })
+
   it('保留36题试卷中的28道有效题，缺失口算不算完成，手动只补8道', async () => {
     const store = ready()
     store.sections = []

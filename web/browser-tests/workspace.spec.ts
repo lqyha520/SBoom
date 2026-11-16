@@ -5,6 +5,98 @@ import { DEFAULT_LAYOUT, TEMPLATES } from '../src/constants'
 import type { WorkspaceSnapshot } from '../src/persistence'
 import { createGenerationRun } from '../src/generation'
 
+test('二十份试卷默认保存为一套，学生卷与答案分别下载两个 PDF', async ({ page, context }, info) => {
+  test.setTimeout(180_000)
+  await api(context)
+  let creates = 0, uploads = 0
+  let record: Record<string, unknown> | undefined
+  let pdf: Buffer | undefined
+  let answers: Buffer | undefined
+  await context.route('**/api/v1/library/**', async route => {
+    const request = route.request(), path = new URL(request.url()).pathname
+    if (path.endsWith('/folders')) return route.fulfill({ json: { items: [] } })
+    if (path.endsWith('/summary')) return route.fulfill({ json: { storage_bytes: 0, storage_limit_bytes: 5 * 1024 ** 3 } })
+    if (path.endsWith('/papers') && request.method() === 'POST') {
+      creates++
+      const body = request.postDataJSON() as { snapshot: { schema_version: number; paper: WorkspaceSnapshot['papers'][number]; additional_papers: WorkspaceSnapshot['papers']; collection_title: string; export_options: { renderer_version: string; separate_answers: boolean } } }
+      expect(body.snapshot.schema_version).toBe(2)
+      expect(body.snapshot.additional_papers).toHaveLength(19)
+      expect(body.snapshot.export_options.renderer_version).toBe('web-v2')
+      expect(body.snapshot.export_options.separate_answers).toBe(true)
+      expect([body.snapshot.paper, ...body.snapshot.additional_papers].map(({ archiveSourceId: _id, ...paper }) => paper)).toEqual(draft.papers)
+      record = { id: 'merged-paper', title: body.snapshot.collection_title!, grade: '小学三年级', subject: '数学', version: 1, question_count: 40,
+        folder_id: null, folder_name: null, group_name: '', favorite: false, file_status: 'pending', file_error: '', page_count: 0,
+        created_at: 1, thumbnail_url: null, snapshot: body.snapshot, assets: [] }
+      return route.fulfill({ status: 201, json: record })
+    }
+    if (path.endsWith('/files')) {
+      uploads++
+      const zip = await JSZip.loadAsync(request.postDataBuffer()!)
+      expect(Object.keys(zip.files)).toHaveLength(22)
+      pdf = await zip.file('paper.pdf')!.async('nodebuffer')
+      answers = await zip.file('answers.pdf')!.async('nodebuffer')
+      expect(pdf.subarray(0, 5).toString()).toBe('%PDF-')
+      expect(answers.subarray(0, 5).toString()).toBe('%PDF-')
+      expect(answers).not.toEqual(pdf)
+      await writeFile(info.outputPath('twenty-student.pdf'), pdf)
+      await writeFile(info.outputPath('twenty-answers.pdf'), answers)
+      await writeFile(info.outputPath('split-bundle.zip'), request.postDataBuffer()!)
+      for (const index of [1, 2, 19, 20]) await writeFile(info.outputPath(`preview-${index}.jpg`), await zip.file(`page-${index}.jpg`)!.async('nodebuffer'))
+      record = { ...record!, file_status: 'ready', page_count: 20, assets: [
+        { id: 'merged-pdf', kind: 'pdf', page_number: 0, byte_size: pdf.length, url: '/api/v1/library/assets/merged-pdf' },
+        { id: 'answers-pdf', kind: 'pdf', edition: 'answers', page_number: 0, byte_size: answers.length, url: '/api/v1/library/assets/answers-pdf' },
+      ] }
+      return route.fulfill({ json: record })
+    }
+    if (path.endsWith('/assets/merged-pdf')) return route.fulfill({ contentType: 'application/pdf', body: pdf! })
+    if (path.endsWith('/assets/answers-pdf')) return route.fulfill({ contentType: 'application/pdf', body: answers! })
+    if (path.endsWith('/papers')) return route.fulfill({ json: { items: record ? [record] : [], total: record ? 1 : 0, has_more: false } })
+    if (path.endsWith('/papers/merged-paper')) return route.fulfill({ json: record })
+    throw new Error('未声明云端请求：' + path)
+  })
+  const draft = worksheet(2)
+  draft.papers = Array.from({ length: 20 }, (_, index) => ({ ...structuredClone(draft.papers[0]), title: `进位加法第${index + 1}天`, titleHtml: `<b>进位加法第${index + 1}天</b>`, day: index + 1 }))
+  draft.paperCount = 20
+  await seed(page, draft)
+  await page.evaluate(() => {
+    const state = window as typeof window & { exportTitles: string[] }
+    const titles = new Set<string>()
+    new MutationObserver(() => {
+      document.querySelectorAll('[data-export-holder] .paper-stack .paper-title').forEach(element => {
+        const text = element.textContent?.trim()
+        if (text) titles.add(text)
+      })
+      state.exportTitles = [...titles]
+    }).observe(document.body, { childList: true, subtree: true, characterData: true })
+  })
+  await page.getByRole('button', { name: '保存到云端', exact: true }).click()
+  await expect(page.getByRole('radio', { name: '全部 20 份', exact: true })).toBeChecked()
+  await expect(page.getByRole('radio', { name: '合并为一套', exact: true })).toBeChecked()
+  await page.getByRole('textbox', { name: '试卷归档名称' }).fill('二十天进位加法')
+  await expect(page.getByRole('combobox', { name: '归档 PDF 内容' })).toContainText('学生卷和答案（分开为两个 PDF）')
+  await page.screenshot({ path: info.outputPath('save-options.png') })
+  await page.getByRole('button', { name: '保存试卷', exact: true }).click()
+  await expect(page.getByRole('button', { name: '查看云端试卷', exact: true })).toBeVisible({ timeout: 150_000 })
+  expect(creates).toBe(1); expect(uploads).toBe(1)
+  expect(await page.evaluate(() => (window as typeof window & { exportTitles: string[] }).exportTitles)).toEqual(
+    draft.papers.flatMap(paper => [paper.title, paper.title + ' · 参考答案']))
+  await page.getByRole('button', { name: '查看云端试卷', exact: true }).click()
+  await expect(page.locator('.archive-row')).toHaveCount(1)
+  await expect(page.locator('.archive-row')).toContainText('二十天进位加法')
+  await expect(page.locator('.archive-row')).not.toContainText('（共20份）')
+  await expect(page.locator('.archive-row')).toContainText('20 页')
+  await page.screenshot({ path: info.outputPath('cloud-library.png') })
+  for (const [label, name, data] of [['学生卷 PDF', 'student', pdf], ['答案 PDF', 'answers', answers]] as const) {
+    await page.getByRole('button', { name: '下载归档 PDF', exact: true }).click()
+    await expect(page.getByRole('heading', { name: '选择下载文件' })).toBeVisible()
+    const download = page.waitForEvent('download')
+    await page.getByRole('button', { name: label, exact: true }).click()
+    const path = info.outputPath(`downloaded-${name}.pdf`)
+    await (await download).saveAs(path)
+    expect(await readFile(path)).toEqual(data)
+  }
+})
+
 // 真实生产构建与 IndexedDB；API 固定响应避免依赖付费模型和业务数据库。
 async function api(context: BrowserContext) {
   let owner = 7
@@ -89,6 +181,16 @@ function worksheet(count: number, footer = '认真检查后再交卷'): Workspac
     generateError: '',
     pendingRun: null,
   }
+}
+
+// 排版与文件测试使用已补齐解析、通过核对的试卷；质量拦截用例仍单独构造待核对数据。
+function exportWorksheet(count: number, footer?: string): WorkspaceSnapshot {
+  const snapshot = worksheet(count, footer)
+  for (const paper of snapshot.papers) for (const section of paper.sections) for (const question of section.data.questions) {
+    question.analysis = '选项甲为本题设定的正确选项。'
+    question.quality_status = 'passed'
+  }
+  return snapshot
 }
 
 async function seed(page: Page, snapshot: WorkspaceSnapshot) {
@@ -481,7 +583,7 @@ test('修改一道题仅重测所属大题，分页和其他大题保持完整',
 
 test('批量 ZIP 包含每份学生卷、答案卷和页数正确的合并卷', async ({ page, context }, info) => {
   await api(context)
-  const snapshot = worksheet(2)
+  const snapshot = exportWorksheet(2)
   snapshot.papers.push(structuredClone(snapshot.papers[0]))
   snapshot.paperCount = 2
   await seed(page, snapshot)
@@ -611,7 +713,7 @@ test('取消排版恢复删除、顺序和尺寸，导出预览也保持原题�
 
 test('末页卷尾完整，下载的 PDF 与页面数量一致', async ({ page, context }, info) => {
   await api(context)
-  await seed(page, worksheet(6, '检查计算过程与答案。'.repeat(100)))
+  await seed(page, exportWorksheet(6, '检查计算过程与答案。'.repeat(100)))
   await expectContentsFit(page)
   const pages = await page.locator('.result-view .paper-stack .paper').count()
   expect(pages).toBeGreaterThan(1)
@@ -654,7 +756,7 @@ test('连线题表格编辑、刷新和 PDF 导出保持完整结构', async ({ 
   snapshot.papers[0].sections[0] = {
     ...snapshot.papers[0].sections[0], type: 'match_pair',
     data: { questions: [{ _qid: 'matching', type: 'match_pair', stem: '连接算式与答案',
-      left_items: ['2+3', '3+4'], right_items: ['5', '7'], answer: [[0, 0], [1, 1]] }] },
+      left_items: ['2+3', '3+4'], right_items: ['5', '7'], answer: [[0, 0], [1, 1]], analysis: '4+1=5，3+4=7。' }] },
   }
   await seed(page, snapshot)
   const table = page.locator('.result-view .paper-stack .match-table')
@@ -665,6 +767,11 @@ test('连线题表格编辑、刷新和 PDF 导出保持完整结构', async ({ 
   await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible()
   await page.reload()
   await expect(table.locator('tbody td').first()).toContainText('4 + 1')
+  await page.locator('.quality-summary').getByRole('button', { name: '查看详情', exact: true }).click()
+  await page.getByRole('button', { name: '核对此大题', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '管理题目', exact: true })
+  await dialog.getByRole('button', { name: '确认已核对', exact: true }).click()
+  await dialog.getByRole('button', { name: '完成', exact: true }).click()
   for (const width of [1440, 320]) {
     await page.setViewportSize({ width, height: 900 })
     await expectContentsFit(page)
@@ -700,7 +807,7 @@ test('仅调整富文本字号也会重新分页', async ({ page, context }) => 
 
 test('单题超过整页时提示调整内容并阻止裁切导出', async ({ page, context }) => {
   await api(context)
-  const snapshot = worksheet(1)
+  const snapshot = exportWorksheet(1)
   snapshot.papers[0].sections[0].data.questions[0].stem = '这是一道需要缩短内容的题目。'.repeat(500)
   await seed(page, snapshot)
   await expect(page.getByRole('alert')).toContainText('内容超出 A4 页面')
@@ -811,7 +918,7 @@ test('真实浏览器净化富文本保留字号颜色并移除页面覆盖样�
 
 test('多页 PNG 只下载一个包含全部页面的 ZIP', async ({ page, context }, info) => {
   await api(context)
-  await seed(page, worksheet(10))
+  await seed(page, exportWorksheet(10))
   const pages = await page.locator('.result-view .paper-stack .paper').count()
   expect(pages).toBeGreaterThan(1)
   const downloads: string[] = []
@@ -1069,7 +1176,7 @@ test('生成等待后首次结果自动适宽，两个重生成入口取消均�
 test('长卷PDF导出记录耗时和浏览器堆内存，页数完整', async ({ page, context }, info) => {
   test.setTimeout(120_000)
   await api(context)
-  const snapshot = worksheet(25)
+  const snapshot = exportWorksheet(25)
   snapshot.papers = Array.from({ length: 10 }, (_, index) => ({ ...structuredClone(snapshot.papers[0]), day: index + 1 }))
   snapshot.paperCount = 10
   await seed(page, snapshot)
@@ -1135,4 +1242,44 @@ test('慢网络冷启动记录首屏且不提前下载重型导出依赖', async
     note: 'Mocked API, real production JS/CSS, local Chromium. Not an end-user Core Web Vitals claim.',
   }, null, 2))
   await cdp.detach()
+})
+
+
+test('可编辑 Word 保留题目、富文本、答案解析，学生卷不泄露答案', async ({ page, context }, info) => {
+  await api(context)
+  const draft = exportWorksheet(2)
+  const paper = draft.papers[0]
+  paper.title = '三年级数学与阅读练习'
+  paper.sections[0].data.questions[0] = { type: 'multiple_choice', stem: '下面哪个算式的结果等于 8？', options: ['3 + 5', '6 + 1', '4 + 3', '9 − 2'], answer: 0, analysis: '3 + 5 = 8，其余算式的结果为 7。', quality_status: 'passed' }
+  paper.sections[0].data.questions[1] = { type: 'multiple_choice', stem: '2 的平方等于多少？', _stemHtml: '<b>2<sup>2</sup></b> 等于多少？', options: ['2', '4', '6', '8'], answer: 1, analysis: '2 × 2 = 4。', quality_status: 'passed' }
+  paper.sections.push(
+    { type: 'number_split', layout: { ...DEFAULT_LAYOUT, qCols: 2 }, data: { questions: [{ top: 8, left: 3, right: '', answer: 5, analysis: '8 − 3 = 5。', quality_status: 'passed' }] } },
+    { type: 'match_pair', layout: { ...DEFAULT_LAYOUT, qCols: 1 }, data: { questions: [{ stem: '把算式和正确答案连起来。', left_items: ['2 + 3', '4 + 4'], right_items: ['8', '5'], answer: [[0, 1], [1, 0]], analysis: '2 + 3 = 5，4 + 4 = 8。', quality_status: 'passed' }] } },
+    { type: 'reading', layout: { ...DEFAULT_LAYOUT, qCols: 1 }, data: { passage: '周末，小雨和爸爸走进图书馆。她先还了上次借的书，又挑选了一本科普读物。回家的路上，她把新学到的知识讲给爸爸听。', questions: [{ type: 'fill_blank', stem: '小雨在图书馆先做了什么？', answer: '归还上次借的书', analysis: '短文中的“先还了上次借的书”说明了事情的顺序。', quality_status: 'passed' }] } },
+    { type: 'word_problem', layout: { ...DEFAULT_LAYOUT, qCols: 1, answerLines: 3 }, data: { questions: [{ type: 'word_problem', stem: '图书角原来有 18 本书，同学们又带来 7 本，现在一共有多少本？', answer: '25 本', analysis: '18 + 7 = 25（本）。', quality_status: 'passed' }] } },
+  )
+  await seed(page, draft)
+  await page.getByRole('button', { name: '导出 Word', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '导出可编辑 Word' })).toBeVisible()
+  let download = page.waitForEvent('download')
+  await page.getByRole('button', { name: '下载 Word 文件' }).click()
+  let file = await download
+  const studentPath = info.outputPath('editable-student.docx')
+  await file.saveAs(studentPath)
+  let zip = await JSZip.loadAsync(await readFile(studentPath))
+  let xml = await zip.file('word/document.xml')!.async('string')
+  expect(xml).toContain('下面哪个算式'); expect(xml).toContain('superscript'); expect(xml).toContain('<w:b/>')
+  expect(xml).not.toContain('归还上次借的书'); expect(xml).not.toContain('word/media'); expect(xml).not.toContain('<w:drawing>')
+  await page.getByRole('button', { name: '导出 Word', exact: true }).click()
+  await page.getByRole('combobox', { name: 'Word 文件内容' }).click()
+  await page.getByRole('option', { name: '试卷、答案与解析', exact: true }).click()
+  await page.screenshot({ path: info.outputPath('word-export-dialog.png') })
+  download = page.waitForEvent('download')
+  await page.getByRole('button', { name: '下载 Word 文件' }).click()
+  file = await download
+  const path = info.outputPath('editable-worksheet.docx')
+  await file.saveAs(path)
+  zip = await JSZip.loadAsync(await readFile(path)); xml = await zip.file('word/document.xml')!.async('string')
+  expect(xml).toContain('归还上次借的书'); expect(xml).toContain('参考答案'); expect(xml).toContain('解析：')
+  expect(file.suggestedFilename()).toMatch(/\.docx$/)
 })

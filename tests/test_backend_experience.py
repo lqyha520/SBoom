@@ -12,6 +12,7 @@ from app import db as database
 from app.models.mini import MembershipUpdate
 from app.routers import engagement, experience, site
 from app.services import mini_auth, mini_experience
+from app.site_defaults import DEFAULT_DOCUMENTS
 
 
 class ExperienceContracts(unittest.TestCase):
@@ -96,6 +97,48 @@ class ExperienceContracts(unittest.TestCase):
         self.assertEqual(self.client.get('/api/v1/site/documents/agreement').status_code, 200)
         self.assertEqual(self.client.get('/api/v1/admin/site/documents').status_code, 401)
 
+    def test_legacy_document_upgrade_preserves_edited_content_and_is_idempotent(self):
+        # 上一版默认协议的真实正文，验证已安装站点能匹配并升级，而非仅测试新建站点。
+        legacy = """## 账号与服务
+未登录也可浏览首页、习题库、分类、标签和专题，以及允许公开预览的习题。收藏分组、文件下载、个人消息与问题反馈需要登录。小程序账号独立于出题工作台，首次微信登录创建普通用户账号。展示昵称可编辑，登录账号保持不变。
+
+## 会员与访问范围
+普通用户和有效 VIP 会员可访问的内容由运营管理员配置。在线开通启用时，以套餐页及订单确认的名称、价格和天数为准，微信确认付款后开通权益；未启用时可联系客服。已有有效期按购买天数顺延。整单退款需申请并经审核，退款成功后撤回本订单对应的未使用会员时长，其他订单和人工续期时长保留。
+
+## 习题与文件
+习题内容由发布方审核与提供。发现错误或涉及版权问题时，可从资料详情提交反馈。修订后原有收藏与公共链接保留，后续获取的是新版本，更新内容以详情页的版本说明为准。习题下架、账号停用或会员到期将影响后续访问，已经另存的文件由用户自行管理。
+
+## 个人信息
+账号标识、昵称、收藏分组、最近浏览、反馈、使用统计与设备缓存的处理方式见隐私政策。实际运营者应提供用户联系、账号注销及数据请求渠道。"""
+
+        def install(title, body, revision):
+            with database.db() as conn:
+                conn.execute("UPDATE site_documents SET title = ?, body = ?, revision = ?, updated_at = 1 WHERE key = 'agreement'",
+                             (title, body, revision))
+                # 模拟上一版已迁移的站点；当前版本不应跳过本次默认文案升级。
+                conn.execute("DELETE FROM schema_migrations WHERE version = ?", (database.SCHEMA_VERSION,))
+                conn.execute("INSERT INTO schema_migrations(version) VALUES (2026110201) ON CONFLICT(version) DO NOTHING")
+            database.init_db(migrate=True)
+            return next(item for item in self.client.get('/api/v1/admin/site/documents').json()['items'] if item['key'] == 'agreement')
+
+        title = DEFAULT_DOCUMENTS['agreement']['title']
+        upgraded = install(title, legacy, 1)
+        self.assertEqual(upgraded['body'], DEFAULT_DOCUMENTS['agreement']['body'])
+        self.assertEqual(upgraded['revision'], 2)
+        self.assertGreater(upgraded['updated_at'], 1)
+        database.init_db()
+        self.assertEqual(next(item for item in self.client.get('/api/v1/admin/site/documents').json()['items'] if item['key'] == 'agreement'), upgraded)
+        self.client.cookies.clear()
+        self.assertEqual(self.client.get('/api/v1/site/documents/agreement').json()['body'], upgraded['body'])
+        self.sign_in(self.admin)
+
+        # 旧默认正文已被保存过、标题改过或正文改过时均不自动覆盖。
+        for saved_title, saved_body, revision in ((title, legacy, 2), ('正式用户协议', legacy, 1), (title, '管理员确认的条款', 1)):
+            with self.subTest(title=saved_title, revision=revision):
+                kept = install(saved_title, saved_body, revision)
+                self.assertEqual((kept['title'], kept['body'], kept['revision'], kept['updated_at']),
+                                 (saved_title, saved_body, revision, 1))
+
     def test_nickname_does_not_change_login_and_migration_keeps_edits(self):
         self.sign_in(self.viewer)
         response = self.client.patch('/api/v1/mini/me', json={'nickname': '新的昵称'})
@@ -127,6 +170,45 @@ class ExperienceContracts(unittest.TestCase):
         response = self.client.get('/api/v1/mini/feedback')
         self.assertEqual(response.json()['items'][0]['reply'], body['reply'])
         self.assertNotIn('internal-only-marker', response.text)
+
+    def test_feedback_identity_tracks_membership_in_admin_list_detail_and_reply(self):
+        self.sign_in(self.viewer)
+        response = self.client.post('/api/v1/mini/feedback', json={'kind': 'membership', 'body': '咨询会员开通流程'})
+        self.assertEqual(response.status_code, 201, response.text)
+        feedback = response.json()
+        self.sign_in(self.other)
+        response = self.client.post('/api/v1/mini/feedback', json={'kind': 'other', 'body': '请协助核实使用问题'})
+        self.assertEqual(response.status_code, 201, response.text)
+        other_feedback = response.json()
+        self.sign_in(self.admin)
+        now = int(time.time())
+        states = [('regular', None, False, 'regular'), ('vip', now + 3600, True, 'active'),
+                  ('vip', None, True, 'active'), ('vip', now - 1, False, 'expired'), ('vip', now, False, 'expired')]
+        with patch.object(mini_auth.time, 'time', return_value=now):
+            for revision, (membership, expiry, is_vip, status) in enumerate(states, 1):
+                with self.subTest(membership=membership, expiry=expiry):
+                    mini_auth.update_membership(self.admin.id, self.viewer.id, MembershipUpdate(
+                        revision=revision, membership=membership, vip_expires_at=expiry, is_active=True))
+                    result = self.client.get('/api/v1/admin/experience/feedback?status=pending').json()
+                    self.assertEqual(result['total'], 2)
+                    rows = {row['id']: row for row in result['items']}
+                    self.assertFalse(rows[other_feedback['id']]['is_vip'])
+                    self.assertEqual(rows[other_feedback['id']]['membership_status'], 'regular')
+                    path = '/api/v1/admin/experience/feedback/' + feedback['id']
+                    detail = self.client.get(path)
+                    self.assertEqual(detail.status_code, 200, detail.text)
+                    saved = self.client.put(path, json={'revision': revision, 'status': 'pending', 'reply': '已收到反馈'})
+                    self.assertEqual(saved.status_code, 200, saved.text)
+                    expected = {'membership': membership, 'vip_expires_at': expiry, 'is_vip': is_vip, 'membership_status': status}
+                    for row in (rows[feedback['id']], detail.json(), saved.json()):
+                        self.assertEqual({key: row[key] for key in expected}, expected)
+                        self.assertEqual(row['username'], self.viewer.username)
+        self.sign_in(self.viewer)
+        public_rows = [feedback, self.client.get('/api/v1/mini/feedback').json()['items'][0],
+                       self.client.get('/api/v1/mini/feedback/' + feedback['id']).json()]
+        for row in public_rows:
+            for key in ('membership', 'vip_expires_at', 'is_vip', 'membership_status', 'internal_note'):
+                self.assertNotIn(key, row)
 
     def test_admin_feedback_detail_returns_latest_without_scanning_lists(self):
         self.sign_in(self.viewer)
@@ -176,6 +258,8 @@ class ExperienceContracts(unittest.TestCase):
         self.sign_in(self.viewer)
         self.assertEqual(self.client.post('/api/v1/mini/feedback', json={'kind': 'correction', 'body': '没有关联具体资料'}).status_code, 422)
         self.assertEqual(self.client.post('/api/v1/mini/feedback', json={'kind': 'membership', 'body': '我想续期一个月'}).status_code, 201)
+        self.assertEqual(self.client.post('/api/v1/mini/feedback', json={
+            'kind': 'other', 'body': '尝试自行指定会员身份', 'membership': 'vip', 'is_vip': True}).status_code, 422)
 
     def test_feedback_submission_limit_is_scoped_per_account(self):
         self.sign_in(self.viewer)

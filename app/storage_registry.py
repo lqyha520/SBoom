@@ -21,6 +21,7 @@ REFERENCES = (
     FileReference("paper_assets", "storage", "storage_key"),
     FileReference("image_assets", "storage", "storage_key"),
     FileReference("site_banners", "image_storage", "image_key"),
+    FileReference("xhs_assets", "storage", "storage_key"),
 )
 
 # 应用生成的存储键格式。存储目录里的其他文件（运维放进来的密钥、备份、日志等）一律不参与孤儿回收。
@@ -29,4 +30,5 @@ MANAGED_KEY = re.compile(
     r"|imports/[0-9a-f]{24}/[0-9A-Za-z_-]+"  # 演示资料导入（scripts/import_demo_catalog.py）
     r"|images/\d+/[0-9a-f]{32}\.png"  # 生图结果（image_assets）
     r"|site/banners/[0-9a-f]{32}\.(?:jpg|png|webp)"  # 首页 Banner（site_content）
+    r"|xhs/\d+/[0-9a-f]{32}\.(?:png|jpg|webp|mp4)"  # 小红书原始素材
 )

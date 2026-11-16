@@ -104,6 +104,86 @@ class PaperLibraryContracts(unittest.TestCase):
         self.assertEqual(saved["version"], 1)
         self.assertIsNone(saved["thumbnail_url"])
 
+    def test_collection_preserves_twenty_papers_and_retries_one_archive(self):
+        value = self.body["snapshot"]
+        papers = [copy.deepcopy(value["paper"]) for _ in range(20)]
+        for index, paper in enumerate(papers):
+            paper["title"] = f"第{index + 1}天练习"
+            paper["sections"] *= 4
+        value.update(schema_version=2, paper=papers[0], additional_papers=papers[1:], collection_title="二十天练习")
+        saved = self.create()
+        self.assertEqual(saved["title"], "二十天练习")
+        self.assertEqual(saved["question_count"], 80)
+        self.assertEqual(saved["snapshot"], value)
+        self.body["request_id"] = "request-again"
+        self.assertEqual(self.create()["id"], saved["id"])
+        self.assertEqual(self.client.get("/api/v1/library/papers").json()["total"], 1)
+        image = io.BytesIO()
+        Image.new("RGB", (21, 29), "white").save(image, "JPEG")
+        files = {"paper.pdf": b"%PDF-1.4\nfixture-only\n%%EOF\n", **{f"page-{i}.jpg": image.getvalue() for i in range(1, 121)}}
+        bad = {**files, "page-121.jpg": image.getvalue()}
+        self.assertEqual(self.upload(saved["id"], bundle(bad)).status_code, 422)
+        self.assertEqual(self.client.get(f"/api/v1/library/papers/{saved['id']}").json()["assets"], [])
+        ready = self.upload(saved["id"], bundle(files))
+        self.assertEqual(ready.status_code, 200, ready.text)
+        self.assertEqual(ready.json()["page_count"], 120)
+        self.assertEqual(len(ready.json()["assets"]), 121)
+        self.assertEqual(self.upload(saved["id"]).json()["assets"], ready.json()["assets"])
+        pdf = next(asset for asset in ready.json()["assets"] if asset["kind"] == "pdf")
+        self.assertEqual(self.client.get(pdf["url"]).content, files["paper.pdf"])
+
+    def test_collection_validates_each_paper_and_single_archive_keeps_page_limit(self):
+        value = self.body["snapshot"]
+        extra = copy.deepcopy(value["paper"])
+        value.update(schema_version=2, additional_papers=[extra], collection_title="合订本")
+        for change in ({"sections": []}, {"subject": "语文"}):
+            with self.subTest(change=change):
+                invalid = copy.deepcopy(self.body)
+                invalid["snapshot"]["additional_papers"][0].update(change)
+                self.assertEqual(self.client.post("/api/v1/library/papers", json=invalid).status_code, 422)
+        value["schema_version"] = 1
+        self.assertEqual(self.client.post("/api/v1/library/papers", json=self.body).status_code, 422)
+        self.body["snapshot"] = snapshot()
+        saved = self.create()
+        image = io.BytesIO()
+        Image.new("RGB", (21, 29), "white").save(image, "JPEG")
+        files = {"paper.pdf": b"%PDF-1.4\nfixture-only\n%%EOF\n", **{f"page-{i}.jpg": image.getvalue() for i in range(1, 42)}}
+        self.assertEqual(self.upload(saved["id"], bundle(files)).status_code, 422)
+
+    def test_collection_print_editions_match_every_paper_in_order(self):
+        from app.services.catalog_editions import fingerprint
+        value = snapshot()
+        extra = copy.deepcopy(value["paper"])
+        extra["sections"][0]["data"]["questions"][0]["answer"] = 0
+        value.update(schema_version=2, additional_papers=[extra], collection_title="合订本")
+        original = fingerprint(json.dumps(value))
+        value["export_options"]["mode"] = "answersOnly"
+        self.assertEqual(original, fingerprint(json.dumps(value)))
+        value["paper"], value["additional_papers"][0] = value["additional_papers"][0], value["paper"]
+        self.assertNotEqual(original, fingerprint(json.dumps(value)))
+        value["additional_papers"][0]["sections"][0]["data"]["questions"][0]["answer"] = 0
+        self.assertNotEqual(original, fingerprint(json.dumps(value)))
+
+    def test_preserved_title_renderer_creates_new_files_without_reusing_old_numbered_pdf(self):
+        value = self.body["snapshot"]
+        value.update(schema_version=2, additional_papers=[copy.deepcopy(value["paper"])], collection_title="原样标题")
+        original = copy.deepcopy(value)
+        old = self.create()
+        self.assertEqual(self.upload(old["id"]).status_code, 200)
+        value["export_options"]["renderer_version"] = "web-v2"
+        self.body["request_id"] = "preserve-title-request"
+        new = self.create()
+        self.assertNotEqual(new["id"], old["id"])
+        self.assertEqual(new["version"], 2)
+        self.assertEqual(new["file_status"], "pending")
+        self.assertEqual(new["title"], "原样标题")
+        self.assertEqual(new["snapshot"]["paper"], original["paper"])
+        self.assertEqual(new["snapshot"]["additional_papers"], original["additional_papers"])
+        self.assertEqual(self.create()["id"], new["id"])
+        old_detail = self.client.get(f"/api/v1/library/papers/{old['id']}").json()
+        self.assertEqual(old_detail["file_status"], "ready")
+        self.assertEqual(old_detail["snapshot"], original)
+
     def test_duplicate_replay_and_content_deduplication(self):
         first = self.create()
         self.assertEqual(self.create()["id"], first["id"])

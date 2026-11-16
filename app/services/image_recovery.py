@@ -39,7 +39,7 @@ def available(row: dict) -> bool:
         if not envelope.get("image_recovery") or envelope.get("attempts", 0) >= MAX_RECOVERY_ATTEMPTS:
             return False
         state = json.loads(decrypt_secret(envelope["image_recovery"]))
-        return bool(state.get("task") or state.get("asset_url"))
+        return bool(state.get("task") or state.get("asset_url") or state.get("saved_asset"))
     except (ValueError, TypeError, KeyError):
         return False
 
@@ -72,6 +72,14 @@ async def checkpoint(config: dict, prompt: str, *, task: dict | None = None, ass
         logger.warning("生图检查点保存失败（%s）", type(exc).__name__)
         raise HTTPException(503, detail={"code": "image_checkpoint_unavailable", "failover_safe": False,
                                         "error": "生图状态记录保存失败，已停止继续调用模型，请查询原请求"}) from exc
+
+
+def checkpoint_saved(result: dict) -> None:
+    """识图检查前记录已落盘的原图；中断恢复不重复发起收费检查。"""
+    owner = current_request.get()
+    if owner is not None:
+        _save(owner, {"saved_asset": True, "prompt": result.get("prompt", ""),
+                      "quality_review": result["quality_review"]})
 
 
 def _claim(user_id: int, request_id: str) -> dict | None:
@@ -124,10 +132,12 @@ def _existing_asset(lease: dict) -> dict | None:
                            (lease["user_id"], lease["request_id"], int(time.time()))).fetchone()
     if not row:
         return None
+    from app.services.image_review import pending
     return {"request_id": lease["request_id"], "asset_id": row["id"],
             "url": f"/api/v1/image-generation/assets/{row['id']}", "mime_type": "image/png",
             "width": row["width"], "height": row["height"], "byte_size": row["byte_size"],
-            "expires_at": row["expires_at"], "prompt": lease["state"]["prompt"]}
+            "expires_at": row["expires_at"], "prompt": lease["state"]["prompt"],
+            "quality_review": lease["state"].get("quality_review") or pending("原图已恢复，尚未完成内容检查")}
 
 
 async def recover(lease: dict) -> None:
@@ -177,7 +187,9 @@ async def recover(lease: dict) -> None:
                 raw = await _public_image(state["asset_url"])
             stage = "image_processing"
             image = await _normalize_when_available(raw)
-            result = await run_sync(persist, lease["user_id"], lease["request_id"], {**image, "prompt": state["prompt"]})
+            from app.services.image_review import pending
+            result = await run_sync(persist, lease["user_id"], lease["request_id"],
+                                    {**image, "prompt": state["prompt"], "quality_review": pending("原图已恢复，尚未完成内容检查")})
             await run_sync(_complete, lease, {**result, "request_id": lease["request_id"]})
             logger.info("原生图结果恢复成功")
     except (Exception, asyncio.CancelledError) as exc:

@@ -15,6 +15,7 @@
     "typecheck": "vue-tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "check:mp": "node scripts/check-build.mjs",
+    "check:mp:dev": "node scripts/check-build.mjs --dev",
     "check:release": "node scripts/check-build.mjs --release",
     "assets": "node scripts/build-icons.mjs",
     "assets:editorial": "node scripts/build-editorial-assets.mjs",

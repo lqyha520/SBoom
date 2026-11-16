@@ -34,12 +34,13 @@ class OpsContracts(unittest.TestCase):
                 modes.append(mode)
                 return chmod(path, mode, **kwargs)
             with patch.dict(os.environ, {"BACKUP_STATUS_FILE": str(target), "RESTIC_REPOSITORY": "s3:fixture/bucket"}, clear=True), \
-                    patch.object(backup.backup_restore, "backup"), patch.object(backup, "run"), \
+                    patch.object(backup.backup_restore, "backup"), patch.object(backup, "run", return_value=b'[{"id":"snapshot-one"}]'), \
                     patch.object(Path, "chmod", record_mode):
                 for timestamp in (100, 200):
                     with patch.object(backup.time, "time", return_value=timestamp):
                         backup.execute("backup")
-                    self.assertEqual(json.loads(target.read_text()), {"completed_at": timestamp, "verified": True, "offsite": True})
+                    self.assertEqual(json.loads(target.read_text()), {"completed_at": timestamp, "verified": True,
+                                                                     "offsite": True, "snapshot_id": "snapshot-one"})
                     if os.name == "posix":
                         self.assertEqual(target.stat().st_mode & 0o777, 0o640)
                         self.assertEqual(target.stat().st_gid, target.parent.stat().st_gid)
@@ -142,6 +143,7 @@ class OpsContracts(unittest.TestCase):
                     patch.object(sys, "argv", ["release.py", "--image", "app:new", "--state-dir", root]), \
                     patch.object(release, "run", side_effect=run) as execute, \
                     patch.object(release, "verify_image"), \
+                    patch.object(release, "validate_evaluation", return_value={'image': 'sha256:new-image'}), \
                     patch.object(release.subprocess, "run"), \
                     patch.object(release, "health_check", side_effect=[OSError("unhealthy"), None]):
                 with self.assertRaisesRegex(RuntimeError, "已恢复"):

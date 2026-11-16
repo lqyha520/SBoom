@@ -3,6 +3,7 @@ import type { Difficulty, GameData, PaperData, Question, Section } from './types
 import { deepClone, ensureQids } from './utils'
 // crypto.randomUUID 是 [SecureContext] 限定 API，http://内网IP 下不存在
 import { randomId } from '../../shared/webcrypto'
+import { MAX_QUESTIONS_PER_REQUEST, MAX_ITEMS_PER_REQUEST, MAX_PAPERS_PER_RUN, MAX_PAPER_SECTIONS, MAX_PAPER_QUESTIONS, sectionQuestionLimit } from './generation-limits'
 
 export interface GenerationContext {
   grade: string
@@ -19,6 +20,8 @@ export interface GenerationContext {
 }
 
 export interface GenerationChunk {
+  analysisRequestId?: string
+  analysisSourceId?: string
   requestId: string
   items: api.BatchItemReq[]
   state: 'new' | 'running' | 'succeeded' | 'failed' | 'unknown'
@@ -48,16 +51,29 @@ export class NoGenerationNeeded extends Error { constructor() { super('没有待
 
 export function createGenerationRun(context: GenerationContext): GenerationRun {
   const snapshot = deepClone(context)
+  if (!Number.isInteger(snapshot.count) || snapshot.count < 1 || snapshot.count > MAX_PAPERS_PER_RUN
+    || snapshot.sections.length > MAX_PAPER_SECTIONS || snapshot.sections.reduce((sum, section) => sum + section.count, 0) > MAX_PAPER_QUESTIONS) {
+    throw new Error('生成数量超出范围，请减少本批份数或单卷题量')
+  }
+  for (const section of snapshot.sections) {
+    if (!Number.isInteger(section.count) || section.count < 1 || section.count > sectionQuestionLimit(section.type)) {
+      throw new Error(`每个${section.type === 'reading' ? '阅读' : ''}大题需设置 1 至 ${sectionQuestionLimit(section.type)} 道题`)
+    }
+  }
   const items = snapshot.sections.map(section => ({ section_id: section.id, game_type: section.type,
     question_count: section.count - (section.lockedQuestions?.length || 0),
   })).filter(item => item.question_count > 0)
   const groups: api.BatchItemReq[][] = []
   for (const item of items) {
-    let group = groups[groups.length - 1]
-    if (!group || group.length >= 10 || group.reduce((n, value) => n + value.question_count, 0) + item.question_count > 30) {
-      group = []; groups.push(group)
+    for (let left = item.question_count; left > 0; left -= MAX_QUESTIONS_PER_REQUEST) {
+      const part = { ...item, question_count: Math.min(left, MAX_QUESTIONS_PER_REQUEST) }
+      let group = groups[groups.length - 1]
+      if (!group || group.length >= MAX_ITEMS_PER_REQUEST || group.some(value => value.section_id === part.section_id)
+        || group.reduce((n, value) => n + value.question_count, 0) + part.question_count > MAX_QUESTIONS_PER_REQUEST) {
+        group = []; groups.push(group)
+      }
+      group.push(part)
     }
-    group.push(item)
   }
   return {
     context: snapshot,
@@ -226,8 +242,9 @@ export function assemblePaper(context: GenerationContext, job: GenerationJob): P
     const parts = job.chunks.filter(chunk => chunk.items.some(item => item.section_id === section.id))
     if (section.type === 'reading' || parts.length < 2) continue
     const results = parts.map(part => (part.result || []).filter(value => value.section_id === section.id))
-    if (!results.every(values => values.length === 1 && values[0].game_type === section.type)) continue
-    const values = results.map(value => value[0])
+    if (results.some(values => values.length > 1 || values.some(value => value.game_type !== section.type))) continue
+    const values = results.flat()
+    if (!values.length) continue
     responses = responses.filter(value => value.section_id !== section.id)
     responses.push({ ...values[0], questions: values.flatMap(value => value.questions || []),
       missing_count: values.reduce((sum, value) => sum + (value.missing_count || 0), 0),

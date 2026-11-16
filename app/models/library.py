@@ -4,6 +4,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+MAX_MERGED_PAPERS = 100
+MAX_MERGED_PAGES = 120
+
+
+def snapshot_papers(snapshot: dict) -> list[dict]:
+    """首份保持旧快照入口，合订本按保存顺序补齐其余试卷。"""
+    return [snapshot["paper"], *snapshot.get("additional_papers", [])]
+
 
 class SnapshotSection(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -37,13 +45,22 @@ class ExportOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["student", "withAnswers", "answersOnly"] = "student"
     addDay: bool
-    renderer_version: Literal["web-v1"] = "web-v1"
+    renderer_version: Literal["web-v1", "web-v2"] = "web-v1"
+    separate_answers: bool = False
+
+    @model_validator(mode="after")
+    def split_requires_answers(self):
+        if self.separate_answers and self.mode != "withAnswers":
+            raise ValueError("Separate answer PDFs require both student and answer content")
+        return self
 
 
 class PaperSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     paper: SnapshotPaper
+    additional_papers: list[SnapshotPaper] = Field(default_factory=list, max_length=MAX_MERGED_PAPERS - 1)
+    collection_title: str = Field("", max_length=240)
     template: dict
     style: dict
     export_options: ExportOptions
@@ -56,9 +73,20 @@ class PaperSnapshot(BaseModel):
                         "kidFont", "exportBg", "titleScale", "titleOffsetY"}
         if not template_fields.issubset(self.template) or not style_fields.issubset(self.style):
             raise ValueError("The full template and paper style are required")
-        count = sum(len(section.data["questions"]) for section in self.paper.sections)
-        if not 1 <= count <= 1500:
-            raise ValueError("A paper must contain 1 to 1500 questions")
+        if self.schema_version == 1 and (self.additional_papers or self.collection_title):
+            raise ValueError("Collections require snapshot version 2")
+        if self.schema_version == 2 and (not self.additional_papers or not self.collection_title.strip()):
+            raise ValueError("A collection requires at least two papers and a title")
+        total = 0
+        for paper in [self.paper, *self.additional_papers]:
+            if (paper.grade, paper.subject) != (self.paper.grade, self.paper.subject):
+                raise ValueError("A collection must use the same grade and subject")
+            count = sum(len(section.data["questions"]) for section in paper.sections)
+            if not 1 <= count <= 1500:
+                raise ValueError("A paper must contain 1 to 1500 questions")
+            total += count
+        if total > 15000:
+            raise ValueError("A collection must contain at most 15000 questions")
         return self
 
 
@@ -84,6 +112,41 @@ class ArchiveUpdate(BaseModel):
         if value is not None and not value.strip():
             raise ValueError("The title cannot be blank")
         return value.strip() if value else value
+
+
+class ArchiveDeleteSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[str] = Field(min_length=1, max_length=50)
+
+    @field_validator("ids")
+    @classmethod
+    def valid_ids(cls, value):
+        if any(not item.strip() or len(item) > 64 for item in value):
+            raise ValueError("请选择有效的试卷")
+        return list(dict.fromkeys(value))
+
+
+class ArchiveBatchDelete(ArchiveDeleteSelection):
+    confirmed: Literal[True]
+
+
+class ArchiveDeleteItem(BaseModel):
+    id: str
+    title: str | None = None
+    reason: str | None = None
+    storage_bytes: int = 0
+
+
+class ArchiveDeletePreview(BaseModel):
+    items: list[ArchiveDeleteItem]
+    deletable_count: int
+    reclaimable_bytes: int
+
+
+class ArchiveDeleteResult(BaseModel):
+    deleted_ids: list[str]
+    skipped: list[ArchiveDeleteItem]
+    released_bytes: int
 
 
 class FolderInput(BaseModel):

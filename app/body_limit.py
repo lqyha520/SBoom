@@ -7,7 +7,10 @@ from starlette.responses import JSONResponse
 
 # 仅精确放行具有流式限额读取器的接口，不能按整个业务前缀豁免。
 UPLOAD_ROUTES = (
+    ("POST", re.compile(r"/api/v1/admin/settlements/statements/[^/]+/attachments/?")),
+    ("POST", re.compile(r"/api/v1/admin/xhs-workspace/assets/file/?")),
     ("POST", re.compile(r"/api/v1/library/papers/?")),
+    ("POST", re.compile(r"/api/v1/library/import/?")),
     ("PUT", re.compile(r"/api/v1/library/papers/[^/]+/files/?")),
     ("POST", re.compile(r"/api/v1/admin/catalog/import/?")),
     ("POST", re.compile(r"/api/v1/admin/catalog/papers/[^/]+/editions/import/?")),

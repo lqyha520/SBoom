@@ -90,6 +90,18 @@ class BannerContracts(unittest.TestCase):
         current = self.client.get("/api/v1/admin/site/banners").json()["items"][0]
         self.assertEqual(current["revision"], uploaded["revision"])
 
+    def test_banner_without_image_can_be_updated_before_upload_retry(self):
+        item = self.create(is_visible=False)
+        self.assertIsNone(item["image_url"])
+        updated = self.update(item, subtitle="图片上传前仍可保存草稿")
+        self.assertIsNone(updated["image_url"])
+        self.assertEqual(updated["revision"], item["revision"] + 1)
+        self.assertEqual(self.client.get("/api/v1/site/home").json()["banners"], [])
+        uploaded = self.upload(updated)
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        published = self.update(uploaded.json(), is_visible=True)
+        self.assertEqual(self.client.get("/api/v1/site/home").json()["banners"][0]["image_url"], published["image_url"])
+
     def test_hidden_banners_allow_admin_preview_but_not_public_images(self):
         item = self.create(is_visible=False)
         image = self.upload(item).json()

@@ -1,3 +1,4 @@
+import { contentDeck,rememberContent,validContentHistory,type ContentHistory } from './challenge-journey'
 import { randomInt, shuffle, type Rng } from './random'
 
 export type IdiomDifficulty = 'starter' | 'explorer' | 'master'
@@ -28,7 +29,7 @@ export interface IdiomRound {
   finished: boolean
 }
 
-export interface IdiomSave {
+export interface IdiomSave extends ContentHistory {
   version: 1
   difficulty: IdiomDifficulty
   round: IdiomRound
@@ -56,6 +57,30 @@ const starterIdioms: IdiomSource[] = [
   { id: 'duiniutanqin', text: '对牛弹琴', blank: 3, answer: '琴', options: ['琴', '勤', '芹', '禽'], pinyin: 'duì niú tán qín', meaning: '比喻对不懂道理的人讲道理，白费口舌。' },
   { id: 'kezhouqiujian', text: '刻舟求剑', blank: 3, answer: '剑', options: ['剑', '箭', '建', '健'], pinyin: 'kè zhōu qiú jiàn', meaning: '比喻拘泥成法，不知道随情况变化。' },
   { id: 'hujiahuwei', text: '狐假虎威', blank: 3, answer: '威', options: ['威', '微', '危', '违'], pinyin: 'hú jiǎ hǔ wēi', meaning: '比喻依仗别人的势力来欺压人。' },
+  {"id": "new-starter-1", "text": "一帆风顺", "pinyin": "yī fān fēng shùn", "meaning": "比喻事情进展顺利。", "blank": 1, "answer": "帆", "options": ["帆", "凡", "反", "返"]},
+  {"id": "new-starter-2", "text": "五颜六色", "pinyin": "wǔ yán liù sè", "meaning": "形容颜色很多。", "blank": 1, "answer": "颜", "options": ["颜", "言", "炎", "严"]},
+  {"id": "new-starter-3", "text": "七上八下", "pinyin": "qī shàng bā xià", "meaning": "形容心里慌乱、不安。", "blank": 2, "answer": "八", "options": ["八", "四", "九", "六"]},
+  {"id": "new-starter-4", "text": "十全十美", "pinyin": "shí quán shí měi", "meaning": "形容十分完美。", "blank": 3, "answer": "美", "options": ["美", "米", "每", "妹"]},
+  {"id": "new-starter-5", "text": "专心致志", "pinyin": "zhuān xīn zhì zhì", "meaning": "把心思集中在一件事情上。", "blank": 3, "answer": "志", "options": ["志", "智", "治", "至"]},
+  {"id": "new-starter-6", "text": "全神贯注", "pinyin": "quán shén guàn zhù", "meaning": "把全部精神集中起来。", "blank": 2, "answer": "贯", "options": ["贯", "惯", "灌", "罐"]},
+  {"id": "new-starter-7", "text": "自言自语", "pinyin": "zì yán zì yǔ", "meaning": "自己对自己说话。", "blank": 3, "answer": "语", "options": ["语", "雨", "宇", "羽"]},
+  {"id": "new-starter-8", "text": "大惊小怪", "pinyin": "dà jīng xiǎo guài", "meaning": "对并不奇怪的事情过分惊讶。", "blank": 3, "answer": "怪", "options": ["怪", "快", "块", "筷"]},
+  {"id": "new-starter-9", "text": "千方百计", "pinyin": "qiān fāng bǎi jì", "meaning": "想尽各种办法。", "blank": 3, "answer": "计", "options": ["计", "记", "际", "济"]},
+  {"id": "new-starter-10", "text": "欢天喜地", "pinyin": "huān tiān xǐ dì", "meaning": "形容非常高兴。", "blank": 2, "answer": "喜", "options": ["喜", "洗", "细", "戏"]},
+  {"id": "new-starter-11", "text": "山清水秀", "pinyin": "shān qīng shuǐ xiù", "meaning": "形容山水景色优美。", "blank": 1, "answer": "清", "options": ["清", "晴", "请", "情"]},
+  {"id": "new-starter-12", "text": "鸟语花香", "pinyin": "niǎo yǔ huā xiāng", "meaning": "鸟鸣花香，形容春天的美好景色。", "blank": 1, "answer": "语", "options": ["语", "羽", "雨", "宇"]},
+  {"id": "new-starter-13", "text": "春暖花开", "pinyin": "chūn nuǎn huā kāi", "meaning": "春天气候温暖，百花开放。", "blank": 1, "answer": "暖", "options": ["暖", "缓", "爱", "援"]},
+  {"id": "new-starter-14", "text": "万里无云", "pinyin": "wàn lǐ wú yún", "meaning": "形容晴朗的天空。", "blank": 3, "answer": "云", "options": ["云", "运", "允", "耘"]},
+  {"id": "new-starter-15", "text": "和风细雨", "pinyin": "hé fēng xì yǔ", "meaning": "温和的风和细小的雨，也比喻态度温和。", "blank": 2, "answer": "细", "options": ["细", "戏", "系", "希"]},
+  {"id": "new-starter-16", "text": "百发百中", "pinyin": "bǎi fā bǎi zhòng", "meaning": "每次都击中目标，比喻很有把握。", "blank": 3, "answer": "中", "options": ["中", "忠", "钟", "终"]},
+  {"id": "new-starter-17", "text": "东张西望", "pinyin": "dōng zhāng xī wàng", "meaning": "向四周看。", "blank": 3, "answer": "望", "options": ["望", "忘", "旺", "汪"]},
+  {"id": "new-starter-18", "text": "手舞足蹈", "pinyin": "shǒu wǔ zú dǎo", "meaning": "形容高兴得舞动手脚。", "blank": 3, "answer": "蹈", "options": ["蹈", "道", "到", "倒"]},
+  {"id": "new-starter-19", "text": "风和日丽", "pinyin": "fēng hé rì lì", "meaning": "风很温和，阳光明亮。", "blank": 3, "answer": "丽", "options": ["丽", "利", "力", "历"]},
+  {"id": "new-starter-20", "text": "千山万水", "pinyin": "qiān shān wàn shuǐ", "meaning": "形容山水很多，路途遥远。", "blank": 1, "answer": "山", "options": ["山", "杉", "删", "衫"]},
+  {"id": "new-starter-21", "text": "井井有条", "pinyin": "jǐng jǐng yǒu tiáo", "meaning": "形容安排整齐、有条理。", "blank": 3, "answer": "条", "options": ["条", "调", "挑", "跳"]},
+  {"id": "new-starter-22", "text": "坐井观天", "pinyin": "zuò jǐng guān tiān", "meaning": "比喻眼界狭窄。", "blank": 2, "answer": "观", "options": ["观", "关", "官", "冠"]},
+  {"id": "new-starter-23", "text": "画饼充饥", "pinyin": "huà bǐng chōng jī", "meaning": "比喻用空想来安慰自己。", "blank": 3, "answer": "饥", "options": ["饥", "机", "鸡", "积"]},
+  {"id": "new-starter-24", "text": "愚公移山", "pinyin": "yú gōng yí shān", "meaning": "比喻坚持努力，不怕困难。", "blank": 2, "answer": "移", "options": ["移", "疑", "宜", "仪"]},
 ]
 
 const explorerIdioms: IdiomSource[] = [
@@ -69,6 +94,30 @@ const explorerIdioms: IdiomSource[] = [
   { id: 'xiongyouchengzhu', text: '胸有成竹', blank: 3, answer: '竹', options: ['竹', '足', '烛', '逐'], pinyin: 'xiōng yǒu chéng zhú', meaning: '比喻做事之前已经有充分的把握。' },
   { id: 'lanyuchongshu', text: '滥竽充数', blank: 1, answer: '竽', options: ['竽', '芋', '鱼', '于'], pinyin: 'làn yú chōng shù', meaning: '比喻没有真才实学的人混在行家里面充数。' },
   { id: 'hualongdianjing', text: '画龙点睛', blank: 3, answer: '睛', options: ['睛', '晴', '精', '请'], pinyin: 'huà lóng diǎn jīng', meaning: '比喻在关键处点明要旨，使内容更加生动。' },
+  {"id": "new-explorer-1", "text": "自相矛盾", "pinyin": "zì xiāng máo dùn", "meaning": "自己的言行前后不一致。", "blank": 3, "answer": "盾", "options": ["盾", "吨", "顿", "遁"]},
+  {"id": "new-explorer-2", "text": "盲人摸象", "pinyin": "máng rén mō xiàng", "meaning": "比喻只了解一部分就作出判断。", "blank": 2, "answer": "摸", "options": ["摸", "模", "磨", "摩"]},
+  {"id": "new-explorer-3", "text": "叶公好龙", "pinyin": "yè gōng hào lóng", "meaning": "比喻口头爱好某事，实际并不喜欢。", "blank": 1, "answer": "公", "options": ["公", "工", "功", "攻"]},
+  {"id": "new-explorer-4", "text": "鹬蚌相争", "pinyin": "yù bàng xiāng zhēng", "meaning": "比喻双方争执，让第三者得利。", "blank": 0, "answer": "鹬", "options": ["鹬", "玉", "鱼", "雨"]},
+  {"id": "new-explorer-5", "text": "不耻下问", "pinyin": "bù chǐ xià wèn", "meaning": "不以向地位或学问不如自己的人请教为耻。", "blank": 1, "answer": "耻", "options": ["耻", "齿", "止", "尺"]},
+  {"id": "new-explorer-6", "text": "勤学苦练", "pinyin": "qín xué kǔ liàn", "meaning": "认真学习，刻苦练习。", "blank": 0, "answer": "勤", "options": ["勤", "琴", "芹", "禽"]},
+  {"id": "new-explorer-7", "text": "举一反三", "pinyin": "jǔ yī fǎn sān", "meaning": "从一件事推知其他同类事。", "blank": 2, "answer": "反", "options": ["反", "返", "饭", "范"]},
+  {"id": "new-explorer-8", "text": "温故知新", "pinyin": "wēn gù zhī xīn", "meaning": "复习旧知识，得到新认识。", "blank": 1, "answer": "故", "options": ["故", "顾", "固", "姑"]},
+  {"id": "new-explorer-9", "text": "实事求是", "pinyin": "shí shì qiú shì", "meaning": "根据实际情况作出正确判断。", "blank": 1, "answer": "事", "options": ["事", "市", "式", "世"]},
+  {"id": "new-explorer-10", "text": "学以致用", "pinyin": "xué yǐ zhì yòng", "meaning": "把学到的知识用于实践。", "blank": 2, "answer": "致", "options": ["致", "至", "志", "制"]},
+  {"id": "new-explorer-11", "text": "闻鸡起舞", "pinyin": "wén jī qǐ wǔ", "meaning": "比喻有志向的人及时奋发努力。", "blank": 0, "answer": "闻", "options": ["闻", "文", "纹", "蚊"]},
+  {"id": "new-explorer-12", "text": "水滴石穿", "pinyin": "shuǐ dī shí chuān", "meaning": "比喻坚持不懈就能取得成果。", "blank": 3, "answer": "穿", "options": ["穿", "川", "串", "船"]},
+  {"id": "new-explorer-13", "text": "金石为开", "pinyin": "jīn shí wéi kāi", "meaning": "比喻诚心能产生很大的力量。", "blank": 0, "answer": "金", "options": ["金", "今", "斤", "巾"]},
+  {"id": "new-explorer-14", "text": "半途而废", "pinyin": "bàn tú ér fèi", "meaning": "事情没有完成就停止。", "blank": 1, "answer": "途", "options": ["途", "图", "徒", "涂"]},
+  {"id": "new-explorer-15", "text": "坚持不懈", "pinyin": "jiān chí bù xiè", "meaning": "坚持到底，毫不松懈。", "blank": 3, "answer": "懈", "options": ["懈", "解", "械", "谢"]},
+  {"id": "new-explorer-16", "text": "精益求精", "pinyin": "jīng yì qiú jīng", "meaning": "已经很好，还要求更好。", "blank": 1, "answer": "益", "options": ["益", "意", "义", "易"]},
+  {"id": "new-explorer-17", "text": "因材施教", "pinyin": "yīn cái shī jiào", "meaning": "根据学习者的特点采用不同的教育方法。", "blank": 1, "answer": "材", "options": ["材", "才", "财", "裁"]},
+  {"id": "new-explorer-18", "text": "聚精会神", "pinyin": "jù jīng huì shén", "meaning": "集中精神，专心致志。", "blank": 0, "answer": "聚", "options": ["聚", "具", "俱", "距"]},
+  {"id": "new-explorer-19", "text": "目不转睛", "pinyin": "mù bù zhuǎn jīng", "meaning": "眼睛一直盯着看，形容非常专注。", "blank": 3, "answer": "睛", "options": ["睛", "晴", "情", "请"]},
+  {"id": "new-explorer-20", "text": "津津有味", "pinyin": "jīn jīn yǒu wèi", "meaning": "形容兴味浓厚。", "blank": 0, "answer": "津", "options": ["津", "今", "斤", "金"]},
+  {"id": "new-explorer-21", "text": "妙笔生花", "pinyin": "miào bǐ shēng huā", "meaning": "比喻文章写得精彩。", "blank": 0, "answer": "妙", "options": ["妙", "秒", "苗", "描"]},
+  {"id": "new-explorer-22", "text": "点石成金", "pinyin": "diǎn shí chéng jīn", "meaning": "比喻把不好的文字修改得很好。", "blank": 1, "answer": "石", "options": ["石", "十", "时", "识"]},
+  {"id": "new-explorer-23", "text": "引人入胜", "pinyin": "yǐn rén rù shèng", "meaning": "吸引人进入美好的境界。", "blank": 3, "answer": "胜", "options": ["胜", "盛", "圣", "剩"]},
+  {"id": "new-explorer-24", "text": "迫不及待", "pinyin": "pò bù jí dài", "meaning": "急切得不能再等待。", "blank": 3, "answer": "待", "options": ["待", "侍", "持", "特"]},
 ]
 
 const masterIdioms: IdiomSource[] = [
@@ -82,6 +131,30 @@ const masterIdioms: IdiomSource[] = [
   { id: 'xuxurushing', text: '栩栩如生', blank: 0, answer: '栩', options: ['栩', '许', '羽', '诩'], pinyin: 'xǔ xǔ rú shēng', meaning: '形容形象生动逼真，像活的一样。' },
   { id: 'kuaizhirenkou', text: '脍炙人口', blank: 1, answer: '炙', options: ['炙', '灸', '治', '质'], pinyin: 'kuài zhì rén kǒu', meaning: '比喻好的诗文或事物受到人们称赞。' },
   { id: 'yimingjingren', text: '一鸣惊人', blank: 1, answer: '鸣', options: ['鸣', '名', '明', '命'], pinyin: 'yī míng jīng rén', meaning: '比喻平时没有突出表现，一下子做出惊人的成绩。' },
+  {"id": "new-master-1", "text": "锲而不舍", "pinyin": "qiè ér bù shě", "meaning": "不断雕刻，比喻坚持到底。", "blank": 0, "answer": "锲", "options": ["锲", "切", "契", "砌"]},
+  {"id": "new-master-2", "text": "孜孜不倦", "pinyin": "zī zī bù juàn", "meaning": "勤奋努力，不知疲倦。", "blank": 3, "answer": "倦", "options": ["倦", "卷", "眷", "券"]},
+  {"id": "new-master-3", "text": "持之以恒", "pinyin": "chí zhī yǐ héng", "meaning": "长久地坚持下去。", "blank": 3, "answer": "恒", "options": ["恒", "衡", "横", "桓"]},
+  {"id": "new-master-4", "text": "融会贯通", "pinyin": "róng huì guàn tōng", "meaning": "把各方面知识联系起来，得到完整理解。", "blank": 2, "answer": "贯", "options": ["贯", "惯", "灌", "罐"]},
+  {"id": "new-master-5", "text": "触类旁通", "pinyin": "chù lèi páng tōng", "meaning": "了解一类事物后，推知其他类似事物。", "blank": 2, "answer": "旁", "options": ["旁", "傍", "膀", "磅"]},
+  {"id": "new-master-6", "text": "博采众长", "pinyin": "bó cǎi zhòng cháng", "meaning": "广泛吸取各方面的长处。", "blank": 1, "answer": "采", "options": ["采", "彩", "踩", "睬"]},
+  {"id": "new-master-7", "text": "循序渐进", "pinyin": "xún xù jiàn jìn", "meaning": "按照步骤逐渐深入。", "blank": 0, "answer": "循", "options": ["循", "寻", "询", "巡"]},
+  {"id": "new-master-8", "text": "举足轻重", "pinyin": "jǔ zú qīng zhòng", "meaning": "形容地位重要，能影响全局。", "blank": 2, "answer": "轻", "options": ["轻", "清", "青", "倾"]},
+  {"id": "new-master-9", "text": "运筹帷幄", "pinyin": "yùn chóu wéi wò", "meaning": "在后方谋划，指筹划和指挥。", "blank": 2, "answer": "帷", "options": ["帷", "维", "唯", "围"]},
+  {"id": "new-master-10", "text": "深思熟虑", "pinyin": "shēn sī shú lǜ", "meaning": "深入、周密地思考。", "blank": 3, "answer": "虑", "options": ["虑", "滤", "绿", "率"]},
+  {"id": "new-master-11", "text": "高瞻远瞩", "pinyin": "gāo zhān yuǎn zhǔ", "meaning": "看得高远，形容目光远大。", "blank": 3, "answer": "瞩", "options": ["瞩", "嘱", "属", "煮"]},
+  {"id": "new-master-12", "text": "未雨绸缪", "pinyin": "wèi yǔ chóu móu", "meaning": "事先做好准备。", "blank": 2, "answer": "绸", "options": ["绸", "稠", "愁", "筹"]},
+  {"id": "new-master-13", "text": "居安思危", "pinyin": "jū ān sī wēi", "meaning": "处于安全环境也想到可能的危险。", "blank": 0, "answer": "居", "options": ["居", "俱", "具", "据"]},
+  {"id": "new-master-14", "text": "随机应变", "pinyin": "suí jī yìng biàn", "meaning": "随着情况变化灵活应对。", "blank": 2, "answer": "应", "options": ["应", "映", "影", "迎"]},
+  {"id": "new-master-15", "text": "见微知著", "pinyin": "jiàn wēi zhī zhù", "meaning": "从细小迹象看出事物的发展。", "blank": 3, "answer": "著", "options": ["著", "着", "住", "注"]},
+  {"id": "new-master-16", "text": "厚积薄发", "pinyin": "hòu jī bó fā", "meaning": "充分积累，谨慎地表现出来。", "blank": 0, "answer": "厚", "options": ["厚", "后", "候", "侯"]},
+  {"id": "new-master-17", "text": "学富五车", "pinyin": "xué fù wǔ chē", "meaning": "形容读书很多、学问丰富。", "blank": 1, "answer": "富", "options": ["富", "副", "付", "负"]},
+  {"id": "new-master-18", "text": "才华横溢", "pinyin": "cái huá héng yì", "meaning": "才能充分显露。", "blank": 3, "answer": "溢", "options": ["溢", "益", "意", "谊"]},
+  {"id": "new-master-19", "text": "文质彬彬", "pinyin": "wén zhì bīn bīn", "meaning": "形容举止文雅、有礼貌。", "blank": 2, "answer": "彬", "options": ["彬", "斌", "宾", "滨"]},
+  {"id": "new-master-20", "text": "豁然开朗", "pinyin": "huò rán kāi lǎng", "meaning": "突然变得开阔明亮，也比喻突然领悟。", "blank": 0, "answer": "豁", "options": ["豁", "或", "获", "惑"]},
+  {"id": "new-master-21", "text": "顿开茅塞", "pinyin": "dùn kāi máo sè", "meaning": "比喻忽然理解，思路畅通。", "blank": 2, "answer": "茅", "options": ["茅", "矛", "毛", "茂"]},
+  {"id": "new-master-22", "text": "不言而喻", "pinyin": "bù yán ér yù", "meaning": "不用说明就能明白。", "blank": 3, "answer": "喻", "options": ["喻", "愉", "渝", "榆"]},
+  {"id": "new-master-23", "text": "相得益彰", "pinyin": "xiāng dé yì zhāng", "meaning": "互相配合，使长处更加显现。", "blank": 3, "answer": "彰", "options": ["彰", "章", "张", "障"]},
+  {"id": "new-master-24", "text": "水到渠成", "pinyin": "shuǐ dào qú chéng", "meaning": "条件成熟，事情自然成功。", "blank": 2, "answer": "渠", "options": ["渠", "取", "曲", "屈"]},
 ]
 
 export const idiomPools: Record<IdiomDifficulty, IdiomSource[]> = {
@@ -98,9 +171,10 @@ export function idiomById(difficulty: IdiomDifficulty, id: string): IdiomSource 
   return idiomPools[difficulty].find(item => item.id === id)
 }
 
-export function newIdiomRound(difficulty: IdiomDifficulty, rng: Rng = Math.random): IdiomRound {
+export function newIdiomRound(difficulty: IdiomDifficulty, rng: Rng = Math.random, history: string[] = []): IdiomRound {
   const pool = [...idiomPools[difficulty]]
-  const used = new Set<string>()
+  const selected=contentDeck(idiomPools[difficulty],IDIOM_QUESTIONS,item=>item.id,history,rng)
+  const used = new Set(idiomPools[difficulty].filter(item=>!selected.includes(item)).map(item=>item.id))
   const questions: IdiomQuestion[] = []
   for (let index = 0; index < IDIOM_QUESTIONS; index++) {
     const available = pool.filter(item => !used.has(item.id))
@@ -165,12 +239,14 @@ export function advanceIdiom(save: IdiomSave): 'next' | 'finished' | null {
 }
 
 export function restartIdiom(save: IdiomSave, rng: Rng = Math.random): void {
-  save.round = newIdiomRound(save.difficulty, rng)
+  const history=rememberContent(save,save.difficulty,save.round.questions.map(question=>question.idiomId))
+  save.round = newIdiomRound(save.difficulty, rng,history)
 }
 
 export function switchIdiomDifficulty(save: IdiomSave, difficulty: IdiomDifficulty, rng: Rng = Math.random): void {
+  rememberContent(save,save.difficulty,save.round.questions.map(question=>question.idiomId))
   save.difficulty = difficulty
-  save.round = newIdiomRound(difficulty, rng)
+  save.round = newIdiomRound(difficulty, rng,save.contentHistory?.[difficulty] || [])
 }
 
 function isInt(value: unknown, min: number, max: number): value is number {
@@ -190,7 +266,7 @@ export function restoreIdiom(raw: string | null): IdiomSave | null {
   if (!raw) return null
   try {
     const value = JSON.parse(raw) as IdiomSave
-    if (!value || value.version !== 1 || !isIdiomDifficulty(value.difficulty)) return null
+    if (!value || !validContentHistory(value.contentHistory) || value.version !== 1 || !isIdiomDifficulty(value.difficulty)) return null
     const best = value.best as unknown as Record<string, unknown>
     if (!best || !idiomDifficulties.every(item => isInt(best[item.id], 0, 3))) return null
     if (!isInt(value.totalCorrect, 0, 1_000_000) || !isInt(value.rounds, 0, 1_000_000)) return null

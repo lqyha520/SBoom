@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission, canPermission, canAdmin } from '../permissions'
 import { computed, reactive, ref, toRefs, watch, nextTick } from 'vue'
 import { useCatalogPreview } from '../catalog-preview'
 import type { CatalogDetail } from '../catalog'
@@ -156,7 +157,7 @@ const sourceModes = [
         <UButton :icon="previewVisible ? 'i-lucide-panel-right-close' : 'i-lucide-panel-right-open'" :label="previewVisible ? '收起预览' : '展开预览'" :aria-expanded="previewVisible" aria-controls="publication-preview" color="neutral" variant="outline" size="sm" @click="previewVisible = !previewVisible" />
       </div>
       <div class="publication-workspace" :class="{ 'with-preview': target && previewVisible }"><div class="publication-fields">
-      <form v-show="section === 'details'" id="publication-form" class="field-stack" @submit.prevent="save">
+      <form v-show="section === 'details'" id="publication-form" class="field-stack" @submit.prevent="canPermission('papers:' + (target ? 'update' : 'create')) && (save())">
         <UAlert v-if="categoryError" :title="categoryError" color="error"
           ><template #actions
             ><UButton
@@ -190,7 +191,7 @@ const sourceModes = [
               <UInput
                 v-model="sourceQuery"
                 placeholder="搜索自己的习题"
-                :disabled="busy"
+                :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy)"
                 @keydown.enter.prevent="loadSources()"
               /><UButton
                 icon="i-lucide-search"
@@ -205,7 +206,7 @@ const sourceModes = [
               v-model="sourceId"
               :items="sourceItems"
               placeholder="选择习题"
-              :disabled="busy || sourceLoading"
+              :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy || sourceLoading)"
               class="w-full mt-2" /><UButton
               v-if="sourceMore"
               label="加载更多"
@@ -241,7 +242,7 @@ const sourceModes = [
                   :items="gradeOptions"
                   aria-label="图片习题年级"
                   placeholder="选择年级"
-                  :disabled="busy || dictionaryLoading"
+                  :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy || dictionaryLoading)"
                   class="w-full"
               /></UFormField>
               <UFormField label="科目" required
@@ -250,7 +251,7 @@ const sourceModes = [
                   :items="subjectOptions"
                   aria-label="图片习题科目"
                   placeholder="选择科目"
-                  :disabled="busy || dictionaryLoading"
+                  :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy || dictionaryLoading)"
                   class="w-full"
               /></UFormField>
               <UFormField label="分类" required
@@ -259,7 +260,7 @@ const sourceModes = [
                   :items="categories"
                   aria-label="图片习题分类"
                   placeholder="选择分类"
-                  :disabled="busy || categoryLoading"
+                  :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy || categoryLoading)"
                   class="w-full"
               /></UFormField>
             </div>
@@ -272,7 +273,7 @@ const sourceModes = [
                   { value: 'answersOnly', label: '仅答案（答案解析版）' },
                 ]"
                 aria-label="图片内容类型"
-                :disabled="busy"
+                :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy)"
                 class="w-full"
             /></UFormField>
             <p class="text-xs text-muted">
@@ -287,7 +288,7 @@ const sourceModes = [
                 :items="gradeOptions"
                 aria-label="网盘习题年级"
                 placeholder="选择年级"
-                :disabled="busy || dictionaryLoading"
+                :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy || dictionaryLoading)"
                 class="w-full"
             /></UFormField>
             <UFormField label="科目" required
@@ -296,19 +297,19 @@ const sourceModes = [
                 :items="subjectOptions"
                 aria-label="网盘习题科目"
                 placeholder="选择科目"
-                :disabled="busy || dictionaryLoading"
+                :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy || dictionaryLoading)"
                 class="w-full"
             /></UFormField>
           </div>
         </fieldset>
-        <details class="quick-category"><summary>新建分类</summary><div class="actions-row mt-2"><UInput v-model="editor.categoryName" aria-label="新分类名称" placeholder="输入分类名称" maxlength="60" :disabled="editor.categoryCreating" @keydown.enter.prevent="editor.addCategory" /><UButton label="创建并选中" :loading="editor.categoryCreating" :disabled="!editor.categoryName.trim() || busy" @click="editor.addCategory" /></div></details>
+        <details class="quick-category"><summary>新建分类</summary><div class="actions-row mt-2"><UInput v-model="editor.categoryName" aria-label="新分类名称" placeholder="输入分类名称" maxlength="60" :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (editor.categoryCreating)" @keydown.enter.prevent="editor.addCategory" /><UButton v-permission="'categories:create'" label="创建并选中" :loading="editor.categoryCreating" :disabled="!editor.categoryName.trim() || busy" @click="editor.addCategory" /></div></details>
         <fieldset class="publication-group">
           <legend>基本信息</legend>
           <UFormField v-if="!importing" label="公开标题" required description="建议使用“年级＋学科＋主题”，例如：一年级数学 · 20 以内加减法。请以文件实际内容为准。"
             ><UInput
               v-model="form.title"
               maxlength="240"
-              :disabled="busy"
+              :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy)"
               required
           /></UFormField>
           <UFormField
@@ -320,7 +321,7 @@ const sourceModes = [
               v-model="form.category_id"
               :items="displayCategories"
               placeholder="选择分类"
-              :disabled="busy"
+              :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy)"
               required
               class="w-full"
           /></UFormField>
@@ -331,7 +332,7 @@ const sourceModes = [
               v-model="form.description"
               maxlength="2000"
               :rows="3"
-              :disabled="busy"
+              :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy)"
             />
           </UFormField>
         </fieldset>
@@ -367,14 +368,14 @@ const sourceModes = [
             ><USelect
               v-model="form.view_access"
               :items="accessOptions"
-              :disabled="busy"
+              :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy)"
               class="w-full"
           /></UFormField>
           <UFormField label="下载 / 获取链接权限"
             ><USelect
               v-model="form.download_access"
               :items="accessOptions"
-              :disabled="busy || form.view_access === 'vip'"
+              :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy || form.view_access === 'vip')"
               class="w-full"
           /></UFormField>
           <p v-if="target" class="text-sm text-muted">
@@ -399,11 +400,11 @@ const sourceModes = [
           <UFormField label="发布状态"
             ><USelect
               v-model="form.status"
-              :items="statuses.slice(1)"
-              :disabled="busy"
+              :items="statuses.slice(1).filter(item => canAdmin('papers', 'publish') || item.value === target?.status)"
+              :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy)"
               class="w-full"
           /></UFormField>
-          <USwitch v-model="form.featured" label="优先展示" :disabled="busy" />
+          <USwitch v-model="form.featured" label="优先展示" :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy)" />
           <UAlert
             v-if="publishing"
             color="warning"
@@ -427,7 +428,7 @@ const sourceModes = [
             v-if="target"
             v-model="form.confirm_publication"
             label="已核对内容，确认公开发布"
-            :disabled="busy"
+            :disabled="!canPermission('papers:' + (target ? 'update' : 'create')) || (busy)"
           />
         </fieldset>
         <UAlert
@@ -468,7 +469,7 @@ const sourceModes = [
                   ?.label || '')
               : ''
         }}</span
-      ><UButton
+      ><UButton v-permission="'papers:create'"
         v-if="!target && mode === 'import' && importQueue.failed.length"
         :label="'仅重试失败项（' + importQueue.failed.length + '）'"
         color="warning"
@@ -480,7 +481,7 @@ const sourceModes = [
           categoryLoading ||
           dictionaryLoading
         "
-        @click="runImport(true)" /><UButton
+        @click="runImport(true)" /><UButton v-permission="'papers:' + (target ? 'update' : 'create')"
         v-if="section === 'details'"
         type="submit"
         form="publication-form"

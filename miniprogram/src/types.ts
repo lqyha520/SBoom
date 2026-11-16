@@ -1,4 +1,5 @@
 export interface User {
+  referral_code?: string
   id: string; username: string; nickname?: string; avatar: string; avatar_url?: string | null; has_password: boolean; has_wechat?: boolean
   membership: 'regular' | 'vip'; is_vip: boolean
   vip_expires_at: number | null; membership_status: 'regular' | 'active' | 'expired'

@@ -88,6 +88,42 @@ test('公开读取仍可取消，失败不会注销当前账号或污染个人�
   reply(2, { favorites: 3 }); assert.equal((await summary).favorites, 3)
 })
 
+test('公开详情可先于账号恢复读取，只放行资料详情而不放行资产或账号接口', async () => {
+  const { api, calls, reply } = fixture()
+  api.configureSession('saved-token', 'reader')
+  const detail = api.fetchCatalogPaper('public-paper', { anonymous: true })
+  assert.equal(calls[0].header.Authorization, undefined); assert.equal(calls[0].header['X-Mini-User'], undefined)
+  reply(0, { id: 'public-paper', can_download: false }); assert.equal((await detail).id, 'public-paper')
+  for (const path of ['/api/v1/catalog/papers/p/assets/a', '/api/v1/catalog/papers/p/download', '/api/v1/mini/me']) {
+    await assert.rejects(api.request(path, 'GET', undefined, { anonymous: true }), /不支持公开读取/)
+  }
+})
+
+test('匿名推广统计完成后保留在途与已缓存的会员信息，个人修改仍刷新缓存', async () => {
+  const { api, calls, reply } = fixture()
+  api.configureSession('reader-token', 'reader')
+  const membership = api.request('/api/v1/mini/me')
+  const entry = api.request('/api/v1/mini/referral-entry', 'POST', { code: 'a_' + 'a'.repeat(20), entry_key: 'device-entry-key-1' }, { anonymous: true })
+  assert.equal(calls[1].header.Authorization, undefined)
+  reply(1, { visit_id: '1'.repeat(32), destination: '/pages/home/index', tracked: true }); await entry
+  const shared = api.request('/api/v1/mini/me')
+  assert.equal(calls.length, 2)
+  reply(0, { id: 'reader', is_vip: true }); await Promise.all([membership, shared])
+  const summary = api.fetchCatalogSummary()
+  reply(2, { favorites: 3 }); await summary
+  const start = api.request('/api/v1/mini/referral-start', 'POST', { visit_id: '1'.repeat(32) }, { anonymous: true })
+  reply(3, { ok: true }); await start
+  assert.equal((await api.request('/api/v1/mini/me')).is_vip, true)
+  assert.equal((await api.fetchCatalogSummary()).favorites, 3)
+  assert.equal(calls.length, 4)
+  const write = api.request('/api/v1/mini/me/profile', 'PUT', { nickname: '新昵称' })
+  reply(4, { id: 'reader', nickname: '新昵称' }); await write
+  const refreshed = api.request('/api/v1/mini/me')
+  assert.equal(calls.length, 6)
+  reply(5, { id: 'reader', nickname: '新昵称' })
+  assert.equal((await refreshed).nickname, '新昵称')
+})
+
 test('only the last cancelled consumer aborts shared metadata; account changes abort private reads', async () => {
   const { api, calls, reply } = fixture()
   const a = createLatestRequest(), b = createLatestRequest()

@@ -5,8 +5,9 @@ import AppTabBar from './AppTabBar.vue'
 import PageChrome from './PageChrome.vue'
 import PaperRow from './PaperRow.vue'
 import EnhancedSkeleton from './EnhancedSkeleton.vue'
-import SearchGradeBar from './SearchGradeBar.vue'
+import SearchField from './SearchField.vue'
 import CatalogFilterSheet from './CatalogFilterSheet.vue'
+import CatalogChoiceSheet from './CatalogChoiceSheet.vue'
 import FavoriteGroups from './FavoriteGroups.vue'
 import FavoriteBatchActions from './FavoriteBatchActions.vue'
 import { clearHistory, fetchTopics, type Topic } from '../services/experience'
@@ -79,6 +80,7 @@ function blurSearch() {
 }
 function holdSearchHelp() { touchingSearchHelp = true; clearTimeout(searchBlurTimer) }
 function releaseSearchHelp() { touchingSearchHelp = false; blurSearch() }
+function prepareFilterSelection() { hideSearchHelp(); uni.hideKeyboard?.() }
 const expandedRow = ref('')
 const gradeOpen = ref(false)
 const metadataError = ref('')
@@ -115,7 +117,10 @@ const hasTabbar = computed(() => !props.topicId && (props.view === 'all' || prop
 const recordTitle = computed(() => ({ all: '', favorites: '我的收藏', downloads: '下载记录', recent: '最近浏览' })[props.view])
 const recordDescription = computed(() => ({ all: '', favorites: '收藏喜欢的资料，下次接着练', downloads: '查找获取过的资料，方便再次打开', recent: '回到上次看过的资料，继续学习' })[props.view])
 const topicOptions = computed(() => [{ id: '', title: '全部专题' }, ...topics.value])
+const topicChoices = computed(() => topicOptions.value.map(item => ({ value: item.id, label: item.title })))
 const filterOpen = ref(false)
+const topicOpen = ref(false)
+const sortOpen = ref(false)
 const filterCount = computed(() => Number(!!category.value) + chosenTags.value.length)
 // Banner 可指向暂时没有资料的科目；保留该选项，避免标签组件把筛选重置成全部。
 const subjects = computed(() => subjectOptions([...(summary.value?.subjects || ['语文', '数学', '英语']), ...(subject.value ? [subject.value] : [])]))
@@ -298,10 +303,11 @@ function deactivate() {
   imagesActive.value = false
   invalidateActions()
   active = false; activation++; cancelSearch(); hideSearchHelp(); requests.invalidate(); metadataRequests.invalidate()
-  loading.value = false; metadataLoading.value = false; filterOpen.value = false; gradeOpen.value = false; expandedRow.value = ''
+  loading.value = false; metadataLoading.value = false; filterOpen.value = false; gradeOpen.value = false; topicOpen.value = false; sortOpen.value = false; expandedRow.value = ''
   uni.stopPullDownRefresh()
 }
 watch([q, grade, subject, category, topic, sort, onlyFree, favoriteGroup, () => Object.values(tagFilters).join(':')], () => {
+  hideSearchHelp()
   endSelection()
   resetCursors(); windowStart.value = 0; nextOffset.value = 0
   invalidateActions(); items.value = []; total.value = 0; appendError.value = ''
@@ -329,7 +335,7 @@ watch(() => session.user?.id, (owner, previous) => {
   selectionRevision = catalogSelection.revision
   loaded.value = false; scrollTop = 0
   topic.value = props.topicId; topics.value = []; tags.value = []; Object.assign(tagFilters, emptyTags()); favoriteGroup.value = ''; onlyFree.value = false; sort.value = 'featured'; if (!props.topicId) preferences()
-  filterOpen.value = false; gradeOpen.value = false
+  filterOpen.value = false; gradeOpen.value = false; topicOpen.value = false; sortOpen.value = false
   if (active && previous && !owner) void activate()
 }, { flush: 'sync' })
 watch(() => props.topicId, value => { topic.value = value })
@@ -426,14 +432,13 @@ onBeforeUnmount(deactivate)
         <view class="content-width catalog-header">
           <view v-if="selecting" class="selection-heading"><text class="section-title">整理收藏</text><button class="section-link" role="checkbox" :aria-checked="allSelected" :disabled="batchBusy" @click="selectAll">{{ allSelected ? '取消全选' : '全选已加载' }}</button></view>
           <template v-else-if="canBrowse">
-            <SearchGradeBar
+            <SearchField
               v-model="searchInput"
-              :grade="grade"
+              action-label="搜索"
               :placeholder="view === 'favorites' ? '搜索收藏' : view === 'downloads' ? '搜索下载记录' : '搜索习题'"
               @search="search()"
               @focus="showSearchHelp"
               @blur="blurSearch"
-              @select-grade="hideSearchHelp(); gradeOpen = true"
             />
             <view class="catalog-tab-row">
               <view class="catalog-tabs">
@@ -446,43 +451,80 @@ onBeforeUnmount(deactivate)
                 hover-class="control-pressed"
                 :hover-start-time="0"
                 :hover-stay-time="80"
-                class="bare-icon catalog-filter"
-                :class="{ selected: filterCount }"
+                class="catalog-filter"
+                :class="{ selected: filterCount, opened: filterOpen }"
                 role="button"
                 aria-label="更多筛选"
+                :aria-expanded="filterOpen"
                 title="更多筛选"
-                @click="hideSearchHelp(); filterOpen = true"
+                @click="prepareFilterSelection(); filterOpen = true"
               >
-                <wd-icon name="filter" size="19px" />
-                <view v-if="filterCount" class="filter-dot" />
+                <wd-icon name="filter" size="16px" />
+                <text>筛选</text>
+                <text v-if="filterCount" class="filter-count">{{ filterCount }}</text>
               </button>
+            </view>
+            <view class="experience-toolbar">
+              <view class="toolbar-actions" :class="{ 'two-filters': !topics.length || !!topicId }">
+                <button
+                  hover-class="filter-pressed"
+                  :hover-start-time="0"
+                  :hover-stay-time="80"
+                  class="toolbar-chip grade-choice"
+                  :class="{ active: grade, opened: gradeOpen }"
+                  role="button"
+                  aria-label="选择年级"
+                  :aria-expanded="gradeOpen"
+                  @click="prepareFilterSelection(); gradeOpen = true"
+                >
+                  <text class="toolbar-chip-label">{{ grade.replace(/^小学/, '') || '全部年级' }}</text>
+                  <wd-icon name="down" size="11px" />
+                </button>
+                <button
+                  v-if="topics.length && !topicId"
+                  class="toolbar-chip topic-choice"
+                  :class="{ active: topic, opened: topicOpen }"
+                  hover-class="filter-pressed"
+                  :hover-start-time="0"
+                  :hover-stay-time="80"
+                  role="button"
+                  :aria-label="'专题：' + (topicOptions.find(item => item.id === topic)?.title || '全部专题')"
+                  :aria-expanded="topicOpen"
+                  @click="prepareFilterSelection(); topicOpen = true"
+                >
+                  <text class="toolbar-chip-label">{{ topicOptions.find(item => item.id === topic)?.title || '全部专题' }}</text>
+                  <wd-icon name="down" size="11px" />
+                </button>
+                <button
+                  hover-class="filter-pressed"
+                  :hover-start-time="0"
+                  :hover-stay-time="80"
+                  role="button"
+                  class="toolbar-chip filter-free"
+                  :class="{ active: onlyFree }"
+                  :aria-pressed="onlyFree"
+                  @click="onlyFree = !onlyFree"
+                >
+                  <view class="free-check" :class="{ checked: onlyFree }" aria-hidden="true"><wd-icon v-if="onlyFree" name="check" size="10px" /></view>
+                  <text>仅免费</text>
+                </button>
+              </view>
+            </view>
+            <scroll-view v-if="category || chosenTags.length" class="active-filter-scroll" scroll-x :show-scrollbar="false">
+              <view class="active-filters">
+                <button v-if="category" class="active-filter-chip" hover-class="filter-pressed" role="button" :aria-label="'移除筛选：' + (exerciseText(categoryName) || '已选分类')" @click="category = ''"><text>{{ exerciseText(categoryName) || '已选分类' }}</text><wd-icon name="close" size="12px" /></button>
+                <button v-for="tag in chosenTags" :key="tag.kind" class="active-filter-chip" hover-class="filter-pressed" role="button" :aria-label="'移除筛选：' + tag.name" @click="tagFilters[tag.kind] = ''"><text>{{ tag.name }}</text><wd-icon name="close" size="12px" /></button>
+              </view>
+            </scroll-view>
+            <view class="catalog-results-bar">
+              <text class="result-count" role="status">{{ catalogCountLabel(total, loaded, loading && !appending, error) }}</text>
+              <button v-if="temporaryFilters" class="clear-filter-button" hover-class="control-pressed" role="button" aria-label="清除其他条件" :title="grade || subject ? '保留' + [grade.replace(/^小学/, ''), subject].filter(Boolean).join('、') : '清除搜索和筛选条件'" @click="clearConditions">{{ grade || subject ? '清除其他' : '清除条件' }}</button>
+              <button v-if="view === 'all' && !topicId" class="sort-choice" :class="{ active: sort !== 'featured' }" hover-class="control-pressed" role="button" :aria-label="'排序：' + (sorts.find(item => item.value === sort)?.label || '精选')" :aria-expanded="sortOpen" @click="prepareFilterSelection(); sortOpen = true"><text>{{ sorts.find(item => item.value === sort)?.label || '精选' }}排序</text><wd-icon name="down" size="11px" /></button>
             </view>
           </template>
         </view>
       </view>
-    </view>
-    <AuthGate
-      v-if="!canBrowse"
-      :title="view === 'favorites' ? '收藏好资料，下次接着练' : '登录查看使用记录'"
-      description="登录后可同步收藏、分组和下载记录"
-      browse
-      @restored="activate"
-    />
-    <view v-else class="content-width catalog-body">
-      <view v-if="metadataError" class="metadata-status" role="status">
-        <text class="grow">{{ metadataError }}暂未加载，已显示的资料仍可使用</text>
-        <button
-          hover-class="control-pressed"
-          :hover-start-time="0"
-          :hover-stay-time="80"
-          class="section-link"
-          :disabled="metadataLoading"
-          @click="loadMetadata(true)"
-        >
-          重试
-        </button>
-      </view>
-      <view v-if="!emptyFavorites && !selecting && searchHelpOpen && !searchInput.trim()" class="search-history" @touchstart="holdSearchHelp" @touchend="releaseSearchHelp" @touchcancel="releaseSearchHelp">
+      <view v-if="canBrowse && !emptyFavorites && !selecting && searchHelpOpen && !searchInput.trim()" class="search-history" @touchstart="holdSearchHelp" @touchend="releaseSearchHelp" @touchcancel="releaseSearchHelp">
         <text class="search-example">可组合搜索，例如：三年级 数学 进位</text>
         <view v-if="searches.length" class="history-heading">
           <text>最近搜索</text>
@@ -510,46 +552,27 @@ onBeforeUnmount(deactivate)
           </view>
         </scroll-view>
       </view>
-      <view v-if="!emptyFavorites && !selecting" class="experience-toolbar">
-        <text class="result-count" role="status">{{ catalogCountLabel(total, loaded, loading && !appending, error) }}</text>
-        <view class="toolbar-actions">
-          <picker v-if="view === 'all' && !topicId" class="sort-buttons" :range="sorts.map(item => item.label)" :value="Math.max(0, sorts.findIndex(item => item.value === sort))" @change="sort = sorts[Number($event.detail.value)]!.value">
-            <view class="toolbar-chip sort-choice" :class="{ active: sort !== 'featured' }" role="button" :aria-label="'排序：' + (sorts.find(item => item.value === sort)?.label || '精选')"><text>{{ sorts.find(item => item.value === sort)?.label || '精选' }}</text><wd-icon name="down" size="12px" /></view>
-          </picker>
-          <button
-            hover-class="control-pressed"
-            :hover-start-time="0"
-            :hover-stay-time="80"
-            role="button"
-            class="toolbar-chip filter-free"
-            :class="{ selected: onlyFree }"
-            :aria-pressed="onlyFree"
-            @click="onlyFree = !onlyFree"
-          >
-            <wd-icon v-if="onlyFree" name="check" size="11px" />
-            <text>仅免费</text>
-          </button>
-          <picker
-            v-if="topics.length && !topicId"
-            class="topic-picker"
-            :range="topicOptions.map((item) => item.title)"
-            :value="
-              Math.max(
-                0,
-                topicOptions.findIndex((item) => item.id === topic),
-              )
-            "
-            @change="topic = topicOptions[Number($event.detail.value)]!.id"
-          >
-            <view class="toolbar-chip topic-choice" role="button" :aria-label="'专题：' + (topicOptions.find((item) => item.id === topic)?.title || '全部专题')">
-              <wd-icon name="folder" size="13px" />
-              <text class="topic-choice-label">
-                {{ topicOptions.find((item) => item.id === topic)?.title || '全部专题' }}
-              </text>
-              <wd-icon name="down" size="11px" />
-            </view>
-          </picker>
-        </view>
+    </view>
+    <AuthGate
+      v-if="!canBrowse"
+      :title="view === 'favorites' ? '收藏好资料，下次接着练' : '登录查看使用记录'"
+      description="登录后可同步收藏、分组和下载记录"
+      browse
+      @restored="activate"
+    />
+    <view v-else class="content-width catalog-body">
+      <view v-if="metadataError" class="metadata-status" role="status">
+        <text class="grow">{{ metadataError }}暂未加载，已显示的资料仍可使用</text>
+        <button
+          hover-class="control-pressed"
+          :hover-start-time="0"
+          :hover-stay-time="80"
+          class="section-link"
+          :disabled="metadataLoading"
+          @click="loadMetadata(true)"
+        >
+          重试
+        </button>
       </view>
       <FavoriteGroups
         ref="groupControl"
@@ -557,23 +580,13 @@ onBeforeUnmount(deactivate)
         :selected="favoriteGroup"
         @select="favoriteGroup = $event"
       />
-      <view v-if="!selecting && (grade || category || chosenTags.length)" class="active-filters">
-        <wd-tag v-if="grade" closable variant="light" type="primary" @close="grade = ''">{{ grade }}</wd-tag>
-        <wd-tag v-if="category" closable variant="light" type="primary" @close="category = ''">
-          {{ exerciseText(categoryName) || '已选分类' }}
-        </wd-tag>
-        <wd-tag v-for="tag in chosenTags" :key="tag.kind" closable variant="light" @close="tagFilters[tag.kind] = ''">
-          {{ tag.name }}
-        </wd-tag>
-      </view>
       <view v-if="error" class="error-strip">
         <text class="grow">{{ error }}</text>
         <wd-button icon="refresh" type="danger" variant="text" role="button" aria-label="重试加载" @click="refresh()">重试</wd-button>
       </view>
       <view v-if="selecting" class="list-caption"><text class="result-count">{{ catalogCountLabel(total, loaded, loading && !appending, error) }}</text></view>
-      <view v-if="!selecting && (filtered || view === 'favorites' && items.length)" class="list-tools">
-        <view v-if="temporaryFilters" class="clear-conditions"><button class="section-link" role="button" aria-label="清除其他条件" @click="clearConditions"><wd-icon name="close" size="14px" /><text>清除其他条件</text></button><text v-if="grade || subject" class="retained-filters">保留{{ [grade.replace(/^小学/, ''), subject].filter(Boolean).join('、') }}</text></view>
-        <button v-if="view === 'favorites' && items.length" class="section-link" role="button" aria-label="批量整理" :disabled="loading || changing.size > 0" @click="expandedRow = ''; selecting = true"><wd-icon name="edit" size="16px" /><text>批量整理</text></button>
+      <view v-if="!selecting && view === 'favorites' && items.length" class="list-tools">
+        <button class="section-link" role="button" aria-label="批量整理" :disabled="loading || changing.size > 0" @click="expandedRow = ''; selecting = true"><wd-icon name="edit" size="16px" /><text>批量整理</text></button>
       </view>
       <EnhancedSkeleton v-if="loading && !items.length" :count="4" type="row" />
       <view v-else-if="items.length" class="paper-list catalog-paper-list">
@@ -666,6 +679,8 @@ onBeforeUnmount(deactivate)
       @close="gradeOpen = false"
       @select="grade = $event"
     />
+    <CatalogChoiceSheet :open="topicOpen" title="选择专题" :value="topic" :options="topicChoices" @close="topicOpen = false" @select="topic = $event" />
+    <CatalogChoiceSheet :open="sortOpen" title="排序方式" :value="sort" :options="sorts" @close="sortOpen = false" @select="sort = $event" />
     <CatalogFilterSheet
       :open="filterOpen"
       :grade="grade"

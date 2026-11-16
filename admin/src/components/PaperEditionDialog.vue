@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission } from '../permissions'
 import EditorPanel from './EditorPanel.vue'
 import { useDialogDraft } from '../dialog-draft'
 import { useRevisionConflict } from '../revision-conflict'
@@ -108,7 +109,7 @@ async function save() {
         </template>
         <UFormField v-else label="上传 PDF" hint="最多 32 MB；上传会替换所选打印版本，请核对题目与答案是否配套。"><input :key="fileRevision" type="file" accept="application/pdf,.pdf" :disabled="busy || loading || checking" @change="chooseFile" /><p v-if="checking">正在校验 PDF</p><p v-if="busy">{{ progress < 100 ? '上传进度 ' + progress + '%' : '上传完成，正在处理文件' }}</p></UFormField>
         <UCheckbox v-if="detail.status === 'published'" v-model="confirmed" label="已核对文件和现有会员权限，确认更新已发布的打印版本" :disabled="busy" />
-        <UButton label="保存打印版本" :disabled="busy || loading || checking || (detail.status === 'published' && !confirmed)" :loading="busy" @click="save" />
+        <UButton v-permission="'papers:update'" label="保存打印版本" :disabled="busy || loading || checking || (detail.status === 'published' && !confirmed)" :loading="busy" @click="save" />
       </template>
     </div>
   </template><template #footer><UButton label="刷新资料" color="neutral" variant="outline" :disabled="busy" @click="refresh" /><UButton label="完成" :disabled="busy" @click="draft.setOpen(false)" /></template></EditorPanel>

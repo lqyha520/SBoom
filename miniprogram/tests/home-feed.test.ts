@@ -24,6 +24,7 @@ function fixture(read: (params: Params) => Promise<PaperList>) {
     '@dcloudio/uni-app': Object.fromEntries(['onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onShareTimeline'].map(name => [name, (fn: () => unknown) => { hooks[name] = fn }])),
     '../../services/session': { session: vue.reactive({ ready: true, user: null, error: '' }), ensureSession: async () => false },
     '../../services/latest-request': { createLatestRequest },
+    '../../services/referral': { cancelReferralLanding() {}, takeReferralLanding: async () => '' },
     '../../services/api': { errorMessage: (cause: Error) => cause.message, fetchCatalog: async (params: Params) => { calls.push(params); return read(params) }, fetchCatalogSummary: async () => ({}), fetchSiteHome: async () => ({ banners: [] }) },
     '../../services/experience': { fetchTopics: async () => ({ items: [] }) },
     '../../services/page-lifecycle': { captureScroll: (save: (top: number) => void) => save(600) },

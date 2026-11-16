@@ -46,6 +46,13 @@ class QualityRules(unittest.TestCase):
         self.assertIsNotNone(question_issue({"type": "match_pair", "left_items": ["2+3", "4+2"],
                                              "right_items": ["5", "6"], "answer": [[0, 1], [1, 0]]}))
 
+    def test_number_split_analysis_must_match_total_and_parts(self):
+        valid = {"type": "number_split", "top": 9, "left": 7, "right": "____", "answer": 2,
+                 "analysis": "9分成7和2，总数是9。"}
+        self.assertIsNone(question_issue(valid))
+        self.assertIsNotNone(question_issue({**valid, "analysis": "9分成7和2，总数是8。"}))
+        self.assertIsNotNone(question_issue({**valid, "analysis": "9分成6和3。"}))
+
     def test_discussion_of_wrong_solution_is_not_a_false_positive(self):
         for analysis in ("2+3=4是错误的，正确结果为5。", "不能写成2+3=4，应为2+3=5。", "小明说“2+3=4”，应当纠正。"):
             self.assertIsNone(question_issue({**choice(), "analysis": analysis}))
@@ -193,8 +200,8 @@ class ReviewAPI(unittest.TestCase):
         raw = {"sections": [{"game_type": "quiz", "section_id": "s1", "questions": [choice()]},
                             {"game_type": "word_problem", "section_id": "s2", "questions": [{
                                 "type": "word_problem", "stem": "有2支铅笔，又买3支，一共有多少支？", "answer": "4支", "analysis": "一共有4支。"}]}]}
-        reviewed = {"reviews": [{"review_id": "q1", "status": "passed", "reason": ""},
-                                {"review_id": "q2", "status": "reject", "reason": "2+3=5，应为5支"}]}
+        reviewed = {"reviews": [{"review_id": "q1", "status": "passed", "reason": "", "analysis": "2+3=5"},
+                                {"review_id": "q2", "status": "reject", "reason": "2+3=5，应为5支", "analysis": ""}]}
         with patch.object(generate, "_call_llm_and_parse", new=AsyncMock(return_value=raw)) as model, \
              patch.object(generate, "_call_quality_review", new=AsyncMock(return_value=reviewed)) as reviewer:
             first = self.client.post("/api/v1/generate-batch", json=self.body, headers={"X-Request-ID": "quality-one"})

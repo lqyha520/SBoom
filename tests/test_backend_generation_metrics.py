@@ -45,7 +45,8 @@ def test_status_usage_is_owned_and_read_only():
 
     row = {"request_id": "eval-one", "kind": "single", "status": "succeeded", "created_at": 1,
            "lease_expires_at": 1, "finished_at": 0, "result_json": "{}", "error_json": "", "error_status": 0,
-           "model_calls": 2, "reported_calls": 1, "prompt_tokens": 42, "completion_tokens": 21}
+           "model_calls": 2, "reported_calls": 1, "prompt_tokens": 42, "completion_tokens": 21,
+           "trace_json": "", "replay_count": 0}
     with patch.object(generation_control, "db") as database:
         query = database.return_value.__enter__.return_value.execute
         query.return_value.fetchone.return_value = row

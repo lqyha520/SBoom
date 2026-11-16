@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 
-export const LEGAL_VERSION = '2026-09-28'
+export const LEGAL_VERSION = '2026-11-07'
 const CONSENT_KEY = 'lc-legal-consent-version'
 export const privacyState = reactive({ open: false, name: '用户隐私保护指引' })
 let resolvers: ((value: { event: 'agree' | 'disagree'; buttonId?: string }) => void)[] = []

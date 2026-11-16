@@ -7,19 +7,31 @@ import { useAuthStore } from '../stores/auth'
 import { useExamStore } from '../stores/exam'
 import ImageWorkbench from '../components/ImageWorkbench.vue'
 import ImagePublicationDialog from '../components/ImagePublicationDialog.vue'
-import { addImagePublication, fetchPublicationCategories } from '../image-publication'
+import ImageCloudSaveDialog from '../components/ImageCloudSaveDialog.vue'
+import CloudLibraryDialog from '../components/CloudLibraryDialog.vue'
+import { addArchivePublication, addImagePublication, fetchPublicationCategories } from '../image-publication'
+import { saveImageArchive } from '../image-cloud'
+import { fetchArchive, fetchArchiveFolders, fetchArchives, fetchLibraryCapacity, type ArchiveDetail } from '../library'
 import { buildWorksheetPdf } from '../worksheet-pdf'
+import { buildWorksheetImagesZip } from '../worksheet-images'
+import { downloadBlob } from '../../../shared/download'
 import { fetchImageOptions, generateWorksheetImage, fetchImageStatus, previewImagePrompt, type ImageWorksheetParams, type WorksheetImage } from '../image-generation'
 
-vi.mock('../image-publication', async original => ({ ...await original<typeof import('../image-publication')>(), addImagePublication: vi.fn(), fetchPublicationCategories: vi.fn() }))
+vi.mock('../image-publication', async original => ({ ...await original<typeof import('../image-publication')>(), addArchivePublication: vi.fn(), addImagePublication: vi.fn(), fetchPublicationCategories: vi.fn() }))
+vi.mock('../image-cloud', async original => ({ ...await original<typeof import('../image-cloud')>(), saveImageArchive: vi.fn() }))
+vi.mock('../library', async original => ({ ...await original<typeof import('../library')>(), fetchArchive: vi.fn(), fetchArchiveFolders: vi.fn(), fetchArchives: vi.fn(), fetchLibraryCapacity: vi.fn() }))
 vi.mock('../worksheet-pdf', () => ({ buildWorksheetPdf: vi.fn() }))
+vi.mock('../worksheet-images', () => ({ buildWorksheetImagesZip: vi.fn() }))
+vi.mock('../../../shared/download', () => ({ downloadBlob: vi.fn(), triggerDownload: vi.fn() }))
 vi.mock('../api', async original => ({ ...await original<typeof import('../api')>(), fetchScope: vi.fn().mockResolvedValue({ allowed: [], forbidden: [] }) }))
 vi.mock('../image-generation', async original => ({ ...await original<typeof import('../image-generation')>(), previewImagePrompt: vi.fn(), fetchImageStatus: vi.fn(), generateWorksheetImage: vi.fn(), fetchImageOptions: vi.fn().mockResolvedValue({ configured: true }) }))
 
 const params: ImageWorksheetParams = { grade: '小学三年级', subject: '数学', keyword: '加减法', difficulty: 'medium', items: [{ game_type: 'quiz', question_count: 4 }], style: 'clean', requirements: '' }
 const images: WorksheetImage[] = ['first', 'second'].map(request_id => ({ request_id, b64_json: btoa('fixture'), mime_type: 'image/png', width: 2, height: 3, prompt: 'fixture' }))
 const paper = { id: 'saved-paper', title: '加减法', status: 'draft', page_count: 2 }
+const cloudArchive = { id: 'cloud-images', title: '加减法', grade: params.grade, subject: params.subject, file_status: 'ready', page_count: 2, question_count: 8, publication_id: null } as ArchiveDetail
 const pdf = new Blob(['%PDF-fixture'], { type: 'application/pdf' })
+const zip = new Blob(['ZIP fixture'], { type: 'application/zip' })
 const input = defineComponent({ props: ['modelValue'], emits: ['update:modelValue'], setup: (props, { emit }) => () => h('input', { value: props.modelValue, onInput: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).value) }) })
 const stubs = {
   UModal: defineComponent({ props: ['open'], setup: (props, { slots }) => () => props.open ? h('div', { role: 'dialog' }, [slots.body?.(), slots.footer?.()]) : null }),
@@ -28,7 +40,8 @@ const stubs = {
   UCheckbox: defineComponent({ props: ['modelValue', 'label'], emits: ['update:modelValue'], setup: (props, { emit }) => () => h('input', { type: 'checkbox', checked: props.modelValue, onChange: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).checked) }) }),
   USelect: defineComponent({ props: ['modelValue', 'items'], emits: ['update:modelValue'], setup: (props, { emit }) => () => h('select', { value: props.modelValue, onChange: (event: Event) => emit('update:modelValue', (event.target as HTMLSelectElement).value) }, props.items.map((item: { value: string; label: string }) => h('option', { value: item.value }, item.label))) }),
   UFormField: defineComponent({ setup: (_, { slots }) => () => h('div', slots.default?.()) }),
-  UAlert: defineComponent({ props: ['title', 'description'], setup: (props, { slots }) => () => h('div', [props.title, props.description, slots.actions?.()]) }), UIcon: true,
+  UAlert: defineComponent({ props: ['title', 'description'], setup: (props, { slots }) => () => h('div', [props.title, props.description, slots.actions?.()]) }), UIcon: true, UBadge: true,
+  UTooltip: defineComponent({ setup: (_, { slots }) => () => h('span', slots.default?.()) }), UDropdownMenu: true,
 }
 let wrapper: VueWrapper
 beforeEach(() => {
@@ -37,7 +50,14 @@ beforeEach(() => {
   vi.mocked(fetchImageOptions).mockResolvedValue({ configured: true } as Awaited<ReturnType<typeof fetchImageOptions>>)
   vi.mocked(fetchPublicationCategories).mockResolvedValue({ items: [{ id: 'visible', name: '练习', is_visible: true }, { id: 'hidden', name: '隐藏', is_visible: false }] })
   vi.mocked(addImagePublication).mockResolvedValue(paper)
+  vi.mocked(addArchivePublication).mockResolvedValue(paper)
+  vi.mocked(fetchArchiveFolders).mockResolvedValue({ items: [{ id: 'folder', name: '数学练习', paper_count: 0 }] })
+  vi.mocked(fetchArchives).mockResolvedValue({ items: [{ ...cloudArchive }], total: 1, has_more: false })
+  vi.mocked(fetchLibraryCapacity).mockResolvedValue({ storage_bytes: 1024, storage_limit_bytes: 5 * 1024 ** 3 })
+  vi.mocked(fetchArchive).mockResolvedValue({ ...cloudArchive, assets: [{ id: 'pdf', kind: 'pdf', page_number: 0, byte_size: 12, url: '/api/v1/library/assets/pdf' }] })
+  vi.mocked(saveImageArchive).mockResolvedValue(cloudArchive)
   vi.mocked(buildWorksheetPdf).mockResolvedValue(pdf)
+  vi.mocked(buildWorksheetImagesZip).mockResolvedValue(zip)
   vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:fixture')
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
   vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }))
@@ -113,6 +133,20 @@ async function workbench() {
   wrapper = mount(ImageWorkbench, { global: { stubs } })
   await flushPromises()
 }
+it('uses the server concurrency allowance, remembers the choice and clamps it after a server limit change', async () => {
+  vi.mocked(fetchImageOptions).mockResolvedValue({ configured: true, max_concurrency: 4, default_concurrency: 2 })
+  await workbench()
+  expect((wrapper.get('[aria-label="同时生成图片数"]').element as HTMLSelectElement).value).toBe('2')
+  expect(wrapper.findAll('[aria-label="同时生成图片数"] option')).toHaveLength(4)
+  await wrapper.get('[aria-label="同时生成图片数"]').setValue('3')
+  expect(localStorage.getItem('lc_u17_image_request_concurrency')).toBe('3')
+  wrapper.unmount(); await workbench()
+  expect((wrapper.get('[aria-label="同时生成图片数"]').element as HTMLSelectElement).value).toBe('3')
+  vi.mocked(fetchImageOptions).mockResolvedValue({ configured: true, max_concurrency: 1, default_concurrency: 1 })
+  wrapper.unmount(); await workbench()
+  expect((wrapper.get('[aria-label="同时生成图片数"]').element as HTMLSelectElement).value).toBe('1')
+  expect(generateWorksheetImage).not.toHaveBeenCalled()
+})
 it('takes only completed pages and their original generation conditions even after editing the next request', async () => {
   await workbench()
   await wrapper.get('[aria-label="图片知识点"]').setValue('下次的新知识点')
@@ -120,10 +154,34 @@ it('takes only completed pages and their original generation conditions even aft
   await flushPromises()
   const opened = wrapper.getComponent(ImagePublicationDialog)
   expect(opened.props('params')).toEqual(params)
-  expect(opened.props('images').map(image => image.request_id)).toEqual(images.map(image => image.request_id))
-  expect(opened.props('images').every(image => image.blob instanceof Blob && !image.b64_json)).toBe(true)
+  expect(opened.props('images')!.map(image => image.request_id)).toEqual(images.map(image => image.request_id))
+  expect(opened.props('images')!.every(image => image.blob instanceof Blob && !image.b64_json)).toBe(true)
   await chooseCategory(); await wrapper.get('#image-publication').trigger('submit'); await flushPromises()
   expect(wrapper.text()).toContain('查看后台草稿')
+})
+
+it('uses the same chosen range for original PNGs, cloud archives and publication, with a distinct saved state per range', async () => {
+  await workbench()
+  await wrapper.get('[aria-label="范围起始张数"]').setValue('2')
+  await wrapper.get('[aria-label="范围结束张数"]').setValue('3')
+  await wrapper.findAll('button').find(button => button.text() === '批量下载图片（1 张）')!.trigger('click')
+  await vi.waitFor(() => expect(buildWorksheetImagesZip).toHaveBeenCalledOnce())
+  expect(vi.mocked(buildWorksheetImagesZip).mock.calls[0][0].map(image => image?.request_id || null)).toEqual([null, 'second', null])
+  await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === '保存到云端')!.trigger('click')
+  await flushPromises()
+  const cloud = wrapper.getComponent(ImageCloudSaveDialog)
+  expect(cloud.props('images').map(image => image.request_id)).toEqual(['second'])
+  cloud.vm.$emit('close'); await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === '添加到后台')!.trigger('click')
+  await flushPromises()
+  const publication = wrapper.getComponent(ImagePublicationDialog)
+  expect(publication.props('images')!.map(image => image.request_id)).toEqual(['second'])
+  publication.vm.$emit('close'); await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === '全部图片')!.trigger('click')
+  await wrapper.findAll('button').find(button => button.text() === '保存到云端')!.trigger('click')
+  await flushPromises()
+  expect(wrapper.getComponent(ImageCloudSaveDialog).props('images').map(image => image.request_id)).toEqual(['first', 'second'])
 })
 
 it('does not expose backend publication or load categories for a regular teacher', async () => {
@@ -131,6 +189,133 @@ it('does not expose backend publication or load categories for a regular teacher
   await workbench()
   expect(wrapper.text()).not.toContain('添加到后台')
   expect(fetchPublicationCategories).not.toHaveBeenCalled()
+})
+
+it('saves completed images to the cloud using original batch conditions for a regular teacher', async () => {
+  useAuthStore().user!.role = 'user'
+  await workbench()
+  await wrapper.get('[aria-label="图片知识点"]').setValue('下一批条件')
+  await wrapper.findAll('button').find(button => button.text() === '保存到云端')!.trigger('click'); await flushPromises()
+  const opened = wrapper.getComponent(ImageCloudSaveDialog)
+  expect(opened.props('params')).toEqual(params)
+  expect(opened.props('images').map(image => image.request_id)).toEqual(['first', 'second'])
+  await opened.get('[aria-label="云端图片标题"]').setValue('云端加减练习')
+  await opened.get('[aria-label="图片云端文件夹"]').setValue('folder')
+  await opened.get('form').trigger('submit'); await flushPromises()
+  await vi.waitFor(() => expect(opened.text()).toContain('已保存到云端'))
+  expect(saveImageArchive).toHaveBeenCalledWith(pdf, expect.stringMatching(/^[a-f0-9]{64}$/), '云端加减练习', params, 2, 'folder', expect.any(AbortSignal))
+  expect(opened.text()).toContain('已保存到云端')
+  expect(addImagePublication).not.toHaveBeenCalled()
+  expect(addArchivePublication).not.toHaveBeenCalled()
+  expect(generateWorksheetImage).not.toHaveBeenCalled()
+  await opened.findAll('button').find(button => button.text() === '查看云端试卷')!.trigger('click')
+  expect(wrapper.emitted('library')).toHaveLength(1)
+})
+
+it('reuses the exact PDF and stable request key after an unknown cloud upload result', async () => {
+  vi.mocked(saveImageArchive).mockRejectedValueOnce(new ApiError('timeout', 0))
+  wrapper = mount(ImageCloudSaveDialog, { props: { open: true, images, params }, global: { stubs } }); await flushPromises()
+  await wrapper.get('form').trigger('submit'); await flushPromises()
+  await vi.waitFor(() => expect(wrapper.text()).toContain('同一批图片不会重复归档'))
+  await wrapper.get('form').trigger('submit'); await flushPromises()
+  await vi.waitFor(() => expect(saveImageArchive).toHaveBeenCalledTimes(2))
+  expect(buildWorksheetPdf).toHaveBeenCalledOnce()
+  expect(saveImageArchive).toHaveBeenCalledTimes(2)
+  expect(vi.mocked(saveImageArchive).mock.calls[0]!.slice(0, 6)).toEqual(vi.mocked(saveImageArchive).mock.calls[1]!.slice(0, 6))
+})
+
+it('cancels cloud upload when the account changes while preparing the PDF', async () => {
+  let finish!: (blob: Blob) => void
+  vi.mocked(buildWorksheetPdf).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  wrapper = mount(ImageCloudSaveDialog, { props: { open: true, images, params }, global: { stubs } }); await flushPromises()
+  await wrapper.get('form').trigger('submit'); await flushPromises()
+  await vi.waitFor(() => expect(buildWorksheetPdf).toHaveBeenCalledOnce())
+  await wrapper.get('form').trigger('submit')
+  expect(buildWorksheetPdf).toHaveBeenCalledOnce()
+  bindWorkspaceOwner('18')
+  finish(pdf); await flushPromises()
+  expect(saveImageArchive).not.toHaveBeenCalled()
+})
+
+it('prepares a mini-program draft directly from a cloud archive without generating or uploading files', async () => {
+  wrapper = mount(CloudLibraryDialog, { props: { open: true }, global: { stubs } }); await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === '准备发布到小程序')!.trigger('click'); await flushPromises()
+  expect(wrapper.text()).toContain('使用已保存的云端文件')
+  await chooseCategory(); await wrapper.get('form').trigger('submit'); await flushPromises()
+  expect(addArchivePublication).toHaveBeenCalledExactlyOnceWith('cloud-images', { title: cloudArchive.title, category_id: 'visible', description: '' })
+  expect(buildWorksheetPdf).not.toHaveBeenCalled()
+  expect(saveImageArchive).not.toHaveBeenCalled()
+  expect(addImagePublication).not.toHaveBeenCalled()
+  expect(wrapper.find('[href="/admin/#papers?paper=saved-paper"]').exists()).toBe(true)
+})
+
+it('shows an existing publication link after reloading cloud records and hides publication from regular teachers', async () => {
+  vi.mocked(fetchArchives).mockResolvedValue({ items: [{ ...cloudArchive, publication_id: paper.id }], total: 1, has_more: false })
+  wrapper = mount(CloudLibraryDialog, { props: { open: true }, global: { stubs } }); await flushPromises()
+  expect(wrapper.text()).toContain('查看小程序发布')
+  expect(wrapper.text()).not.toContain('准备发布到小程序')
+  useAuthStore().user!.role = 'user'; await flushPromises()
+  expect(wrapper.text()).not.toContain('查看小程序发布')
+  expect(fetchPublicationCategories).not.toHaveBeenCalled()
+})
+
+it('does not download a cloud file after an account switch or save an unexpected error page as PDF', async () => {
+  const fetch = vi.fn().mockResolvedValueOnce(new Response('error page', { headers: { 'Content-Type': 'text/html' } }))
+    .mockImplementationOnce(async () => { bindWorkspaceOwner('18'); return new Response(pdf) })
+  vi.stubGlobal('fetch', fetch)
+  wrapper = mount(CloudLibraryDialog, { props: { open: true }, global: { stubs } }); await flushPromises()
+  await wrapper.get('[aria-label="下载归档 PDF"]').trigger('click'); await flushPromises()
+  expect(wrapper.text()).toContain('下载文件无效')
+  expect(downloadBlob).not.toHaveBeenCalled()
+  await wrapper.get('[aria-label="下载归档 PDF"]').trigger('click'); await flushPromises()
+  expect(fetch).toHaveBeenCalledTimes(2)
+  expect(downloadBlob).not.toHaveBeenCalled()
+})
+
+it('downloads every completed image in the batch as one ZIP even when another page is selected', async () => {
+  useAuthStore().user!.role = 'user'
+  await workbench()
+  await wrapper.get('[aria-label="第 3 张 · 待生成"]').trigger('click')
+  await wrapper.findAll('button').find(button => button.text() === '批量下载图片（2 张）')!.trigger('click')
+  await flushPromises()
+  const pages = vi.mocked(buildWorksheetImagesZip).mock.calls[0]![0]
+  expect(pages.map(image => image?.request_id ?? null)).toEqual(['first', 'second', null])
+  expect(downloadBlob).toHaveBeenCalledExactlyOnceWith(zip, '习题图片-first-2张.zip')
+  expect(generateWorksheetImage).not.toHaveBeenCalled()
+})
+
+it('keeps images available and allows retry when ZIP creation fails', async () => {
+  vi.mocked(buildWorksheetImagesZip).mockRejectedValueOnce(new Error('打包失败，请重试'))
+  await workbench()
+  const button = () => wrapper.findAll('button').find(button => button.text() === '批量下载图片（2 张）')!
+  await button().trigger('click'); await flushPromises()
+  expect(wrapper.text()).toContain('打包失败，请重试')
+  expect(downloadBlob).not.toHaveBeenCalled()
+  expect(wrapper.findAll('.image-pages img')).toHaveLength(2)
+  expect(button().attributes('disabled')).toBeUndefined()
+  await button().trigger('click'); await flushPromises()
+  expect(downloadBlob).toHaveBeenCalledOnce()
+  expect(generateWorksheetImage).not.toHaveBeenCalled()
+})
+
+it.each(['account', 'unmount'])('blocks conflicting batch actions and does not download after %s changes', async change => {
+  let finish!: (blob: Blob) => void
+  vi.mocked(buildWorksheetImagesZip).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  await workbench()
+  const button = () => wrapper.findAll('button').find(button => button.text() === '批量下载图片（2 张）')!
+  await button().trigger('click'); await flushPromises()
+  expect(button().attributes('disabled')).toBeDefined()
+  for (const label of ['下载 PDF（2 页）', '继续生成剩余 1 张', '历史批次', '添加到后台']) {
+    expect(wrapper.findAll('button').find(button => button.text() === label)!.attributes('disabled')).toBeDefined()
+  }
+  await wrapper.get('form').trigger('submit')
+  expect(generateWorksheetImage).not.toHaveBeenCalled()
+  expect(buildWorksheetImagesZip).toHaveBeenCalledOnce()
+  if (change === 'account') {
+    useAuthStore().user = { id: 18, username: 'other', role: 'admin' }; bindWorkspaceOwner('18')
+  } else wrapper.unmount()
+  finish(zip); await flushPromises()
+  expect(downloadBlob).not.toHaveBeenCalled()
 })
 
 it('keeps the configured worksheet when reselecting the current grade or subject', async () => {

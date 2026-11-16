@@ -7,7 +7,7 @@ from datetime import datetime
 
 from app.db import db
 from app.security import decrypt_secret
-from app.services import membership_ledger, mini_auth, mini_orders
+from app.services import membership_ledger, mini_auth, mini_orders, settlements
 from app.services.mini_errors import fail
 from app.services.mini_messages import notify
 from app.services.wechat_pay import PaymentError, WeChatPay
@@ -142,6 +142,7 @@ def apply(value, event_id=None, expected=None):
             before = mini_auth._admin_item(user) if user else None
             seconds = membership_ledger.revoke(conn, order["id"])
             conn.execute("UPDATE mini_orders SET status = 'refunded', revision = revision + 1, updated_at = ? WHERE id = ?", (now, order["id"]))
+            settlements.revoke_reward(conn, order['id'], '订单已全额退款，撤销首付奖励')
             if user:
                 after = mini_auth._admin_item(conn.execute("SELECT * FROM mini_users WHERE id = ?", (user["id"],)).fetchone())
                 mini_auth._record_event(conn, refund["admin_id"], user["id"], before, {**after, "refund_order": order["id"], "revoked_seconds": seconds})
@@ -209,6 +210,9 @@ def settle_virtual(order_id, value):
         before = mini_auth._admin_item(user) if user else None
         seconds = membership_ledger.revoke(conn, order_id)
         conn.execute("UPDATE mini_orders SET status = 'refunded', revision = revision + 1, updated_at = ? WHERE id = ?", (now, order_id))
+        # 只见退款、又缺失原付款时间时保守消耗首付资格，不能把后到的续费误奖为首付。
+        settlements.record_payment(conn, order_id, historical=order['paid_at'] is None and not (type(paid_time) is int and 0 < paid_time <= now + 300))
+        settlements.revoke_reward(conn, order_id, '订单已全额退款，撤销首付奖励')
         if user:
             after = mini_auth._admin_item(conn.execute("SELECT * FROM mini_users WHERE id = ?", (user["id"],)).fetchone())
             mini_auth._record_event(conn, None, user["id"], before, {**after, "refund_order": order_id, "revoked_seconds": seconds})

@@ -36,8 +36,8 @@ def schema_type(schema: dict) -> str:
     return {"integer": "number", "number": "number", "boolean": "boolean", "string": "string", "null": "null"}.get(str(kind), "unknown")
 
 
-def generate() -> str:
-    spec = app.openapi()
+def generate(spec: dict | None = None) -> str:
+    spec = app.openapi() if spec is None else spec
     lines = ["// 自动生成：python scripts/generate_api_types.py；请修改后端模型后重新生成。", "export interface ApiSchemas {"]
     for name, schema in sorted(spec.get("components", {}).get("schemas", {}).items()):
         lines.append("  " + json.dumps(name) + ": " + schema_type(schema))
@@ -47,8 +47,20 @@ def generate() -> str:
             if method not in ("get", "post", "put", "delete", "patch"):
                 continue
             body = value.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema", {})
-            lines.append("  " + json.dumps(method.upper() + " " + path) + ": { body: " + schema_type(body) + " }")
-    return "\n".join(lines + ["}", ""])
+            responses = []
+            for status, response in sorted(value.get("responses", {}).items()):
+                content = response.get("content", {})
+                response_type = schema_type(content["application/json"].get("schema", {})) if "application/json" in content else "void" if not content else "Blob"
+                responses.append(json.dumps(status) + ": " + response_type)
+            parameters: dict[str, list[str]] = {"path": [], "query": []}
+            for parameter in [*operations.get("parameters", []), *value.get("parameters", [])]:
+                if parameter.get("in") in parameters:
+                    parameters[parameter["in"]].append(json.dumps(parameter["name"]) + ("" if parameter.get("required") else "?") + ": " + schema_type(parameter.get("schema", {})))
+            fields = ["body: " + schema_type(body), "responses: { " + "; ".join(responses) + " }"]
+            fields.extend(name + ": { " + "; ".join(items) + " }" for name, items in parameters.items())
+            lines.append("  " + json.dumps(method.upper() + " " + path) + ": { " + "; ".join(fields) + " }")
+    return "\n".join(lines + ["}", "",
+        "export type ApiResponse<K extends keyof ApiOperations> = ApiOperations[K]['responses'][Extract<keyof ApiOperations[K]['responses'], `2${string}`>]", ""])
 
 
 def main() -> None:

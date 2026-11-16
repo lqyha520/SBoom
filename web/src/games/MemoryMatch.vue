@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { writeGameSave } from './game-storage'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import GameNav from './GameNav.vue'
 import {
@@ -15,10 +16,11 @@ const save = ref(readSave() || newMemory())
 const resetDifficulty = ref<MemoryDifficulty | null>(null)
 const helpOpen = ref(false)
 const resultOpen = ref(false)
+const slowReveal = ref(false)
 const saveError = ref(false)
 const message = ref('一次翻两张，把算式和它相等的答案配成一对。')
 const round = computed(() => save.value.round)
-const config = computed(() => memoryConfigFor(save.value.difficulty))
+const config = computed(() => memoryConfigFor(save.value.difficulty,round.value.stage || 1))
 const difficulty = computed(() => memoryDifficulties.find(item => item.id === save.value.difficulty)!)
 const pairs = computed(() => round.value.cards.length / 2)
 const matchedPairs = computed(() => round.value.matched.length)
@@ -43,16 +45,23 @@ function selectCard(id: number) {
   if (result === 'first') message.value = '记住这张牌，再找和它相等的另一张。'
   if (result === 'matched' || result === 'mismatch') {
     message.value = result === 'matched' ? '配对成功，继续找下一对！' : '这两张不是一对，记住它们的位置。'
-    clearTimer()
-    timer = setTimeout(() => {
+    scheduleResolve()
+  }
+}
+function scheduleResolve() {
+  clearTimer()
+  if(round.value.flipped.length!==2 || pendingMismatch.value && slowReveal.value)return
+  timer = setTimeout(foldCards,pendingMismatch.value?1400:430)
+}
+function foldCards() {
+  clearTimer()
       timer = undefined
       const outcome = resolveMemory(save.value)
       if (outcome === 'finished') {
         message.value = '所有卡片都配对成功，太厉害了！'
         resultOpen.value = true
       }
-    }, result === 'matched' ? 430 : 820)
-  }
+
 }
 function restart() {
   clearTimer(); restartMemory(save.value); resultOpen.value = false
@@ -70,13 +79,15 @@ function applyDifficulty() {
   message.value = '一次翻两张，把算式和它相等的答案配成一对。'
 }
 watch(save, value => {
-  try { localStorage.setItem(props.storageKey, JSON.stringify(value)); saveError.value = false }
+  try { writeGameSave(props.storageKey, value); saveError.value = false }
   catch { saveError.value = true }
 }, { deep: true, immediate: true, flush: 'post' })
 watch(() => props.storageKey, () => {
   clearTimer(); save.value = readSave() || newMemory(); resultOpen.value = false
   message.value = '一次翻两张，把算式和它相等的答案配成一对。'
 })
+watch(()=>round.value.flipped.join(','),scheduleResolve,{immediate:true})
+watch(slowReveal,scheduleResolve)
 onBeforeUnmount(clearTimer)
 </script>
 
@@ -115,7 +126,7 @@ onBeforeUnmount(clearTimer)
             </span>
           </button>
         </div>
-        <div class="stage-feedback" role="status" aria-label="翻牌反馈"><span :class="{ good: message.startsWith('配对') || message.startsWith('所有') }"><UIcon :name="message.startsWith('这两张') ? 'i-lucide-brain' : message.startsWith('配对') || message.startsWith('所有') ? 'i-lucide-circle-check' : 'i-lucide-hand-pointer'" /></span><p>{{ message }}</p></div>
+        <div class="reveal-controls"><label><input v-model="slowReveal" type="checkbox" aria-label="翻牌慢慢看">慢慢看，自己收起未配对卡片</label><button v-if="pendingMismatch && slowReveal" @click="foldCards">记住了，收起卡片</button></div><div class="stage-feedback" role="status" aria-label="翻牌反馈"><span :class="{ good: message.startsWith('配对') || message.startsWith('所有') }"><UIcon :name="message.startsWith('这两张') ? 'i-lucide-brain' : message.startsWith('配对') || message.startsWith('所有') ? 'i-lucide-circle-check' : 'i-lucide-mouse-pointer-2'" /></span><p>{{ message }}</p></div>
         <div class="stage-tips"><span><UIcon name="i-lucide-lightbulb" />小提示：先记住算式，再找和它相等的答案。</span><span>三颗星：翻牌不超过 {{ pairs + 2 }} 次</span></div>
       </section>
 
@@ -129,6 +140,7 @@ onBeforeUnmount(clearTimer)
 </template>
 
 <style scoped>
+.reveal-controls{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:12px;margin-top:14px;font-size:12px;color:#81758f}.reveal-controls label{display:flex;gap:8px;align-items:center}.reveal-controls button{padding:10px;border:1px solid #d6ccdf;border-radius:7px;background:white}
 .memory-game { --memory-ink: #403b52; --memory-muted: #8f899f; --memory-violet: #7866a8; --memory-border: #eae3ef; min-height: 100dvh; background: #faf8fc; color: var(--memory-ink); font-family: var(--font-ui); letter-spacing: 0; }
 .memory-game button { cursor: pointer; transition: background .16s, box-shadow .16s; }
 .memory-game button:disabled { cursor: default; }

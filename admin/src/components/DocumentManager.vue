@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission, canPermission } from '../permissions'
 import { useAdminLeaveGuard } from "../navigation"
 import { computed, onActivated, onDeactivated, ref } from 'vue'
 import { ApiError, type UserInfo } from '../api'
@@ -96,7 +97,7 @@ onDeactivated(() => { sequence++; loading.value = false })
       </div>
       <div class="actions-row">
         <UButton v-if="dirty" label="放弃修改" color="neutral" variant="ghost" :disabled="busy" @click="restore" />
-        <UButton label="保存" icon="i-lucide-check" :loading="busy" :disabled="busy || !dirty || !title.trim()" @click="save" />
+        <UButton v-permission="'documents:update'" label="保存" icon="i-lucide-check" :loading="busy" :disabled="busy || !dirty || !title.trim()" @click="save" />
       </div>
     </div>
     <UButton v-if="conflict" label="载入最新并保留我的修改" @click="reloadConflict" /><UAlert v-if="error" :title="error" color="error" variant="soft" class="notice" />
@@ -109,9 +110,9 @@ onDeactivated(() => { sequence++; loading.value = false })
     <div class="doc-editor" :aria-busy="loading">
       <div class="doc-pane">
         <label class="field-label" for="doc-title">标题</label>
-        <UInput id="doc-title" v-model="title" maxlength="60" :disabled="busy || loading" class="w-full" />
+        <UInput id="doc-title" v-model="title" maxlength="60" :disabled="!canPermission('documents:update') || (busy || loading)" class="w-full" />
         <label class="field-label" for="doc-body">正文<small>以「## 」开头是小标题，其余每一行是一个段落</small></label>
-        <textarea id="doc-body" v-model="body" class="doc-textarea" maxlength="20000" spellcheck="false" :disabled="busy || loading" />
+        <textarea id="doc-body" v-model="body" class="doc-textarea" maxlength="20000" spellcheck="false" :disabled="!canPermission('documents:update') || (busy || loading)" />
       </div>
       <div class="doc-pane preview">
         <span class="field-label" aria-hidden="true">小程序里的显示效果</span>

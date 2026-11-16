@@ -10,7 +10,7 @@ import MembershipSheet from '../../components/MembershipSheet.vue'
 import { ApiError, errorMessage, favoriteCatalogPaper, fetchCatalogPaper, requestCatalogDownload } from '../../services/api'
 import { clearSession, ensureSession, requireLogin, session } from '../../services/session'
 import { rememberPaperIntent, takePaperIntent } from '../../services/paper-intent'
-import { cancelPdfDownload, clearAssetCache, openPdf } from '../../services/assets'
+import { cancelPdfDownload, clearAssetCache, openPdf, revalidateCatalogAssetCache } from '../../services/assets'
 import { createLatestRequest } from '../../services/latest-request'
 import { fileSize, fileStatus, formatDate } from '../../content'
 import { answerReadinessLabel, difficultyLabel, exerciseText, exerciseTitle, downloadAccessHint, subjectTone } from '../../presentation'
@@ -50,8 +50,9 @@ const groupError = ref('')
 const groupItems = ref<FavoriteGroup[]>([])
 const groupName = ref('')
 const requests = createLatestRequest()
-let active = true
+let active = true, activation = 0
 let actionRevision = 0
+let reconnectPending = false
 const pdf = computed(() => paper.value?.assets.find(asset => asset.kind === 'pdf'))
 const external = computed(() => paper.value?.download_mode === 'external')
 const selectedEdition = computed(() => paper.value?.editions?.find(item => item.kind === edition.value))
@@ -70,6 +71,8 @@ const downloadVersion = computed(() => external.value ? '网盘资料' : selecte
 const downloadStatus = computed(() => !downloading.value ? '' : external.value ? '正在获取网盘链接…' : downloadProgress.value === null ? '正在准备文件…' : downloadProgress.value < 100 ? '正在下载 ' + downloadProgress.value + '%' : '下载完成，正在打开 PDF…')
 const actionLabel = computed(() => {
   if (!paper.value) return pdfLabel
+  if (!session.ready) return '正在恢复登录…'
+  if (session.error) return '请先重新连接'
   if (!session.user) return paper.value.required_download === 'vip' ? '登录查看会员权益' : external.value ? '登录获取链接' : '登录后免费下载'
   if (!paper.value.can_download) return '查看会员权益'
   if (retryDownload.value) return external.value ? '重新获取链接' : '重试下载'
@@ -77,7 +80,7 @@ const actionLabel = computed(() => {
   return external.value ? '获取网盘链接' : hasEditions.value && selectedEdition.value ? pdfLabel.replace('PDF', selectedEdition.value.label) : pdfLabel
 })
 watch(() => session.user?.id, (owner, previous) => {
-  actionRevision++; requests.invalidate(); paper.value = null; error.value = ''; errorStatus.value = 0; loading.value = false
+  actionRevision++; requests.invalidate(); verified.value = false; if (previous || !owner) paper.value = null; error.value = ''; errorStatus.value = 0; loading.value = false
   edition.value = 'original'; retryDownload.value = false; downloadProgress.value = null
   editionOpen.value = false; resumeAction.value = ''
   previewOpen.value = false; membershipOpen.value = false
@@ -85,7 +88,7 @@ watch(() => session.user?.id, (owner, previous) => {
   groupOpen.value = false; groupBusy.value = false; groupError.value = ''; groupItems.value = []; groupName.value = ''
   if (active && previous && !owner) void load()
 }, { flush: 'sync' })
-async function load() {
+async function load(anonymous = !session.ready || !!session.error) {
   if (!id.value || !active || changing.value) { uni.stopPullDownRefresh(); return }
   const current = requests.begin()
   const restoring = !!paper.value
@@ -93,16 +96,16 @@ async function load() {
   previewOpen.value = false
   clearLink()
   try {
-    const result = await fetchCatalogPaper(id.value, { scope: current })
+    const result = await fetchCatalogPaper(id.value, { scope: current, anonymous })
     if (current()) {
-      if (!result.can_view || !result.can_download) clearAssetCache()
+      revalidateCatalogAssetCache(id.value, result.can_view, result.can_download)
       paper.value = result
-      verified.value = true
-      const intent = session.user ? takePaperIntent(id.value, session.user.id) : null
+      verified.value = !anonymous || (session.ready && !session.error && !session.user)
+      const intent = !anonymous && session.user ? takePaperIntent(id.value, session.user.id) : null
       if (intent) { edition.value = intent.edition; resumeAction.value = intent.action }
       if (restoring) { await nextTick(); if (current()) uni.pageScrollTo?.({ scrollTop, duration: 0 }) }
       if (!result.editions?.some(item => item.kind === edition.value)) edition.value = 'original'
-      if (current() && session.user && viewedBy !== session.user.id) {
+      if (current() && !anonymous && session.user && viewedBy !== session.user.id) {
         const owner = session.user.id; viewedBy = owner
         void recordView(result.id).catch(() => { if (viewedBy === owner) viewedBy = '' })
       }
@@ -111,7 +114,11 @@ async function load() {
     if (current()) {
       error.value = errorMessage(cause)
       errorStatus.value = cause instanceof ApiError ? cause.status : 0
-      if (cause instanceof ApiError && [401, 403, 404].includes(cause.status)) { paper.value = null; clearAssetCache() }
+      if (cause instanceof ApiError && [401, 403, 404].includes(cause.status)) {
+        paper.value = null
+        if (cause.status === 401) clearAssetCache()
+        else revalidateCatalogAssetCache(id.value, false, false)
+      }
     }
   } finally { if (current()) { loading.value = false; uni.stopPullDownRefresh() } }
   if (current() && verified.value && resumeAction.value === 'favorite') {
@@ -157,7 +164,7 @@ async function download() {
   } catch (cause) {
     if (!active || revision !== actionRevision) return
     if (requested) void recordEvent('download_failed', id.value).catch(() => {})
-    if (cause instanceof ApiError && cause.code === 'vip_required') { clearAssetCache(); await load() }
+    if (cause instanceof ApiError && cause.code === 'vip_required') { revalidateCatalogAssetCache(id.value, true, false); await load() }
     if (!active || revision !== actionRevision) return
     error.value = errorMessage(cause)
     retryDownload.value = !(cause instanceof ApiError && [401, 403, 404].includes(cause.status))
@@ -247,9 +254,23 @@ function sharePaper() {
 onLoad(options => { id.value = typeof options?.id === 'string' ? options.id : '' })
 onShareAppMessage(() => shareCard('paper', id.value, paper.value?.title))
 onShareTimeline(() => shareTimeline(shareCard('paper', id.value, paper.value?.title)))
-onShow(async () => { active = true; await ensureSession(); if (active) void load() })
+async function reconnectSession() {
+  const run = activation
+  await ensureSession()
+  if (active && run === activation) await load()
+}
+onShow(async () => {
+  active = true
+  const run = ++activation, restoring = !session.ready || !!session.error
+  const restored = ensureSession()
+  void load(restoring)
+  await restored
+  if (!active || run !== activation) return
+  if (restoring && session.user && !session.error) void load(false)
+  else if (!loading.value && session.ready && !session.error) verified.value = !!paper.value
+})
 function leave() {
-  active = false; groupReads.invalidate(); actionRevision++; requests.invalidate(); loading.value = false; verified.value = false
+  active = false; activation++; reconnectPending = false; groupReads.invalidate(); actionRevision++; requests.invalidate(); loading.value = false; verified.value = false
   if (paper.value) paper.value = { ...paper.value, assets: [], snapshot: null, thumbnail_url: null, editions: paper.value.editions?.map(({ url: _url, ...item }) => item) }
   cancelPdfDownload()
   previewOpen.value = false; membershipOpen.value = false; editionOpen.value = false; uni.stopPullDownRefresh()
@@ -257,7 +278,13 @@ function leave() {
   groupOpen.value = false; groupBusy.value = false; groupError.value = ''; groupItems.value = []; groupName.value = ''
 }
 onHide(() => { captureScroll(top => { scrollTop = top }); leave() })
-function reconnect() { if (active && !changing.value && !downloading.value) void load() }
+function flushReconnect() {
+  if (!reconnectPending || !active || loading.value || changing.value || downloading.value || previewOpen.value) return
+  reconnectPending = false; void load()
+}
+function reconnect() { if (active) { reconnectPending = true; flushReconnect() } }
+// 恢复网络时让阅读器继续停留在当前页；失败图片自行重试，关闭预览后再核验详情。
+watch([loading, changing, downloading, previewOpen], flushReconnect)
 uni.$on?.('lc-network-restored', reconnect)
 onUnload(() => { leave(); paper.value = null; uni.$off?.('lc-network-restored', reconnect) })
 onPullDownRefresh(() => { void load() })
@@ -273,11 +300,11 @@ onPullDownRefresh(() => { void load() })
     </view>
     <view class="detail-hero" :class="subjectTone(paper?.subject || '')">
       <view v-if="paper" class="paper-stage">
-        <view v-if="!verified" class="preview-sheet locked-sheet"><wd-loading v-if="loading" /><text>{{ loading ? '正在核验访问权限' : '请重试加载资料' }}</text></view>
+        <view v-if="!verified" class="preview-sheet locked-sheet" role="status"><wd-loading v-if="loading || !session.ready" /><text>{{ session.error ? '重新连接后可查看原稿' : !session.ready ? '正在恢复登录以确认预览权限' : loading ? '正在核验访问权限' : '请重试加载资料' }}</text></view>
         <view v-else-if="!paper.can_view" class="preview-sheet locked-sheet"><wd-icon name="lock" size="31px" /><text>VIP 专享习题</text></view>
         <view v-else-if="external && !pages.length" class="preview-sheet locked-sheet"><wd-icon name="folder" size="31px" /><text>网盘资料</text></view><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-else class="preview-sheet preview-entry" :disabled="!pages.length" role="button" aria-label="查看完整习题预览" @click="preview"><PrivateImage :src="cover" label="习题原稿封面" /></button>
         <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" v-if="paper.can_view && pages.length" class="preview-pill" role="button" @click="preview"><wd-icon name="fullscreen" size="16px" /><text>原稿预览 · {{ pages.length }} 页</text></button>
-        <view v-else-if="!paper.can_view" class="preview-access access-badge"><wd-icon name="lock" size="12px" /><text>VIP 专享</text></view>
+        <view v-else-if="verified && !paper.can_view" class="preview-access access-badge"><wd-icon name="lock" size="12px" /><text>VIP 专享</text></view>
       </view>
     </view>
     <template v-if="waiting">
@@ -289,11 +316,12 @@ onPullDownRefresh(() => { void load() })
       <view class="detail-hero"><view class="paper-stage"><view class="preview-sheet skeleton-sheet" /></view></view>
       <view class="content-width paper-skeleton-content"><view class="skeleton-line" /><view class="skeleton-line" /><view class="skeleton-line short" /></view>
     </template>
-    <template v-if="session.ready">
+    <template v-if="paper || session.ready || error">
+      <view v-if="!session.ready || session.error" class="content-width"><view class="notice-strip" role="status"><text>{{ session.error ? '登录暂时无法恢复，仍可查看资料说明。' : '正在恢复登录，稍后可收藏或下载。' }}</text><wd-button v-if="session.error" role="button" variant="text" @click="reconnectSession">重新连接</wd-button></view></view>
       <view v-if="error" class="content-width"><view class="error-strip"><text class="grow">{{ error }}</text><wd-button v-if="loginRequired" class="error-action" role="button" variant="text" :disabled="downloading" @click="relogin">重新登录</wd-button><wd-button class="error-action" icon="refresh" type="danger" variant="text" role="button" :aria-label="retryDownload ? (external ? '重新获取链接' : '重新下载') : '重试加载'" :disabled="downloading" @click="retryDownload ? download() : load()">{{ retryDownload ? (external ? '重新获取' : '重新下载') : '重试' }}</wd-button></view></view>
       <template v-if="paper">
         <view class="content-width detail-content">
-          <view v-if="paper.tags?.length" class="detail-tags curriculum-tags"><wd-tag v-for="tag in paper.tags" :key="tag.id" variant="light">{{ tag.name }}</wd-tag></view>
+          <view v-if="paper.tags?.length" class="detail-tags detail-labels"><wd-tag v-for="tag in paper.tags" :key="tag.id" variant="light">{{ tag.name }}</wd-tag></view>
           <text v-if="paper.description || paper.keyword" class="detail-description">{{ exerciseText(paper.description || paper.keyword) }}</text>
           <view v-if="paper.update_note" class="notice-strip"><text>第 {{ paper.release_number }} 版 · {{ paper.update_note }}</text></view>
           <view v-if="paper.versions && paper.versions.length > 1" class="version-notes"><text v-for="version in paper.versions" :key="version.release_number">第 {{ version.release_number }} 版 · {{ formatDate(version.created_at) }} · {{ version.note || '首次发布' }}</text></view>
@@ -306,7 +334,7 @@ onPullDownRefresh(() => { void load() })
           <view v-if="!external && paper.file_status !== 'ready'" class="notice-strip">{{ exerciseText(paper.file_error) || fileStatus(paper.file_status) }}</view>
 
           <view v-if="verified && !paper.can_view" class="vip-locked"><text>完整内容仅对有效 VIP 会员开放</text><wd-button variant="text" icon="star" role="button" @click="viewMembership">{{ session.user ? '查看会员状态' : '登录查看会员权益' }}</wd-button></view>
-          <view v-else-if="verified && !pages.length" class="preview-empty"><wd-empty icon="file-pdf" :tip="external ? '文件由网盘提供，获取链接后可前往查看' : pdf ? '暂无预览图' : '习题文件暂未就绪'"><template #bottom><view class="empty-actions"><wd-button variant="plain" icon="refresh" role="button" @click="load">刷新状态</wd-button></view></template></wd-empty></view>
+          <view v-else-if="verified && !pages.length" class="preview-empty"><wd-empty icon="file-pdf" :tip="external ? '文件由网盘提供，获取链接后可前往查看' : pdf ? '暂无预览图' : '习题文件暂未就绪'"><template #bottom><view class="empty-actions"><wd-button variant="plain" icon="refresh" role="button" @click="load()">刷新状态</wd-button></view></template></wd-empty></view>
           <view class="file-guidance"><text>{{ downloadAccessHint(paper, !!session.user) }}</text><text v-if="!external">{{ pdfGuide }}</text></view>
         </view>
         <view class="detail-dock">
@@ -390,7 +418,7 @@ onPullDownRefresh(() => { void load() })
 .preview-download-action { flex:1;min-width:0; }
 .preview-download-note { display:block;margin-top:6px;font-size:12px;line-height:1.5;color:var(--lc-secondary);overflow-wrap:anywhere; }
 .link-sheet{max-width:520px;margin:0 auto}.link-tip{display:block;color:var(--lc-secondary);font-size:13px;line-height:1.8}.external-url{display:block;overflow-wrap:anywhere;word-break:break-all;padding:16px;margin:16px 0;background:var(--lc-background);border-radius:8px;color:var(--lc-primary);font-size:14px}.external-code{display:block;margin:0 0 20px;font-size:15px}
-.curriculum-tags { margin-top:0; }
+.detail-labels { margin-top:0; }
 .detail-service { display:flex;gap:16px;flex-wrap:wrap;margin:14px 0; }.version-notes text { display:block;font-size:12px;color:var(--lc-muted);margin:8px 0; }
 .edition-summary { display:flex;align-items:center;gap:8px;width:100%;min-height:44px;margin:0;padding:0;background:transparent;color:var(--lc-text);font-size:14px;line-height:1.5;text-align:left; }
 .edition-summary .grow { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }.edition-preview-hint { flex:none;font-size:12px;color:var(--lc-muted); }.edition-change { display:flex;align-items:center;gap:3px;flex:none;font-size:13px;color:var(--lc-primary); }

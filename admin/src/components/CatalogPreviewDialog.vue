@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission } from '../permissions'
 import EditorPanel from './EditorPanel.vue'
 import { toRefs, type UnwrapNestedRefs } from 'vue'
 import type { useCatalogPreview } from '../catalog-preview'
@@ -123,7 +124,7 @@ const {
         label="下载 PDF"
         icon="i-lucide-download"
         color="neutral"
-        variant="outline" /><UButton
+        variant="outline" /><UButton v-permission="'papers:publish'"
         v-if="
           preview && previewRole === 'admin' && preview.status !== 'published'
         "

@@ -78,10 +78,15 @@ def execute(action):
                 env_file=Path('/run/secrets/service.env'),
                 secret_file=Path('/app/data/secret_key.txt') if Path('/app/data/secret_key.txt').is_file() else None,
                 extra_files_root=Path('/app/data/wechat'),
+                config_root=Path(os.environ['BACKUP_CONFIG_ROOT']) if os.environ.get('BACKUP_CONFIG_ROOT') else None,
                 pg_container=None))
-            run('restic', 'backup', '--host', 'learn-coach', '--tag', 'learn-coach', str(bundle))
+            image_root = os.environ.get('BACKUP_IMAGES_ROOT')
+            if image_root and not (Path(image_root) / 'runtime.json').is_file():
+                raise RuntimeError('恢复镜像归档缺失')
+            run('restic', 'backup', '--host', 'learn-coach', '--tag', 'learn-coach', str(bundle),
+                *([image_root] if image_root else []))
             run('restic', 'forget', '--host', 'learn-coach', '--tag', 'learn-coach', '--group-by', 'host,tags',
-                '--keep-daily', '7', '--keep-weekly', '4', '--keep-monthly', '6', '--prune')
+                '--keep-last', '3', '--keep-daily', '7', '--keep-weekly', '4', '--keep-monthly', '6', '--prune')
             run('restic', 'check')
             status_file = os.environ.get('BACKUP_STATUS_FILE')
             if status_file:
@@ -90,22 +95,48 @@ def execute(action):
                 temporary = target.with_suffix('.tmp')
                 repository = os.environ.get('RESTIC_REPOSITORY', '')
                 remote = repository.startswith(('s3:', 'b2:', 'azure:', 'gs:', 'rclone:', 'rest:https://', 'sftp:'))
-                temporary.write_text(json.dumps({'completed_at': int(time.time()), 'verified': True, 'offsite': remote}), encoding='utf-8')
-                # The setgid receipt directory assigns the dedicated monitoring
-                # group; no credentials are included in this status document.
+                snapshots = json.loads(run('restic', 'snapshots', '--json', 'latest', '--host', 'learn-coach', '--tag', 'learn-coach'))
+                if len(snapshots) != 1:
+                    raise RuntimeError('无法确认新备份快照')
+                temporary.write_text(json.dumps({'completed_at': int(time.time()), 'verified': True, 'offsite': remote,
+                                                 'snapshot_id': snapshots[0]['id']}), encoding='utf-8')
+                # 回执不包含凭据，目录的 setgid 规则分配监控组。
                 temporary.chmod(0o640)
                 temporary.replace(target)
         else:
             # 只能在独立 restore-db 容器里运行；backup_restore 二次验证 localhost 和库名前缀。
-            run('restic', 'restore', 'latest', '--host', 'learn-coach', '--tag', 'learn-coach', '--target', str(root / 'download'))
+            readonly = ['--no-lock'] if os.environ.get('RESTIC_READ_ONLY') == 'true' else []
+            snapshot = os.environ.get('RESTORE_SNAPSHOT', 'latest')
+            run('restic', *readonly, 'restore', snapshot, '--host', 'learn-coach', '--tag', 'learn-coach', '--target', str(root / 'download'),
+                '--exclude', '/run/images/runtime.tar.gz')
             bundles = list((root / 'download').rglob('manifest.json'))
             if len(bundles) != 1:
                 raise RuntimeError('恢复快照必须恰好包含一个备份清单')
             backup_restore.restore(SimpleNamespace(source=bundles[0].parent, destination=root / 'verified', pg_container=None))
+            if export := os.environ.get('RESTORE_EXPORT_ROOT'):
+                import shutil
+                target = Path(export)
+                if any(target.iterdir()):
+                    raise RuntimeError('恢复导出目录必须为空')
+                shutil.copytree(root / 'verified' / 'files', target / 'paper-files')
+                for name in ('secret_key.txt', 'wechat'):
+                    source = root / 'verified' / name
+                    if source.is_dir():
+                        shutil.copytree(source, target / name)
+                    elif source.is_file():
+                        shutil.copyfile(source, target / name)
             import psycopg
             with psycopg.connect(os.environ['LC_RESTORE_DATABASE_URL']) as conn:
                 conn.execute('SELECT COUNT(*) FROM users').fetchone()
                 conn.execute('SELECT COUNT(*) FROM site_banners').fetchone()
+            if status_file := os.environ.get('RESTORE_STATUS_FILE'):
+                target = Path(status_file)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                temporary = target.with_suffix('.tmp')
+                temporary.write_text(json.dumps({'completed_at': int(time.time()), 'verified': True, 'snapshot_id': snapshot,
+                                                 'database_counts_checked': (bundles[0].parent / 'database_counts.json').is_file()}), encoding='utf-8')
+                temporary.chmod(0o640)
+                temporary.replace(target)
 
 
 def main():
@@ -125,7 +156,8 @@ def main():
         finally:
             # 不打印 restic stderr 或 DSN，避免把存储访问密钥写进日志。
             raise SystemExit(f'{args.action} 失败：{type(exc).__name__}，请检查配置和服务状态') from None
-    print(args.action + ' 完成：异地备份/隔离恢复检查通过')
+    messages = {'backup': '加密备份检查通过', 'restore-check': '隔离恢复检查通过', 'init': '加密仓库已初始化'}
+    print(args.action + ' 完成：' + messages[args.action])
 
 
 if __name__ == '__main__':

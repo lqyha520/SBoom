@@ -90,7 +90,7 @@ def collect_case(client: httpx.Client, case: dict) -> None:
         response = client.get("/api/v1/me/generations/" + case["request_id"])
         response.raise_for_status()
         value = response.json()
-        case["observation"] = {key: value.get(key) for key in ("status", "result", "error", "usage", "cache_expired")}
+        case["observation"] = {key: value.get(key) for key in ("status", "result", "error", "usage", "cache_expired", "trace", "replay_count")}
         case.pop("collection_error", None)
     except (httpx.HTTPError, ValueError) as error:
         # 不保存可能包含凭证或上游响应内容的异常消息，也不自动重发收费请求。
@@ -117,7 +117,10 @@ def run_cases(client: httpx.Client, cases: list[dict], directory: Path, identity
             save_json(directory / "run.json", run)
         collect_case(client, case)
         save_json(directory / "run.json", run)
-        if case.get("observation", {}).get("status") not in ("succeeded", "failed"):
+        observation = case.get('observation') or {}
+        # 格式错误已收到完整响应，可继续下一独立样本；保留本题失败，不重发本题。
+        known_format_failure = (observation.get('error') or {}).get('code') in ('generation_invalid_format', 'provider_empty_text')
+        if observation.get("status") not in ("succeeded", "failed") and not known_format_failure:
             break
     return run
 
@@ -134,9 +137,12 @@ def questions(case: dict) -> list[dict]:
 
 
 def ratings_template(run: dict) -> dict:
+    if 'runs' in run:
+        return {'version': 2, 'status': 'pending_human_review', 'run_digest': digest(run),
+                'rounds': [ratings_template(item) for item in run['runs']]}
     # 人工表不展示模型复核结论，避免把模型自评当作真值。
     return {"version": 1, "run_digest": digest(run), "questions": [
-        {"key": item["key"], "case": case["id"], "passage": item["passage"],
+        {"key": item["key"], "case": case["id"], "requirements": case['request'], "passage": item["passage"],
          "question": {key: value for key, value in item["question"].items() if key not in ("quality_status", "quality_issues")},
          "correct": None, "reason": ""}
         for case in run["cases"] for item in questions(case)
@@ -198,6 +204,7 @@ def main(argv=None) -> int:
     run.add_argument("--suite", type=Path, default=SUITE)
     run.add_argument("--limit", type=int, default=1)
     run.add_argument("--model-label", required=True)
+    run.add_argument("--build-id", required=True)
     run.add_argument("--confirm-paid", action="store_true")
     for command in (run, sub.add_parser("collect")):
         command.add_argument("--base-url", required=True)
@@ -222,7 +229,7 @@ def main(argv=None) -> int:
             with authenticated(args.base_url) as client:
                 data = run_cases(client, cases[:args.limit], args.directory, {
                     "target_digest": digest(validate_base(args.base_url)), "suite_digest": digest(cases), "model_label": args.model_label,
-                    "account_digest": digest(client.headers["X-Workspace-User"]),
+                    "account_digest": digest(client.headers["X-Workspace-User"]), "build_id": args.build_id,
                 })
                 if any(case.get("observation", {}).get("status") not in ("succeeded", "failed") for case in data["cases"]):
                     return 1

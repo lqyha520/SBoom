@@ -8,7 +8,7 @@ import socket
 import tempfile
 import unittest
 from contextlib import ExitStack
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pg_support
 
@@ -45,7 +45,7 @@ class ImageGenerationContracts(unittest.TestCase):
         self.stack.enter_context(patch.object(get_settings(), "archive_local_dir", self.stack.enter_context(tempfile.TemporaryDirectory(prefix="lc-image-test-"))))
         database.init_db()
         self.user = user_store.create_user("image-teacher", "test-password")
-        self.admin = user_store.create_user("image-admin", "test-password", role="admin")
+        self.admin = user_store.create_user("image-admin", "test-password", role="admin", is_super_admin=True)
         self.other = user_store.create_user("image-other", "test-password")
         app = FastAPI()
         app.include_router(image_generation.router)
@@ -215,6 +215,19 @@ class ImageGenerationContracts(unittest.TestCase):
         self.assertEqual(image_config.get_config(with_key=True)["api_key"], "secret-image-test")
         self.assertEqual(self.client.delete("/api/v1/admin/image-config").status_code, 200)
         self.assertFalse(self.client.get("/api/v1/image-generation/options").json()["configured"])
+
+    def test_parallel_options_respect_account_global_and_workbench_limits(self):
+        from app.config import get_settings
+        for user_limit, global_limit, expected in [(2, 6, 2), (1, 6, 1), (6, 1, 1), (6, 6, 4)]:
+            with self.subTest(user_limit=user_limit, global_limit=global_limit), \
+                    patch.object(get_settings(), 'generation_user_concurrency', user_limit), \
+                    patch.object(get_settings(), 'generation_global_concurrency', global_limit):
+                response = self.client.get('/api/v1/image-generation/options')
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(), {'configured': True, 'max_concurrency': expected,
+                                                  'default_concurrency': min(2, expected)})
+                self.assertNotIn('secret-image-test', response.text)
+        self.assertEqual(self.calls, [])
 
     def test_config_validation_rejects_credentials_query_and_unknown_fields(self):
         self.login(self.admin)
@@ -472,10 +485,18 @@ class ImageGenerationContracts(unittest.TestCase):
             self.assertEqual(self.client.get(f"/api/v1/me/generations/batch-{index}").json()["result"], result)
 
     def test_batch_count_and_page_index_are_bounded_before_provider_call(self):
-        for change in ({"image_count": 0}, {"image_count": 11}, {"image_count": 1.5},
+        for change in ({"image_count": 0}, {"image_count": 101}, {"image_count": 1.5},
                        {"image_index": 0}, {"image_index": 2}, {"image_count": 3, "image_index": 4}):
             self.assertEqual(self.send(body={**self.body, **change}).status_code, 422)
         self.assertEqual(self.calls, [])
+
+    def test_hundred_image_batch_still_sends_one_image_to_provider(self):
+        response = self.send('large-batch-last', {**self.body, 'image_count': 100, 'image_index': 100})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.calls), 1)
+        body = json.loads(self.calls[0].content)
+        self.assertEqual(body['n'], 1)
+        self.assertIn('共 100 张，这是第 100 张', body['prompt'])
 
     def test_auth_owner_and_request_validation_precede_provider(self):
         self.client.cookies.clear()
@@ -880,7 +901,6 @@ class ImageGenerationContracts(unittest.TestCase):
 
     def test_async_checkpoint_survives_timeout_and_recovers_existing_task_only(self):
         from app.services.generation_control import request_status
-        config = {**image_config.get_config(with_key=True), "timeout": 0.05}
         done = False
         def handler(req):
             if req.method == "POST":
@@ -888,8 +908,11 @@ class ImageGenerationContracts(unittest.TestCase):
             return httpx.Response(200, json={"id": "original-task", "status": "success" if done else "running",
                 "data": [{"b64_json": base64.b64encode(png()).decode()}] if done else []})
         self.handler = handler
-        with patch.object(image_config, "get_config", return_value=config), patch.object(service, "TASK_POLL_INTERVAL", 0.01):
+        # 在任务检查点落库后的轮询阶段注入超时，避免并行测试的调度耗尽 50ms 后
+        # 实际测到提交前超时；真实总时限由 test_async_polling_obeys_total_timeout 覆盖。
+        with patch.object(service, "_poll_image_task", new=AsyncMock(side_effect=TimeoutError())) as poll:
             response = self.send("recover-task")
+        poll.assert_awaited_once()
         self.assertEqual(response.status_code, 504)
         self.assertIs(request_status(self.user.id, "recover-task")["recoverable"], True)
         done = True

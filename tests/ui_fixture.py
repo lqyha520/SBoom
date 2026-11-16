@@ -53,6 +53,7 @@ from app.routers import (
     me,
     mini,
     site,
+    teaching,
 )
 from app.services import app_config, mini_auth, user_store
 from app.services.generation_control import record_attempt, record_usage
@@ -109,7 +110,7 @@ def question(kind, index, version=0):
 @asynccontextmanager
 async def lifespan(_app):
     init_db()
-    publisher = user_store.create_user("admin_console", "admin-pass-123", role="admin")
+    publisher = user_store.create_user("admin_console", "admin-pass-123", role="admin", is_super_admin=True)
     teacher = user_store.create_user("ui_teacher", "teacher-pass-123")
     mini_auth.register("ui_reader", "reader-pass-123")
     vip = mini_auth.register("ui_vip", "vip-pass-123")["user"]
@@ -218,6 +219,7 @@ fixture.include_router(auth.router)
 fixture.include_router(me.router)
 fixture.include_router(library.router)
 fixture.include_router(mini.router)
+fixture.include_router(teaching.router)
 fixture.include_router(catalog.router)
 fixture.include_router(catalog.admin_router)
 fixture.include_router(generate.router)

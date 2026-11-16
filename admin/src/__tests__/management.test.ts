@@ -13,7 +13,7 @@ vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof impo
 vi.mock('../experience', () => ({ batchCatalog: mocks.batch }))
 vi.mock('../growth', async importOriginal => ({ ...await importOriginal<typeof import('../growth')>(), getTags: mocks.tags }))
 
-const user = { id: 1, username: 'admin', role: 'admin' }
+const user = { id: 1, username: 'admin', role: 'admin', is_super_admin: true }
 let wrapper: VueWrapper
 function button(label: string) {
   return wrapper.findAll('button').find(item => item.text() === label)!

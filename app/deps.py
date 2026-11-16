@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import Cookie, Depends, Header, HTTPException
+from fastapi import Cookie, Depends, Header, HTTPException, Request
 
 from app.blocking import run_sync_in
 from app.security import parse_token
@@ -37,14 +37,32 @@ async def require_user(token: str | None = Cookie(None, alias=SESSION_COOKIE),
         from app.services.workspace_sessions import valid
         if not await run_sync_in("auth", valid, payload["sid"], user.id):
             raise HTTPException(401, detail={"error": "会话已退出或长时间未使用，请重新登录"})
+    elif user.role == 'admin':
+        from app.services.admin_mfa import enabled
+        if await run_sync_in('auth', enabled, user.id):
+            raise HTTPException(401, detail={'error': '请重新登录并完成 MFA 验证'})
     return user
 
 
-async def require_admin(user: CurrentUser = Depends(require_user)) -> CurrentUser:
-    """要求当前用户是管理员，否则 403。"""
+async def require_admin(request: Request, user: CurrentUser = Depends(require_user)) -> CurrentUser:
+    """每次请求读取最新授权，未登记的管理接口默认拒绝。"""
     if user.role != "admin":
         raise HTTPException(status_code=403, detail={"error": "需要管理员权限"})
+    from app.admin_permissions import authorize_request
+    await authorize_request(request, user)
     return user
+
+
+async def require_admin_identity(user: CurrentUser = Depends(require_user)) -> CurrentUser:
+    """管理员管理自己的安全设置，不要求账号管理菜单权限。"""
+    if user.role != 'admin':
+        raise HTTPException(403, detail={'error': '需要管理员权限'})
+    return user
+
+
+async def require_recent_admin_identity(token: str | None = Cookie(None, alias=SESSION_COOKIE),
+                                        user: CurrentUser = Depends(require_admin_identity)) -> CurrentUser:
+    return await require_recent_admin(token, user)
 
 
 async def require_recent_admin(token: str | None = Cookie(None, alias=SESSION_COOKIE),

@@ -4,27 +4,31 @@ import { captureWorkspaceGuard, ApiError } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useExamStore } from '../stores/exam'
 import { imageWorksheetTitle, plannedImageQuestionCount, type ImageWorksheetParams, type WorksheetImage } from '../image-generation'
-import { addImagePublication, fetchPublicationCategories, publicationUrl, type ImagePublication, type ImagePublicationMeta } from '../image-publication'
+import { addArchivePublication, addImagePublication, fetchPublicationCategories, publicationUrl, type ImagePublication, type ImagePublicationMeta } from '../image-publication'
+import type { ArchiveSummary } from '../library'
 
-const props = defineProps<{ open: boolean; images: WorksheetImage[]; params: ImageWorksheetParams }>()
+const props = withDefaults(defineProps<{ open: boolean; images?: WorksheetImage[]; params?: ImageWorksheetParams; archive?: ArchiveSummary }>(), { images: () => [] })
 const emit = defineEmits<{ close: []; saved: [paper: ImagePublication] }>()
 const auth = useAuthStore(), store = useExamStore()
 const owner = store.ownerId, ownerGuard = captureWorkspaceGuard()
 let alive = true
 const current = () => alive && store.ownerId === owner && !store.accountChanged && auth.user?.role === 'admin' && String(auth.user.id) === owner
-const plannedCount = plannedImageQuestionCount(props.params.items)
+const plannedCount = props.params ? plannedImageQuestionCount(props.params.items) : undefined
 const meta = ref<ImagePublicationMeta>({
-  title: imageWorksheetTitle(props.params).slice(0, 240),
-  grade: props.params.grade, subject: props.params.subject, category_id: '', description: '',
-  keyword: props.params.keyword, question_types: props.params.items.map(item => item.game_type).join(','),
+  title: props.archive?.title || (props.params ? imageWorksheetTitle(props.params).slice(0, 240) : ''),
+  grade: props.archive?.grade || props.params?.grade || '', subject: props.archive?.subject || props.params?.subject || '', category_id: '', description: '',
+  keyword: props.params?.keyword || '', question_types: props.params?.items.map(item => item.game_type).join(',') || '',
   ...(plannedCount === undefined ? {} : { question_count: plannedCount * props.images.length }),
 })
 const categories = ref<{ label: string; value: string }[]>([])
 const loading = ref(false), categoryError = ref(''), error = ref(''), busy = ref(false), progress = ref('')
 const saved = ref<ImagePublication | null>(null)
+const reviewIssues = computed(() => props.images.filter(image => image.quality_review?.status === 'issues').length)
+const reviewIncomplete = computed(() => props.images.filter(image => !['passed', 'issues'].includes(image.quality_review?.status || '')).length)
 // Keep the exact PDF bytes on retry so the server can recognize an already imported file.
 let pdf: Blob | null = null
 const valid = computed(() => current() && !loading.value && !categoryError.value && !!meta.value.title.trim()
+  && (props.archive ? props.archive.file_status === 'ready' : !!props.images.length)
   && !!meta.value.grade.trim() && !!meta.value.subject.trim() && categories.value.some(item => item.value === meta.value.category_id))
 
 async function loadCategories() {
@@ -43,7 +47,7 @@ async function save() {
   const metadata = { ...meta.value, title: meta.value.title.trim(), grade: meta.value.grade.trim(), subject: meta.value.subject.trim() }
   try {
     ownerGuard()
-    if (!pdf) {
+    if (!props.archive && !pdf) {
       const { buildWorksheetPdf } = await import('../worksheet-pdf')
       if (!current()) return
       pdf = await buildWorksheetPdf(props.images, done => { if (current()) progress.value = `正在合成 PDF：${done} / ${props.images.length} 页` }, () => !current())
@@ -51,13 +55,15 @@ async function save() {
     ownerGuard()
     if (!current()) return
     progress.value = '正在保存到后台并生成预览…'
-    const paper = await addImagePublication(pdf, metadata)
+    const paper = props.archive
+      ? await addArchivePublication(props.archive.id, { title: metadata.title, category_id: metadata.category_id, description: metadata.description })
+      : await addImagePublication(pdf!, metadata)
     ownerGuard()
     if (!current()) return
     saved.value = paper; emit('saved', paper)
   } catch (cause) {
     if (current()) error.value = cause instanceof ApiError && (cause.status === 0 || cause.status >= 500)
-      ? '暂未确认保存结果，请先到后台查看是否已有草稿；重试会复用本次 PDF。'
+      ? props.archive ? '暂未确认保存结果，请先到后台查看是否已有草稿，或刷新云端试卷查看发布入口。' : '暂未确认保存结果，请先到后台查看是否已有草稿；重试会复用本次 PDF。'
       : cause instanceof Error ? cause.message : '添加失败，请重试'
   } finally { busy.value = false; progress.value = '' }
 }
@@ -66,16 +72,18 @@ onBeforeUnmount(() => { alive = false })
 </script>
 
 <template>
-  <UModal :open="open" title="添加到后台" description="保存为习题草稿，确认后再发布" :ui="{ content: 'max-w-lg', body: 'sm:p-6' }" :dismissible="!busy" :close="!busy" @update:open="!$event && !busy && emit('close')">
+  <UModal :open="open" :title="archive ? '准备发布到小程序' : '添加到后台'" description="保存为习题草稿，确认后再发布" :ui="{ content: 'max-w-lg', body: 'sm:p-6' }" :dismissible="!busy" :close="!busy" @update:open="!$event && !busy && emit('close')">
     <template #body>
       <div v-if="saved" class="space-y-4">
-        <div class="publication-notice" role="status"><span class="publication-icon"><UIcon name="i-lucide-check" class="size-5" /></span><div><h3>已添加为后台习题草稿</h3><p>{{ saved.title }} · {{ saved.page_count }} 页，可前往后台预览并发布。</p></div></div>
+        <div class="publication-notice" role="status"><span class="publication-icon"><UIcon name="i-lucide-check" class="size-5" /></span><div><h3>已添加为后台习题草稿</h3><p>{{ saved.title }} · {{ saved.page_count }} 页，可前往后台预览并发布到小程序。</p></div></div>
         <UButton label="前往后台查看" icon="i-lucide-arrow-up-right" :href="publicationUrl(saved.id)" target="_blank" />
       </div>
       <form v-else id="image-publication" class="publication-form" @submit.prevent="save">
-        <div class="publication-notice"><span class="publication-icon"><UIcon name="i-lucide-files" class="size-5" /></span><div><h3>{{ images.length }} 张图片 · 合并为一份 PDF</h3><p>按图片顺序保存为草稿，保留知识点、题型和计划题量。请在后台核对实际题目与答案后发布。</p></div></div>
+        <div class="publication-notice"><span class="publication-icon"><UIcon name="i-lucide-files" class="size-5" /></span><div><h3>{{ archive ? `${archive.page_count} 页 · 使用已保存的云端文件` : `${images.length} 张图片 · 合并为一份 PDF` }}</h3><p>保存为草稿，保留知识点、题型和计划题量。请在后台核对实际题目与答案后发布。</p></div></div>
+        <p v-if="images.length" class="text-sm text-muted">待人工核对：{{ images.length }} 张；自动检查发现疑点 {{ reviewIssues }} 张，未完成检查 {{ reviewIncomplete }} 张。可先保存草稿，正式发布前请逐页核对。</p>
         <UFormField label="习题标题" required><UInput v-model="meta.title" aria-label="习题标题" maxlength="240" required color="primary" variant="outline" :disabled="busy" class="w-full" /></UFormField>
-        <div class="grid grid-cols-2 gap-4">
+        <p v-if="archive" class="text-sm text-muted">{{ archive.grade }} · {{ archive.subject }}</p>
+        <div v-else class="grid grid-cols-2 gap-4">
           <UFormField label="年级" required><UInput v-model="meta.grade" aria-label="习题年级" maxlength="80" required color="primary" variant="outline" :disabled="busy" class="w-full" /></UFormField>
           <UFormField label="科目" required><UInput v-model="meta.subject" aria-label="习题科目" placeholder="图片实际科目" maxlength="80" required color="primary" variant="outline" :disabled="busy" class="w-full" /></UFormField>
         </div>

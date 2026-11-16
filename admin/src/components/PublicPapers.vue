@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission } from '../permissions'
 import {
   computed,
   nextTick,
@@ -11,8 +12,8 @@ import {
 } from 'vue'
 import type { UserInfo } from '../api'
 import {
-  catalogDetail,
   catalogList,
+  catalogDetail,
   catalogStats,
   deletePublication,
   type CatalogDetail,
@@ -22,11 +23,12 @@ import {
 import { useCatalogSelection } from '../catalog-selection'
 import { useCatalogPreview } from '../catalog-preview'
 import { usePublicationEditor, publicationLabels as labels } from '../publication-editor'
-import { adminRoute, useAdminListRoute } from '../navigation'
+import { adminRoute, navigateAdmin, useAdminListRoute } from '../navigation'
 import CatalogPaperTable from './CatalogPaperTable.vue'
 import PublicationEditorDialog from './PublicationEditorDialog.vue'
 import CatalogPreviewDialog from './CatalogPreviewDialog.vue'
 import CatalogBatchDialog from './CatalogBatchDialog.vue'
+import CatalogOperations from './CatalogOperations.vue'
 
 
 const props = defineProps<{ user: UserInfo }>()
@@ -35,6 +37,11 @@ const selection = useCatalogSelection()
 const selectedIds = selection.ids
 const selectedItems = selection.selected
 const batchOpen = ref(false)
+const operations = ref<'' | 'schedules' | 'health'>('')
+async function inspectOperation(id: string) {
+  try { const item = await catalogDetail(id); previewCreated(item) }
+  catch (cause) { error.value = cause instanceof Error ? cause.message : '资料暂时无法打开' }
+}
 const grade = ref('all'), subject = ref('all'), category = ref('all'), access = ref('all')
 const createdExpanded = ref(false)
 const statsLoading = ref(false), statsError = ref('')
@@ -163,23 +170,14 @@ onDeactivated(() => {
   previewOpen.value = false
   batchOpen.value = false
 })
-async function openLinkedPaper() {
-  const id = new URLSearchParams(adminRoute.query).get('paper')
+function openLinkedPaper() {
+  const params = new URLSearchParams(adminRoute.query)
+  const id = params.get('paper')
   if (adminRoute.tab !== 'papers' || !id) return
-  try {
-    const item = await catalogDetail(id)
-    if (
-      adminRoute.tab === 'papers' &&
-      new URLSearchParams(adminRoute.query).get('paper') === id
-    )
-      await showPreview(item)
-  } catch (cause) {
-    if (
-      adminRoute.tab === 'papers' &&
-      new URLSearchParams(adminRoute.query).get('paper') === id
-    )
-      error.value = message(cause)
-  }
+  // A direct link opens once; remembered menu state keeps only the list filters.
+  params.delete('paper')
+  navigateAdmin('papers', Object.fromEntries(params), true)
+  void showPreview({ id })
 }
 onActivated(openLinkedPaper)
 watch(() => new URLSearchParams(adminRoute.query).get('paper'), openLinkedPaper)
@@ -232,11 +230,11 @@ async function remove() {
 
 <template>
   <section class="admin-section catalog-page" aria-label="公共习题管理">
-    <div class="catalog-library-heading"><span class="catalog-library-icon"><UIcon name="i-lucide-folders" class="size-5" /></span><div><h2>教学资料库</h2><p>整理、核对与发布，在一个地方完成。</p></div><span class="catalog-library-badge"><UIcon name="i-lucide-globe" class="size-3.5" />公共内容</span></div>
+    <div class="catalog-library-heading"><span class="catalog-library-icon"><UIcon name="i-lucide-folders" class="size-5" /></span><div><h2>教学资料库</h2><p>{{ user.is_super_admin ? '查看所有管理员创建的习题。' : '仅显示你创建的习题。' }}整理、核对与发布，在一个地方完成。</p></div><span class="catalog-library-badge"><UIcon name="i-lucide-globe" class="size-3.5" />公共内容</span></div>
     <div v-if="statsError" class="actions-row mb-3"><span class="text-sm text-muted">统计暂不可用，仍可管理资料</span><UButton label="重试统计" size="xs" variant="outline" :loading="statsLoading" @click="loadStats(true)" /></div>
     <div class="section-toolbar catalog-toolbar">
       <UTabs v-model="status" :items="statusTabs" :content="false" variant="link" aria-label="发布状态筛选" class="max-w-full overflow-x-auto" :ui="{ list: 'w-max p-0 gap-4', trigger: 'flex-none px-0 pb-3 text-sm' }" />
-      <div class="actions-row"><UTooltip text="刷新"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="刷新公共习题" :loading="loading" @click="refresh" /></UTooltip><UButton icon="i-lucide-plus" label="添加习题" @click="create" /></div>
+      <div class="actions-row"><UButton label="资料体检" icon="i-lucide-heart-pulse" color="neutral" variant="outline" @click="operations = 'health'" /><UButton label="发布排期" icon="i-lucide-calendar-clock" color="neutral" variant="outline" @click="operations = 'schedules'" /><UTooltip text="刷新"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="刷新公共习题" :loading="loading" @click="refresh" /></UTooltip><UButton v-permission="'papers:create'" icon="i-lucide-plus" label="添加习题" @click="create" /></div>
     </div>
     <div class="catalog-filters" aria-label="资料筛选">
       <form class="table-search" @submit.prevent="search">
@@ -284,8 +282,8 @@ async function remove() {
       aria-label="本次新建习题"
     >
       <div class="actions-row">
-        <button type="button" :aria-expanded="createdExpanded" @click="createdExpanded = !createdExpanded">本次新建 {{ createdItems.length }} 份习题 · {{ createdExpanded ? '收起' : '展开' }}</button>
-        <UButton
+        <button v-permission="'papers:create'" type="button" :aria-expanded="createdExpanded" @click="createdExpanded = !createdExpanded">本次新建 {{ createdItems.length }} 份习题 · {{ createdExpanded ? '收起' : '展开' }}</button>
+        <UButton v-permission="'papers:create'"
           label="继续添加"
           size="sm"
           variant="outline"
@@ -304,7 +302,7 @@ async function remove() {
               variant="outline"
               :disabled="busy"
               @click="previewCreated(item)"
-            /><UButton
+            /><UButton v-permission="'papers:update'"
               label="补充教学标签"
               size="sm"
               variant="outline"
@@ -324,7 +322,7 @@ async function remove() {
     <div class="catalog-selection-bar" :class="{ 'has-selection': selectedItems.length }">
       <span>{{ selectedItems.length ? '已选择 ' + selectedItems.length + ' 份' : '共 ' + total + ' 份习题' }}</span>
       <div class="actions-row" v-if="selectedItems.length">
-      <UButton
+      <UButton v-permission="'papers:update'"
         :label="'批量管理（' + selectedItems.length + '）'"
         icon="i-lucide-list-checks" size="sm" variant="soft"
         @click="batchOpen = true"
@@ -334,6 +332,7 @@ async function remove() {
     </div>
     <CatalogPaperTable
       :items="items"
+      :show-publisher="user.is_super_admin"
       :selected-ids="selectedIds"
       :categories="filterCategories"
       :loading="loading"
@@ -388,12 +387,12 @@ async function remove() {
           variant="soft"
           class="mt-3" /></template
       ><template #footer
-        ><UButton
+        ><UButton v-permission="'papers:delete'"
           label="取消"
           color="neutral"
           variant="outline"
           :disabled="busy"
-          @click="removeOpen = false" /><UButton
+          @click="removeOpen = false" /><UButton v-permission="'papers:delete'"
           label="删除条目"
           icon="i-lucide-trash-2"
           color="error"
@@ -408,6 +407,7 @@ async function remove() {
       @close="batchOpen = false"
       @saved="batchSaved"
     />
+    <CatalogOperations v-if="operations" :mode="operations" @close="operations = ''" @saved="refresh" @edit="inspectOperation" />
   </section>
 </template>
 
@@ -424,7 +424,7 @@ async function remove() {
 .catalog-selection-bar.has-selection { padding:10px 14px;margin:12px 0;background:#edf7f1;border-radius:10px;color:#286b4d; }
 .catalog-engagement { display:flex;gap:12px; }
 .catalog-toolbar { margin-bottom:0;gap:12px; }
-.catalog-toolbar > .actions-row { margin-left:auto;flex-wrap:nowrap; }
+.catalog-toolbar > .actions-row { margin-left:auto;flex-wrap:wrap; }
 @media(max-width:600px) { .catalog-filters { display:grid;grid-template-columns:repeat(2,minmax(0,1fr)); }.catalog-filters > :not([role='combobox']) { grid-column:1 / -1; }.catalog-filters .table-search { width:100%; }.catalog-toolbar > :first-child { order:2;width:100%; }.catalog-selection-bar { flex-wrap:wrap;padding:10px 0; } }
 @media(max-width:600px) { .catalog-library-badge { display:none; }.catalog-filters { padding:12px; }.catalog-library-heading { padding-bottom:20px; } }
 .created-results {

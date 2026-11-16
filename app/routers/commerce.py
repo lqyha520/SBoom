@@ -10,6 +10,24 @@ from app.deps import require_admin, require_recent_admin
 from app.http_limits import limited_body
 from app.library_deps import no_store, require_mini_user
 from app.models.commerce import BillInput, OrderInput, PayInput, PlanInput, RefundInput, RefundReview
+from app.models.commerce_api_responses import (
+    CommerceVirtualNotificationResponse,
+)
+from app.models.consumer_responses import (
+    AdminOrderResponse,
+    CardCodeResponse,
+    CardRedeemResponse,
+    CardResponse,
+    ItemsResponse,
+    MembershipPlanResponse,
+    MembershipPlansResponse,
+    OrderResponse,
+    OrdersResponse,
+    PageResponse,
+    PaymentResponse,
+    ReconciliationResponse,
+    StatusResponse,
+)
 from app.models.membership_cards import CardCreate, CardRedeem
 from app.services import membership_cards, mini_orders, mini_refunds, payment_bills, wechat_virtual_pay
 from app.services.mini_auth import MiniUser
@@ -29,139 +47,149 @@ def payment_call(function, *args):
         raise HTTPException(503, detail={"error": str(error), "code": "payment_unavailable"}) from error
 
 
-@router.get("/mini/membership/plans")
+@router.get("/mini/membership/plans", response_model=MembershipPlansResponse, response_model_exclude_unset=True)
 def plans(user: MiniUser = Depends(require_mini_user)):
     return mini_orders.plans(user_id=user.id)
 
-@router.post('/mini/membership/redeem')
+@router.post('/mini/membership/redeem', response_model=CardRedeemResponse, response_model_exclude_unset=True)
 def redeem_card(body: CardRedeem, user: MiniUser = Depends(require_mini_user)):
     throttle(user.id, "redeem")
     return membership_cards.redeem(user.id, body.code)
 
-@router.get('/admin/commerce/cards')
+@router.get('/admin/commerce/cards', response_model=PageResponse[CardResponse], response_model_exclude_unset=True)
 def admin_cards(q: str = Query('', max_length=4), status: str = '', limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), user: CurrentUser = Depends(require_admin)):
     return membership_cards.listing(status, limit, offset, q)
 
-@router.post('/admin/commerce/cards', status_code=201)
+@router.post('/admin/commerce/cards', status_code=201, response_model=ItemsResponse[CardCodeResponse], response_model_exclude_unset=True)
 def create_cards(body: CardCreate, user: CurrentUser = Depends(require_admin)):
     return membership_cards.create(user.id, body.days, body.quantity, body.expires_at)
 
-@router.post('/admin/commerce/cards/{identifier}/disable')
+@router.post('/admin/commerce/cards/{identifier}/disable', response_model=StatusResponse, response_model_exclude_unset=True)
 def disable_card(identifier: str, user: CurrentUser = Depends(require_admin)):
     return membership_cards.disable(identifier)
 
 
-@router.get("/mini/orders")
+@router.get("/mini/orders", response_model=OrdersResponse[OrderResponse], response_model_exclude_unset=True)
 def orders(limit: int = Query(20, ge=1, le=50), offset: int = Query(0, ge=0, le=100000), user: MiniUser = Depends(require_mini_user)):
     return mini_orders.listing(user.id, limit=limit, offset=offset)
 
 
-@router.post("/mini/orders", status_code=201)
+@router.post("/mini/orders", status_code=201, response_model=OrderResponse, response_model_exclude_unset=True)
 def create_order(body: OrderInput, user: MiniUser = Depends(require_mini_user)):
     throttle(str(user.id), "create_order")
     return mini_orders.create(user.id, body)
 
 
-@router.get("/mini/orders/{identifier}")
+@router.get("/mini/orders/{identifier}", response_model=OrderResponse, response_model_exclude_unset=True)
 def order(identifier: str, user: MiniUser = Depends(require_mini_user)):
     return mini_orders.detail(identifier, user.id)
 
 
-@router.post("/mini/orders/{identifier}/pay")
+@router.post("/mini/orders/{identifier}/pay", response_model=PaymentResponse, response_model_exclude_unset=True)
 def pay(identifier: str, body: PayInput | None = None, user: MiniUser = Depends(require_mini_user)):
     throttle(str(user.id), "pay")
     return payment_call(mini_orders.pay, identifier, user.id, body.platform if body else "")
 
 
-@router.post("/mini/orders/{identifier}/sync")
+@router.post("/mini/orders/{identifier}/sync", response_model=OrderResponse, response_model_exclude_unset=True)
 def sync_order(identifier: str, user: MiniUser = Depends(require_mini_user)):
     throttle(str(user.id), "sync_order")
     return payment_call(mini_orders.sync, identifier, user.id)
 
 
-@router.post("/mini/orders/{identifier}/cancel")
+@router.post("/mini/orders/{identifier}/cancel", response_model=OrderResponse, response_model_exclude_unset=True)
 def cancel_order(identifier: str, user: MiniUser = Depends(require_mini_user)):
     throttle(str(user.id), "cancel_order")
     return payment_call(mini_orders.cancel, identifier, user.id)
 
 
-@router.post("/mini/orders/{identifier}/refund")
+@router.post("/mini/orders/{identifier}/refund", response_model=OrderResponse, response_model_exclude_unset=True)
 def request_refund(identifier: str, body: RefundInput, user: MiniUser = Depends(require_mini_user)):
     throttle(str(user.id), "request_refund")
     return mini_refunds.request(identifier, user.id, body)
 
 
-@router.post("/mini/refunds/{identifier}/sync")
+@router.post("/mini/refunds/{identifier}/sync", response_model=OrderResponse, response_model_exclude_unset=True)
 def sync_refund(identifier: str, user: MiniUser = Depends(require_mini_user)):
     throttle(str(user.id), "sync_refund")
     return payment_call(mini_refunds.sync, identifier, user.id)
 
 
-@router.get("/admin/commerce/plans")
+@router.get("/admin/commerce/plans", response_model=MembershipPlansResponse, response_model_exclude_unset=True)
 def admin_plans(user: CurrentUser = Depends(require_admin)):
     return mini_orders.plans(True)
 
 
-@router.post("/admin/commerce/plans", status_code=201)
+@router.post("/admin/commerce/plans", status_code=201, response_model=MembershipPlanResponse, response_model_exclude_unset=True)
 def create_plan(body: PlanInput, user: CurrentUser = Depends(require_admin)):
     return mini_orders.save_plan(body)
 
 
-@router.put("/admin/commerce/plans/{identifier}")
+@router.put("/admin/commerce/plans/{identifier}", response_model=MembershipPlanResponse, response_model_exclude_unset=True)
 def update_plan(identifier: str, body: PlanInput, user: CurrentUser = Depends(require_admin)):
     return mini_orders.save_plan(body, identifier)
 
 
-@router.get("/admin/commerce/orders")
+@router.get("/admin/commerce/orders", response_model=OrdersResponse[AdminOrderResponse], response_model_exclude_unset=True)
 def admin_orders(status: OrderStatus = "", q: str = Query("", max_length=120), start_date: str = Query("", max_length=10), end_date: str = Query("", max_length=10), limit: int = Query(20, ge=1, le=50), offset: int = Query(0, ge=0, le=100000), user: CurrentUser = Depends(require_admin)):
-    return mini_orders.listing(status=status, q=q, limit=limit, offset=offset, start_date=start_date, end_date=end_date)
+    return mini_orders.listing(status=status, q=q, limit=limit, offset=offset, start_date=start_date, end_date=end_date, admin_actor_id=user.id)
 
 
-@router.get("/admin/commerce/orders/export")
+@router.get("/admin/commerce/orders/export", response_class=Response, responses={200: {'content': {'text/csv': {'schema': {'type': 'string', 'format': 'binary'}}}}})
 def export_orders(status: OrderStatus = "", q: str = Query("", max_length=120), start_date: str = Query("", max_length=10), end_date: str = Query("", max_length=10), user: CurrentUser = Depends(require_admin)):
-    return Response(payment_bills.export_orders(status, q, start_date, end_date), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": 'attachment; filename="membership-orders.csv"'})
+    return Response(payment_bills.export_orders(status, q, start_date, end_date, admin_actor_id=user.id), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": 'attachment; filename="membership-orders.csv"'})
 
 
-@router.post("/admin/commerce/orders/{identifier}/sync")
+@router.post("/admin/commerce/orders/{identifier}/sync", response_model=AdminOrderResponse, response_model_exclude_unset=True)
 def admin_sync(identifier: str, user: CurrentUser = Depends(require_admin)):
+    from app.services.referrals import require_order
+    require_order(user.id, identifier)
     throttle(str(user.id), "admin_sync")
     return payment_call(mini_orders.sync, identifier)
 
 
-@router.get("/admin/commerce/orders/{identifier}")
+@router.get("/admin/commerce/orders/{identifier}", response_model=AdminOrderResponse, response_model_exclude_unset=True)
 def admin_order(identifier: str, user: CurrentUser = Depends(require_admin)):
+    from app.services.referrals import require_order
+    require_order(user.id, identifier)
     return mini_orders.detail(identifier)
 
 
-@router.post("/admin/commerce/orders/{identifier}/cancel")
+@router.post("/admin/commerce/orders/{identifier}/cancel", response_model=AdminOrderResponse, response_model_exclude_unset=True)
 def admin_cancel(identifier: str, user: CurrentUser = Depends(require_admin)):
+    from app.services.referrals import require_order
+    require_order(user.id, identifier)
     throttle(str(user.id), "admin_cancel")
     return payment_call(mini_orders.cancel, identifier)
 
 
-@router.put("/admin/commerce/refunds/{identifier}")
+@router.put("/admin/commerce/refunds/{identifier}", response_model=AdminOrderResponse, response_model_exclude_unset=True)
 def review_refund(identifier: str, body: RefundReview, user: CurrentUser = Depends(require_recent_admin)):
+    from app.services.referrals import require_order
+    require_order(user.id, identifier, refund=True)
     throttle(str(user.id), "review_refund")
     return payment_call(mini_refunds.review, user.id, identifier, body)
 
 
-@router.post("/admin/commerce/refunds/{identifier}/sync")
+@router.post("/admin/commerce/refunds/{identifier}/sync", response_model=AdminOrderResponse, response_model_exclude_unset=True)
 def admin_sync_refund(identifier: str, user: CurrentUser = Depends(require_admin)):
+    from app.services.referrals import require_order
+    require_order(user.id, identifier, refund=True)
     throttle(str(user.id), "admin_sync_refund")
     return payment_call(mini_refunds.sync, identifier)
 
 
-@router.get("/admin/commerce/reconciliations")
+@router.get("/admin/commerce/reconciliations", response_model=PageResponse[ReconciliationResponse], response_model_exclude_unset=True)
 def bills(limit: int = Query(20, ge=1, le=50), offset: int = Query(0, ge=0, le=100000), user: CurrentUser = Depends(require_admin)):
     return payment_bills.listing(limit, offset)
 
 
-@router.get("/admin/commerce/reconciliations/{identifier}")
+@router.get("/admin/commerce/reconciliations/{identifier}", response_model=ReconciliationResponse, response_model_exclude_unset=True)
 def bill(identifier: str, user: CurrentUser = Depends(require_admin)):
     return payment_bills.get(identifier)
 
 
-@router.post("/admin/commerce/reconciliations")
+@router.post("/admin/commerce/reconciliations", response_model=ReconciliationResponse, response_model_exclude_unset=True)
 def reconcile(body: BillInput, user: CurrentUser = Depends(require_admin)):
     throttle(str(user.id), "reconcile")
     return payment_call(payment_bills.reconcile, user.id, body.bill_date)
@@ -189,17 +217,17 @@ async def receive(request, refund=False):
     return Response(status_code=204)
 
 
-@router.post("/payments/wechat/notify")
+@router.post("/payments/wechat/notify", status_code=204)
 async def paid_notification(request: Request):
     return await receive(request)
 
 
-@router.post("/payments/wechat/refund-notify")
+@router.post("/payments/wechat/refund-notify", status_code=204)
 async def refund_notification(request: Request):
     return await receive(request, True)
 
 
-@router.get("/payments/wechat/virtual-notify")
+@router.get("/payments/wechat/virtual-notify", response_class=Response, responses={200: {'content': {'text/plain': {'schema': {'type': 'string'}}}}})
 def verify_virtual_notification(signature: str = Query(""), timestamp: str = Query(""), nonce: str = Query(""), echostr: str = Query("")):
     """微信保存虚拟支付消息推送地址时的 URL 校验。"""
     if not wechat_virtual_pay.verify_push_url(signature, timestamp, nonce):
@@ -207,7 +235,7 @@ def verify_virtual_notification(signature: str = Query(""), timestamp: str = Que
     return Response(echostr, media_type="text/plain")
 
 
-@router.post("/payments/wechat/virtual-notify")
+@router.post("/payments/wechat/virtual-notify", response_model=CommerceVirtualNotificationResponse, response_model_exclude_unset=True, responses={200: {'content': {'application/xml': {'schema': {'type': 'string'}}}}})
 async def virtual_notification(request: Request):
     """虚拟支付消息推送：只当触发器，最终状态一律回查微信订单接口。"""
     raw = await limited_body(request, 1048576, error="通知过大")

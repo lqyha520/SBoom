@@ -7,7 +7,8 @@ def confirm(conn, catalog_id, admin_id):
     row = conn.execute("SELECT c.paper_id, c.revision, a.snapshot_json FROM catalog_papers c JOIN paper_archives a ON a.id = c.paper_id WHERE c.id = ?", (catalog_id,)).fetchone()
     mode = json.loads(row["snapshot_json"])["export_options"].get("mode")
     answers = "included" if mode in ("answersOnly", "withAnswers") else "missing"
-    if conn.execute("SELECT 1 FROM catalog_print_editions WHERE catalog_id = ? AND kind = 'answers'", (catalog_id,)).fetchone():
+    if (conn.execute("SELECT 1 FROM catalog_print_editions WHERE catalog_id = ? AND kind = 'answers'", (catalog_id,)).fetchone()
+            or conn.execute("SELECT 1 FROM paper_assets WHERE paper_id = ? AND kind = 'answers_pdf'", (row["paper_id"],)).fetchone()):
         answers = "separate"
     now = int(time.time())
     conn.execute("UPDATE catalog_papers SET reviewed_at = ?, reviewed_by = ?, answer_readiness = ? WHERE id = ?", (now, admin_id, answers, catalog_id))

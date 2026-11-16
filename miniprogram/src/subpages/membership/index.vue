@@ -85,7 +85,8 @@ function purchase(plan: Plan) {
   action.value = 'purchase'
   let needsReload = false
   void page.act(async valid => {
-    if (!await confirmAction('确认会员套餐', plan.name + '：' + plan.days + ' 天，' + yuan(priceOf(plan)) + '。确认后生成订单，在订单页完成付款。') || !valid()) return
+    const expiry = plan.projected_expires_at ? '预计有效期至 ' + new Date(plan.projected_expires_at * 1000).toLocaleDateString('zh-CN') + '，以实际支付时间为准。' : ''
+    if (!await confirmAction(session.user?.is_vip ? '确认续费套餐' : '确认会员套餐', plan.name + '：' + plan.days + ' 天，' + yuan(priceOf(plan)) + '。' + expiry + '本次为单次购买，不会自动扣款。确认后在订单页完成付款。') || !valid()) return
     if (attempt.plan !== plan.id || attempt.revision !== plan.revision) attempt = { plan: plan.id, revision: plan.revision, key: requestKey() }
     try {
       const order = await createOrder(plan, attempt.key)
@@ -173,7 +174,7 @@ function redeem() {
           </view>
           <view v-else-if="!loading" class="plans-empty"><text>{{ ios ? 'iPhone 端暂时没有可开通的套餐，可以联系客服了解后续安排。' : '暂时没有可选套餐，可通过下方「咨询开通」了解开通方式。' }}</text></view>
           <text v-if="selectedPlan?.description" class="plan-description">{{ selectedPlan.description }}</text>
-          <text v-if="listed.length" class="plan-tip">{{ allBlocked ? (allLimited ? '可选套餐均已达到限购次数，如需再次开通请联系客服。' : '你还有待付款订单，请先完成或取消后再购买。') : canPurchase ? '有效期自动顺延，无自动续费。确认后在订单页付款。' : '套餐价格供参考，可联系客服了解开通方式。' }}</text>
+          <text v-if="listed.length" class="plan-tip">{{ allBlocked ? (allLimited ? '可选套餐均已达到限购次数，如需再次开通请联系客服。' : '你还有待付款订单，请先完成或取消后再购买。') : canPurchase ? (listed.some(plan => plan.renewal_status === 'expired') ? '会员已到期，付款成功后重新计算有效期。无自动续费。' : listed.some(plan => plan.renewal_due) ? '会员即将到期，手动续费后权益会从当前到期日顺延。无自动续费。' : '有效期自动顺延，无自动续费。确认后在订单页付款。') : '套餐价格供参考，可联系客服了解开通方式。' }}</text>
         </view>
 
         <view v-if="!restricted" class="redeem-panel">

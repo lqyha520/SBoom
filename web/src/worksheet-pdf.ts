@@ -1,13 +1,24 @@
 import { imageBlob, type WorksheetImage } from './image-generation'
+import { MAX_WORKSHEET_PDF_PAGES, MAX_WORKSHEET_PDF_BYTES } from './generation-limits'
+import { watermarkImage, type ImageWatermark } from './image-watermark'
 
 /** Keep each complete image on its own A4 page, with the original aspect ratio. */
-export async function buildWorksheetPdf(images: readonly WorksheetImage[], progress: (done: number) => void = () => {}, cancelled: () => boolean = () => false): Promise<Blob> {
-  if (!images.length || images.length > 10) throw new Error('请选择 1 至 10 张已生成的图片')
+export async function buildWorksheetPdf(images: readonly WorksheetImage[], progress: (done: number) => void = () => {}, cancelled: () => boolean = () => false, watermark?: ImageWatermark): Promise<Blob> {
+  if (!images.length || images.length > MAX_WORKSHEET_PDF_PAGES) throw new Error(`一份 PDF 支持 1 至 ${MAX_WORKSHEET_PDF_PAGES} 张图片，请缩小下载和保存范围`)
+  if (cancelled()) throw new Error('已停止导出')
+  if (images.reduce((size, image) => size + imageBlob(image).size, 0) > MAX_WORKSHEET_PDF_BYTES) {
+    throw new Error('图片合计超过 32 MB，请缩小下载和保存范围后分批合成 PDF')
+  }
   const { jsPDF } = await import('jspdf')
   const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true })
+  let outputBytes = 0
   for (const [index, image] of images.entries()) {
     if (cancelled()) throw new Error('已停止导出')
-    const bytes = new Uint8Array(await imageBlob(image).arrayBuffer())
+    const output = await watermarkImage(imageBlob(image), watermark, cancelled)
+    outputBytes += output.size
+    if (outputBytes > MAX_WORKSHEET_PDF_BYTES) throw new Error('图片合计超过 32 MB，请缩小下载和保存范围后分批合成 PDF')
+    const bytes = new Uint8Array(await output.arrayBuffer())
+    if (cancelled()) throw new Error('已停止导出')
     // Decode actual PNG dimensions instead of trusting cached metadata.
     const properties = pdf.getImageProperties(bytes)
     const { width, height } = properties
@@ -22,5 +33,7 @@ export async function buildWorksheetPdf(images: readonly WorksheetImage[], progr
   }
   if (cancelled()) throw new Error('已停止导出')
   pdf.deletePage(1)
-  return pdf.output('blob')
+  const blob = pdf.output('blob')
+  if (blob.size > MAX_WORKSHEET_PDF_BYTES) throw new Error('PDF 超过 32 MB，请缩小下载和保存范围')
+  return blob
 }

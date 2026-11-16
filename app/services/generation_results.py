@@ -11,9 +11,17 @@ from app.models import BatchItem, GameResult, GameType, GenerateRequest, Questio
 from app.services.generation_control import reserve_repairs
 from app.services.knowledge_topics import is_make_ten_practice
 from app.services.prompt_builder import allows_process_fill, prompt_builder
+from app.services.question_planning import arrange_answers
 from app.services.question_qc import arithmetic_value, exact_question_key, make_ten_issue, question_issue
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_reading_passage(value) -> str | None:
+    """兼容模型在 JSON 字符串内多转义一次的换行，不改正文内容。"""
+    if not isinstance(value, str):
+        return None
+    return value.replace('\\r\\n', '\n').replace('\\n', '\n').replace('\r\n', '\n').replace('\r', '\n').strip() or None
 
 
 def completed_sections(text: str) -> list[dict]:
@@ -91,14 +99,26 @@ def _normalize_question(value, game_type: str) -> dict | None:
     if game_type == "reading":
         expected = "multiple_choice" if question.get("options") else "reading"
     kind = question.get("type") or expected
+    if not isinstance(kind, str):
+        return None
     if kind in ("quiz", "challenge"):
         kind = "multiple_choice"
+    # 仅兼容含义明确的阅读简答别名，不猜测未知题型或带选项的题目。
+    if game_type == "reading" and kind == "short_answer" and not question.get("options"):
+        kind = "reading"
     allowed = {expected}
     if game_type == "reading":
         allowed = {"reading", "multiple_choice", "fill_blank", "word_problem", "true_false"}
     if kind not in allowed:
         return None
     question["type"] = kind
+    if game_type == "reading" and kind == "fill_blank":
+        answer, stem = question.get("answer"), question.get("stem")
+        # 多空答案只有逐空对应且均为非空标量时才能无损转成接口的答案字符串。
+        if (isinstance(answer, list) and answer and isinstance(stem, str)
+                and len(re.findall(r"_{2,}", stem)) == len(answer)
+                and all(type(part) in (str, int) and str(part).strip() for part in answer)):
+            question["answer"] = "；".join(str(part).strip() for part in answer)
     # 模型偶尔返回不带等号的纯算式；统一成卷面需要的“算式 =”格式。
     if game_type in ("oral_math", "vertical_calc", "recursive_calc", "smart_calc"):
         stem = question.get("stem")
@@ -145,6 +165,9 @@ def _take_questions(
 
 
 def _rejection_warning(rejected: Counter[str], section_id: str | None, phase: str) -> str:
+    from app.services.generation_trace import rejected as record_rejection
+    for reason, count in rejected.items():
+        record_rejection("validate_refill", reason, count)
     details = "；".join(f"{reason} {count} 道" for reason, count in rejected.items())
     logger.info("生成质检 section=%s phase=%s rejected=%s", section_id, phase, dict(rejected))
     return f"{phase}剔除 {sum(rejected.values())} 道题（{details}）"
@@ -163,8 +186,7 @@ async def normalize_result(
     if not isinstance(raw, dict) or raw.get("game_type", item.game_type) != item.game_type:
         raw = {}
         warnings.append("模型未返回可对应的大题")
-    passage = raw.get("passage")
-    passage = passage.strip() if isinstance(passage, str) else None
+    passage = normalize_reading_passage(raw.get("passage"))
     compact_fill_blank = item.game_type == "fill_blank" and request.subject == "数学"
     allow_fill_blank_steps = allows_process_fill(request.grade, request.subject, request.keyword)
     make_ten = item.game_type != "reading" and is_make_ten_practice(request.grade, request.subject, request.keyword)
@@ -181,8 +203,7 @@ async def normalize_result(
     if rejected:
         warnings.append(_rejection_warning(rejected, item.section_id, "初次生成"))
 
-    # Reading repairs could introduce questions about a different passage. Keep
-    # the original passage and expose missing counts instead of mixing sources.
+    # 阅读缺题统一交给复核后的 refill_reviewed；该路径绑定原文并复核新增题。
     missing = item.question_count - len(kept)
     if missing and allow_repairs and item.game_type != "reading":
         try:
@@ -223,6 +244,8 @@ async def normalize_result(
     missing = item.question_count - len(kept)
     if missing:
         warnings.append(f"请求 {item.question_count} 道，保留 {len(kept)} 道，缺少 {missing} 道；补题有次数上限")
+    kept, arrangement_warnings = arrange_answers(kept, item.game_type)
+    warnings.extend(arrangement_warnings)
     return GameResult(
         game_type=item.game_type, section_id=item.section_id,
         topic=request.keyword, difficulty=request.difficulty.value,

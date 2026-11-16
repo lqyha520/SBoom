@@ -70,6 +70,24 @@ def bounded_import(function):
     return wrapped
 
 
+@bounded_import
+def validate_split_pages(student: bytes, answers: bytes, preview_count: int, max_pages: int):
+    """与导入共用 PDFium 锁；双文件合计页数仍受归档上限约束。"""
+    import pypdfium2 as pdfium
+    counts = []
+    for raw in (student, answers):
+        try:
+            document = pdfium.PdfDocument(raw)
+            try:
+                counts.append(len(document))
+            finally:
+                document.close()
+        except Exception as exc:
+            raise HTTPException(422, detail={"error": "PDF 无法解析，请重新保存学生卷与答案"}) from exc
+    if counts[0] != preview_count or min(counts) < 1 or sum(counts) > max_pages:
+        raise HTTPException(422, detail={"error": f"学生卷预览须与 PDF 页数一致，学生卷与答案合计最多 {max_pages} 页"})
+
+
 def _render_pages(data: bytes) -> list[bytes]:
     try:
         import pypdfium2 as pdfium
@@ -126,7 +144,7 @@ MODE_LABELS = {"student": "练习版", "answersOnly": "答案版", "withAnswers"
 
 
 @bounded_import
-def import_paper(user_id: int, title: str, grade: str, subject: str, data: bytes, mode: str = "withAnswers", *, keyword: str = "", question_types: list[str] | None = None, question_count: int = 0) -> dict:
+def import_paper(user_id: int, title: str, grade: str, subject: str, data: bytes, mode: str = "withAnswers", *, keyword: str = "", question_types: list[str] | None = None, question_count: int = 0, request_id: str = "", folder_id: str | None = None) -> dict:
     """把一份 PDF 变成 file_status=ready 的私有试卷归档，返回归档详情。"""
     title = (title or "").strip() or "导入的习题"
     grade, subject = (grade or "").strip(), (subject or "").strip()
@@ -139,9 +157,15 @@ def import_paper(user_id: int, title: str, grade: str, subject: str, data: bytes
     if len(data) > MAX_IMPORT_BYTES:
         raise HTTPException(413, detail={"error": "PDF 不能超过 32 MB"})
     digest = hashlib.sha256(data).hexdigest()
+    # Image batches use a stable, owner-scoped key across reloads, including PDFs
+    # rebuilt with a different creation timestamp. The first saved metadata wins.
+    source_id = f"import-images-{request_id}" if request_id else f"import-{digest[:32]}"
+    archive_request_id = source_id if request_id else f"import-{digest}"
     with db() as conn:
-        existing = conn.execute("SELECT id, file_status FROM paper_archives WHERE user_id = ? AND source_id = ? AND content_hash = ?",
-                                (user_id, f"import-{digest[:32]}", digest)).fetchone()
+        existing = conn.execute("SELECT id, file_status FROM paper_archives WHERE user_id = ? AND request_id = ?",
+                                (user_id, archive_request_id)).fetchone()
+        if not existing:
+            paper_library._folder(conn, user_id, folder_id)
     if existing and existing["file_status"] == "ready":
         return paper_library.get_paper(user_id, existing["id"])
     pages = _render_pages(data)
@@ -152,29 +176,30 @@ def import_paper(user_id: int, title: str, grade: str, subject: str, data: bytes
     }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     now = int(time.time())
     with db(serialized=True) as conn:
-        # 同一管理员重复导入同一份 PDF 时复用既有归档，避免试卷库堆积重复文件
+        # 同一账号重试导入时复用既有归档，避免试卷库堆积重复文件。
         replay = conn.execute(
-            "SELECT id FROM paper_archives WHERE user_id = ? AND source_id = ? AND content_hash = ?",
-            (user_id, f"import-{digest[:32]}", digest),
+            "SELECT id FROM paper_archives WHERE user_id = ? AND request_id = ?",
+            (user_id, archive_request_id),
         ).fetchone()
         if replay:
             paper_id = replay["id"]
         else:
+            paper_library._folder(conn, user_id, folder_id)
             if conn.execute("SELECT COUNT(*) FROM paper_archives WHERE user_id = ?", (user_id,)).fetchone()[0] \
                     >= get_settings().archive_max_papers:
                 raise HTTPException(409, detail={"error": "试卷库已达到数量上限，请先整理旧试卷"})
             version = conn.execute(
                 "INSERT INTO paper_series(user_id, source_id, version) VALUES (?, ?, 1) "
                 "ON CONFLICT(user_id, source_id) DO UPDATE SET version = paper_series.version + 1 RETURNING version",
-                (user_id, f"import-{digest[:32]}"),
+                (user_id, source_id),
             ).fetchone()[0]
             paper_id = uuid.uuid4().hex
             conn.execute(
                 "INSERT INTO paper_archives(id, user_id, source_id, request_id, content_hash, version, title, grade, subject, "
                 "keyword, question_count, snapshot_json, folder_id, group_id, group_name, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (paper_id, user_id, f"import-{digest[:32]}", f"import-{digest}", digest, version, title, grade, subject,
-                 keyword.strip(), question_count, snapshot, None, "", "", now, now),
+                (paper_id, user_id, source_id, archive_request_id, digest, version, title, grade, subject,
+                 keyword.strip(), question_count, snapshot, folder_id, "", "", now, now),
             )
     paper_library.publish_bundle(user_id, paper_id, _bundle(pages, data))
     return paper_library.get_paper(user_id, paper_id)

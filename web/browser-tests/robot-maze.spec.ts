@@ -1,3 +1,4 @@
+import { mockGameCloud } from './game-fixtures'
 import { expect, test, type Page } from '@playwright/test'
 
 const key = 'lc_game_robot_maze_v1_guest'
@@ -68,6 +69,7 @@ test('免登录游戏：编排、单步、暂停、刷新恢复、通关解锁�
 })
 
 test('已登录用户直接打开或刷新游戏时仍使用账号存档', async ({ page }) => {
+  await mockGameCloud(page.context(), 7)
   await page.addInitScript(() => { try { localStorage.setItem('lc_uid', '7') } catch { /* 忽略存储限制 */ } })
   await page.goto('/#/games/robot-maze')
   await expect(firstHeading(page)).toBeVisible()
@@ -114,12 +116,12 @@ test('手机：转弯纠错、编辑顺序、提示、重置确认和窄屏布�
   await page.getByRole('button', { name: '重新开始探索', exact: true }).click()
   await page.getByRole('button', { name: '重新开始', exact: true }).click()
   await expect(firstHeading(page)).toBeVisible()
-  expect((await getSave(page)).stars).toEqual(Array(9).fill(0))
+  expect((await getSave(page)).stars).toEqual(Array(36).fill(0))
   await page.setViewportSize({ width: 320, height: 740 })
   await noOverflow(page)
 })
 
-test('循环积木：空循环提示、次数编辑、内部删除、逐步展开和全部通关', async ({ page }, info) => {
+test('循环积木：空循环提示、次数编辑、内部删除、逐步展开并解锁新章节', async ({ page }, info) => {
   await page.addInitScript(k => localStorage.setItem(k, JSON.stringify({ version: 1, level: 6, program: [], stars: [3, 3, 3, 3, 3, 3, 0, 0, 0], hints: Array(9).fill(0) })), key)
   await page.goto('/#/games/robot-maze')
   await expect(page.getByRole('heading', { name: '重复的魔法', exact: true })).toBeVisible()
@@ -147,8 +149,9 @@ test('循环积木：空循环提示、次数编辑、内部删除、逐步展�
   await add(page, '前进', '前进', '前进', '右转')
   await page.getByRole('combobox', { name: '第1块重复次数' }).selectOption('4')
   await run(page)
-  await expect(page.getByText('探索路线全部完成！你已经会用顺序、转向和循环了。', { exact: true })).toBeVisible()
-  expect((await getSave(page)).stars).toEqual(Array(9).fill(3))
+  await expect(page.getByText('路线规划得真好，下一段冒险等着你！', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button',{name:'前往下一关',exact:true})).toBeVisible()
+  expect((await getSave(page)).stars).toEqual([...Array(9).fill(3),...Array(27).fill(0)])
   await page.screenshot({ path: info.outputPath('robot-maze-complete.png'), fullPage: true })
 })
 
@@ -164,10 +167,13 @@ test('工作台账号、访客和两个游戏各自保存；返回工作台恢�
     else throw new Error('未声明的请求：' + path)
     await route.fulfill({ json })
   })
+  await mockGameCloud(context)
   await page.goto('/')
   const title = page.getByRole('textbox', { name: '试卷标题', exact: true })
   await title.fill('机器人探索前的草稿')
   await page.getByRole('button', { name: '学习游戏', exact: true }).click()
+  await expect(page.getByRole('heading', { name: /学习游戏中心/ })).toBeVisible()
+  await page.locator('.game-grid').getByRole('link', { name: /(?:开始|继续)小小店长/ }).click()
   await expect(page.getByRole('heading', { name: '小小店长.' })).toBeVisible()
   await page.getByRole('link', { name: '机器人闯迷宫', exact: true }).click()
   await expect(firstHeading(page)).toBeVisible()
@@ -177,6 +183,8 @@ test('工作台账号、访客和两个游戏各自保存；返回工作台恢�
   await page.getByRole('link', { name: '返回工作台', exact: true }).click()
   await expect(title).toHaveValue('机器人探索前的草稿')
   await page.getByRole('button', { name: '学习游戏', exact: true }).click()
+  await expect(page.getByRole('heading', { name: /学习游戏中心/ })).toBeVisible()
+  await page.locator('.game-grid').getByRole('link', { name: /(?:开始|继续)小小店长/ }).click()
   await expect(page.getByRole('heading', { name: '小小店长.' })).toBeVisible()
   await page.getByRole('link', { name: '机器人闯迷宫', exact: true }).click()
   await expect(firstHeading(page)).toBeVisible()

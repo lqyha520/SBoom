@@ -331,4 +331,4 @@ def seed_public_catalog(publisher, reader, disposable_root, assets_directory):
     if spare.request_id not in existing:
         source = paper_library.create_paper(publisher.id, spare)
         paper_library.publish_bundle(publisher.id, source["id"], bundles[entries[1]["key"]])
-    return {"created": created, **public_catalog.admin_summary()}
+    return {"created": created, **public_catalog.admin_summary(publisher.id)}

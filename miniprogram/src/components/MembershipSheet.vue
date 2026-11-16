@@ -19,13 +19,33 @@ const busy = ref(false)
 const error = ref('')
 const contact = ref<SupportSettings | null>(null)
 const iosEnabled = ref(false)
-const restricted = computed(() => iosRestricted(iosEnabled.value))
+const plansKnown = ref(false), plansLoading = ref(false), contactLoading = ref(false)
+const plansError = ref(''), contactError = ref('')
+const restricted = computed(() => plansKnown.value && iosRestricted(iosEnabled.value))
 const expiresSoon = computed(() => session.user?.is_vip && session.user.vip_expires_at && session.user.vip_expires_at - Date.now() / 1000 <= 7 * 86400)
-let contactSequence = 0
-const reads = createLatestRequest()
-onHide(() => { reads.invalidate(); contactSequence++; revision++ })
-onBeforeUnmount(reads.invalidate)
-watch(() => props.open, async value => { const current = ++contactSequence; const scope = reads.begin(); if (!value) return; try { const [result, plans] = await Promise.all([fetchSupport({ scope }), fetchPlans({ scope })]); if (props.open && current === contactSequence) { contact.value = result; iosEnabled.value = plans.ios_enabled } } catch { /* 无法确认平台能力时保留保守默认值。 */ } })
+const contactReads = createLatestRequest(), planReads = createLatestRequest(), memberReads = createLatestRequest()
+function invalidate() { contactReads.invalidate(); planReads.invalidate(); memberReads.invalidate(); revision++; plansLoading.value = false; contactLoading.value = false; busy.value = false }
+async function loadContact() {
+  if (!props.open) return
+  const current = contactReads.begin()
+  contactLoading.value = true; contactError.value = ''
+  try { const result = await fetchSupport({ scope: current }); if (current() && props.open) contact.value = result }
+  catch (cause) { if (current() && props.open) contactError.value = errorMessage(cause) }
+  finally { if (current()) contactLoading.value = false }
+}
+async function loadPlans() {
+  if (!props.open) return
+  const current = planReads.begin()
+  plansKnown.value = false; iosEnabled.value = false; plansLoading.value = true; plansError.value = ''
+  try { const result = await fetchPlans({ scope: current }); if (current() && props.open) { iosEnabled.value = result.ios_enabled; plansKnown.value = true } }
+  catch (cause) { if (current() && props.open) plansError.value = errorMessage(cause) }
+  finally { if (current()) plansLoading.value = false }
+}
+function reset() { invalidate(); contact.value = null; plansKnown.value = false; iosEnabled.value = false; plansError.value = ''; contactError.value = ''; error.value = '' }
+watch(() => props.open, value => { reset(); if (value) { void loadContact(); void loadPlans() } })
+watch(() => session.user?.id, () => { reset(); if (props.open) { void loadContact(); void loadPlans() } }, { flush: 'sync' })
+onHide(invalidate)
+onBeforeUnmount(invalidate)
 function service() { emit('close'); navigatePage({ url: '/subpages/membership/index' }) }
 function contactService() { emit('close'); navigatePage({ url: '/subpages/membership/index?contact=1' }) }
 let revision = 0
@@ -37,7 +57,7 @@ async function refresh() {
   const current = ++revision
   busy.value = true; error.value = ''
   try {
-    await refreshMembership({ scope: reads.begin(), force: true })
+    await refreshMembership({ scope: memberReads.begin(), force: true })
     if (current === revision && props.open) emit('refreshed')
   } catch (cause) { if (current === revision) error.value = errorMessage(cause) }
   finally { if (current === revision) busy.value = false }
@@ -51,7 +71,13 @@ async function refresh() {
       <view class="sheet-head"><text class="sheet-title">会员状态</text><button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="bare-icon" role="button" aria-label="关闭会员状态" @click="emit('close')"><wd-icon name="close" size="20px" /></button></view>
       <view class="membership-identity"><view class="membership-symbol"><wd-icon name="star-fill" size="25px" /></view><view class="grow"><text class="membership-name">{{ session.user?.is_vip ? 'VIP 会员' : '普通用户' }}</text><text class="membership-expiry">{{ membershipExpiry(session.user) }}</text></view></view>
       <view class="membership-perks"><view><wd-icon name="book" size="17px" /><text>VIP 专享习题</text></view><view><wd-icon name="file-pdf" size="17px" /><text>完整原稿与 PDF</text></view></view>
-      <template v-if="!restricted"><text v-if="expiresSoon" class="membership-contact">会员将在 7 天内到期，可提前查看续期套餐。</text><text v-if="contact" class="membership-contact">{{ contact.benefits }}</text><view class="membership-refresh"><wd-button role="button" block variant="plain" @click="service">会员套餐与卡密</wd-button><wd-button role="button" block variant="text" @click="contactService">查看联系方式</wd-button></view></template><text v-else class="membership-contact">当前平台暂不支持开通；已有会员权益可正常使用。</text>
+      <text v-if="expiresSoon && !restricted" class="membership-contact">会员将在 7 天内到期，可提前查看续期套餐。</text>
+      <text v-if="contact" class="membership-contact">{{ contact.benefits }}</text>
+      <text v-if="plansLoading" class="membership-contact" role="status">正在确认当前平台的会员服务</text>
+      <text v-else-if="restricted" class="membership-contact">当前平台暂不支持开通；已有会员权益可正常使用。</text>
+      <view v-if="plansError" class="error-strip" role="alert"><text class="grow">开通方式暂时无法确认：{{ plansError }}</text><wd-button role="button" variant="text" :loading="plansLoading" @click="loadPlans()">重试套餐信息</wd-button></view>
+      <view v-if="contactError" class="error-strip" role="alert"><text class="grow">客服信息暂时无法加载：{{ contactError }}</text><wd-button role="button" variant="text" :loading="contactLoading" @click="loadContact()">重试客服信息</wd-button></view>
+      <view class="membership-refresh"><wd-button v-if="!restricted" role="button" block variant="plain" @click="service">{{ plansKnown ? '会员套餐与卡密' : '查看会员服务' }}</wd-button><wd-button role="button" block variant="text" @click="contactService">查看联系方式</wd-button></view>
       <view v-if="error" class="error-strip">{{ error }}</view>
       <view class="membership-refresh"><wd-button block icon="refresh" role="button" :loading="busy" :disabled="busy || !session.user" @click="refresh">刷新会员状态</wd-button></view>
     </view>

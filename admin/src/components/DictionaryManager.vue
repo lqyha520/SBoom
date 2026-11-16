@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission, canPermission } from '../permissions'
 import { useDialogDraft } from '../dialog-draft'
 import TextbookCatalog from './TextbookCatalog.vue'
 import { computed, onActivated, onDeactivated, ref, watch } from 'vue'
@@ -190,7 +191,7 @@ const linkDraft = useDialogDraft(linkOpen, () => linkPicked.value, busy, '关联
   <section class="admin-section" aria-label="年级科目字典">
     <div class="section-toolbar">
       <p class="section-hint">年级科目字典 · 人教版官方教材目录</p>
-      <div class="actions-row"><UTooltip text="刷新"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="刷新字典" :loading="loading" @click="load" /></UTooltip><UButton v-if="kind !== 'knowledge_point'" icon="i-lucide-plus" :label="'新建' + kindLabel" @click="create" /></div>
+      <div class="actions-row"><UTooltip text="刷新"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="刷新字典" :loading="loading" @click="load" /></UTooltip><UButton v-permission="'dictionary:create'" v-if="kind !== 'knowledge_point'" icon="i-lucide-plus" :label="'新建' + kindLabel" @click="create" /></div>
     </div>
     <UTabs v-model="kind" :items="tabs" :content="false" class="dict-tabs" />
     <UAlert v-if="error" :title="error" color="error" variant="soft" class="notice" />
@@ -199,7 +200,7 @@ const linkDraft = useDialogDraft(linkOpen, () => linkPicked.value, busy, '关联
     <div v-if="pending.length" class="unlisted">
       <div class="unlisted-head"><UIcon name="i-lucide-triangle-alert" class="size-4" /><strong>发现 {{ pending.length }} 个未收录的{{ kindLabel }}</strong><span>来自历史试卷的自由文本，建议收编进字典以便统一管理。</span></div>
       <div class="unlisted-values"><UBadge v-for="value in pending" :key="value" color="warning" variant="soft">{{ value }}</UBadge></div>
-      <UButton icon="i-lucide-plus" :label="'全部收录进' + kindLabel + '字典'" color="warning" variant="soft" size="sm" :loading="busy" :disabled="busy" @click="adopt" />
+      <UButton v-permission="'dictionary:update'" icon="i-lucide-plus" :label="'全部收录进' + kindLabel + '字典'" color="warning" variant="soft" size="sm" :loading="busy" :disabled="busy" @click="adopt" />
     </div>
 
     <div v-if="kind === 'knowledge_point'" class="point-picker">
@@ -212,28 +213,28 @@ const linkDraft = useDialogDraft(linkOpen, () => linkPicked.value, busy, '关联
     <TextbookCatalog v-if="kind === 'knowledge_point'" :grade="grades.find(item => item.id === pointGrade)?.value || ''" :subject="subjects.find(item => item.id === pointSubject)?.value || ''" />
     <div v-else class="data-scroll" :aria-busy="loading"><table class="data-table dict-table"><thead><tr><th class="order-col">顺序</th><th>{{ kindLabel }}</th><th>显示名</th><th>小程序展示</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
       <tr v-for="(item, index) in visible" :key="item.id">
-        <td class="order-col"><div class="order-buttons"><UButton icon="i-lucide-chevron-up" size="xs" color="neutral" variant="ghost" :disabled="index === 0 || busy" :aria-label="'上移 ' + item.value" @click="move(index, -1)" /><UButton icon="i-lucide-chevron-down" size="xs" color="neutral" variant="ghost" :disabled="index === visible.length - 1 || busy" :aria-label="'下移 ' + item.value" @click="move(index, 1)" /></div></td>
+        <td class="order-col"><div class="order-buttons"><UButton v-permission="'dictionary:update'" icon="i-lucide-chevron-up" size="xs" color="neutral" variant="ghost" :disabled="index === 0 || busy" :aria-label="'上移 ' + item.value" @click="move(index, -1)" /><UButton v-permission="'dictionary:update'" icon="i-lucide-chevron-down" size="xs" color="neutral" variant="ghost" :disabled="index === visible.length - 1 || busy" :aria-label="'下移 ' + item.value" @click="move(index, 1)" /></div></td>
         <td class="name-cell">{{ item.value }}</td>
         <td class="desc-cell">{{ item.label || '—' }}</td>
         <td><UBadge :color="item.is_visible ? 'success' : 'neutral'" variant="soft">{{ item.is_visible ? '展示中' : '已隐藏' }}</UBadge></td>
         <td><div class="row-actions">
-          <UTooltip v-if="item.kind === 'grade'" text="关联科目"><UButton icon="i-lucide-link" color="neutral" variant="ghost" :aria-label="'关联科目 ' + item.value" @click="openLinks(item)" /></UTooltip>
-          <UTooltip text="编辑"><UButton icon="i-lucide-pencil" color="neutral" variant="ghost" :aria-label="'编辑 ' + item.value" @click="edit(item)" /></UTooltip>
-          <UTooltip :text="item.is_visible ? '隐藏' : '展示'"><UButton :icon="item.is_visible ? 'i-lucide-eye-off' : 'i-lucide-eye'" color="neutral" variant="ghost" :aria-label="(item.is_visible ? '隐藏 ' : '展示 ') + item.value" @click="toggleVisible(item)" /></UTooltip>
-          <UTooltip text="删除"><UButton icon="i-lucide-trash-2" color="error" variant="ghost" :aria-label="'删除 ' + item.value" @click="askRemove(item)" /></UTooltip>
+          <UTooltip v-if="item.kind === 'grade'" text="关联科目"><UButton v-permission="'dictionary:update'" icon="i-lucide-link" color="neutral" variant="ghost" :aria-label="'关联科目 ' + item.value" @click="openLinks(item)" /></UTooltip>
+          <UTooltip text="编辑"><UButton v-permission="'dictionary:update'" icon="i-lucide-pencil" color="neutral" variant="ghost" :aria-label="'编辑 ' + item.value" @click="edit(item)" /></UTooltip>
+          <UTooltip :text="item.is_visible ? '隐藏' : '展示'"><UButton v-permission="'dictionary:update'" :icon="item.is_visible ? 'i-lucide-eye-off' : 'i-lucide-eye'" color="neutral" variant="ghost" :aria-label="(item.is_visible ? '隐藏 ' : '展示 ') + item.value" @click="toggleVisible(item)" /></UTooltip>
+          <UTooltip text="删除"><UButton v-permission="'dictionary:delete'" icon="i-lucide-trash-2" color="error" variant="ghost" :aria-label="'删除 ' + item.value" @click="askRemove(item)" /></UTooltip>
         </div></td>
       </tr>
       <tr v-if="!visible.length"><td colspan="5"><div class="empty-state"><UIcon :name="loading ? 'i-lucide-loader-circle' : 'i-lucide-list-tree'" class="size-7" :class="{ 'animate-spin': loading }" /><h3>{{ loading ? '正在加载' : '该字典为空' }}</h3></div></td></tr>
     </tbody></table></div>
     <div v-if="kind !== 'knowledge_point'" class="table-footer"><span>共 {{ visible.length }} 个{{ kindLabel }}</span></div>
 
-    <UModal v-model:open="draft.model.value" :title="(target ? '编辑' : '新建') + kindLabel" :dismissible="!busy" :close="!busy"><template #body><form id="dict-form" class="field-stack" @submit.prevent="save">
-      <UFormField :label="kindLabel + '内容'" required :hint="kind === 'knowledge_point' ? '知识点名称会直接进入出题的知识范围约束' : '需与试卷里保存的写法完全一致'"><UInput v-model="form.entry" :maxlength="kind === 'knowledge_point' ? 120 : 80" :disabled="busy" required class="w-full" /></UFormField>
-      <UFormField :label="kind === 'knowledge_point' ? '备注' : '显示名'" hint="留空则直接显示内容本身"><UInput v-model="form.label" maxlength="80" :disabled="busy" class="w-full" /></UFormField>
-      <UFormField label="展示顺序" hint="数值小的排前面"><UInput v-model.number="form.sort_order" type="number" min="0" :disabled="busy" class="w-full" /></UFormField>
-      <USwitch v-model="form.is_visible" :label="kind === 'knowledge_point' ? '参与出题范围约束' : '在小程序展示'" :disabled="busy" />
+    <UModal v-model:open="draft.model.value" :title="(target ? '编辑' : '新建') + kindLabel" :dismissible="!busy" :close="!busy"><template #body><form id="dict-form" class="field-stack" @submit.prevent="canPermission('dictionary:' + (target ? 'update' : 'create')) && (save())">
+      <UFormField :label="kindLabel + '内容'" required :hint="kind === 'knowledge_point' ? '知识点名称会直接进入出题的知识范围约束' : '需与试卷里保存的写法完全一致'"><UInput v-model="form.entry" :maxlength="kind === 'knowledge_point' ? 120 : 80" :disabled="!canPermission('dictionary:' + (target ? 'update' : 'create')) || (busy)" required class="w-full" /></UFormField>
+      <UFormField :label="kind === 'knowledge_point' ? '备注' : '显示名'" hint="留空则直接显示内容本身"><UInput v-model="form.label" maxlength="80" :disabled="!canPermission('dictionary:' + (target ? 'update' : 'create')) || (busy)" class="w-full" /></UFormField>
+      <UFormField label="展示顺序" hint="数值小的排前面"><UInput v-model.number="form.sort_order" type="number" min="0" :disabled="!canPermission('dictionary:' + (target ? 'update' : 'create')) || (busy)" class="w-full" /></UFormField>
+      <USwitch v-model="form.is_visible" :label="kind === 'knowledge_point' ? '参与出题范围约束' : '在小程序展示'" :disabled="!canPermission('dictionary:' + (target ? 'update' : 'create')) || (busy)" />
       <UButton v-if="conflict" label="载入最新并保留我的修改" @click="reloadConflict" /><UAlert v-if="formError" :title="formError" color="error" variant="soft" />
-    </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="draft.setOpen(false)" /><UButton type="submit" form="dict-form" :label="target ? '保存' : '创建'" icon="i-lucide-check" :loading="busy" :disabled="busy || !form.entry.trim()" /></template></UModal>
+    </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="draft.setOpen(false)" /><UButton v-permission="'dictionary:' + (target ? 'update' : 'create')" type="submit" form="dict-form" :label="target ? '保存' : '创建'" icon="i-lucide-check" :loading="busy" :disabled="busy || !form.entry.trim()" /></template></UModal>
 
     <UModal v-model:open="linkDraft.model.value" :title="'关联科目 · ' + (linkGrade?.value || '')" :dismissible="!busy" :close="!busy"><template #body><div class="field-stack">
       <p class="section-hint">勾选该年级可用的科目；关联会同步约束出题工作台的年级-科目组合。</p>
@@ -242,9 +243,9 @@ const linkDraft = useDialogDraft(linkOpen, () => linkPicked.value, busy, '关联
       </div>
       <p v-if="!subjects.length" class="section-hint">还没有科目条目，请先到「科目」页签创建。</p>
       <UAlert v-if="error" :title="error" color="error" variant="soft" />
-    </div></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="linkDraft.setOpen(false)" /><UButton label="保存关联" icon="i-lucide-check" :loading="busy" :disabled="busy" @click="saveLinks" /></template></UModal>
+    </div></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="linkDraft.setOpen(false)" /><UButton v-permission="'dictionary:update'" label="保存关联" icon="i-lucide-check" :loading="busy" :disabled="busy" @click="saveLinks" /></template></UModal>
 
-    <UModal v-model:open="removeOpen" title="删除字典条目" :dismissible="!busy" :close="!busy"><template #body><div class="field-stack"><p>确认删除「{{ removing?.value }}」？已有习题本身不会被改动。<template v-if="removing?.kind !== 'knowledge_point'">该{{ removing?.kind === 'grade' ? '年级的科目关联' : '科目下的知识点' }}会一并删除。</template></p></div></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="removeOpen = false" /><UButton label="确认删除" color="error" icon="i-lucide-trash-2" :loading="busy" :disabled="busy" @click="confirmRemove" /></template></UModal>
+    <UModal v-model:open="removeOpen" title="删除字典条目" :dismissible="!busy" :close="!busy"><template #body><div class="field-stack"><p>确认删除「{{ removing?.value }}」？已有习题本身不会被改动。<template v-if="removing?.kind !== 'knowledge_point'">该{{ removing?.kind === 'grade' ? '年级的科目关联' : '科目下的知识点' }}会一并删除。</template></p></div></template><template #footer><UButton v-permission="'dictionary:delete'" label="取消" color="neutral" variant="outline" :disabled="busy" @click="removeOpen = false" /><UButton v-permission="'dictionary:delete'" label="确认删除" color="error" icon="i-lucide-trash-2" :loading="busy" :disabled="busy" @click="confirmRemove" /></template></UModal>
   </section>
 </template>
 

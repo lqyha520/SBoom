@@ -1,13 +1,181 @@
 {
   "version": 1,
   "cases": [
-    {"id": "g1-math-add", "request": {"grade": "小学一年级", "subject": "数学", "keyword": "20以内的进位加法", "game_type": "oral_math", "difficulty": "easy", "question_count": 3}},
-    {"id": "g2-math-word", "request": {"grade": "小学二年级", "subject": "数学", "keyword": "表内乘法解决问题", "game_type": "word_problem", "difficulty": "medium", "question_count": 3}},
-    {"id": "g3-math-division", "request": {"grade": "小学三年级", "subject": "数学", "keyword": "除数是一位数的除法", "game_type": "vertical_calc", "difficulty": "medium", "question_count": 3}},
-    {"id": "g5-math-decimal", "request": {"grade": "小学五年级", "subject": "数学", "keyword": "小数乘法解决问题，不超出小学范围", "game_type": "word_problem", "difficulty": "hard", "question_count": 3}},
-    {"id": "g2-chinese-words", "request": {"grade": "小学二年级", "subject": "语文", "keyword": "常用近义词辨析，给出完整语境", "game_type": "quiz", "difficulty": "easy", "question_count": 3}},
-    {"id": "g5-chinese-reading", "request": {"grade": "小学五年级", "subject": "语文", "keyword": "阅读理解，提供完整短文，根据原文作答", "game_type": "reading", "difficulty": "medium", "question_count": 3}},
-    {"id": "g3-english-words", "request": {"grade": "小学三年级", "subject": "英语", "keyword": "PEP三年级起点，颜色与学习用品词汇", "game_type": "quiz", "difficulty": "easy", "question_count": 3}},
-    {"id": "g6-english-reading", "request": {"grade": "小学六年级", "subject": "英语", "keyword": "PEP三年级起点，日常活动短文阅读，提供全文", "game_type": "reading", "difficulty": "hard", "question_count": 3}}
+    {
+      "id": "g1-math-add",
+      "request": {
+        "grade": "小学一年级",
+        "subject": "数学",
+        "keyword": "20以内的进位加法",
+        "game_type": "oral_math",
+        "difficulty": "easy",
+        "question_count": 3
+      }
+    },
+    {
+      "id": "g2-math-word",
+      "request": {
+        "grade": "小学二年级",
+        "subject": "数学",
+        "keyword": "表内乘法解决问题",
+        "game_type": "word_problem",
+        "difficulty": "medium",
+        "question_count": 3
+      }
+    },
+    {
+      "id": "g3-math-division",
+      "request": {
+        "grade": "小学三年级",
+        "subject": "数学",
+        "keyword": "除数是一位数的除法",
+        "game_type": "vertical_calc",
+        "difficulty": "medium",
+        "question_count": 3
+      }
+    },
+    {
+      "id": "g5-math-decimal",
+      "request": {
+        "grade": "小学五年级",
+        "subject": "数学",
+        "keyword": "小数乘法解决问题，不超出小学范围",
+        "game_type": "word_problem",
+        "difficulty": "hard",
+        "question_count": 3
+      }
+    },
+    {
+      "id": "g2-chinese-words",
+      "request": {
+        "grade": "小学二年级",
+        "subject": "语文",
+        "keyword": "常用近义词辨析，给出完整语境",
+        "game_type": "quiz",
+        "difficulty": "easy",
+        "question_count": 3
+      }
+    },
+    {
+      "id": "g5-chinese-reading",
+      "request": {
+        "grade": "小学五年级",
+        "subject": "语文",
+        "keyword": "阅读理解，提供完整短文，根据原文作答",
+        "game_type": "reading",
+        "difficulty": "medium",
+        "question_count": 3
+      }
+    },
+    {
+      "id": "g3-english-words",
+      "request": {
+        "grade": "小学三年级",
+        "subject": "英语",
+        "keyword": "PEP三年级起点，颜色与学习用品词汇",
+        "game_type": "quiz",
+        "difficulty": "easy",
+        "question_count": 3
+      }
+    },
+    {
+      "id": "g6-english-reading",
+      "request": {
+        "grade": "小学六年级",
+        "subject": "英语",
+        "keyword": "PEP三年级起点，日常活动短文阅读，提供全文",
+        "game_type": "reading",
+        "difficulty": "hard",
+        "question_count": 3
+      }
+    },
+    {
+      "id": "g1-number-split",
+      "request": {
+        "grade": "小学一年级",
+        "subject": "数学",
+        "keyword": "10以内数的分与合，数值与左右缺项分散，避免按顺序列举",
+        "game_type": "number_split",
+        "difficulty": "easy",
+        "question_count": 8
+      }
+    },
+    {
+      "id": "g1-make-ten",
+      "request": {
+        "grade": "小学一年级",
+        "subject": "数学",
+        "keyword": "20以内进位加法，凑十法过程填空，只挖必要步骤",
+        "game_type": "fill_blank",
+        "difficulty": "easy",
+        "question_count": 4
+      }
+    },
+    {
+      "id": "g2-mixed-comparison",
+      "request": {
+        "grade": "小学二年级",
+        "subject": "数学",
+        "keyword": "100以内加减法比大小，左右算式，答案包含大于小于等于",
+        "game_type": "compare",
+        "difficulty": "medium",
+        "question_count": 6
+      }
+    },
+    {
+      "id": "g3-unique-choices",
+      "request": {
+        "grade": "小学三年级",
+        "subject": "数学",
+        "keyword": "两位数乘一位数，四个选项互不重复且只有一个正确答案",
+        "game_type": "quiz",
+        "difficulty": "medium",
+        "question_count": 4
+      }
+    },
+    {
+      "id": "g4-word-conditions",
+      "request": {
+        "grade": "小学四年级",
+        "subject": "数学",
+        "keyword": "行程问题，条件完整并注明单位，不用方程，符合小学四年级",
+        "game_type": "word_problem",
+        "difficulty": "medium",
+        "question_count": 3
+      }
+    },
+    {
+      "id": "g2-chinese-context",
+      "request": {
+        "grade": "小学二年级",
+        "subject": "语文",
+        "keyword": "多音字读音，根据完整句子判断，避免脱离语境",
+        "game_type": "quiz",
+        "difficulty": "medium",
+        "question_count": 3
+      }
+    },
+    {
+      "id": "g4-english-context",
+      "request": {
+        "grade": "小学四年级",
+        "subject": "英语",
+        "keyword": "PEP三年级起点，根据完整语境选择代词，答案唯一",
+        "game_type": "quiz",
+        "difficulty": "medium",
+        "question_count": 3
+      }
+    },
+    {
+      "id": "g6-fractions",
+      "request": {
+        "grade": "小学六年级",
+        "subject": "数学",
+        "keyword": "分数除法应用题，单位与数量关系明确，提供必要条件",
+        "game_type": "word_problem",
+        "difficulty": "hard",
+        "question_count": 3
+      }
+    }
   ]
 }

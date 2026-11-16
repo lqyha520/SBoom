@@ -14,6 +14,8 @@ export interface AdminUser {
   is_active: number
   created_at: string
   template_count: number
+  is_super_admin?: boolean
+  permissions_revision?: number
 }
 
 export interface AdminStats {
@@ -49,6 +51,7 @@ export interface AdminFeedback {
 /** 401 广播事件：任何接口的会话失效都会通知外壳（App.vue 监听并回登录页），
  *  避免管理员停留在 Dashboard 里逐个操作报错直到手动刷新 */
 export const FORBIDDEN_EVENT = 'lc-admin:forbidden'
+export const PERMISSIONS_CHANGED_EVENT = 'lc-admin:permissions-changed'
 export const AUTH_EXPIRED_EVENT = 'lc-admin:auth-expired'
 export const ACCOUNT_CHANGED_EVENT = 'lc-admin:account-changed'
 export const ACCOUNT_KEY = 'lc_uid'
@@ -68,8 +71,8 @@ const DEFAULT_TIMEOUT_MS = 30_000
 const TEST_LLM_TIMEOUT_MS = 610_000
 const MODEL_LIST_TIMEOUT_MS = 65_000
 
-export async function request<T>(url: string, init?: RequestInit, responseType: 'json' | 'blob' = 'json'): Promise<T> {
-  const authEntry = url === '/api/v1/auth/login' || url === '/api/v1/auth/register' || url === '/api/v1/auth/me'
+export async function request<T>(url: string, init?: RequestInit, responseType: 'json' | 'blob' = 'json', timeoutMs?: number): Promise<T> {
+  const authEntry = url === '/api/v1/auth/login' || url === '/api/v1/auth/register' || url === '/api/v1/auth/mfa/verify' || url === '/api/v1/auth/me'
   if (accountInvalidated && !authEntry) throw new AuthError('登录账号已变化，请刷新后重试')
   const epoch = accountEpoch
   const headers = new Headers(init?.headers)
@@ -81,7 +84,7 @@ export async function request<T>(url: string, init?: RequestInit, responseType: 
   let r!: Response
   for (let attempt = 0; attempt < 2; attempt++) {
     if (!authEntry && epoch !== accountEpoch) throw new AuthError('登录账号已变化，请刷新后重试')
-    const timeout = AbortSignal.timeout(url.endsWith('/reconciliations') && init?.method === 'POST' ? 180000 : url.includes('/admin/catalog/import') || url.includes('/editions/import') ? 120000 : url.includes('test-llm') ? TEST_LLM_TIMEOUT_MS : url.includes('/llm-models') ? MODEL_LIST_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
+    const timeout = AbortSignal.timeout(timeoutMs ?? (url.includes('/admin/xhs-research/tasks') ? 180000 : url.endsWith('/reconciliations') && init?.method === 'POST' ? 180000 : url.includes('/admin/catalog/import') || url.includes('/editions/import') ? 120000 : url.includes('test-llm') ? TEST_LLM_TIMEOUT_MS : url.includes('/llm-models') ? MODEL_LIST_TIMEOUT_MS : DEFAULT_TIMEOUT_MS))
     try {
       r = await fetch(url, { ...init, headers, signal: init?.signal ? AbortSignal.any([timeout, init.signal]) : timeout })
     } catch (cause) {
@@ -95,13 +98,17 @@ export async function request<T>(url: string, init?: RequestInit, responseType: 
   if (!authEntry && epoch !== accountEpoch) throw new AuthError('登录账号已变化，请刷新后重试')
   if (!r.ok) {
     const detail = parseErrorDetail(await r.json().catch(() => null), `请求失败（${r.status}）`)
-    const credentialEntry = url === '/api/v1/auth/login' || url === '/api/v1/auth/register'
+    const credentialEntry = url === '/api/v1/auth/login' || url === '/api/v1/auth/register' || url === '/api/v1/auth/mfa/verify'
     if (detail.code === 'account_changed') { accountChanged(); throw new AuthError('登录账号已变化，请刷新后重试') }
     if (r.status === 401 && !credentialEntry) {
       window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail }))
       throw new AuthError(detail.code === 'reauth_required' ? '请重新验证登录后再次保存，当前修改已保留' : '登录已过期，请重新登录，当前修改已保留')
     }
     if (r.status === 403 && !credentialEntry) {
+      if (detail.code === 'permission_denied') {
+        window.dispatchEvent(new CustomEvent(PERMISSIONS_CHANGED_EVENT))
+        throw new ApiError(detail.message, r.status, detail.code)
+      }
       window.dispatchEvent(new CustomEvent(FORBIDDEN_EVENT))
       throw new ForbiddenError(detail.message)
     }
@@ -114,12 +121,21 @@ export async function request<T>(url: string, init?: RequestInit, responseType: 
 }
 
 /* ── 认证 ── */
-export async function login(username: string, password: string): Promise<UserInfo> {
-  const user = await request<UserInfo>('/api/v1/auth/login', {
+export interface MfaLoginChallenge { mfa_required: true; challenge: string; username: string }
+export async function login(username: string, password: string): Promise<UserInfo | MfaLoginChallenge> {
+  const user = await request<UserInfo | MfaLoginChallenge>('/api/v1/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
   })
+  if ('mfa_required' in user) return user
+  bindAdminAccount(user.id)
+  try { localStorage.setItem(ACCOUNT_KEY, String(user.id)) } catch { /* 请求头仍校验账号。 */ }
+  return user
+}
+
+export async function verifyMfa(challenge: string, code: string): Promise<UserInfo> {
+  const user = await request<UserInfo>('/api/v1/auth/mfa/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ challenge, code }) })
   bindAdminAccount(user.id)
   try { localStorage.setItem(ACCOUNT_KEY, String(user.id)) } catch { /* 请求头仍校验账号。 */ }
   return user
@@ -275,4 +291,13 @@ export async function fetchLlmModels(cfg: ApiSchemas["AdminLlmModelsIn"]): Promi
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(cfg),
   })
+}
+
+export interface GenerationTraceRow {
+  user_id: number; request_id: string; kind: string; status: string; created_at: number
+  model_calls: number; reported_calls: number; prompt_tokens: number; completion_tokens: number
+  replay_count: number; trace: import('../../shared/generation-trace').GenerationTrace | null
+}
+export function fetchGenerationTraces(requestId = '') {
+  return request<{ requests: GenerationTraceRow[] }>('/api/v1/admin/generation-traces?request_id=' + encodeURIComponent(requestId))
 }

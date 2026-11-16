@@ -1,6 +1,7 @@
 """Server-priced orders, idempotent payment confirmation and membership fulfillment."""
 
 import hashlib
+import json
 import logging
 import re
 import time
@@ -10,7 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from app.config import get_settings
 from app.db import db
 from app.security import decrypt_secret
-from app.services import membership_ledger, mini_auth, wechat_virtual_pay
+from app.services import membership_ledger, mini_auth, settlements, wechat_virtual_pay
 from app.services.mini_errors import fail
 from app.services.mini_messages import notify
 from app.services.wechat_pay import PaymentError, WeChatPay, configuration
@@ -20,7 +21,7 @@ from app.sql_utils import escape_like
 logger = logging.getLogger(__name__)
 
 PUBLIC_FIELDS = ("id", "plan_id", "plan_name", "plan_days", "amount_fen", "currency", "status", "payment_channel", "device_platform", "revision", "created_at", "expires_at", "paid_at", "closed_at", "updated_at")
-ADMIN_FIELDS = ("virtual_env", "virtual_offer_id", "virtual_product_id", "virtual_order_id", "virtual_order_type", "device_platform", "delivered_at")
+ADMIN_FIELDS = ("virtual_env", "virtual_offer_id", "virtual_product_id", "virtual_order_id", "virtual_order_type", "device_platform", "delivered_at", "referral")
 REFUND_FIELDS = ("id", "reason", "reply", "status", "revision", "created_at", "updated_at", "completed_at")
 #: 列表查询把退款与下单人一次 LEFT JOIN 带出来（列名加前缀避免和订单列撞名），public_order(joined=True) 直接消费
 JOINED_COLUMNS = ", ".join(f"f.{key} AS refund_{key}" for key in REFUND_FIELDS) + ", u.username AS owner_username, u.nickname AS owner_nickname"
@@ -64,12 +65,17 @@ def detail(identifier, user_id=None):
 
 
 def plans(admin=False, user_id=None):
+    renewal = None
     with db() as conn:
         items = [dict(row) for row in conn.execute("SELECT * FROM mini_membership_plans " + ("" if admin else "WHERE is_active = 1 ") + "ORDER BY sort_order, created_at, id")]
         for item in items:
             # iPhone 走苹果 IAP，需同时配好 iOS 价与 iOS 道具才能在 iPhone 上架。
             item["ios_available"] = bool(item["price_fen_ios"] and item["virtual_product_id_ios"])
-        if user_id is not None and items:
+        if user_id is not None:
+            from app.services.membership_renewal import renewal_state
+            member = conn.execute("SELECT membership, vip_expires_at FROM mini_users WHERE id = ?", (user_id,)).fetchone()
+            expires_at = member["vip_expires_at"] if member else None
+            renewal = renewal_state(member['membership'] if member else 'regular', expires_at)
             paid = {row[0]: row[1] for row in conn.execute(
                 "SELECT plan_id, COUNT(*) FROM mini_orders WHERE user_id = ? AND paid_at IS NOT NULL GROUP BY plan_id", (user_id,))}
             pending: dict[str, int] = {}
@@ -84,6 +90,10 @@ def plans(admin=False, user_id=None):
                 item["pending"] = pending.get(item["id"], 0)
                 item["pending_order"] = pending_order.get(item["id"])
                 item["pending_expires_at"] = pending_expiry.get(item["id"])
+                item['renewal_due'] = renewal['renewal_due']
+                item['renewal_label'] = '会员已到期，付款成功后重新开通' if renewal['status'] == 'expired' else '会员即将到期，续费可顺延' if renewal['renewal_due'] else ''
+                item['renewal_status'] = renewal['status']
+                item['projected_expires_at'] = renewal['starts_at'] + item['days'] * 86400 if renewal['starts_at'] is not None else None
         elif admin and items:
             # 后台按套餐统计订单量，便于核对限购效果和放弃付款情况。
             stats = {row[0]: (row[1], row[2]) for row in conn.execute(
@@ -98,7 +108,7 @@ def plans(admin=False, user_id=None):
     ready = virtual["ready"] if channel == "virtual" else ordinary["ready"]
     result = {"items": items, "checkout_enabled": ready,
               "ios_enabled": (virtual["ios_enabled"] if channel == "virtual" else ordinary["ios_enabled"]) if ready else False,
-              "checkout_channel": channel}
+              "checkout_channel": channel, 'renewal': renewal}
     if admin:
         result.update(configuration=ordinary, virtual_configuration=virtual)
     return result
@@ -187,6 +197,8 @@ def create(user_id, body):
         conn.execute("INSERT INTO mini_orders(id, user_id, request_key, plan_id, plan_name, plan_days, amount_fen, appid, mchid, payer_enc, payment_channel, virtual_env, virtual_offer_id, virtual_product_id, device_platform, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                      (identifier, user_id, request_key, plan["id"], plan["name"], plan["days"], amount_fen, settings.wechat_app_id, settings.wechat_pay_mchid, user["wechat_openid_enc"],
                       channel, virtual["env"], virtual["offer_id"] if channel == "virtual" else "", product_id, body.platform, now, now + 900, now))
+        conn.execute('UPDATE mini_orders SET referral=?::jsonb WHERE id=?', (json.dumps({**user['referral'], 'buyer_id': user_id}), identifier))
+        settlements.snapshot_order(conn, identifier, user)
         return public_order(conn, owned(conn, identifier))
 
 
@@ -304,6 +316,7 @@ def confirm_payment(value, event_id=None):
         except (KeyError, ValueError, TypeError, OverflowError, AttributeError):
             fail("支付完成时间无效", 400)
         conn.execute("UPDATE mini_orders SET status = 'paid', transaction_id = ?, paid_at = ?, revision = revision + 1, updated_at = ? WHERE id = ?", (transaction, paid_at, now, order["id"]))
+        settlements.record_payment(conn, order['id'])
         user = conn.execute("SELECT * FROM mini_users WHERE id = ?", (order["user_id"],)).fetchone()
         if user:
             before = mini_auth._admin_item(user)
@@ -371,6 +384,7 @@ def confirm_virtual_payment(value):
         conn.execute("UPDATE mini_orders SET status = 'paid', transaction_id = ?, virtual_order_id = ?, virtual_order_type = ?, paid_at = ?, "
                      "delivered_at = COALESCE(?, delivered_at), revision = revision + 1, updated_at = ? WHERE id = ?",
                      (transaction, transaction, order_type, paid_at, delivered_at, now, order["id"]))
+        settlements.record_payment(conn, order['id'])
         user = conn.execute("SELECT * FROM mini_users WHERE id = ?", (order["user_id"],)).fetchone()
         if user:
             before = mini_auth._admin_item(user)
@@ -386,18 +400,35 @@ def confirm_virtual_payment(value):
 
 
 def deliver_virtual(identifier):
-    """通知微信已完成发货；失败只记录日志，由定时任务重试，不影响付款确认。"""
+    """发货通知独立租约；失败退避，避免异常订单堵塞后续补偿。"""
+    now, lease = int(time.time()), uuid.uuid4().hex
     with db() as conn:
-        order = dict(owned(conn, identifier))
-        if order["payment_channel"] != "virtual" or order["paid_at"] is None or order["delivered_at"] is not None:
+        row = conn.execute(
+            "UPDATE mini_orders SET delivery_lease_key = ?, delivery_lease_until = ?, delivery_attempts = delivery_attempts + 1 "
+            "WHERE id = ? AND payment_channel = 'virtual' AND paid_at IS NOT NULL AND delivered_at IS NULL "
+            "AND delivery_next_at <= ? AND delivery_lease_until <= ? RETURNING *",
+            (lease, now + 90, identifier, now, now),
+        ).fetchone()
+        if row is None:
             return
+        order = dict(row)
+    delivered = False
     try:
         VirtualPay().provide_goods(order)
-    except PaymentError as error:
-        logger.warning("虚拟支付发货通知失败 order_id=%s code=%s", identifier, error.code)
-        return
-    with db(serialized="accounts") as conn:
-        conn.execute("UPDATE mini_orders SET delivered_at = COALESCE(delivered_at, ?) WHERE id = ?", (int(time.time()), identifier))
+        delivered = True
+    except Exception as error:
+        # 通知失败不撤销已确认的付款和会员权益，也不阻断其他订单。
+        code = error.code if isinstance(error, PaymentError) else type(error).__name__
+        logger.warning("虚拟支付发货通知待重试 order_id=%s attempt=%s code=%s", identifier, order["delivery_attempts"], code)
+    finally:
+        finished = int(time.time())
+        delay = min(3600, 60 * 2 ** min(order["delivery_attempts"] - 1, 6))
+        with db() as conn:
+            conn.execute(
+                "UPDATE mini_orders SET delivered_at = CASE WHEN ? THEN COALESCE(delivered_at, ?) ELSE delivered_at END, "
+                "delivery_next_at = ?, delivery_lease_key = '', delivery_lease_until = 0 WHERE id = ? AND delivery_lease_key = ?",
+                (delivered, finished, 0 if delivered else finished + delay, identifier, lease),
+            )
 
 
 def apply_virtual_order(order, value):
@@ -504,7 +535,7 @@ def owned_in_new_connection(identifier):
         return dict(owned(conn, identifier))
 
 
-def listing(user_id=None, status="", q="", limit=20, offset=0, start_date="", end_date=""):
+def listing(user_id=None, status="", q="", limit=20, offset=0, start_date="", end_date="", admin_actor_id=None, referral_admin_id=None, campaign_id='', date_basis='created', real_only=False):
     clauses, args = [], []
     if user_id is not None:
         clauses.append("o.user_id = ?")
@@ -515,15 +546,22 @@ def listing(user_id=None, status="", q="", limit=20, offset=0, start_date="", en
     elif status:
         clauses.append("o.status = ?")
         args.append(status)
+    if real_only:
+        from app.services.referral_metrics import real_order
+        clauses.append(real_order())
+    if campaign_id:
+        clauses.append("o.referral->>'campaign_id'=?")
+        args.append(campaign_id)
+    date_column = 'o.paid_at' if date_basis == 'paid' else 'o.created_at'
     try:
         zone = timezone(timedelta(hours=8))
         if start_date and end_date and date.fromisoformat(start_date) > date.fromisoformat(end_date):
             raise ValueError("Reversed range")
         if start_date:
-            clauses.append("o.created_at >= ?")
+            clauses.append(date_column + " >= ?")
             args.append(int(datetime.combine(date.fromisoformat(start_date), datetime.min.time(), zone).timestamp()))
         if end_date:
-            clauses.append("o.created_at < ?")
+            clauses.append(date_column + " < ?")
             args.append(int(datetime.combine(date.fromisoformat(end_date) + timedelta(days=1), datetime.min.time(), zone).timestamp()))
     except (ValueError, OverflowError):
         fail("订单日期范围无效", 422)
@@ -533,6 +571,11 @@ def listing(user_id=None, status="", q="", limit=20, offset=0, start_date="", en
         args.extend([escaped] * 3)
     where = " AND ".join(clauses) or "1=1"
     with db() as conn:
+        if admin_actor_id is not None:
+            from app.services.referrals import scope
+            scoped, scoped_args = scope(conn, admin_actor_id, referral_admin_id, 'o')
+            where = f'({where}) AND ({scoped})'
+            args.extend(scoped_args)
         total = conn.execute(f"SELECT COUNT(*) FROM mini_orders o LEFT JOIN mini_users u ON u.id = o.user_id WHERE {where}", args).fetchone()[0]
         rows = conn.execute(f"SELECT o.*, {JOINED_COLUMNS} FROM {JOINED_TABLES} WHERE {where} ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?", [*args, limit, offset]).fetchall()
         items = [public_order(conn, row, user_id is None, joined=True) for row in rows]
