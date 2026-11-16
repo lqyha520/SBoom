@@ -338,20 +338,6 @@ async function inspect() {
   color: var(--ui-text-muted);
   font-size: 12px;
 }
-.feedback-identity {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-  color: var(--ui-text-muted);
-  font-size: 12px;
-}
-.feedback-membership-note {
-  margin-top: 6px;
-  color: var(--ui-text-muted);
-  font-size: 12px;
-}
 .feedback-excerpt {
   max-width: 300px;
   white-space: normal;
