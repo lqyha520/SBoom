@@ -9,7 +9,7 @@ import { miniUsers, type MiniUser } from '../mini'
 vi.mock('../mini', async original => ({ ...await original<typeof import('../mini')>(), miniUsers: vi.fn() }))
 vi.mock('../components/MemberTools.vue', () => ({ default: { render: () => null } }))
 let wrapper: VueWrapper
-const user = { id: 1, username: 'admin', role: 'admin' }
+const user = { id: 1, username: 'admin', role: 'admin', is_super_admin: true }
 const buyer: MiniUser = { id: 'buyer', username: 'buyer', avatar: '', has_password: true, membership: 'regular', is_vip: false,
   membership_status: 'regular', vip_expires_at: null, is_active: true, revision: 1, created_at: 1, updated_at: 1, login_method: 'password' }
 beforeEach(() => {

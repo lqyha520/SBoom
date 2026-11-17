@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission, canPermission } from '../permissions'
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { useAdminListRoute } from '../navigation'
 import type { UserInfo } from '../api'
@@ -45,15 +46,15 @@ function download() {
       <UButton label="刷新" variant="outline" :loading="loading" @click="page.load()" />
     </div></div>
     <UAlert v-if="error" :title="error" color="error" /><UAlert v-if="notice" :title="notice" color="success" />
-    <form class="actions-row card-form" @submit.prevent="generate">
-      <UFormField label="会员天数"><UInput v-model="days" type="number" min="1" max="3660" /></UFormField>
-      <UFormField label="生成数量"><UInput v-model="quantity" type="number" min="1" max="1000" /></UFormField>
-      <UFormField label="失效日期（北京时间当天结束，可选）"><UInput v-model="expires" type="date" /></UFormField>
+    <form class="actions-row card-form" @submit.prevent="canPermission('membershipCards:create') && (generate())">
+      <UFormField label="会员天数"><UInput :disabled="!canPermission('membershipCards:create')" v-model="days" type="number" min="1" max="3660" /></UFormField>
+      <UFormField label="生成数量"><UInput :disabled="!canPermission('membershipCards:create')" v-model="quantity" type="number" min="1" max="1000" /></UFormField>
+      <UFormField label="失效日期（北京时间当天结束，可选）"><UInput :disabled="!canPermission('membershipCards:create')" v-model="expires" type="date" /></UFormField>
       <UButton type="submit" label="生成卡密" :loading="busy" />
     </form>
-    <div v-if="generated.length" class="generated"><strong>本次生成的卡密：</strong><textarea :value="generated.join('\n')" readonly rows="5" /><UButton label="复制全部" @click="copy" /><UButton label="导出卡密" @click="download" /></div>
+    <div v-if="generated.length" class="generated"><strong>本次生成的卡密：</strong><textarea :value="generated.join('\n')" readonly rows="5" /><UButton v-permission="'membershipCards:export'" label="复制全部" @click="copy" /><UButton v-permission="'membershipCards:export'" label="导出卡密" @click="download" /></div>
     <div class="data-scroll"><table class="data-table"><thead><tr><th>卡密尾号</th><th>天数</th><th>状态</th><th>失效时间</th><th>兑换时间</th><th>操作</th></tr></thead>
-      <tbody><tr v-for="item in items" :key="item.id"><td>****{{ item.code_hint }}</td><td>{{ item.days }} 天</td><td>{{ item.status === 'active' ? '可用' : item.status === 'redeemed' ? '已兑换' : '已作废' }}</td><td>{{ item.expires_at ? dateTime(item.expires_at) : '不限' }}</td><td>{{ dateTime(item.redeemed_at) }}</td><td><UButton v-if="item.status === 'active'" label="作废" color="error" variant="soft" @click="disable(item.id)" /></td></tr>
+      <tbody><tr v-for="item in items" :key="item.id"><td>****{{ item.code_hint }}</td><td>{{ item.days }} 天</td><td>{{ item.status === 'active' ? '可用' : item.status === 'redeemed' ? '已兑换' : '已作废' }}</td><td>{{ item.expires_at ? dateTime(item.expires_at) : '不限' }}</td><td>{{ dateTime(item.redeemed_at) }}</td><td><UButton v-permission="'membershipCards:update'" v-if="item.status === 'active'" label="作废" color="error" variant="soft" @click="disable(item.id)" /></td></tr>
         <tr v-if="!items.length"><td colspan="6">{{ loading ? '正在加载' : '暂无卡密' }}</td></tr></tbody></table></div>
     <div class="actions-row"><span>共 {{ total }} 张，第 {{ pageNumber }} 页</span><UButton label="上一页" :disabled="loading || pageNumber <= 1" @click="pageNumber--" /><UButton label="下一页" :disabled="loading || pageNumber * 50 >= total" @click="pageNumber++" /></div>
   </section>

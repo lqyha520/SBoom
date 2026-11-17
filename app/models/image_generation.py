@@ -8,6 +8,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.models import Difficulty, GameType
 
+MAX_WORKSHEET_IMAGES = 100  # 同步 web/src/generation-limits.ts；每个上游请求仍只生成一张。
+MAX_IMAGE_CONCURRENCY = 4
+
+
+class ImageGenerationOptions(BaseModel):
+    configured: bool
+    max_concurrency: int = Field(ge=1, le=MAX_IMAGE_CONCURRENCY)
+    default_concurrency: int = Field(ge=1, le=MAX_IMAGE_CONCURRENCY)
+
 
 class ImageModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -52,8 +61,8 @@ class ImageWorksheetRequest(BaseModel):
     items: list[ImageWorksheetItem] = Field(default_factory=list, max_length=5)
     style: Literal["playful", "clean", "black_white"] = "playful"
     requirements: str = Field("", max_length=600)
-    image_count: int = Field(1, ge=1, le=10)
-    image_index: int = Field(1, ge=1, le=10)
+    image_count: int = Field(1, ge=1, le=MAX_WORKSHEET_IMAGES)
+    image_index: int = Field(1, ge=1, le=MAX_WORKSHEET_IMAGES)
 
     @model_validator(mode="after")
     def validate_items(self):

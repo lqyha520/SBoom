@@ -1,32 +1,37 @@
-"""派生预览缓存只复用像素，文件变化或删除立即生效。"""
+"""预览保留原始图片字节，受限资源不缓存，文件变化或删除立即生效。"""
 
 import io
 from unittest.mock import patch
 
-import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from PIL import Image
 
 from app import library_files
 from app.services.paper_storage import LocalStorage
 
 
-def test_preview_reuses_encoding_but_observes_file_changes(tmp_path):
+def test_preview_preserves_original_and_observes_file_changes(tmp_path):
     path = tmp_path / "page.jpg"
     Image.new("RGB", (1000, 1400), "white").save(path)
-    asset = {"storage": "local", "storage_key": "page.jpg", "sha256": "revision-one"}
-    library_files._previews.clear()
-    with patch.object(LocalStorage, "path", return_value=path):
-        first = library_files.limited_preview(asset)
-        with patch.object(library_files.Image, "open", side_effect=AssertionError("缓存命中不应解码")):
-            second = library_files.limited_preview(asset)
-        assert first.body == second.body
+    asset = {"storage": "local", "storage_key": "page.jpg", "kind": "page", "mime_type": "image/jpeg"}
+    app = FastAPI()
+
+    @app.get("/preview")
+    def preview():
+        return library_files.asset_response(asset)
+
+    with patch.object(LocalStorage, "path", return_value=path), TestClient(app) as client:
+        first = client.get("/preview")
+        assert first.status_code == 200
+        assert first.content == path.read_bytes()
+        second = client.get("/preview")
+        assert first.content == second.content
         assert second.headers["cache-control"] == "private, no-store"
-        with Image.open(io.BytesIO(first.body)) as image:
-            assert image.width <= 480 and image.height <= 720
+        with Image.open(io.BytesIO(first.content)) as image:
+            assert image.size == (1000, 1400)
         Image.new("RGB", (600, 800), "black").save(path)
-        assert library_files.limited_preview(asset).body != first.body
+        changed = client.get("/preview")
+        assert changed.content == path.read_bytes() and changed.content != first.content
         path.unlink()
-        with pytest.raises(HTTPException) as error:
-            library_files.limited_preview(asset)
-        assert error.value.status_code == 503
+        assert client.get("/preview").status_code == 503

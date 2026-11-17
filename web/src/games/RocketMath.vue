@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import { writeGameSave } from './game-storage'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import GameNav from './GameNav.vue'
 import {
   advanceRocket, answerRocket, newRocket, restartRocket, restoreRocket,
-  ROCKET_QUESTIONS, rocketDifficulties, rocketStars, switchRocketDifficulty,
+  ROCKET_QUESTIONS, rocketExplanation, rocketDifficulties, rocketStars, switchRocketDifficulty,
   type RocketDifficulty,
 } from './rocket-math'
 
@@ -26,11 +27,7 @@ const answeredCount = computed(() => finished.value ? ROCKET_QUESTIONS : flight.
 const progress = computed(() => answeredCount.value / ROCKET_QUESTIONS)
 const rocketBottom = computed(() => 10 + progress.value * 58)
 const difficulty = computed(() => rocketDifficulties.find(item => item.id === save.value.difficulty)!)
-const explanation = computed(() => question.value.operator === '×'
-  ? '想一想乘法口诀，再选出答案。'
-  : question.value.operator === '+'
-    ? '把两个数合起来，再数一数。'
-    : '从大数里去掉小数，就是剩下的部分。')
+const explanation = computed(() => rocketExplanation(question.value))
 let audio: AudioContext | null = null
 function playTone(correct: boolean) {
   if (!sound.value) return
@@ -67,7 +64,7 @@ function applyDifficulty() {
   resetDifficulty.value = null
 }
 watch(save, value => {
-  try { localStorage.setItem(props.storageKey, JSON.stringify(value)); saveError.value = false }
+  try { writeGameSave(props.storageKey, value); saveError.value = false }
   catch { saveError.value = true }
 }, { deep: true, immediate: true, flush: 'post' })
 watch(() => props.storageKey, () => { save.value = readSave() || newRocket() })

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-defineProps<{ active: 'little-shop' | 'robot-maze' | 'rocket-math' | 'memory-match' | 'fraction-pizza' | 'poem-order' | 'idiom-fill' | 'word-spell' | 'word-market' | 'clock-town' }>()
+import { games, gameHref, type GameId } from './catalog'
+defineProps<{ active?: GameId }>()
 const nav = ref<HTMLElement | null>(null)
 let observer: ResizeObserver | null = null
 function centerActive() {
@@ -25,18 +26,9 @@ onBeforeUnmount(() => observer?.disconnect())
 
 <template>
   <header class="games-nav">
-    <a class="games-brand" href="#/games/little-shop"><span><UIcon name="i-lucide-gamepad-2" /></span>学习游戏</a>
-    <nav ref="nav" aria-label="游戏导航">
-      <a href="#/games/little-shop" :aria-current="active === 'little-shop' ? 'page' : undefined" :class="{ selected: active === 'little-shop' }"><UIcon name="i-lucide-store" />小小店长</a>
-      <a href="#/games/robot-maze" :aria-current="active === 'robot-maze' ? 'page' : undefined" :class="{ selected: active === 'robot-maze' }"><UIcon name="i-lucide-bot" />机器人闯迷宫</a>
-      <a href="#/games/rocket-math" :aria-current="active === 'rocket-math' ? 'page' : undefined" :class="{ selected: active === 'rocket-math' }"><UIcon name="i-lucide-rocket" />口算火箭</a>
-      <a href="#/games/memory-match" :aria-current="active === 'memory-match' ? 'page' : undefined" :class="{ selected: active === 'memory-match' }"><UIcon name="i-lucide-brain" />记忆翻牌</a>
-      <a href="#/games/fraction-pizza" :aria-current="active === 'fraction-pizza' ? 'page' : undefined" :class="{ selected: active === 'fraction-pizza' }"><UIcon name="i-lucide-pizza" />披萨分数</a>
-      <a href="#/games/poem-order" :aria-current="active === 'poem-order' ? 'page' : undefined" :class="{ selected: active === 'poem-order' }"><UIcon name="i-lucide-scroll-text" />诗句排队</a>
-      <a href="#/games/idiom-fill" :aria-current="active === 'idiom-fill' ? 'page' : undefined" :class="{ selected: active === 'idiom-fill' }"><UIcon name="i-lucide-book-marked" />成语补字</a>
-      <a href="#/games/word-spell" :aria-current="active === 'word-spell' ? 'page' : undefined" :class="{ selected: active === 'word-spell' }"><UIcon name="i-lucide-spell-check-2" />单词拼写</a>
-      <a href="#/games/word-market" :aria-current="active === 'word-market' ? 'page' : undefined" :class="{ selected: active === 'word-market' }"><UIcon name="i-lucide-shopping-basket" />单词集市</a>
-      <a href="#/games/clock-town" :aria-current="active === 'clock-town' ? 'page' : undefined" :class="{ selected: active === 'clock-town' }"><UIcon name="i-lucide-clock-3" />时钟小镇</a>
+    <a class="games-brand" href="#/games"><span><UIcon name="i-lucide-gamepad-2" /></span>学习游戏中心</a>
+    <nav v-if="active" ref="nav" aria-label="游戏导航">
+      <a v-for="game in games" :key="game.id" :href="gameHref(game.id)" :aria-current="active === game.id ? 'page' : undefined" :class="{ selected: active === game.id }"><UIcon :name="game.icon" />{{ game.title }}</a>
     </nav>
     <a class="workspace-link" href="/"><UIcon name="i-lucide-arrow-left" /><span>返回工作台</span></a>
   </header>

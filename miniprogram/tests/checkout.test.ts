@@ -78,6 +78,14 @@ test('an exhausted confirmation cycle resumes later without another payment', as
   assert.equal(app.api.checkoutState.has('order-one'), false)
 })
 
+test('后台恢复查单返回是否同步了订单，空队列与其他账号不触发页面补刷新', async () => {
+  const app = fixture('MP-WEIXIN', 'pending')
+  assert.equal(await app.api.resumeCheckouts(), false)
+  app.api.checkoutState.set('order-one', { epoch: 0, phase: 'waiting', attempts: 0 })
+  assert.equal(await app.api.resumeCheckouts(), true)
+  app.switchAccount(); assert.equal(await app.api.resumeCheckouts(), false)
+})
+
 test('manual terminal results clear pending state and failed reads can retry', async () => {
   const app = fixture('MP-WEIXIN', 'pending')
   await app.api.checkout('order-one', app.valid)

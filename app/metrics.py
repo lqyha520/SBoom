@@ -36,15 +36,28 @@ class GenerationStageOutcome:
 
 
 @asynccontextmanager
-async def generation_stage(stage: Literal["generate", "validate_refill", "review"]):
+async def generation_stage(stage: Literal["generate", "validate_refill", "refill", "review"]):
     """阶段名由代码固定；包含失败/取消耗时，不记录题干、请求 ID 或账号。"""
+    from app.services.generation_trace import current_trace, flush
+    trace = current_trace.get()
+    previous = trace.phase if trace else "preparing"
+    if trace:
+        trace.phase = stage
+        trace.progress = {}
+    await flush()
     started, status = time.perf_counter(), "error"
     outcome = GenerationStageOutcome()
     try:
         yield outcome
         status = outcome.status
     finally:
-        generation_stage_duration.labels(stage, status).observe(time.perf_counter() - started)
+        duration = time.perf_counter() - started
+        generation_stage_duration.labels(stage, status).observe(duration)
+        if trace:
+            if len(trace.stages) < 80:
+                trace.stages.append({"stage": stage, "status": status, "duration_ms": round(duration * 1000)})
+            trace.phase = previous
+        await flush()
 
 
 class RequestMetrics:
@@ -70,6 +83,7 @@ class RequestMetrics:
             api_request_duration.labels(method, endpoint).observe(time.perf_counter() - started)
 
 def observe_provider(function):
+    from app.services.generation_trace import begin_call, end_call
     signature = inspect.signature(function)
     def begin(args, kwargs):
         from app.config import get_settings
@@ -80,12 +94,13 @@ def observe_provider(function):
         @wraps(function)
         async def stream(*args, **kwargs):
             model, started, status = begin(args, kwargs), time.perf_counter(), "error"
-            token = provider_model.set(model)
+            token, trace_token = provider_model.set(model), begin_call()
             try:
                 async for item in function(*args, **kwargs):
                     yield item
                 status = "success"
             finally:
+                end_call(trace_token, status)
                 provider_model.reset(token)
                 llm_calls_total.labels(model, status).inc()
                 llm_request_duration.labels(model).observe(time.perf_counter() - started)
@@ -93,12 +108,13 @@ def observe_provider(function):
     @wraps(function)
     async def call(*args, **kwargs):
         model, started, status = begin(args, kwargs), time.perf_counter(), "error"
-        token = provider_model.set(model)
+        token, trace_token = provider_model.set(model), begin_call()
         try:
             result = await function(*args, **kwargs)
             status = "success"
             return result
         finally:
+            end_call(trace_token, status)
             provider_model.reset(token)
             llm_calls_total.labels(model, status).inc()
             llm_request_duration.labels(model).observe(time.perf_counter() - started)

@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 from app.db import db
 
-TARGETS = {"paper", "feedback", "membership", "request", "closure", "order", ""}
+TARGETS = {"paper", "feedback", "membership", "request", "closure", "order", "curriculum", ""}
 
 
 def notify_favorites(conn, catalog_id: str, release: int, title: str, body: str) -> None:

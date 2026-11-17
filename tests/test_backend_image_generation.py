@@ -8,7 +8,7 @@ import socket
 import tempfile
 import unittest
 from contextlib import ExitStack
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pg_support
 
@@ -45,7 +45,7 @@ class ImageGenerationContracts(unittest.TestCase):
         self.stack.enter_context(patch.object(get_settings(), "archive_local_dir", self.stack.enter_context(tempfile.TemporaryDirectory(prefix="lc-image-test-"))))
         database.init_db()
         self.user = user_store.create_user("image-teacher", "test-password")
-        self.admin = user_store.create_user("image-admin", "test-password", role="admin")
+        self.admin = user_store.create_user("image-admin", "test-password", role="admin", is_super_admin=True)
         self.other = user_store.create_user("image-other", "test-password")
         app = FastAPI()
         app.include_router(image_generation.router)
@@ -216,6 +216,19 @@ class ImageGenerationContracts(unittest.TestCase):
         self.assertEqual(self.client.delete("/api/v1/admin/image-config").status_code, 200)
         self.assertFalse(self.client.get("/api/v1/image-generation/options").json()["configured"])
 
+    def test_parallel_options_respect_account_global_and_workbench_limits(self):
+        from app.config import get_settings
+        for user_limit, global_limit, expected in [(2, 6, 2), (1, 6, 1), (6, 1, 1), (6, 6, 4)]:
+            with self.subTest(user_limit=user_limit, global_limit=global_limit), \
+                    patch.object(get_settings(), 'generation_user_concurrency', user_limit), \
+                    patch.object(get_settings(), 'generation_global_concurrency', global_limit):
+                response = self.client.get('/api/v1/image-generation/options')
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(), {'configured': True, 'max_concurrency': expected,
+                                                  'default_concurrency': min(2, expected)})
+                self.assertNotIn('secret-image-test', response.text)
+        self.assertEqual(self.calls, [])
+
     def test_config_validation_rejects_credentials_query_and_unknown_fields(self):
         self.login(self.admin)
         for change in [{"baseUrl": "https://user:secret@provider.invalid/v1"}, {"baseUrl": "https://provider.invalid/v1?key=secret"}, {"timeout": 601}, {"size": "oversized"}, {"unexpected": True}]:
@@ -228,12 +241,12 @@ class ImageGenerationContracts(unittest.TestCase):
             ImageModelProfile(**{**self.config, "apiKey": "backup-key", "model": "backup-image"}, id="backup"),
         ])
 
-    def test_image_failover_switches_on_timeout_http_and_invalid_images(self):
+    def test_image_failover_only_switches_on_connection_failure_and_explicit_rejection(self):
         self.configure_failover()
         good = self.handler
         for index, failure in enumerate([
-            httpx.ReadTimeout("upstream possibly billed"), httpx.Response(401), httpx.Response(429),
-            httpx.Response(503), httpx.Response(200, json={"data": [{"b64_json": "bad image"}]}),
+            httpx.ConnectTimeout("not submitted"), httpx.ConnectError("not submitted"),
+            httpx.Response(401), httpx.Response(429),
         ]):
             with self.subTest(index=index):
                 self.calls.clear()
@@ -255,11 +268,32 @@ class ImageGenerationContracts(unittest.TestCase):
                 status = self.client.get(f"/api/v1/me/generations/failover-{index}").json()
                 self.assertEqual(status["usage"]["model_calls"], 2)
         with database.db() as conn:
-            self.assertEqual(conn.execute("SELECT SUM(images) FROM generation_budget").fetchone()[0], 10)
+            self.assertEqual(conn.execute("SELECT SUM(images) FROM generation_budget").fetchone()[0], 8)
+
+    def test_uncertain_or_invalid_paid_results_never_start_backup_and_replay_same_error(self):
+        self.configure_failover()
+        for index, failure in enumerate([
+            httpx.ReadTimeout("possibly billed"), httpx.WriteTimeout("possibly submitted"),
+            httpx.ReadError("interrupted"), httpx.Response(503),
+            httpx.Response(200, json={"data": [{"b64_json": "invalid image"}]}),
+        ]):
+            with self.subTest(index=index):
+                self.calls.clear()
+                def handler(req, failure=failure):
+                    if isinstance(failure, Exception):
+                        raise failure
+                    return failure
+                self.handler = handler
+                response = self.send(f"uncertain-result-{index}")
+                self.assertGreaterEqual(response.status_code, 500)
+                self.assertIs(response.json()["detail"]["failover_safe"], False)
+                self.assertEqual(len(self.calls), 1)
+                self.assertEqual(self.send(f"uncertain-result-{index}").json(), response.json())
+                self.assertEqual(len(self.calls), 1)
 
     def test_image_all_fail_and_budget_exhaustion_never_loop(self):
         self.configure_failover()
-        self.handler = lambda req: httpx.Response(503)
+        self.handler = lambda req: httpx.Response(401)
         result = self.send("all-failed")
         self.assertEqual(result.status_code, 502)
         self.assertEqual(self.send("all-failed").json(), result.json())
@@ -451,10 +485,18 @@ class ImageGenerationContracts(unittest.TestCase):
             self.assertEqual(self.client.get(f"/api/v1/me/generations/batch-{index}").json()["result"], result)
 
     def test_batch_count_and_page_index_are_bounded_before_provider_call(self):
-        for change in ({"image_count": 0}, {"image_count": 11}, {"image_count": 1.5},
+        for change in ({"image_count": 0}, {"image_count": 101}, {"image_count": 1.5},
                        {"image_index": 0}, {"image_index": 2}, {"image_count": 3, "image_index": 4}):
             self.assertEqual(self.send(body={**self.body, **change}).status_code, 422)
         self.assertEqual(self.calls, [])
+
+    def test_hundred_image_batch_still_sends_one_image_to_provider(self):
+        response = self.send('large-batch-last', {**self.body, 'image_count': 100, 'image_index': 100})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.calls), 1)
+        body = json.loads(self.calls[0].content)
+        self.assertEqual(body['n'], 1)
+        self.assertIn('共 100 张，这是第 100 张', body['prompt'])
 
     def test_auth_owner_and_request_validation_precede_provider(self):
         self.client.cookies.clear()
@@ -621,7 +663,7 @@ class ImageGenerationContracts(unittest.TestCase):
         with self.assertRaises(ValueError):
             ImageModelConfig(**self.config, requestMode="invalid")
 
-    def test_async_task_failure_switches_provider_and_hides_task_error(self):
+    def test_async_task_failure_stops_and_hides_task_error(self):
         self.configure_failover()
         good = self.handler
 
@@ -636,9 +678,9 @@ class ImageGenerationContracts(unittest.TestCase):
         self.handler = handler
         with patch.object(service, "TASK_POLL_INTERVAL", 0):
             response = self.send()
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual([call.method for call in self.calls], ["POST", "GET", "POST"])
-        self.assertEqual(self.calls[-1].headers["authorization"], "Bearer backup-key")
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertEqual([call.method for call in self.calls], ["POST", "GET"])
+        self.assertIs(response.json()["detail"]["failover_safe"], False)
         self.assertNotIn("secret-image-test", response.text)
 
     def test_explicit_model_error_is_not_hidden_by_generic_tool_message(self):
@@ -791,6 +833,180 @@ class ImageGenerationContracts(unittest.TestCase):
         self.assertEqual(result.status_code, 409)
         self.assertEqual(result.json()["detail"]["code"], "image_storage_quota")
         self.assertEqual(self.calls, [])
+
+    def seed_image_checkpoint(self, request_id, *, task=None, asset_url=""):
+        import asyncio
+
+        from app.services.generation_control import Usage, _begin, _finish
+        from app.services.image_recovery import checkpoint, current_request
+        _begin(self.user.id, request_id, "image", self.body)
+        token = current_request.set((self.user.id, request_id))
+        try:
+            asyncio.run(checkpoint(image_config.get_config(with_key=True), "private original prompt",
+                                   task=task, asset_url=asset_url))
+        finally:
+            current_request.reset(token)
+        _finish(self.user.id, request_id, Usage(model_calls=1), "unknown", None,
+                (502, {"error": "original result unavailable"}))
+
+    def recover_image_now(self, request_id):
+        import asyncio
+
+        from app.services.image_recovery import _claim, recover
+        from app.services.provider_http import close_clients
+        lease = _claim(self.user.id, request_id)
+        self.assertIsNotNone(lease)
+        async def run():
+            try:
+                await recover(lease)
+            finally:
+                await close_clients()
+        asyncio.run(run())
+
+    def test_failed_asset_is_encrypted_and_recovered_by_download_without_paid_backup(self):
+        from app.services.generation_control import request_status
+        self.configure_failover()
+        blocked = True
+        asset_url = "https://images.invalid/output.png?signature=private-signature"
+        def handler(req):
+            if req.method == "POST":
+                return httpx.Response(200, json={"data": [{"url": asset_url}]})
+            self.assertNotIn("authorization", req.headers)
+            if blocked:
+                raise httpx.ConnectTimeout("blocked CDN", request=req)
+            return httpx.Response(200, content=png())
+        self.handler = handler
+        response = self.send("recover-asset")
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(sum(r.method == "POST" for r in self.calls), 1)
+        status = request_status(self.user.id, "recover-asset")
+        self.assertIs(status["recoverable"], True)
+        self.assertIsNone(status["result"])
+        self.assertNotIn("private-signature", json.dumps(status))
+        with database.db() as conn:
+            stored = conn.execute("SELECT result_json FROM generation_requests WHERE request_id = 'recover-asset'").fetchone()[0]
+        self.assertNotIn(asset_url, stored)
+        self.assertNotIn("secret-image-test", stored)
+        self.assertNotIn(self.body["requirements"], stored)
+        blocked = False
+        self.recover_image_now("recover-asset")
+        result = request_status(self.user.id, "recover-asset")
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["usage"]["model_calls"], 1)
+        self.assertEqual(self.client.get(result["result"]["url"]).status_code, 200)
+        self.assertEqual(self.send("recover-asset").json(), result["result"])
+        self.assertEqual(sum(r.method == "POST" for r in self.calls), 1)
+        with database.db() as conn:
+            self.assertEqual(conn.execute("SELECT SUM(images) FROM generation_budget").fetchone()[0], 1)
+
+    def test_async_checkpoint_survives_timeout_and_recovers_existing_task_only(self):
+        from app.services.generation_control import request_status
+        done = False
+        def handler(req):
+            if req.method == "POST":
+                return httpx.Response(202, json={"task_id": "original-task", "poll_url": "/tasks?ids=original-task"})
+            return httpx.Response(200, json={"id": "original-task", "status": "success" if done else "running",
+                "data": [{"b64_json": base64.b64encode(png()).decode()}] if done else []})
+        self.handler = handler
+        # 在任务检查点落库后的轮询阶段注入超时，避免并行测试的调度耗尽 50ms 后
+        # 实际测到提交前超时；真实总时限由 test_async_polling_obeys_total_timeout 覆盖。
+        with patch.object(service, "_poll_image_task", new=AsyncMock(side_effect=TimeoutError())) as poll:
+            response = self.send("recover-task")
+        poll.assert_awaited_once()
+        self.assertEqual(response.status_code, 504)
+        self.assertIs(request_status(self.user.id, "recover-task")["recoverable"], True)
+        done = True
+        self.recover_image_now("recover-task")
+        result = request_status(self.user.id, "recover-task")
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["usage"]["model_calls"], 1)
+        self.assertEqual(sum(r.method == "POST" for r in self.calls), 1)
+        self.assertEqual(self.calls[-1].headers["authorization"], "Bearer secret-image-test")
+
+    def test_recovery_claim_is_owned_serialized_throttled_and_expiring(self):
+        import time
+
+        from app.services.image_recovery import _claim, _complete
+        self.seed_image_checkpoint("claim-image", asset_url="https://images.invalid/output.png")
+        self.assertIsNone(_claim(self.other.id, "claim-image"))
+        lease = _claim(self.user.id, "claim-image")
+        self.assertIsNotNone(lease)
+        self.assertIsNone(_claim(self.user.id, "claim-image"))
+        _complete(lease, None, {"error": "temporarily unreachable"})
+        self.assertIsNone(_claim(self.user.id, "claim-image"))
+        with database.db() as conn:
+            conn.execute("UPDATE generation_requests SET created_at = ? WHERE request_id = 'claim-image'",
+                         (int(time.time()) - 400 * 86400,))
+        self.assertIsNone(_claim(self.user.id, "claim-image"))
+        self.assertEqual(self.calls, [])
+
+    def test_changed_provider_and_cross_origin_poll_never_receive_original_key(self):
+        from app.services.generation_control import request_status
+        for name, poll_url in [("changed-config", "/tasks"), ("cross-origin-recovery", "https://public.invalid/tasks")]:
+            self.seed_image_checkpoint(name, task={"task_id": "original-task", "poll_url": poll_url})
+            if name == "changed-config":
+                image_config.save_config(ImageModelConfig(**{**self.config, "model": "changed-model", "apiKey": ""}))
+            self.recover_image_now(name)
+            self.assertIsNone(request_status(self.user.id, name)["result"])
+            image_config.save_config(ImageModelConfig(**self.config))
+        self.assertEqual(self.calls, [])
+
+    def test_maintenance_keeps_running_image_checkpoint(self):
+        from app.services import maintenance
+        from app.services.generation_control import _begin
+        from app.services.image_recovery import _save
+        _begin(self.user.id, "running-checkpoint", "image", self.body)
+        state = {"asset_url": "https://images.invalid/output.png"}
+        _save((self.user.id, "running-checkpoint"), state)
+        maintenance.tick()
+        with database.db() as conn:
+            self.assertTrue(conn.execute("SELECT result_json FROM generation_requests WHERE request_id = 'running-checkpoint'").fetchone()[0])
+
+    def test_status_endpoint_restores_original_image_in_background(self):
+        import time
+
+        self.seed_image_checkpoint("status-recovery", asset_url="https://images.invalid/output.png")
+        self.handler = lambda req: httpx.Response(200, content=png())
+        for _ in range(30):
+            status = self.client.get("/api/v1/me/generations/status-recovery").json()
+            if status["status"] == "succeeded":
+                break
+            time.sleep(0.02)
+        self.assertEqual(status["status"], "succeeded")
+        self.assertEqual(status["usage"]["model_calls"], 1)
+        self.assertEqual([r.method for r in self.calls], ["GET"])
+        self.assertEqual(status["result"]["prompt"], "private original prompt")
+
+    def test_recovery_reuses_saved_asset_after_request_completion_was_interrupted(self):
+        from app.services.generation_control import request_status
+        from app.services.image_assets import persist
+        self.seed_image_checkpoint("saved-asset-recovery", asset_url="https://images.invalid/output.png")
+        image = service.normalize_image(png())
+        saved = persist(self.user.id, "saved-asset-recovery", {**image, "prompt": "private original prompt"})
+        self.recover_image_now("saved-asset-recovery")
+        status = request_status(self.user.id, "saved-asset-recovery")
+        self.assertEqual(status["status"], "succeeded")
+        self.assertEqual(status["result"]["asset_id"], saved["asset_id"])
+        self.assertEqual(self.calls, [])
+        with database.db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM image_assets").fetchone()[0], 1)
+
+    def test_expired_recovery_owner_cannot_overwrite_new_lease(self):
+        import time
+
+        from app.services.generation_control import request_status
+        from app.services.image_recovery import _claim, _complete
+        self.seed_image_checkpoint("lease-recovery", asset_url="https://images.invalid/output.png")
+        original = _claim(self.user.id, "lease-recovery")
+        with database.db() as conn:
+            conn.execute("UPDATE generation_requests SET lease_expires_at = ? WHERE request_id = 'lease-recovery'",
+                         (int(time.time()) - 1,))
+        current = _claim(self.user.id, "lease-recovery")
+        self.assertNotEqual(original["token"], current["token"])
+        _complete(original, {"request_id": "lease-recovery", "obsolete": True})
+        self.assertEqual(request_status(self.user.id, "lease-recovery")["status"], "running")
+        _complete(current, {"request_id": "lease-recovery", "current": True})
+        self.assertIs(request_status(self.user.id, "lease-recovery")["result"]["current"], True)
 
 
 if __name__ == "__main__":

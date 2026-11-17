@@ -1,3 +1,4 @@
+import { contentDeck,rememberContent,validContentHistory,type ContentHistory } from './challenge-journey'
 import { englishDifficulties, englishWord, englishWords, isEnglishTier, type EnglishTier } from './english-words'
 import { randomInt, shuffle, type Rng } from './random'
 
@@ -30,7 +31,7 @@ export interface SpellRound {
   finished: boolean
 }
 
-export interface SpellSave {
+export interface SpellSave extends ContentHistory {
   version: 1
   difficulty: SpellDifficulty
   round: SpellRound
@@ -55,8 +56,9 @@ function makeQuestion(difficulty: SpellDifficulty, rng: Rng, used: Set<string>):
   return { wordId: item.word, word: item.word, meaning: item.meaning, emoji: item.emoji, answer, tiles: shuffle(tiles, rng) }
 }
 
-export function newSpellRound(difficulty: SpellDifficulty, rng: Rng = Math.random): SpellRound {
-  const used = new Set<string>()
+export function newSpellRound(difficulty: SpellDifficulty, rng: Rng = Math.random, history: string[] = []): SpellRound {
+  const selected=contentDeck(englishWords[difficulty],SPELL_QUESTIONS,item=>item.word,history,rng)
+  const used = new Set(englishWords[difficulty].filter(item=>!selected.includes(item)).map(item=>item.word))
   return {
     version: 1,
     difficulty,
@@ -101,6 +103,13 @@ export function selectSpellTile(save: SpellSave, tileId: string): boolean {
   return true
 }
 
+export function moveSpellTile(save: SpellSave, index: number, delta: number): boolean {
+  const round = save.round, target = index+delta
+  if (round.finished || round.solved || !Number.isInteger(index) || ![-1,1].includes(delta) || index < 0 || index >= round.selected.length || target < 0 || target >= round.selected.length) return false
+  ;[round.selected[index],round.selected[target]] = [round.selected[target],round.selected[index]]
+  return true
+}
+
 export function clearSpellSelection(save: SpellSave): void {
   if (save.round.finished || save.round.solved) return
   save.round.selected = []
@@ -111,7 +120,8 @@ export function spellHint(save: SpellSave): string | null {
   if (round.finished || round.solved) return null
   const question = round.questions[round.index]
   round.hints++
-  return question.word[0]
+  const index = question.word.split('').findIndex((letter,index)=>question.tiles.find(tile=>tile.id===round.selected[index])?.letter!==letter)
+  return index < 0 ? null : question.word[index]
 }
 
 export function checkSpell(save: SpellSave): boolean | null {
@@ -148,12 +158,14 @@ export function advanceSpell(save: SpellSave): 'next' | 'finished' | null {
 }
 
 export function restartSpell(save: SpellSave, rng: Rng = Math.random): void {
-  save.round = newSpellRound(save.difficulty, rng)
+  const history=rememberContent(save,save.difficulty,save.round.questions.map(question=>question.wordId))
+  save.round = newSpellRound(save.difficulty, rng,history)
 }
 
 export function switchSpellDifficulty(save: SpellSave, difficulty: SpellDifficulty, rng: Rng = Math.random): void {
+  rememberContent(save,save.difficulty,save.round.questions.map(question=>question.wordId))
   save.difficulty = difficulty
-  save.round = newSpellRound(difficulty, rng)
+  save.round = newSpellRound(difficulty, rng,save.contentHistory?.[difficulty] || [])
 }
 
 function isInt(value: unknown, min: number, max: number): value is number {
@@ -179,7 +191,7 @@ export function restoreSpell(raw: string | null): SpellSave | null {
   if (!raw) return null
   try {
     const value = JSON.parse(raw) as SpellSave
-    if (!value || value.version !== 1 || !isSpellDifficulty(value.difficulty)) return null
+    if (!value || !validContentHistory(value.contentHistory) || value.version !== 1 || !isSpellDifficulty(value.difficulty)) return null
     const best = value.best as unknown as Record<string, unknown>
     if (!best || !englishDifficulties.every(item => isInt(best[item.id], 0, 3))) return null
     if (!isInt(value.totalWords, 0, 1_000_000) || !isInt(value.rounds, 0, 1_000_000)) return null
@@ -197,7 +209,7 @@ export function restoreSpell(raw: string | null): SpellSave | null {
     if (round.selected.length > question.word.length) return null
     if (!round.finished) {
       if (round.correct !== round.index + (round.solved ? 1 : 0)) return null
-      if (round.solved && (round.selected.length !== question.word.length || !round.selected.every((id, index) => id === question.answer[index]))) return null
+      if (round.solved && (round.selected.length !== question.word.length || !round.selected.every((id, index) => question.tiles.find(tile=>tile.id===id)?.letter === question.word[index]))) return null
     }
     if (round.finished) {
       if (round.index !== SPELL_QUESTIONS - 1 || round.solved || round.correct !== SPELL_QUESTIONS || round.selected.length !== 0) return null

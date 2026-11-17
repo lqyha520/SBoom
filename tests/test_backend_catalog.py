@@ -47,7 +47,7 @@ class PublicCatalogContracts(unittest.TestCase):
         self.stack.enter_context(patch.object(mini, "allow", return_value=True))
         self.stack.enter_context(patch.object(auth, "allow", return_value=True))
         database.init_db()
-        self.admin = user_store.create_user("catalog-admin", "test-password", role="admin")
+        self.admin = user_store.create_user("catalog-admin", "test-password", role="admin", is_super_admin=True)
         self.author = user_store.create_user("catalog-reader", "author-password")
         self.viewer = mini_auth.get_user(mini_auth.register("catalog-reader", "test-password")["user"]["id"])
         self.other = mini_auth.get_user(mini_auth.register("other-reader", "test-password")["user"]["id"])
@@ -649,7 +649,7 @@ class PublicCatalogContracts(unittest.TestCase):
 
     def test_console_accounts_split_into_authors_and_administrators(self):
         """后台「出题用户」与「管理员账号」两页按 role 取数，概览统计口径与之一致。"""
-        second_admin = user_store.create_user("second-admin", "test-password", role="admin")
+        second_admin = user_store.create_user("second-admin", "test-password", role="admin", is_super_admin=True)
         everything = self.client.get("/api/v1/admin/users").json()["users"]
         authors = self.client.get("/api/v1/admin/users", params={"role": "user"}).json()["users"]
         admins = self.client.get("/api/v1/admin/users", params={"role": "admin"}).json()["users"]

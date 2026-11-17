@@ -5,11 +5,13 @@ import { TYPE_NAME } from '../constants'
 import { answerOf } from '../utils'
 import { confirmQuestionReview, invalidateQuestionReview, isManuallyReviewed, paperQuality, questionConcerns } from '../question-quality'
 import type { Question } from '../types'
+import { saveBankQuestion } from '../question-bank'
 const props = defineProps<{ sectionId?: string; paperIndex?: number }>()
 const emit = defineEmits<{ close: [] }>()
 const store = useExamStore()
 const selected = ref(props.sectionId || '')
 const error = ref(''), notice = ref(''), confirming = ref('')
+const bankBusy = ref(false)
 const options = computed(() => props.paperIndex === undefined
   ? store.sections.map(item => ({ value: item.id, label: item.name || TYPE_NAME[item.type] || item.type }))
   : (store.papers[props.paperIndex]?.sections || []).map((item, index) => ({ value: item._sid || String(index), label: item.name || TYPE_NAME[item.type] || item.type })))
@@ -80,6 +82,17 @@ async function replace() {
   try { await store.replaceQuestion(selected.value, qid, props.paperIndex); notice.value = '已替换此题，可通过撤销恢复原题' }
   catch (cause) { error.value = cause instanceof Error ? cause.message : '替换失败，原题已保留' }
 }
+async function saveToBank(question: Question) {
+  const target = section.value
+  if (!target || bankBusy.value || store.generating || editing.value) return
+  const paper = props.paperIndex === undefined ? undefined : store.papers[props.paperIndex]
+  const owner = store.ownerId; bankBusy.value = true; error.value = ''; notice.value = ''
+  try {
+    await saveBankQuestion(paper?.grade || store.grade, paper?.subject || store.subject, paper?.keyword || store.keyword, (paper?.difficulty || store.difficulty) as 'easy' | 'medium' | 'hard', target, question)
+    if (owner === store.ownerId && !store.accountChanged) notice.value = target.type === 'reading' ? '文章与整组阅读题已存入题库，重复保存会复用已有条目' : '已存入我的题库，重复保存会复用已有条目'
+  } catch (cause) { if (owner === store.ownerId && !store.accountChanged) error.value = cause instanceof Error ? cause.message : '保存失败' }
+  finally { bankBusy.value = false }
+}
 </script>
 <template>
   <UModal :open="true" title="管理题目" :dismissible="!store.generating" :close="!store.generating" :ui="{ content: 'max-w-2xl' }" @update:open="value => { if (!value) emit('close') }">
@@ -113,6 +126,7 @@ async function replace() {
         <div class="flex flex-wrap gap-2 mt-2">
           <UButton :label="manual ? '撤销人工确认' : '确认已核对'" :icon="manual ? 'i-lucide-undo-2' : 'i-lucide-check-check'" size="xs" variant="soft" :disabled="store.generating || store.layoutMode || !!question._replacement || !!editing" @click="reviewQuestion(question)" />
           <UButton label="修改答案与解析" size="xs" variant="ghost" :disabled="store.generating" @click="editAnswer(question)" />
+          <UButton :label="section?.type === 'reading' ? '整篇存入题库' : '存入题库'" icon="i-lucide-library" size="xs" variant="outline" :loading="bankBusy" :disabled="store.generating || !!editing || question._preview || !!question._replacement" @click="saveToBank(question)" />
           <UButton :label="question._locked ? '已锁定 · 点击解锁' : '锁定此题'" :icon="question._locked ? 'i-lucide-lock-keyhole' : 'i-lucide-lock-keyhole-open'" size="xs" variant="soft" :disabled="store.generating || section?.type === 'reading' || !!question._replacement" @click="store.toggleQuestionLock(selected, question._qid!, paperIndex)" />
           <UButton :label="question._replacement ? '查询并重试换题' : '换一道题'" icon="i-lucide-refresh-cw" size="xs" variant="outline" :disabled="store.generating || question._locked || section?.type === 'reading'" @click="confirming = question._qid!" />
         </div>

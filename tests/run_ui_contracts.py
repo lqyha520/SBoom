@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
-SUITES = ("http", "home", "profile", "discovery", "performance")
+SUITES = ("http", "home", "profile", "discovery", "performance", "teaching")
 
 
 def run_fixture(suite="http"):
@@ -26,6 +26,8 @@ def run_fixture(suite="http"):
         env.update(LC_WEB_DIST=str(ROOT / "miniprogram" / "dist" / "build" / "h5"), LC_SEED_MINI_FIXTURE="1")
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as log:
         fixture = "tests/profile_ui_fixture.py" if suite in ("profile", "discovery") else "tests/ui_fixture.py"
+        if suite == 'teaching':
+            fixture = 'tests/teaching_ui_fixture.py'
         process = subprocess.Popen([sys.executable, fixture, "--port", str(port)],
                                    cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
         try:
@@ -43,10 +45,12 @@ def run_fixture(suite="http"):
                 raise TimeoutError("Disposable service did not become healthy")
             if suite != "http":
                 script = {"profile": "tests/profile-membership-ui.cjs", "home": "tests/home-banner-ui.cjs",
-                          "discovery": "tests/mini-discovery-ui.cjs", "performance": "tests/mini-performance-ui.mjs"}[suite]
+                          "discovery": "tests/mini-discovery-ui.cjs", "performance": "tests/mini-performance-ui.mjs", "teaching": "tests/teaching-ui.mjs"}[suite]
                 subprocess.run(["node", script], cwd=ROOT, env=env, check=True)
                 if suite == "profile":
                     subprocess.run(["node", "tests/mini-optimization-ui.mjs"], cwd=ROOT,
+                                   env={**env, "MINI_UI_BASE": base}, check=True)
+                    subprocess.run(["node", "tests/mini-consumer-optimization-ui.mjs"], cwd=ROOT,
                                    env={**env, "MINI_UI_BASE": base}, check=True)
             else:
                 subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_ui_contracts.py", "-v"], cwd=ROOT, env=env, check=True)

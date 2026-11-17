@@ -10,7 +10,7 @@ vi.mock('../components/OverviewPage.vue', () => ({ __esModule: true, default: { 
 it('后台退出失败显示错误并允许重试，成功后才通知外壳退出', async () => {
   const logout = vi.spyOn(api, 'logout').mockRejectedValueOnce(new Error('网络异常，请重试')).mockResolvedValue(undefined)
   const wrapper = mount(Dashboard, {
-    props: { user: { id: 1, username: 'admin', role: 'admin' } },
+    props: { user: { id: 1, username: 'admin', role: 'admin', is_super_admin: true } },
     global: { stubs: { ...uiStubs,
       UDropdownMenu: defineComponent({ props: ['items'], setup: props => () => h('div', props.items.map((item: { label: string; onSelect?: () => void; disabled?: boolean }) => h('button', { onClick: item.onSelect, disabled: item.disabled }, item.label))) }),
     } },

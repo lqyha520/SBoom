@@ -28,7 +28,7 @@ def _tags(admin=False):
 
 
 def save(body, identifier=None):
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         if conn.execute("SELECT 1 FROM catalog_tags WHERE kind = ? AND name = ? AND id <> ?", (body.kind, body.name, identifier or "")).fetchone():
             fail("此类型已有同名标签")
         if identifier:
@@ -51,7 +51,7 @@ def save(body, identifier=None):
 
 
 def remove(identifier, revision):
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         row = conn.execute("SELECT revision FROM catalog_tags WHERE id = ?", (identifier,)).fetchone()
         if not row:
             fail("标签不存在", 404)
@@ -74,8 +74,10 @@ def label_map(conn, identifiers, admin=False):
     return result
 
 
-def assign(catalog_id, body):
-    with db(serialized=True) as conn:
+def assign(catalog_id, body, *, admin_id):
+    with db(serialized=True, invalidate_public=True) as conn:
+        from app.services.catalog_scope import require_paper
+        require_paper(conn, admin_id, catalog_id)
         row = conn.execute("SELECT revision FROM catalog_papers WHERE id = ?", (catalog_id,)).fetchone()
         if not row:
             fail("资料不存在", 404)

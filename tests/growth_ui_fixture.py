@@ -141,7 +141,7 @@ def seed_growth():
             mini_refunds.request(order['id'], owner, RefundInput(reason='验收：核对退款处理流程'))
     if paper:
         tags = [catalog_discovery.save(TagInput(kind=kind, name=name)) for kind, name in [('textbook', '人教版'), ('term', '上学期'), ('unit', '第一单元'), ('knowledge', '两位数加法')]]
-        labels = catalog_discovery.assign(paper['id'], PaperLabels(revision=paper['revision'], tag_ids=[tag['id'] for tag in tags]))
+        labels = catalog_discovery.assign(paper['id'], PaperLabels(revision=paper['revision'], tag_ids=[tag['id'] for tag in tags]), admin_id=admin)
         snapshot = json.loads(paper['snapshot_json'])
         snapshot['export_options']['mode'] = 'answersOnly'
         alternate = paper_library.create_paper(admin, ArchiveCreate(request_id='fixture-answers', source_id='fixture-answer-source', snapshot=snapshot))

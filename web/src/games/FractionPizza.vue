@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { writeGameSave } from './game-storage'
 import { computed, ref, watch } from 'vue'
 import GameNav from './GameNav.vue'
 import {
@@ -23,8 +24,7 @@ const finished = computed(() => flight.value.finished)
 const stars = computed(() => fractionStars(flight.value))
 const answeredCount = computed(() => finished.value ? FRACTION_QUESTIONS : flight.value.index + (answered.value === null ? 0 : 1))
 const difficulty = computed(() => fractionDifficulties.find(item => item.id === save.value.difficulty)!)
-const pizza = computed(() => {
-  const total = question.value.total
+function pizzaFor(total: number, shaded: number) {
   const step = (Math.PI * 2) / total
   const slices = Array.from({ length: total }, (_, index) => {
     const start = -Math.PI / 2 + index * step
@@ -37,7 +37,7 @@ const pizza = computed(() => {
       index,
       step,
       mid: start + step / 2,
-      shaded: index < question.value.shaded,
+      shaded: index < shaded,
       path: `M120 120 L${x1.toFixed(2)} ${y1.toFixed(2)} A96 96 0 0 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z`,
     }
   })
@@ -55,9 +55,16 @@ const pizza = computed(() => {
     })
   })
   return { slices, toppings }
-})
+}
+const pizza = computed(() => pizzaFor(question.value.total, question.value.shaded))
+const otherPizza = computed(() => question.value.other ? pizzaFor(question.value.other.total, question.value.other.shaded) : null)
 const explanation = computed(() => {
   const value = question.value
+  if (value.mode === 'compare' && value.other) {
+    const left = value.shaded * value.other.total, right = value.other.shaded * value.total
+    return `左边 ${value.shaded}/${value.total}，右边 ${value.other.shaded}/${value.other.total}。换成共同分母 ${value.total*value.other.total} 后，比较 ${left} 和 ${right}：${fractionReading(value.answer)}。`
+  }
+  if (value.mode === 'complement') return `整张披萨有 ${value.total} 块，去掉涂色的 ${value.shaded} 块，还剩 ${value.total-value.shaded} 块，占 ${value.answer}。`
   if (value.mode === 'identify') {
     return `这张披萨平均分成 ${value.total} 份，涂色 ${value.shaded} 份，所以是 ${value.answer}，读作「${fractionReading(value.answer)}」。`
   }
@@ -77,7 +84,7 @@ function applyDifficulty() {
   resetDifficulty.value = null
 }
 watch(save, value => {
-  try { localStorage.setItem(props.storageKey, JSON.stringify(value)); saveError.value = false }
+  try { writeGameSave(props.storageKey, value); saveError.value = false }
   catch { saveError.value = true }
 }, { deep: true, immediate: true, flush: 'post' })
 watch(() => props.storageKey, () => { save.value = readSave() || newFraction() })
@@ -112,7 +119,7 @@ watch(() => props.storageKey, () => { save.value = readSave() || newFraction() }
         <div class="pizza-scene">
           <span class="kitchen-ticket"><UIcon name="i-lucide-chef-hat" />今日点单 · 分数披萨</span>
           <span class="steam steam-one" aria-hidden="true" /><span class="steam steam-two" aria-hidden="true" />
-          <div class="pizza-art" :class="{ celebrate: answered !== null && isCorrect }" role="img" :aria-label="`披萨平均分成 ${question.total} 块，其中 ${question.shaded} 块涂色`">
+          <div v-if="!otherPizza" class="pizza-art" :class="{ celebrate: answered !== null && isCorrect }" role="img" :aria-label="`披萨平均分成 ${question.total} 块，其中 ${question.shaded} 块涂色`">
             <svg viewBox="0 0 240 250" aria-hidden="true">
               <defs>
                 <linearGradient id="fraction-cheese" x1="0" y1="0" x2="1" y2="1">
@@ -138,15 +145,15 @@ watch(() => props.storageKey, () => { save.value = readSave() || newFraction() }
               <circle cx="120" cy="120" r="3.4" fill="#e9b159" />
             </svg>
           </div>
-          <div class="scene-legend"><span><i class="legend-shaded" />涂色部分</span><span><i class="legend-plain" />没涂色</span><span class="slice-count">一共 {{ question.total }} 块</span></div>
-          <div class="scene-note"><UIcon name="i-lucide-info" />每一块都一样大，才可以用分数表示。</div>
+          <div v-if="otherPizza" class="compare-pizzas" aria-label="两张同样大小的披萨"><figure v-for="(art,side) in [pizza,otherPizza]" :key="side"><figcaption>{{ side?'右边':'左边' }}</figcaption><svg viewBox="0 0 240 240" role="img" :aria-label="side?`右边 ${question.other!.shaded}/${question.other!.total}`:`左边 ${question.shaded}/${question.total}`"><circle cx="120" cy="120" r="102" fill="#dca467" /><path v-for="slice in art.slices" :key="slice.index" :d="slice.path" :fill="slice.shaded?'#eeb85e':'#f8e9cf'" stroke="#fff8ea" stroke-width="2.6" /></svg><strong>{{ side?question.other!.shaded:question.shaded }} / {{ side?question.other!.total:question.total }}</strong></figure></div><div class="scene-legend"><span><i class="legend-shaded" />涂色部分</span><span><i class="legend-plain" />没涂色</span><span class="slice-count">{{ otherPizza ? '左 ' + question.total + ' 份 / 右 ' + question.other!.total + ' 份' : '一共 ' + question.total + ' 块' }}</span></div>
+          <div class="scene-note"><UIcon name="i-lucide-info" />{{ otherPizza ? '两张整披萨一样大；各自平均分，单块大小可能不同。' : '每一块都一样大，才可以用分数表示。' }}</div>
         </div>
 
         <div class="pizza-panel">
           <div :key="flight.index" class="question-body">
             <div class="question-meta"><span>第 {{ flight.index + 1 }} / {{ FRACTION_QUESTIONS }} 题</span><span v-if="question.mode === 'simplify'" class="simplify-pill"><UIcon name="i-lucide-scaling" />最简分数</span></div>
             <h2 class="pizza-prompt">{{ fractionPrompt(question.mode) }}</h2>
-            <p class="prompt-hint"><UIcon name="i-lucide-eye" />{{ question.mode === 'simplify' ? '先看涂色部分占几分之几，再把分子和分母化成最简。' : '先数一数涂色的块数，再数一数一共分成几块。' }}</p>
+            <p class="prompt-hint"><UIcon name="i-lucide-eye" />{{ question.mode === 'compare' ? '整张披萨一样大，比较涂色所占的比例，不能只比块数。' : question.mode === 'complement' ? '从总块数中减去涂色块数。' : question.mode === 'simplify' ? '先看涂色部分占几分之几，再把分子和分母化成最简。' : '先数一数涂色的块数，再数一数一共分成几块。' }}</p>
             <div class="fraction-options" role="group" aria-label="分数选项">
               <button v-for="option in question.options" :key="option" :data-fraction="option" :class="{ right: answered !== null && option === question.answer, wrong: answered === option && option !== question.answer }" :disabled="answered !== null" :aria-label="`选择 ${option}，读作${fractionReading(option)}`" @click="choose(option)"><strong>{{ option }}</strong><small>{{ fractionReading(option) }}</small></button>
             </div>
@@ -177,12 +184,13 @@ watch(() => props.storageKey, () => { save.value = readSave() || newFraction() }
       <footer class="fraction-footer"><span><UIcon name="i-lucide-heart" />每一次尝试，都是成长</span><span role="status" aria-label="进度保存状态"><UIcon :name="saveError ? 'i-lucide-cloud-off' : 'i-lucide-cloud-check'" />{{ saveError ? '本机暂时无法保存进度' : '进度已保存在本机' }}</span></footer>
     </main>
 
-    <UModal :open="helpOpen" title="切披萨，认识分数" description="平均分的每一块，都藏着分数的秘密。" :close="{ 'aria-label': '关闭玩法说明' }" :ui="{ content: 'game-modal' }" @update:open="helpOpen = $event"><template #body><ol class="help-list"><li>先看披萨平均分成了几块，这就是分母；再看涂色的有几块，这就是分子。</li><li>例如分成 4 块、涂色 3 块，就是 3/4，读作「四分之三」。</li><li>挑战难度里，涂色部分可能不是最简分数。把分子和分母同时除以相同的数，就得到最简分数。</li><li>八道题完成后可以查看成绩单。全部答对就能烤出三颗星的满分披萨。</li></ol><button class="primary-action" @click="helpOpen = false">明白了，开始切披萨<UIcon name="i-lucide-pizza" /></button></template></UModal>
+    <UModal :open="helpOpen" title="切披萨，认识分数" description="平均分的每一块，都藏着分数的秘密。" :close="{ 'aria-label': '关闭玩法说明' }" :ui="{ content: 'game-modal' }" @update:open="helpOpen = $event"><template #body><ol class="help-list"><li>先看披萨平均分成了几块，这就是分母；再看涂色的有几块，这就是分子。</li><li>例如分成 4 块、涂色 3 块，就是 3/4，读作「四分之三」。</li><li>挑战难度里，涂色部分可能不是最简分数。把分子和分母同时除以相同的数，就得到最简分数。</li><li>进阶里还会判断剩余部分、比较同分母分数；挑战里比较不同分母。两张披萨总大小相同，涂色比例才有可比性。</li><li>八道题完成后可以查看成绩单。全部答对就能烤出三颗星的满分披萨。</li></ol><button class="primary-action" @click="helpOpen = false">明白了，开始切披萨<UIcon name="i-lucide-pizza" /></button></template></UModal>
     <UModal :open="resetDifficulty !== null" :title="resetDifficulty === save.difficulty ? '重新烤一盘？' : '切换游戏难度？'" description="新的披萨会从第一题开始，当前这盘题的进度会清空，最佳记录会保留。" :close="{ 'aria-label': '关闭难度确认' }" :ui="{ content: 'game-modal' }" @update:open="!$event && (resetDifficulty = null)"><template #body><div class="modal-actions"><button class="secondary-action" @click="resetDifficulty = null">继续这一盘</button><button class="primary-action" @click="applyDifficulty">{{ resetDifficulty === save.difficulty ? '重新开始' : '切换并开始' }}<UIcon name="i-lucide-arrow-right" /></button></div></template></UModal>
   </div>
 </template>
 
 <style scoped>
+.compare-pizzas{position:relative;z-index:2;display:flex;gap:12px;width:100%;text-align:center}.compare-pizzas figure{flex:1;min-width:0}.compare-pizzas svg{width:100%}.compare-pizzas figcaption,.compare-pizzas strong{font-size:14px;color:#906449}.compare-pizzas strong{display:block}
 .fraction-game { --fraction-ink: #4a3c34; --fraction-muted: #9b8d82; --fraction-red: #c4674f; --fraction-border: #efe3d8; min-height: 100dvh; background: #fdf9f4; color: var(--fraction-ink); font-family: var(--font-ui); letter-spacing: 0; }
 .fraction-game button { cursor: pointer; transition: background .16s, transform .16s, box-shadow .16s; }
 .fraction-game button:disabled { cursor: default; }

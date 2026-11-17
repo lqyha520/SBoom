@@ -1,3 +1,4 @@
+import { contentDeck, seededRandom } from './challenge-journey'
 export type ProductId = 'apple' | 'banana' | 'pear' | 'orange'
 export type Difficulty = 'count' | 'total' | 'change'
 export type Stage = 'packing' | 'total' | 'change' | 'served' | 'closed'
@@ -44,6 +45,8 @@ export interface ShopState {
   mistakes: number
   hints: number
   upgrades: number
+  orders?: Basket[]
+  orderHistory?: string[]
   lifetimeServed: number
 }
 export function newShop(difficulty: Difficulty = 'change'): ShopState {
@@ -52,7 +55,7 @@ export function newShop(difficulty: Difficulty = 'change'): ShopState {
     mistakes: 0, hints: 0, upgrades: 0, lifetimeServed: 0 }
 }
 export function currentOrder(state: ShopState): Basket {
-  return orderBook[((state.day - 1) * 4 + state.customer) % orderBook.length]
+  return state.orders?.[state.customer] ?? orderBook[((state.day - 1) * 4 + state.customer) % orderBook.length]
 }
 export function basketTotal(basket: Basket): number {
   return products.reduce((sum, product) => sum + product.price * basket[product.id], 0)
@@ -111,8 +114,23 @@ export function nextDay(state: ShopState): void {
   state.customer = 0
   state.stage = 'packing'
   state.bag = emptyBasket()
+  const pool: Basket[] = []
+  const maxQuantity = Math.min(3, 1 + Math.floor(state.day / 3))
+  const maxKinds = Math.min(4, 2 + Math.floor(state.day / 4))
+  for (let a = 0; a <= maxQuantity; a++) for (let b = 0; b <= maxQuantity; b++)
+    for (let c = 0; c <= maxQuantity; c++) for (let d = 0; d <= maxQuantity; d++) {
+      const quantities = [a,b,c,d], kinds = quantities.filter(Boolean).length
+      if (kinds < 2 || kinds > maxKinds || quantities.reduce((sum,n)=>sum+n,0) > 8) continue
+      pool.push({apple:a,banana:b,pear:c,orange:d})
+    }
+  const key = (basket: Basket) => products.map(product=>basket[product.id]).join(',')
+  const history = state.orderHistory || orderBook.slice(0,4).map(key)
+  state.orders = contentDeck(pool,4,key,history,seededRandom(state.day*7919 + ['count','total','change'].indexOf(state.difficulty)*65537))
+  const ids = state.orders.map(key)
+  state.orderHistory = [...history.filter(id=>!ids.includes(id)),...ids].slice(-256)
   const stock = 8 + state.upgrades * 2
   state.stock = { apple: stock, banana: stock, pear: stock, orange: stock }
+  for (const product of products) state.stock[product.id] = Math.max(stock,state.orders.reduce((sum,order)=>sum+order[product.id],0))
   state.revenue = 0
   state.profit = 0
   state.mistakes = 0
@@ -137,6 +155,8 @@ export function restoreShop(raw: string | null): ShopState | null {
       || (value.stage === 'closed' && value.customer !== 3)
       || (value.difficulty === 'count' && ['total', 'change'].includes(value.stage))
       || (value.difficulty === 'total' && value.stage === 'change')) return null
+    if (value.orders !== undefined && (!Array.isArray(value.orders) || value.orders.length !== 4 || !value.orders.every(order=>products.every(p=>nonnegative(order?.[p.id]) && order[p.id] <= 3) && products.reduce((sum,p)=>sum+order[p.id],0) >= 1))) return null
+    if (value.orderHistory !== undefined && (!Array.isArray(value.orderHistory) || value.orderHistory.length > 256 || !value.orderHistory.every(id=>typeof id === 'string' && /^[0-3](,[0-3]){3}$/.test(id)))) return null
     if (value.stage !== 'packing' && !products.every(p => value.bag[p.id] === currentOrder(value)[p.id])) return null
     if (['packing', 'total', 'change'].includes(value.stage) && !products.every(p => value.stock[p.id] >= currentOrder(value)[p.id] && value.bag[p.id] <= value.stock[p.id])) return null
     return value

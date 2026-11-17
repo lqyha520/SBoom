@@ -1,0 +1,8 @@
+[
+  {"id":"math-oral-1","grade":"小学一年级","subject":"数学","keyword":"10以内加减法","items":[{"game_type":"oral_math","question_count":4}],"style":"clean","image_count":2,"image_index":1},
+  {"id":"math-oral-2","grade":"小学一年级","subject":"数学","keyword":"10以内加减法","items":[{"game_type":"oral_math","question_count":4}],"style":"clean","image_count":2,"image_index":2},
+  {"id":"math-diagram","grade":"小学一年级","subject":"数学","keyword":"10以内加减法","items":[{"game_type":"word_problem","question_count":2}],"style":"playful","requirements":"每题配清楚的数量图：一道合并两组物品的加法题，一道拿走部分物品的减法题。"},
+  {"id":"chinese-quiz","grade":"小学三年级","subject":"语文","keyword":"在具体词语中辨别多音字读音","items":[{"game_type":"quiz","question_count":4}],"style":"black_white"},
+  {"id":"english-quiz","grade":"小学三年级","subject":"英语","items":[{"game_type":"quiz","question_count":4}],"style":"clean"},
+  {"id":"chinese-reading","grade":"小学三年级","subject":"语文","keyword":"阅读短文，提取关键信息","items":[{"game_type":"reading","question_count":3}],"style":"black_white"}
+]

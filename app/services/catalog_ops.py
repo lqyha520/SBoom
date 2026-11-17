@@ -6,13 +6,14 @@ from types import SimpleNamespace
 
 from app.db import db
 from app.mini_schema import index_question_types
-from app.services import catalog_access, catalog_editions
+from app.services import catalog_access, catalog_editions, catalog_scope
 from app.services import public_catalog as catalog
 from app.services.mini_experience import fail
 
 
-def batch(body, admin_id=None):
-    with db(serialized=True) as conn:
+def batch(body, admin_id):
+    with db(serialized=True, invalidate_public=True) as conn:
+        where, scope_args = catalog_scope.condition(conn, admin_id)
         category = None
         tag_kinds = {}
         if body.action == "category":
@@ -32,7 +33,7 @@ def batch(body, admin_id=None):
                     fail("教材、学期、单元各只能设置一个", 422)
         ids = [item.id for item in body.items]
         fetched = {row["id"]: row for row in conn.execute(
-            f"SELECT c.*, a.file_status FROM {catalog.JOIN} WHERE c.id = ANY(?)", (ids,)).fetchall()} if ids else {}
+            f"SELECT c.*, a.file_status FROM {catalog.JOIN} WHERE c.id = ANY(?) AND {where}", [ids, *scope_args]).fetchall()} if ids else {}
         rows = []
         for item in body.items:
             if item.id not in fetched:
@@ -100,7 +101,8 @@ def preview(admin_id, catalog_id, membership):
 
 def revise(admin_id, catalog_id, body):
     now = int(time.time())
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
+        catalog_scope.require_paper(conn, admin_id, catalog_id)
         row = conn.execute("SELECT * FROM catalog_papers WHERE id = ?", (catalog_id,)).fetchone()
         if not row:
             fail("公共资料不存在", 404)

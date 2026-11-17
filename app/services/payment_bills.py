@@ -144,7 +144,7 @@ def reconcile(admin_id: int | None, bill_date: str) -> dict[str, Any]:
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             summary, differences = compare(conn, rows, bill_date)
             conn.execute("UPDATE mini_reconciliations SET status = 'complete', summary_json = ?, differences_json = ?, updated_at = ? WHERE id = ?",
-                         (json.dumps(summary), json.dumps(differences[:5000], ensure_ascii=False), int(time.time()), identifier))
+                         (json.dumps(summary), json.dumps(differences, ensure_ascii=False), int(time.time()), identifier))
     except (PaymentError, ValueError, csv.Error) as error:
         message = "微信账单暂不可用，请检查配置或在账单生成后重试"
         with db(serialized="accounts") as conn:
@@ -163,34 +163,38 @@ def get(identifier: str) -> dict[str, Any]:
     result = dict(row)
     result["summary"] = json.loads(result.pop("summary_json"))
     result["differences"] = json.loads(result.pop("differences_json"))
+    result["differences_complete"] = result["summary"].get("differences", len(result["differences"])) == len(result["differences"])
     return result
 
 
 def listing(limit: int = 20, offset: int = 0) -> dict[str, Any]:
     with db() as conn:
         total = conn.execute("SELECT COUNT(*) FROM mini_reconciliations").fetchone()[0]
-        rows = conn.execute("SELECT id, bill_date, status, error, summary_json, created_at, updated_at FROM mini_reconciliations ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
+        rows = conn.execute("SELECT id, bill_date, status, error, summary_json, created_at, updated_at, jsonb_array_length(differences_json::jsonb) AS stored_differences FROM mini_reconciliations ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
     items = []
     for row in rows:
         item = dict(row)
         item["summary"] = json.loads(item.pop("summary_json"))
+        stored = item.pop("stored_differences")
+        item["differences_complete"] = item["summary"].get("differences", stored) == stored
         items.append(item)
     return {"items": items, "total": total, "has_more": offset + len(items) < total}
 
 
-def export_orders(status: str = "", q: str = "", start_date: str = "", end_date: str = "") -> str:
+def export_orders(status: str = "", q: str = "", start_date: str = "", end_date: str = "", *, admin_actor_id: int | None = None, referral_admin_id: int | None = None, campaign_id: str = '', date_basis: str = 'created', real_only: bool = False) -> str:
     from app.services.mini_orders import listing as orders
-    page = orders(status=status, q=q, limit=5000, start_date=start_date, end_date=end_date)
+    page = orders(status=status, q=q, limit=5000, start_date=start_date, end_date=end_date, admin_actor_id=admin_actor_id, referral_admin_id=referral_admin_id, campaign_id=campaign_id, date_basis=date_basis, real_only=real_only)
     if page["total"] > 5000:
         fail("结果超过 5000 条，请缩小筛选范围再导出", 422)
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["订单号", "账号", "套餐", "天数", "金额（元）", "状态", "支付渠道", "微信交易号", "创建时间", "退款状态"])
+    writer.writerow(["订单号", "账号", "套餐", "天数", "金额（元）", "状态", "支付渠道", "微信交易号", "创建时间", "退款状态", "注册来源", "直接邀请人", "归属管理员"])
     def safe(value: Any) -> str:
         text = str(value or "")
         return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r", "\n")) else text
     for item in page["items"]:
         writer.writerow([safe(item["id"]), safe(item["username"]), safe(item["plan_name"]), item["plan_days"], f"{item['amount_fen'] / 100:.2f}",
                          item["status"], "虚拟支付" if item.get("payment_channel") == "virtual" else "微信支付", safe(item["transaction_id"]),
-                         datetime.fromtimestamp(item["created_at"], ZONE).isoformat(), item["refund"]["status"] if item["refund"] else ""])
+                         datetime.fromtimestamp(item["created_at"], ZONE).isoformat(), item["refund"]["status"] if item["refund"] else "",
+                         safe(item['referral'].get('source')), safe(item['referral'].get('inviter_name')), safe(item['referral'].get('admin_name'))])
     return "\ufeff" + output.getvalue()

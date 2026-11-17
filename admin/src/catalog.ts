@@ -1,3 +1,4 @@
+import { optionPath } from './admin-options'
 import { AUTH_EXPIRED_EVENT, FORBIDDEN_EVENT, ApiError, AuthError, ForbiddenError, adminAccountEpoch, accountChanged, request } from './api'
 import type { ApiSchemas } from '../../shared/api-schema'
 import { backoff, parseErrorDetail } from '../../shared/http'
@@ -14,6 +15,7 @@ export interface CatalogPaper extends DownloadSettings {
   reviewed_at?: number; answer_readiness?: string
   question_count: number; page_count: number; file_status: string; thumbnail_url: string | null
   updated_at: number; favorite_count?: number; download_users?: number
+  publisher_id?: number | null; publisher_name?: string | null
 }
 export interface CatalogAsset { id: string; kind: 'pdf' | 'page'; page_number: number; url: string }
 export interface CatalogDetail extends CatalogPaper { assets: CatalogAsset[]; editions?: import('./growth').Edition[]; versions?: { release_number: number; note: string; created_at: number }[] }
@@ -29,7 +31,7 @@ export interface PublicationEdit extends DownloadSettings {
 const base = '/api/v1/admin/catalog'
 export interface CatalogFilters { grade?: string; subject?: string; category?: string; access?: string }
 export function catalogList(q: string, status: string, offset: number, filters: CatalogFilters = {}) {
-  return request<Page<CatalogPaper>>(base + '/papers?' + new URLSearchParams({ q, status, offset: String(offset), limit: '20', ...filters }))
+  return request<Page<CatalogPaper>>((status === 'published' ? optionPath('papers', 'papers', base + '/papers') : base + '/papers') + '?' + new URLSearchParams({ q, status, offset: String(offset), limit: '20', ...filters }))
 }
 export function catalogStats() { return request<CatalogStats>(base + '/summary') }
 export function catalogDetail(id: string) { return request<CatalogDetail>(base + '/papers/' + encodeURIComponent(id)) }

@@ -1,3 +1,4 @@
+import { contentDeck,rememberContent,validContentHistory,type ContentHistory } from './challenge-journey'
 import { englishDifficulties, englishWord, englishWords, isEnglishTier, type EnglishTier } from './english-words'
 import { randomInt, shuffle, type Rng } from './random'
 
@@ -6,6 +7,7 @@ export type MarketDifficulty = EnglishTier
 export interface MarketQuestion {
   wordId: string
   options: string[]
+  direction?: 'meaning' | 'word'
 }
 
 export interface MarketRound {
@@ -19,7 +21,7 @@ export interface MarketRound {
   finished: boolean
 }
 
-export interface MarketSave {
+export interface MarketSave extends ContentHistory {
   version: 1
   difficulty: MarketDifficulty
   round: MarketRound
@@ -35,9 +37,10 @@ export function isMarketDifficulty(value: unknown): value is MarketDifficulty {
   return isEnglishTier(value)
 }
 
-export function newMarketRound(difficulty: MarketDifficulty, rng: Rng = Math.random): MarketRound {
+export function newMarketRound(difficulty: MarketDifficulty, rng: Rng = Math.random, history: string[] = []): MarketRound {
   const pool = englishWords[difficulty]
-  const used = new Set<string>()
+  const selected=contentDeck(englishWords[difficulty],MARKET_QUESTIONS,item=>item.word,history,rng)
+  const used = new Set(englishWords[difficulty].filter(item=>!selected.includes(item)).map(item=>item.word))
   const questions: MarketQuestion[] = []
   for (let index = 0; index < MARKET_QUESTIONS; index++) {
     const available = pool.filter(item => !used.has(item.word))
@@ -46,7 +49,7 @@ export function newMarketRound(difficulty: MarketDifficulty, rng: Rng = Math.ran
     const distractors = shuffle(pool.filter(candidate => candidate.word !== item.word), rng)
       .slice(0, 3)
       .map(candidate => candidate.word)
-    questions.push({ wordId: item.word, options: shuffle([item.word, ...distractors], rng) })
+    questions.push({ direction: difficulty!=='starter' && index%2 ? 'meaning' : 'word', wordId: item.word, options: shuffle([item.word, ...distractors], rng) })
   }
   return {
     version: 1,
@@ -103,12 +106,14 @@ export function advanceMarket(save: MarketSave): 'next' | 'finished' | null {
 }
 
 export function restartMarket(save: MarketSave, rng: Rng = Math.random): void {
-  save.round = newMarketRound(save.difficulty, rng)
+  const history=rememberContent(save,save.difficulty,save.round.questions.map(question=>question.wordId))
+  save.round = newMarketRound(save.difficulty, rng,history)
 }
 
 export function switchMarketDifficulty(save: MarketSave, difficulty: MarketDifficulty, rng: Rng = Math.random): void {
+  rememberContent(save,save.difficulty,save.round.questions.map(question=>question.wordId))
   save.difficulty = difficulty
-  save.round = newMarketRound(difficulty, rng)
+  save.round = newMarketRound(difficulty, rng,save.contentHistory?.[difficulty] || [])
 }
 
 function isInt(value: unknown, min: number, max: number): value is number {
@@ -117,7 +122,7 @@ function isInt(value: unknown, min: number, max: number): value is number {
 
 function validQuestion(question: MarketQuestion, difficulty: MarketDifficulty): boolean {
   const source = englishWord(difficulty, question?.wordId)
-  if (!source) return false
+  if (!source || question.direction!==undefined && !['meaning','word'].includes(question.direction)) return false
   if (!Array.isArray(question.options) || question.options.length !== 4) return false
   if (!question.options.every(word => typeof word === 'string')) return false
   if (new Set(question.options).size !== 4 || !question.options.includes(source.word)) return false
@@ -128,7 +133,7 @@ export function restoreMarket(raw: string | null): MarketSave | null {
   if (!raw) return null
   try {
     const value = JSON.parse(raw) as MarketSave
-    if (!value || value.version !== 1 || !isMarketDifficulty(value.difficulty)) return null
+    if (!value || !validContentHistory(value.contentHistory) || value.version !== 1 || !isMarketDifficulty(value.difficulty)) return null
     const best = value.best as unknown as Record<string, unknown>
     if (!best || !englishDifficulties.every(item => isInt(best[item.id], 0, 3))) return null
     if (!isInt(value.totalCorrect, 0, 1_000_000) || !isInt(value.rounds, 0, 1_000_000)) return null

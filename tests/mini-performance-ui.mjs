@@ -96,11 +96,15 @@ try {
   await expect(page.locator('.reader-pages uni-swiper-item')).toHaveCount(5)
   await expect(page.locator('.reader-image')).toHaveCount(2)
   await expect(page.locator('.reader-image image, .reader-image img').first()).toBeVisible()
+  const originalPaths = () => [...new Set(report.requests.filter(item => item.path.includes('/original-')).map(item => item.path))].sort()
+  await expect.poll(originalPaths).toEqual([
+    '/api/v1/catalog/assets/original-0', '/api/v1/catalog/assets/original-1', '/api/v1/catalog/assets/original-2',
+  ]) // 阅读器预取当前页及后两页；选择器只请求缩略图。
+  const beforeChooser = originalPaths()
   await page.getByRole('button', { name: '选择预览页码' }).click()
   await expect(page.locator('.reader-page-option')).toHaveCount(12)
   await expect(page.locator('.reader-thumb img').first()).toBeVisible()
-  const originalRequests = report.requests.filter(item => item.path.includes('/original-'))
-  assert.ok(new Set(originalRequests.map(item => item.path)).size <= 2, 'chooser must not request original pages')
+  assert.deepEqual(originalPaths(), beforeChooser, 'chooser must not request original pages')
   await page.locator('.chooser-controls').getByRole('button', { name: '下一组' }).click()
   await expect(page.locator('.reader-page-option')).toHaveCount(12)
   await page.locator('.reader-page-option').first().click()

@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest'
-import { defineComponent, h, KeepAlive } from 'vue'
+import { defineComponent, h, KeepAlive, ref } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import PublicPapers from '../components/PublicPapers.vue'
 import PublicationEditorDialog from '../components/PublicationEditorDialog.vue'
@@ -7,7 +7,7 @@ import CatalogPreviewDialog from '../components/CatalogPreviewDialog.vue'
 import PaperMetadataDialog from '../components/PaperMetadataDialog.vue'
 import { defaultDownloadSettings } from '../download-settings'
 import { uiStubs } from '../../../shared/test/ui-stubs'
-import { readAdminRoute } from '../navigation'
+import { adminRoute, navigateAdmin, readAdminRoute } from '../navigation'
 import * as catalog from '../catalog'
 const mocks = vi.hoisted(() => ({ categories: vi.fn(), dictionary: vi.fn(), createCategory: vi.fn() }))
 vi.mock('../site', () => ({ siteCategories: mocks.categories, siteDictionary: mocks.dictionary, createCategory: mocks.createCategory }))
@@ -28,7 +28,7 @@ beforeEach(() => {
 it('required option failures show independent retry actions and retain typed form content', async () => {
   mocks.categories.mockRejectedValueOnce(new Error('offline'))
   mocks.dictionary.mockRejectedValue(new Error('offline'))
-  const wrapper = mount(defineComponent({ setup: () => () => h(KeepAlive, () => h(PublicPapers, { user: { id: 1, username: 'admin', role: 'admin' } })) }), {
+  const wrapper = mount(defineComponent({ setup: () => () => h(KeepAlive, () => h(PublicPapers, { user: { id: 1, username: 'admin', role: 'admin', is_super_admin: true } })) }), {
     global: { stubs: { ...uiStubs,
       UAlert: defineComponent({ props: ['title'], setup: (props, { slots }) => () => h('div', [props.title, slots.actions?.()]) }),
       CatalogBatchDialog: true, CatalogRevisionDialog: true, PaperMetadataDialog: true, PaperEditionDialog: true, UTextarea: true } },
@@ -54,10 +54,56 @@ it('required option failures show independent retry actions and retain typed for
 const paper = { id: 'paper', title: '旧标题', revision: 1, description: '', category_id: 'category', status: 'draft', featured: false,
   view_access: 'free', download_access: 'free', assets: [], file_status: 'ready' } as unknown as catalog.CatalogDetail
 function mountPapers() {
-  return mount(defineComponent({ setup: () => () => h(KeepAlive, () => h(PublicPapers, { user: { id: 1, username: 'admin', role: 'admin' } })) }), {
+  return mount(defineComponent({ setup: () => () => h(KeepAlive, () => h(PublicPapers, { user: { id: 1, username: 'admin', role: 'admin', is_super_admin: true } })) }), {
     global: { stubs: { ...uiStubs, CatalogBatchDialog: true, CatalogRevisionDialog: true, PaperMetadataDialog: true, PaperEditionDialog: true, UTextarea: true } },
   })
 }
+it('习题直达链接只预览一次，关闭和返回菜单保留筛选但不重复弹窗', async () => {
+  navigateAdmin('papers', { paper: 'paper', q: '练习', status: 'draft', page: '3' })
+  vi.mocked(catalog.catalogList).mockResolvedValue({ items: [paper], total: 60, has_more: false })
+  const active = ref(true)
+  const wrapper = mount(defineComponent({ setup: () => () => h(KeepAlive, () => active.value
+    ? h(PublicPapers, { user: { id: 1, username: 'admin', role: 'admin', is_super_admin: true } })
+    : h('div', '其他页面')) }), {
+    global: { stubs: { ...uiStubs, CatalogBatchDialog: true, CatalogRevisionDialog: true, PaperMetadataDialog: true, PaperEditionDialog: true, UTextarea: true } },
+  })
+  try {
+    await flushPromises()
+    const state = wrapper.findComponent(CatalogPreviewDialog).props('state')
+    expect(state.previewOpen).toBe(true)
+    expect(catalog.catalogDetail).toHaveBeenCalledTimes(1)
+    expect(new URLSearchParams(adminRoute.query).get('paper')).toBeNull()
+    state.previewOpen = false
+    await flushPromises()
+    navigateAdmin('orders'); active.value = false; await flushPromises()
+    navigateAdmin('papers'); active.value = true; await flushPromises()
+    expect(wrapper.findComponent(CatalogPreviewDialog).props('state').previewOpen).toBe(false)
+    expect(Object.fromEntries(new URLSearchParams(adminRoute.query))).toEqual({ q: '练习', status: 'draft', page: '3' })
+    expect(catalog.catalogDetail).toHaveBeenCalledTimes(1)
+    navigateAdmin('papers', { paper: 'paper' }); await flushPromises()
+    expect(wrapper.findComponent(CatalogPreviewDialog).props('state').previewOpen).toBe(true)
+    expect(catalog.catalogDetail).toHaveBeenCalledTimes(2)
+  } finally { wrapper.unmount() }
+})
+
+it('直达习题加载期间关闭预览，迟到的响应不会重新打开', async () => {
+  let resolve!: (value: catalog.CatalogDetail) => void
+  vi.mocked(catalog.catalogDetail).mockReturnValue(new Promise(done => { resolve = done }))
+  navigateAdmin('papers', { paper: 'paper' })
+  const wrapper = mountPapers()
+  try {
+    await flushPromises()
+    const state = wrapper.findComponent(CatalogPreviewDialog).props('state')
+    expect(state.previewOpen).toBe(true)
+    state.previewOpen = false
+    await flushPromises()
+    resolve(paper); await flushPromises()
+    expect(state.previewOpen).toBe(false)
+    expect(state.preview).toBeNull()
+    expect(catalog.catalogDetail).toHaveBeenCalledTimes(1)
+  } finally { wrapper.unmount() }
+})
+
 it('不选原稿即可创建网盘习题，链接无效时阻止提交', async () => {
   vi.mocked(catalog.createPublication).mockResolvedValue({ ...paper, download_mode: 'external' })
   const wrapper = mountPapers()

@@ -3,10 +3,12 @@
 import asyncio
 import json
 import logging
+from functools import partial
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from app.blocking import run_sync
 from app.config import get_settings
@@ -25,15 +27,23 @@ from app.models import (
     ValidateRequest,
     ValidateResult,
 )
+from app.models.generate_api_responses import (
+    GenerateGetAvailableScopesResponse,
+    GenerateSubmitFeedbackResponse,
+)
+from app.models.responses import GenerationPolicyResponse
 from app.services.generation_control import metered
 from app.services.generation_policy import QUALITY_REVIEW_TIMEOUT, load_policy, runtime_config
 from app.services.generation_results import completed_sections, match_sections, normalize_result
 from app.services.knowledge_scope import knowledge_scope_service
 from app.services.llm_client import OutputTruncated, llm_client
+from app.services.model_json import ModelFormatError
+from app.services.model_json import extract_json as _extract_json
 from app.services.prompt_builder import prompt_builder
 from app.services.provider_failover import run_with_failover, stream_with_health
 from app.services.question_review import previous_question_keys, review_results
 from app.services.rate_limit import allow
+from app.services.review_refill import refill_reviewed
 from app.services.user_store import CurrentUser
 
 logger = logging.getLogger(__name__)
@@ -41,72 +51,31 @@ router = APIRouter(prefix="/api/v1", tags=["生成"])
 settings = get_settings()
 
 
-def _object(value) -> dict:
-    """模型返回的 JSON 必须是结果对象，数组、标量与上游错误都按失败处理。"""
-    if not isinstance(value, dict) or "error" in value:
-        raise ValueError("模型返回的 JSON 不是对象")
-    return value
-
-
-def _extract_json(text: str) -> dict:
-    """从 LLM 返回的文本中提取 JSON，处理思考标签/markdown 包裹等干扰"""
-    text = text.strip()
-
-    # 剥掉推理模型的 <think>...</think> 思考过程
-    import re
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-    # 未闭合的 <think>（输出被截断）：取 </think> 之后 / 或最后一个 { 开始
-    if "<think>" in text and "</think>" not in text:
-        text = text.split("<think>")[0]
-
-    # 去掉可能的 ```json ... ``` 包裹
-    if text.startswith("```"):
-        lines = text.split("\n")
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
-
-    # 尝试找到 JSON 开始和结束位置
-    start = text.find("{")
-    end = text.rfind("}") + 1
-    if start != -1 and end > start:
-        text = text[start:end]
-
-    try:
-        return _object(json.loads(text))
-    except json.JSONDecodeError:
-        # JSON 内部有杂质（如 "Extra data"）：用 JSONDecoder 逐段解析取第一个完整对象
-        try:
-            obj, _ = json.JSONDecoder().raw_decode(text)
-            if isinstance(obj, dict):
-                return _object(obj)
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
-        # 括号配平修复：从第一个 { 起逐字符配平，截取完整对象
-        depth = 0
-        in_str = False
-        esc = False
-        for i, ch in enumerate(text):
-            if esc:
-                esc = False
-                continue
-            if ch == "\\":
-                esc = True
-                continue
-            if ch == '"':
-                in_str = not in_str
-                continue
-            if in_str:
-                continue
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    return _object(json.loads(text[: i + 1]))
-        raise
+def _format_failure(error: Exception, text: str, expected_key: str | None, candidate: dict) -> HTTPException:
+    reason = error.reason if isinstance(error, ModelFormatError) else "invalid_json"
+    logger.warning("模型题目数据解析失败", extra={
+        "format_reason": reason, "expected_container": expected_key, "response_chars": len(text),
+        "json_line": error.line if isinstance(error, ModelFormatError) else None,
+        "json_column": error.column if isinstance(error, ModelFormatError) else None,
+        "candidate_id": candidate.get("id"),
+    })
+    messages = {
+        "no_json": "模型未返回可识别的题目数据",
+        "invalid_json": "模型返回的题目数据格式有误",
+        "incomplete_json": "模型返回的题目数据未完整结束，请减少单次题量后重新生成",
+        "missing_container": "模型返回的内容缺少本次任务所需的数据字段",
+        "container_type": "模型返回的数据字段类型不符合要求",
+        "invalid_root": "模型返回的数据结构不符合要求",
+        "error_object": "模型返回了错误信息，未生成有效题目",
+        "duplicate_key": "模型返回的数据字段重复，无法可靠解析",
+        "ambiguous_json": "模型返回了多份结果，无法确定有效内容",
+        "too_deep": "模型返回的数据嵌套过深，无法解析",
+    }
+    return HTTPException(502, detail={
+        "code": "generation_invalid_format", "reason": reason,
+        "error": messages.get(reason, messages["invalid_json"]),
+        "detail": "查询原请求不会再次调用模型；重新生成会发起新的模型调用。若持续出现，请联系管理员查看解析日志。",
+    })
 
 
 def _merged_llm_params() -> dict:
@@ -122,6 +91,7 @@ def _merged_llm_params() -> dict:
              "timeout": profile["timeout"], "max_tokens": profile["maxTokens"],
              "sampling_mode": profile.get("samplingMode", "configured"),
              "token_parameter": profile.get("tokenParameter", "max_tokens"),
+             "thinking_mode": profile.get("thinkingMode", "default"),
              "id": profile["id"], "_health_kind": "text", "_revision": g["revision"]}
             for profile in g["models"] if profile["enabled"]
         ]}
@@ -134,6 +104,7 @@ def _merged_llm_params() -> dict:
         "max_tokens": int(g.get("maxTokens") or settings.llm_max_tokens),
         "sampling_mode": g.get("samplingMode", "configured"),
         "token_parameter": g.get("tokenParameter", "max_tokens"),
+        "thinking_mode": g.get("thinkingMode", "default"),
         "id": "legacy", "_health_kind": "text", "_revision": g["revision"],
     }
 
@@ -163,35 +134,38 @@ async def _call_llm_and_parse(system_prompt: str, user_message: str, question_co
         if time_budget is not None:
             timeout = min(timeout, time_budget / min(len(candidates), 2))
         async with asyncio.timeout(timeout):
-            raw_response = await llm_client.chat(
-                messages, base_url=candidate["base_url"], model=candidate["model"],
-                api_key=candidate["api_key"], timeout=timeout,
-                max_tokens=min(candidate["max_tokens"], 2048 + 400 * question_count), max_attempts=1,
-                temperature=temperature,
-                sampling_mode=candidate.get("sampling_mode", "configured"),
-                token_parameter=candidate.get("token_parameter", "max_tokens"),
-            )
+            raw_response = ''
+            async def call(payload, *, thinking_mode=None):
+                nonlocal raw_response
+                raw_response = await llm_client.chat(
+                    payload, base_url=candidate["base_url"], model=candidate["model"],
+                    api_key=candidate["api_key"], timeout=timeout,
+                    # 单模型没有备用候选，仅对请求尚未发出的连接错误重连一次；
+                    # llm_client 不重试读写超时，外层原有总时限仍覆盖重连与等待。
+                    max_tokens=candidate["max_tokens"], max_attempts=2 if len(candidates) == 1 else 1,
+                    temperature=temperature,
+                    sampling_mode=candidate.get("sampling_mode", "configured"),
+                    token_parameter=candidate.get("token_parameter", "max_tokens"),
+                    thinking_mode=thinking_mode or candidate.get("thinking_mode", "default"),
+                )
+                return raw_response
             try:
-                result = await run_sync(_extract_json, raw_response)
                 # 只校验任务容器，题目仍交给后续逐题校验，保留部分有效内容。
-                if expected_key is not None and not isinstance(result.get(expected_key), list):
-                    raise ValueError("模型返回了其他任务的数据")
-                return result
+                from app.services.generation_format import parse_response
+                # 已验证 Qwen3 的关闭思考协议；仅出题空正文恢复使用，独立复核保留原设置。
+                can_recover = (expected_key in ('sections', 'questions')
+                               and candidate.get('thinking_mode', 'default') == 'default'
+                               and candidate['model'].lower().rsplit('/', 1)[-1].startswith('qwen3'))
+                return await parse_response(call, messages, expected_key,
+                                            empty_reasoning_call=partial(call, thinking_mode='disabled') if can_recover else None)
             except (ValueError, TypeError, RecursionError) as exc:
-                raise HTTPException(502, detail={"error": "LLM 返回格式异常，请重试"}) from exc
+                raise _format_failure(exc, raw_response, expected_key, candidate) from exc
 
     try:
         async with asyncio.timeout(time_budget):
             return await run_with_failover(candidates, invoke)
     except HTTPException:
         raise
-    except json.JSONDecodeError as e:
-        # raw_response 可能未绑定（llm_client 内部解析响应 JSON 就失败时），分别兜底
-        logger.error("模型返回内容不是有效 JSON: %s", type(e).__name__)
-        raise HTTPException(
-            status_code=502,
-            detail={"error": "LLM 返回格式异常，请重试", "detail": str(e)},
-        ) from e
     except httpx.HTTPStatusError as e:
         logger.error("模型 API 错误: HTTP %s", e.response.status_code)
         raise HTTPException(
@@ -242,15 +216,41 @@ def _require_complete(sections: list[GameResult]) -> None:
 
 
 async def _call_quality_review(system_prompt: str, user_message: str, question_count: int) -> dict:
-    # 独立请求仍由同一计量、限流和 token 预算约束，不自动重试复核或循环重出。
+    # 每批解析与复核仍由同一计量、限流和 token 预算约束，不循环重出。
     return await _call_llm_and_parse(system_prompt, user_message, question_count, temperature=0.1,
                                      expected_key="reviews", time_budget=QUALITY_REVIEW_TIMEOUT)
 
-@router.get("/generation/options", summary="读取由后台模型配置计算的任务等待时限", dependencies=[Depends(no_store)])
+@router.get("/generation/options", response_model=GenerationPolicyResponse, summary="读取由后台模型配置计算的任务等待时限", dependencies=[Depends(no_store)])
 def generation_options(kind: str = "text", user: CurrentUser = Depends(require_user)):
     if kind not in ("text", "image"):
         raise HTTPException(422, detail={"error": "不支持的模型类型"})
     return load_policy(kind).public()
+
+
+class RetryAnalysisRequest(BaseModel):
+    source_request_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+@router.post("/retry-analysis", response_model=BatchGenerateResponse, dependencies=[Depends(no_store)],
+             summary="仅补全原请求未完成的解析与复核")
+@metered("analysis")
+async def retry_analysis(request: RetryAnalysisRequest, http_request: Request, user: CurrentUser = Depends(require_user)):
+    from app.services.generation_control import request_status
+    source = await run_sync(request_status, user.id, request.source_request_id)
+    if source["status"] not in ("succeeded", "failed") or source["cache_expired"]:
+        raise HTTPException(409, detail={"error": "原请求尚未结束或已过期，请先查询原请求"})
+    if source["kind"] not in ("batch", "single", "analysis"):
+        raise HTTPException(400, detail={"error": "该请求不支持补全解析"})
+    result = source["result"] or {}
+    values = ([result] if "questions" in result else result.get("sections")) or (source["error"] or {}).get("partial_sections", [])
+    sections = [GameResult.model_validate(value) for value in values]
+    if not sections or sum(len(section.questions) for section in sections) > 30:
+        raise HTTPException(400, detail={"error": "原请求没有可补全的题目或题量超限"})
+    # 题目与年级只能从当前账号的服务端原结果读取，不能注入他人的试卷或改写题干。
+    context = GenerateRequest(grade=sections[0].grade, subject=sections[0].subject, keyword=sections[0].topic,
+                              difficulty=sections[0].difficulty)
+    await review_results(sections, context, _call_quality_review, generate_analysis=True, only_incomplete=True)
+    return BatchGenerateResponse(sections=sections)
 
 
 @router.post(
@@ -262,7 +262,7 @@ def generation_options(kind: str = "text", user: CurrentUser = Depends(require_u
 )
 @metered("batch")
 async def generate_batch(request: BatchGenerateRequest, http_request: Request, user: CurrentUser = Depends(require_user)):
-    """一次 LLM 调用生成整卷的多个题型"""
+    """先生成整卷题目与答案，再分批补解析并独立复核。"""
     if sum(item.question_count for item in request.items) > 30:
         raise HTTPException(422, detail={"code": "generation_batch_too_large", "error": "每次最多生成 30 道题，请拆分请求"})
     # 1. 知识范围
@@ -332,7 +332,8 @@ async def generate_batch(request: BatchGenerateRequest, http_request: Request, u
         detail = dict(truncated.detail) if isinstance(truncated.detail, dict) else {}
         detail["partial_sections"] = [section.model_dump(mode="json") for section in sections]
         raise HTTPException(truncated.status_code, detail=detail) from truncated
-    await review_results(sections, request, _call_quality_review)
+    await review_results(sections, request, _call_quality_review, generate_analysis=True)
+    await refill_reviewed(sections, request, scope, _call_llm_and_parse, _call_quality_review)
     _require_complete(sections)
     return BatchGenerateResponse(sections=sections)
 
@@ -386,7 +387,8 @@ async def generate_questions(request: GenerateRequest, http_request: Request, us
         item,
         scope, _call_llm_and_parse,
     )
-    await review_results([result], request, _call_quality_review)
+    await review_results([result], request, _call_quality_review, generate_analysis=True)
+    await refill_reviewed([result], request, scope, _call_llm_and_parse, _call_quality_review)
     _require_complete([result])
     return result
 
@@ -396,6 +398,7 @@ async def generate_questions(request: GenerateRequest, http_request: Request, us
     summary="生成题目/游戏（流式，实验性）",
     description="流式返回生成结果，降低首字延迟感知。SSE 格式。注意：为保持流式体验，"
                 "质检无法像非流式那样事后剔除违禁题，仅在流结束时追加 qc_warning 事件告警。",
+    response_class=Response, responses={200: {'content': {'text/event-stream': {'schema': {'type': 'string'}}}}},
 )
 @metered("stream")
 async def generate_questions_stream(request: GenerateRequest, http_request: Request, user: CurrentUser = Depends(require_user)):
@@ -418,7 +421,7 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
             detail={"error": f"暂不支持 {request.grade} 的 {request.subject} 科目"},
         )
 
-    system_prompt = prompt_builder.build_system_prompt(request, scope)
+    system_prompt = prompt_builder.build_system_prompt(request, scope, include_analysis=True)
     user_message = prompt_builder.build_user_message(request.keyword)
     messages = [
         {"role": "system", "content": system_prompt},
@@ -430,15 +433,15 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
     if not candidates or any(not candidate["api_key"] for candidate in candidates):
         raise HTTPException(400, detail={"error": "尚未配置模型，请联系管理员"})
 
-    question_count = request.question_count
     async def candidate_tokens(candidate):
         async with asyncio.timeout(candidate["timeout"]):
             async for token in llm_client.chat_stream(
                 messages, base_url=candidate["base_url"], model=candidate["model"],
                 api_key=candidate["api_key"], timeout=candidate["timeout"],
-                max_tokens=min(candidate["max_tokens"], 2048 + 400 * question_count),
+                max_tokens=candidate["max_tokens"],
                 sampling_mode=candidate.get("sampling_mode", "configured"),
                 token_parameter=candidate.get("token_parameter", "max_tokens"),
+                thinking_mode=candidate.get("thinking_mode", "default"),
             ):
                 yield token
 
@@ -453,11 +456,9 @@ async def generate_questions_stream(request: GenerateRequest, http_request: Requ
             async with asyncio.timeout(candidate["timeout"]):
                 chunks = [token async for token in candidate_tokens(candidate)]
                 try:
-                    data = await run_sync(_extract_json, "".join(chunks))
-                    if not isinstance(data.get("questions"), list):
-                        raise ValueError("模型返回了其他任务的数据")
+                    await run_sync(_extract_json, "".join(chunks), expected_key="questions")
                 except (ValueError, TypeError, RecursionError) as exc:
-                    raise HTTPException(502, detail={"error": "模型返回格式异常"}) from exc
+                    raise _format_failure(exc, "".join(chunks), "questions", candidate) from exc
                 return chunks
 
         for token in await run_with_failover(candidates, collect):
@@ -522,7 +523,7 @@ def get_knowledge_scope(grade: str, subject: str, user: CurrentUser = Depends(re
     "/scope/available",
     summary="获取可用年级/科目列表",
     description="返回后台启用且已有核实的人教版教材目录的年级科目组合",
-)
+ response_model=GenerateGetAvailableScopesResponse, response_model_exclude_unset=True)
 def get_available_scopes(user: CurrentUser = Depends(require_user)):
     """可用年级/科目：字典决定展示什么，年级-科目关联决定组合（后台可编辑）"""
     from app.db import db
@@ -584,7 +585,7 @@ async def validate_oob(request: ValidateRequest, http_request: Request, user: Cu
     "/feedback",
     summary="用户反馈",
     description="收集用户对题目超纲等问题的反馈",
-)
+ response_model=GenerateSubmitFeedbackResponse, response_model_exclude_unset=True)
 def submit_feedback(request: FeedbackRequest, user: CurrentUser = Depends(require_user)):
     """接收用户反馈并落库（后台可查看，重启不丢）"""
     from app.db import db

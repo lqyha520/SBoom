@@ -88,6 +88,15 @@ export const useAuthStore = defineStore('auth', {
 
     async login(username: string, password: string) {
       const u = await api.login(username, password)
+      if ('mfa_required' in u) return u
+      await this.finishLogin(u)
+    },
+
+    async verifyMfa(challenge: string, code: string) {
+      await this.finishLogin(await api.verifyMfa(challenge, code))
+    },
+
+    async finishLogin(u: api.UserInfo) {
       try { localStorage.removeItem('lc_purge:' + u.id) } catch { /* 存储限制不应阻止登录。 */ }
       this.user = u
       rememberUser(u.id)

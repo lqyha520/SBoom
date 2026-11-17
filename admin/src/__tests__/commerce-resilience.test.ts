@@ -13,7 +13,7 @@ vi.mock('../growth', async original => ({ ...await original<typeof import('../gr
 }))
 
 type Plans = Awaited<ReturnType<typeof growth.getPlans>>
-const user = { id: 1, username: 'admin', role: 'admin' }
+const user = { id: 1, username: 'admin', role: 'admin', is_super_admin: true }
 function plans(wechat: boolean, virtual: boolean, virtualEnabled = virtual): Plans {
   return { items: [], checkout_enabled: virtualEnabled ? virtual : wechat, checkout_channel: virtualEnabled ? 'virtual' : 'wechat', ios_enabled: false,
     configuration: { enabled: wechat, ready: wechat, missing: [], ios_enabled: false, payment_callback: '', refund_callback: '' },

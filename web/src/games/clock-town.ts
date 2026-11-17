@@ -1,3 +1,4 @@
+import { contentDeck, rememberContent, validContentHistory, type ContentHistory } from './challenge-journey'
 import { randomInt, shuffle, type Rng } from './random'
 
 export type ClockDifficulty = 'starter' | 'explorer' | 'master'
@@ -18,9 +19,12 @@ export interface ClockRound {
   mistakes: number
   answered: string | null
   finished: boolean
+  dial?: [number,number]
+  dialMistakes?: number
 }
 
-export interface ClockSave {
+export interface ClockSave extends ContentHistory {
+  mode?: 'read' | 'set'
   version: 1
   difficulty: ClockDifficulty
   round: ClockRound
@@ -71,12 +75,10 @@ function buildOptions(hour: number, minute: number, difficulty: ClockDifficulty,
   return shuffle([answer, ...shuffle([...candidates], rng).slice(0, 3)], rng)
 }
 
-export function newClockRound(difficulty: ClockDifficulty, rng: Rng = Math.random): ClockRound {
+export function newClockRound(difficulty: ClockDifficulty, rng: Rng = Math.random, history: string[] = []): ClockRound {
   const minutes = allowedMinutes(difficulty)
-  const times = shuffle(
-    Array.from({ length: 12 }, (_, index) => index + 1).flatMap(hour => minutes.map(minute => ({ hour, minute }))),
-    rng,
-  ).slice(0, CLOCK_QUESTIONS)
+  const pool = Array.from({ length: 12 }, (_, index) => index + 1).flatMap(hour => minutes.map(minute => ({hour,minute})))
+  const times = contentDeck(pool,CLOCK_QUESTIONS,q=>formatClock(q.hour,q.minute),history,rng)
   const questions = times.map(({ hour, minute }) => ({
     hour,
     minute,
@@ -106,8 +108,9 @@ export function newClock(difficulty: ClockDifficulty = 'starter', rng: Rng = Mat
   }
 }
 
-export function clockStars(round: Pick<ClockRound, 'mistakes'>): number {
-  return round.mistakes === 0 ? 3 : round.mistakes === 1 ? 2 : 1
+export function clockStars(round: Pick<ClockRound, 'mistakes' | 'dialMistakes'>): number {
+  const mistakes = round.mistakes + (round.dialMistakes || 0)
+  return mistakes === 0 ? 3 : mistakes === 1 ? 2 : 1
 }
 
 export function clockExplanation(question: Pick<ClockQuestion, 'hour' | 'minute' | 'answer'>): string {
@@ -132,6 +135,7 @@ export function advanceClock(save: ClockSave): 'next' | 'finished' | null {
   if (round.finished || round.answered === null) return null
   if (round.index < CLOCK_QUESTIONS - 1) {
     round.index++
+    round.dial = undefined
     round.answered = null
     return 'next'
   }
@@ -144,12 +148,32 @@ export function advanceClock(save: ClockSave): 'next' | 'finished' | null {
 }
 
 export function restartClock(save: ClockSave, rng: Rng = Math.random): void {
-  save.round = newClockRound(save.difficulty, rng)
+  const history = rememberContent(save,save.difficulty,save.round.questions.map(q=>q.answer))
+  save.round = newClockRound(save.difficulty, rng, history)
 }
 
 export function switchClockDifficulty(save: ClockSave, difficulty: ClockDifficulty, rng: Rng = Math.random): void {
+  rememberContent(save,save.difficulty,save.round.questions.map(q=>q.answer))
   save.difficulty = difficulty
-  save.round = newClockRound(difficulty, rng)
+  save.round = newClockRound(difficulty, rng, save.contentHistory?.[difficulty] || [])
+}
+
+export function turnClock(save: ClockSave, hand: 'hour' | 'minute', delta: number): boolean {
+  if (save.mode !== 'set' || save.round.finished || save.round.answered !== null || ![-1,1].includes(delta)) return false
+  const dial = save.round.dial ||= [12,0]
+  if (hand === 'hour') dial[0] = (dial[0]-1+delta+12)%12+1
+  else {
+    const step = save.difficulty === 'starter' ? 60 : save.difficulty === 'explorer' ? 15 : 5
+    const total = (dial[0]%12*60+dial[1]+delta*step+720)%720
+    dial[0] = Math.floor(total/60) || 12; dial[1] = total%60
+  }
+  return true
+}
+export function submitClockDial(save: ClockSave): boolean | null {
+  if (save.mode !== 'set' || save.round.finished || save.round.answered !== null) return null
+  const [hour,minute] = save.round.dial || [12,0], question = save.round.questions[save.round.index]
+  if (formatClock(hour,minute) !== question.answer) { save.round.dialMistakes = (save.round.dialMistakes || 0)+1; return false }
+  return answerClock(save,question.answer)
 }
 
 function isInt(value: unknown, min: number, max: number): value is number {
@@ -177,12 +201,14 @@ export function restoreClock(raw: string | null): ClockSave | null {
   if (!raw) return null
   try {
     const value = JSON.parse(raw) as ClockSave
-    if (!value || value.version !== 1 || !isClockDifficulty(value.difficulty)) return null
+    if (!validContentHistory(value.contentHistory) || (value.mode !== undefined && !['read','set'].includes(value.mode)) || !value || value.version !== 1 || !isClockDifficulty(value.difficulty)) return null
     const best = value.best as unknown as Record<string, unknown>
     if (!best || !clockDifficulties.every(item => isInt(best[item.id], 0, 3))) return null
     if (!isInt(value.totalCorrect, 0, 1_000_000) || !isInt(value.rounds, 0, 1_000_000)) return null
     const round = value.round
     if (!round || round.version !== 1 || round.difficulty !== value.difficulty) return null
+    if (round.dial !== undefined && (!Array.isArray(round.dial) || round.dial.length !== 2 || !isInt(round.dial[0],1,12) || !allowedMinutes(value.difficulty).includes(round.dial[1]))) return null
+    if (round.dialMistakes !== undefined && !isInt(round.dialMistakes,0,100_000)) return null
     if (!Array.isArray(round.questions) || round.questions.length !== CLOCK_QUESTIONS) return null
     if (!round.questions.every(question => validQuestion(question, value.difficulty))) return null
     if (new Set(round.questions.map(question => question.answer)).size !== CLOCK_QUESTIONS) return null

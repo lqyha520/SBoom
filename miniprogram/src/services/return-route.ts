@@ -1,4 +1,5 @@
 /** Login and inbox targets are rebuilt from a strict public-route allowlist. */
+import { referralSharePath } from './referral'
 const routes: Record<string, readonly string[]> = {
   home: [], library: ['q', 'grade', 'subject', 'category', 'topic'], favorites: [], account: [], downloads: [], recent: [],
   paper: ['id'], topic: ['id'], messages: [], membership: ['contact'], orders: ['id'], closure: [],
@@ -52,7 +53,12 @@ export function routeFromPage(page: { route?: string; options?: Record<string, u
 export function loginUrl(target: string) { return '/pages/login/index?returnTo=' + encodeURIComponent(safeDestination(target)) }
 export function shareCard(kind: 'home' | 'paper' | 'topic', id = '', title = '') {
   // Omitting imageUrl lets WeChat capture the current page.
-  return { title: title.trim().slice(0, 100) || '习题库 · 每天一点进步', path: safeDestination('/pages/' + kind + '/index' + (id ? '?id=' + encodeURIComponent(id) : '')) }
+  return { title: title.trim().slice(0, 100) || '习题库 · 每天一点进步', path: referralSharePath(safeDestination('/pages/' + kind + '/index' + (id ? '?id=' + encodeURIComponent(id) : ''))) }
+}
+
+/** 从个人中心邀请好友时使用首页封面，避免微信截取账号和会员信息。 */
+export function invitationShareCard() {
+  return { ...shareCard('home'), imageUrl: '/static/share/home.jpg' }
 }
 
 /** Share the public paper chosen by a native button, never the private list. */
@@ -65,4 +71,11 @@ export function catalogShare(event: { target?: { dataset?: Record<string, unknow
 /** 朋友圈分享：onShareTimeline 只能分享「当前页面路径」，因此仅返回 title + query。 */
 export function shareTimeline(card = shareCard('home')) {
   return { title: card.title, query: card.path.split('?')[1] || '' }
+}
+
+/** 朋友圈只能打开当前页，个人列表不能以首页标题伪装成公开入口。 */
+export function hidePrivateTimeline() {
+  // #ifdef MP-WEIXIN
+  if (typeof wx !== 'undefined') wx.hideShareMenu({ menus: ['shareTimeline'] })
+  // #endif
 }

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission } from '../permissions'
+import { canAdmin } from '../permissions'
 import { computed, onActivated, ref } from 'vue'
 import { fetchAdminStats, type AdminStats, type UserInfo } from '../api'
 import { catalogList } from '../catalog'
@@ -33,6 +35,7 @@ const tasks = ref([
 ])
 async function loadTask(id: string) {
   const task = tasks.value.find(item => item.id === id)!
+  if (!canAdmin(({ drafts: 'papers', requests: 'resourceRequests', feedback: 'supportCenter', refunds: 'orders' } as Record<string,string>)[id]!)) return
   if (task.loading) return
   task.loading = true; task.error = ''
   try {
@@ -63,7 +66,7 @@ onActivated(refresh)
   <section class="admin-section overview-page" aria-label="运行概览">
     <div class="overview-welcome">
       <div><div class="welcome-date"><UIcon name="i-lucide-calendar-days" class="size-3.5" />{{ dateLabel }}</div><h2>欢迎回来<span v-if="user">，{{ user.username }}</span></h2><p>资料、用户与服务动态，尽在掌握。</p></div>
-      <div class="welcome-actions"><UButton icon="i-lucide-library" label="管理资料" @click="navigateAdmin('papers')" /><UButton icon="i-lucide-chart-no-axes-combined" label="内容数据" color="neutral" variant="outline" @click="navigateAdmin('miniAnalytics')" /></div>
+      <div class="welcome-actions"><UButton v-permission="'papers:view'" icon="i-lucide-library" label="管理资料" @click="navigateAdmin('papers')" /><UButton v-permission="'miniAnalytics:view'" icon="i-lucide-chart-no-axes-combined" label="内容数据" color="neutral" variant="outline" @click="navigateAdmin('miniAnalytics')" /></div>
       <UIcon name="i-lucide-notebook-pen" class="welcome-art" aria-hidden="true" />
     </div>
     <div class="section-toolbar"><h2>平台概况<span class="section-caption">运营数据，一目了然</span></h2><div class="actions-row"><span v-if="updatedAt" class="updated-time">更新于 {{ updatedAt }}</span><UTooltip text="刷新数据"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" size="sm" aria-label="刷新概览" :loading="loading" @click="refresh" /></UTooltip></div></div>
@@ -80,7 +83,7 @@ onActivated(refresh)
       <section class="overview-tasks" aria-label="待办事项">
         <div class="overview-section-heading"><h2><UIcon name="i-lucide-list-checks" class="size-4" />待办事项</h2><span>点击即可前往处理</span></div>
         <div class="task-list">
-          <article v-for="(task, index) in tasks" :key="task.id" class="task-row" :aria-busy="task.loading">
+          <article v-for="(task, index) in tasks.filter(task => canAdmin(({ drafts: 'papers', requests: 'resourceRequests', feedback: 'supportCenter', refunds: 'orders' } as Record<string,string>)[task.id]!))" :key="task.id" class="task-row" :aria-busy="task.loading">
             <button type="button" class="task-action" @click="openTask(task.id)" :aria-label="task.label + ' ' + (task.count ?? '') + ' 前往处理'">
               <span class="task-icon" :class="'task-icon-' + task.id"><UIcon :name="['i-lucide-file-pen-line', 'i-lucide-folder-input', 'i-lucide-messages-square', 'i-lucide-receipt-text'][index]" class="size-5" /></span>
               <span class="task-label">{{ task.label }}</span>
@@ -98,7 +101,7 @@ onActivated(refresh)
           <dl class="service-facts"><dt>密钥加密</dt><dd>{{ stats.server.encryption }}</dd><dt>服务版本</dt><dd>v{{ stats.server.version }}</dd><dt>管理员</dt><dd>{{ stats.admins }} 人</dd></dl>
         </template>
         <p v-else class="service-placeholder">{{ loading ? '正在读取模型配置…' : '暂未获取服务信息，请刷新概览重试。' }}</p>
-        <UButton icon="i-lucide-settings-2" label="模型配置" color="neutral" variant="outline" size="sm" @click="$emit('configure')" />
+        <UButton v-if="canAdmin('llm')" icon="i-lucide-settings-2" label="模型配置" color="neutral" variant="outline" size="sm" @click="$emit('configure')" />
       </section>
     </div>
     <section v-if="stats?.generationUsage" class="usage-section" aria-label="生成用量">

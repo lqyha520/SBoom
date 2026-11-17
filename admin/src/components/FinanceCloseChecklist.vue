@@ -1,0 +1,26 @@
+<script setup lang="ts">
+import { ref, watch } from 'vue'
+import { request } from '../api'
+import { useAdminPage } from '../admin-page'
+import { navigateAdmin } from '../navigation'
+import { canAdmin } from '../permissions'
+import { yuan, dateTime } from '../growth'
+import { financeDateRange } from '../finance-experience'
+interface Checklist { month: string; month_end: string; ended: boolean; as_of: number; archives: { total: number; page: number; items: { admin_id: number; admin_name: string; closing_fen: number }[] } | null; bills: { day: string; reason: string; differences: number }[] | null; costs: { total: number; page: number; items: { id: string; name: string; admin_id: number; spend_fen: number | null; missing_evidence: number }[] } | null; disputes: { total: number; page: number; items: { id: string; title: string }[] } | null }
+const open = ref(false), month = ref(financeDateRange('previous').start.slice(0, 7)), number = ref(1), costPage = ref(1), disputePage = ref(1), value = ref<Checklist | null>(null)
+const page = useAdminPage(async valid => { if (!open.value) return; const result = await request<Checklist>('/api/v1/admin/settlements/month-end?' + new URLSearchParams({ month: month.value, page: String(number.value), cost_page: String(costPage.value), dispute_page: String(disputePage.value) })); if (valid()) { value.value = result; number.value = result.archives?.page ?? 1; costPage.value = result.costs?.page ?? 1; disputePage.value = result.disputes?.page ?? 1 } })
+watch([month, number, costPage, disputePage], () => { value.value = null; void page.load() })
+function toggle(event: Event) { open.value = (event.target as HTMLDetailsElement).open; if (open.value) void page.load() }
+</script>
+<template>
+  <details class="promotion-panel" @toggle="toggle"><summary class="cursor-pointer font-semibold">月末核对清单</summary><div v-if="open" class="field-stack mt-4">
+    <div class="actions-row"><UFormField label="核对月份"><UInput v-model="month" type="month" :max="new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 7)" /></UFormField><UButton label="刷新月末清单" :loading="page.loading.value" variant="outline" @click="page.load" /></div>
+    <UAlert v-if="page.error.value" :title="page.error.value" color="error" /><p v-if="page.loading.value" role="status">正在汇总月末待办…</p>
+    <template v-if="value"><p class="text-xs text-muted">{{ value.month }} · 读取于 {{ dateTime(value.as_of) }}。这是当前未处理事项，处理后刷新；已留档月账保持原版本。{{ value.ended ? '' : '本月尚未结束，先核对资料，下月再留档。' }}</p>
+      <section v-if="value.archives" class="promotion-review-box field-stack"><h4>月度账本待留档 · {{ value.archives.total }} 位推广人</h4><p class="text-xs text-muted">仅列出期末余额非零或本月有核定账本变动的推广人。</p><div v-for="item in value.archives.items" :key="item.admin_id" class="actions-row"><span>{{ item.admin_name || item.admin_id }} · 期末余额 {{ yuan(item.closing_fen) }}</span><UButton label="核对月度账本" variant="link" @click="navigateAdmin('financeMonthly', { admin: String(item.admin_id), month: value!.month })" /></div><p v-if="!value.archives.total">当前范围无需补充留档</p><UPagination v-if="value.archives.total > 20" v-model:page="number" :total="value.archives.total" :items-per-page="20" :disabled="page.loading.value" /></section>
+      <section v-if="value.bills" class="promotion-review-box field-stack"><h4>微信账单待核对 · {{ value.bills.length }} 天</h4><p class="text-xs text-muted">检查本月有本地微信收款或退款的日期；不含虚拟支付。当天账单须在渠道生成后处理。</p><div v-for="item in value.bills" :key="item.day" class="actions-row"><span>{{ item.day }} · {{ item.reason }}</span><UButton label="进入账单核对" variant="link" @click="navigateAdmin('financeBills', { section: 'wechat', day: item.day })" /></div><p v-if="!value.bills.length">当前范围没有待核对日期</p></section>
+      <section v-if="value.costs" class="promotion-review-box field-stack"><h4>成本或原始附件待补齐 · {{ value.costs.total }} 个活动</h4><p class="text-xs text-muted">检查月末前创建的活动当前资料；旧记录可补登记原始凭据及附件。</p><div v-for="item in value.costs.items" :key="item.id" class="actions-row"><span>{{ item.name }} · {{ item.spend_fen === null ? '此前累计未填写；' : '' }}{{ item.missing_evidence }} 笔未关联原始附件</span><UButton label="查看活动成本" variant="link" @click="navigateAdmin('financeExpenses', { campaign: item.id })" /><UButton v-if="canAdmin('referrals')" label="补充投入资料" variant="link" @click="navigateAdmin('referrals', { section: 'campaigns', admin: String(item.admin_id), detail: item.id, expenses: '1' })" /></div><p v-if="!value.costs.total">当前范围成本资料已补齐</p><UPagination v-if="value.costs.total > 20" v-model:page="costPage" :total="value.costs.total" :items-per-page="20" :disabled="page.loading.value" /></section>
+      <section v-if="value.disputes" class="promotion-review-box field-stack"><h4>未结束异议 · {{ value.disputes.total }} 条</h4><div v-for="item in value.disputes.items" :key="item.id" class="actions-row"><span>{{ item.title }}</span><UButton label="处理此异议" variant="link" @click="navigateAdmin('financeSettlements', { section: 'disputes', dispute: item.id })" /></div><p v-if="!value.disputes.total">当前范围没有未结束异议</p><UPagination v-if="value.disputes.total > 20" v-model:page="disputePage" :total="value.disputes.total" :items-per-page="20" :disabled="page.loading.value" /></section>
+    </template>
+  </div></details>
+</template>

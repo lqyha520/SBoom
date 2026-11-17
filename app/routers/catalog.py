@@ -7,10 +7,29 @@ from pydantic import ValidationError
 
 from app.blocking import run_sync
 from app.deps import require_admin
+from app.http_contracts import binary_responses
 from app.http_limits import limited_body
 from app.library_deps import no_store, optional_mini_user, require_mini_user
 from app.library_files import asset_response
 from app.models.catalog import CatalogCreate, CatalogFavorite, CatalogUpdate, CatalogWindow, TypeAccessUpdate
+from app.models.catalog_api_responses import (
+    CatalogAdminPaperResponse,
+    CatalogAdminPapersResponse,
+    CatalogAdminSummaryResponse,
+    CatalogCatalogWindowResponse,
+    CatalogCreateResponse,
+    CatalogDownloadResponse,
+    CatalogFavoriteResponse,
+    CatalogImportEditionResponse,
+    CatalogImportPaperResponse,
+    CatalogPaperResponse,
+    CatalogPapersResponse,
+    CatalogSourcesResponse,
+    CatalogSummaryResponse,
+    CatalogTypeRulesResponse,
+    CatalogUpdateResponse,
+    CatalogUpdateTypeRuleResponse,
+)
 from app.services import catalog_access, catalog_import
 from app.services import public_catalog as catalog
 from app.services.mini_auth import MiniUser
@@ -20,17 +39,17 @@ router = APIRouter(prefix="/api/v1/catalog", tags=["公共试卷库"], dependenc
 admin_router = APIRouter(prefix="/api/v1/admin/catalog", tags=["公共试卷管理"], dependencies=[Depends(no_store)])
 
 
-@router.post("/window")
+@router.post("/window", response_model=CatalogCatalogWindowResponse, response_model_exclude_unset=True)
 def catalog_window(body: CatalogWindow, user: MiniUser | None = Depends(optional_mini_user)):
     return catalog.revalidate_window(user.id if user else None, body.ids)
 
 
-@router.get("/summary")
+@router.get("/summary", response_model=CatalogSummaryResponse, response_model_exclude_unset=True)
 def summary(user: MiniUser | None = Depends(optional_mini_user)):
     return catalog.summary(user.id if user else None)
 
 
-@router.get("/papers")
+@router.get("/papers", response_model=CatalogPapersResponse, response_model_exclude_unset=True)
 def papers(q: str = Query("", max_length=120), grade: str = Query("", max_length=80),
            subject: str = Query("", max_length=80), category: str = Query("", max_length=60),
            favorite: bool = False, downloaded: bool = False, limit: int = Query(20, ge=1, le=50),
@@ -49,53 +68,50 @@ def papers(q: str = Query("", max_length=120), grade: str = Query("", max_length
     return result
 
 
-@router.get("/papers/{catalog_id}")
+@router.get("/papers/{catalog_id}", response_model=CatalogPaperResponse, response_model_exclude_unset=True)
 def paper(catalog_id: str, user: MiniUser | None = Depends(optional_mini_user)):
     return catalog.get_paper(user.id if user else None, catalog_id)
 
 
-@router.put("/papers/{catalog_id}/favorite")
+@router.put("/papers/{catalog_id}/favorite", response_model=CatalogFavoriteResponse, response_model_exclude_unset=True)
 def favorite(catalog_id: str, body: CatalogFavorite, user: MiniUser = Depends(require_mini_user)):
     return catalog.favorite_paper(user.id, catalog_id, body.favorite)
 
 
-@router.post("/papers/{catalog_id}/download")
+@router.post("/papers/{catalog_id}/download", response_model=CatalogDownloadResponse, response_model_exclude_unset=True)
 def download(catalog_id: str, edition: Literal["original", "student", "answers"] = "original", user: MiniUser = Depends(require_mini_user)):
     return catalog.request_download(user.id, catalog_id, edition)
 
 
-@router.get("/papers/{catalog_id}/assets/{asset_id}")
+@router.get("/papers/{catalog_id}/assets/{asset_id}", response_class=Response, responses=binary_responses('application/pdf', 'image/jpeg', 'image/png', 'image/webp', partial=True))
 def asset(catalog_id: str, asset_id: str, user: MiniUser | None = Depends(optional_mini_user)):
     item = catalog.get_asset(catalog_id, asset_id, user_id=user.id if user else None)
-    if item.get("limited_preview"):
-        from app.library_files import limited_preview
-        return limited_preview(item)
     cache = "private, max-age=86400" if item.get("cache_public_preview") and item["kind"] != "pdf" else None
     return asset_response(item, cache_control=cache)
 
 
-@admin_router.get("/type-rules")
+@admin_router.get("/type-rules", response_model=CatalogTypeRulesResponse, response_model_exclude_unset=True)
 def type_rules(user: CurrentUser = Depends(require_admin)):
     return catalog_access.list_type_rules()
 
 
-@admin_router.put("/type-rules/{question_type}")
+@admin_router.put("/type-rules/{question_type}", response_model=CatalogUpdateTypeRuleResponse, response_model_exclude_unset=True)
 def update_type_rule(question_type: str, body: TypeAccessUpdate, user: CurrentUser = Depends(require_admin)):
     return catalog_access.update_type_rule(question_type, body)
 
 
-@admin_router.get("/summary")
+@admin_router.get("/summary", response_model=CatalogAdminSummaryResponse, response_model_exclude_unset=True)
 def admin_summary(user: CurrentUser = Depends(require_admin)):
-    return catalog.admin_summary()
+    return catalog.admin_summary(user.id)
 
 
-@admin_router.get("/sources")
+@admin_router.get("/sources", response_model=CatalogSourcesResponse, response_model_exclude_unset=True)
 def sources(q: str = Query("", max_length=120), limit: int = Query(20, ge=1, le=50),
             offset: int = Query(0, ge=0, le=100000), user: CurrentUser = Depends(require_admin)):
     return catalog.list_sources(user.id, q, limit, offset)
 
 
-@admin_router.get("/papers")
+@admin_router.get("/papers", response_model=CatalogAdminPapersResponse, response_model_exclude_unset=True)
 def admin_papers(q: str = Query("", max_length=120), status: Literal["", "draft", "published", "withdrawn"] = "",
                  limit: int = Query(20, ge=1, le=50), offset: int = Query(0, ge=0, le=100000),
                  grade: str = Query("", max_length=80), subject: str = Query("", max_length=80),
@@ -105,7 +121,7 @@ def admin_papers(q: str = Query("", max_length=120), status: Literal["", "draft"
                                limit=limit, offset=offset, admin=True, status=status, access=access)
 
 
-@admin_router.post("/papers", status_code=201)
+@admin_router.post("/papers", status_code=201, response_model=CatalogCreateResponse, response_model_exclude_unset=True)
 def create(body: CatalogCreate, user: CurrentUser = Depends(require_admin)):
     return catalog.create_paper(user.id, body)
 
@@ -118,7 +134,7 @@ async def _pdf_body(request: Request, limit: int):
     return await limited_body(request, limit, error="PDF 不能超过 32 MB")
 
 
-@admin_router.post("/import", status_code=201)
+@admin_router.post("/import", status_code=201, response_model=CatalogImportPaperResponse, response_model_exclude_unset=True)
 @catalog_import.admitted_import
 async def import_paper(request: Request,
                        title: str = Query("", max_length=240), grade: str = Query("", max_length=80),
@@ -150,16 +166,18 @@ async def import_paper(request: Request,
     return await run_sync(catalog.create_paper, user.id, body)
 
 
-@admin_router.post("/papers/{catalog_id}/editions/import")
+@admin_router.post("/papers/{catalog_id}/editions/import", response_model=CatalogImportEditionResponse, response_model_exclude_unset=True)
 @catalog_import.admitted_import
 async def import_edition(catalog_id: str, request: Request,
                          kind: Literal["student", "answers"] = Query("answers"),
                          revision: int | None = Query(None, ge=1), confirm_publication: bool = False,
                          user: CurrentUser = Depends(require_admin)):
     """导入一份外部 PDF 直接挂为该资料的打印版本（默认答案解析版），不单独创建公共条目。"""
+    from app.admin_permissions import require
     from app.models.engagement import EditionInput
     from app.services import catalog_editions
-
+    if confirm_publication:
+        require(user, 'papers', 'publish')
     detail = await run_sync(catalog.get_paper, user.id, catalog_id, admin=True)
     if revision is not None and revision != detail["revision"]:
         raise HTTPException(409, detail={"error": "资料已更新，请刷新后重试"})
@@ -173,22 +191,30 @@ async def import_edition(catalog_id: str, request: Request,
     return await run_sync(catalog_editions.assign, user.id, catalog_id, body)
 
 
-@admin_router.get("/papers/{catalog_id}")
+@admin_router.get("/papers/{catalog_id}", response_model=CatalogAdminPaperResponse, response_model_exclude_unset=True)
 def admin_paper(catalog_id: str, user: CurrentUser = Depends(require_admin)):
     return catalog.get_paper(user.id, catalog_id, admin=True)
 
 
-@admin_router.put("/papers/{catalog_id}")
+@admin_router.put("/papers/{catalog_id}", response_model=CatalogUpdateResponse, response_model_exclude_unset=True)
 def update(catalog_id: str, body: CatalogUpdate, user: CurrentUser = Depends(require_admin)):
+    from app.admin_permissions import require
+    current = catalog.get_paper(user.id, catalog_id, admin=True)
+    if body.status != current['status'] or body.confirm_publication:
+        require(user, 'papers', 'publish')
     return catalog.update_paper(user.id, catalog_id, body)
 
 
 @admin_router.delete("/papers/{catalog_id}", status_code=204)
 def delete(catalog_id: str, revision: int = Query(ge=1), user: CurrentUser = Depends(require_admin)):
-    catalog.delete_paper(catalog_id, revision)
+    catalog.delete_paper(catalog_id, revision, admin_id=user.id)
     return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 
-@admin_router.get("/papers/{catalog_id}/assets/{asset_id}")
+@admin_router.get("/papers/{catalog_id}/assets/{asset_id}", response_class=Response, responses=binary_responses('application/pdf', 'image/jpeg', 'image/png', 'image/webp', partial=True))
 def admin_asset(catalog_id: str, asset_id: str, user: CurrentUser = Depends(require_admin)):
-    return asset_response(catalog.get_asset(catalog_id, asset_id, admin=True))
+    from app.admin_permissions import require
+    asset = catalog.get_asset(catalog_id, asset_id, admin=True, user_id=user.id)
+    if asset['mime_type'] == 'application/pdf':
+        require(user, 'papers', 'export')
+    return asset_response(asset)

@@ -45,7 +45,7 @@ class CatalogDeliveryContracts(fixtures.PublicCatalogContracts):
         self.assertEqual(self.client.post(path + '/download').status_code, 404)
         self.assertEqual(self.client.get('/api/v1/catalog/papers?downloaded=true').json()['total'], 0)
         self.sign_in(self.admin)
-        catalog_ops.batch(SimpleNamespace(action='published', items=[SimpleNamespace(id=item['id'], revision=withdrawn['revision'])]))
+        catalog_ops.batch(SimpleNamespace(action='published', items=[SimpleNamespace(id=item['id'], revision=withdrawn['revision'])]), self.admin.id)
         self.assertEqual(self.client.get(path).status_code, 200)
 
     def test_vip_links_are_protected_and_old_pdf_urls_are_disabled_in_link_mode(self):

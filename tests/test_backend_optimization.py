@@ -94,7 +94,7 @@ class OptimizationContracts(unittest.TestCase):
         self.addCleanup(self.stack.close)
         pg_support.case_database(self.stack)
         database.init_db()
-        self.user = user_store.create_user("optimization-admin", "test-password", role="admin")
+        self.user = user_store.create_user("optimization-admin", "test-password", role="admin", is_super_admin=True)
         app = FastAPI()
         app.include_router(admin.router)
         self.client = self.stack.enter_context(TestClient(app))

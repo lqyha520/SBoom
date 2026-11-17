@@ -1,3 +1,5 @@
+import { optionPath } from './admin-options'
+import type { Referral } from '../../shared/referral'
 import { request } from './api'
 import { downloadBlob } from '../../shared/download'
 import type { Page } from './catalog'
@@ -21,13 +23,14 @@ export interface Refund { id: string; reason: string; reply: string; status: 're
 export interface Order { id: string; user_id: string | null; username: string; nickname: string; plan_name: string; plan_days: number; amount_fen: number; status: 'created' | 'pending' | 'paid' | 'closed' | 'refunded'; payment_channel: PaymentChannel; virtual_env: number; virtual_offer_id: string; virtual_product_id: string; virtual_order_id: string; virtual_order_type: number; device_platform: string; delivered_at: number | null; revision: number; created_at: number; paid_at: number | null; expires_at: number; transaction_id: string | null; refund: Refund | null }
 export { orderFilterLabels as orderStatuses, adminRefundLabels as refundStatuses } from '../../shared/commerce'
 export interface OrderFilter { status?: string; q?: string; start_date?: string; end_date?: string }
-export interface Reconciliation { id: string; bill_date: string; status: 'running' | 'complete' | 'error'; error: string; created_at: number; summary: { wechat_paid_fen?: number; wechat_refunded_fen?: number; local_paid_fen?: number; local_refunded_fen?: number; differences?: number; wechat_orders?: number; local_orders?: number }; differences?: { order_id: string; refund_id: string; reason: string; remote_fen: number | null; local_fen: number | null }[] }
+export interface Order { referral?: Referral }
+export interface Reconciliation { differences_complete?: boolean; id: string; bill_date: string; status: 'running' | 'complete' | 'error'; error: string; created_at: number; summary: { wechat_paid_fen?: number; wechat_refunded_fen?: number; local_paid_fen?: number; local_refunded_fen?: number; differences?: number; wechat_orders?: number; local_orders?: number }; differences?: { order_id: string; refund_id: string; reason: string; remote_fen: number | null; local_fen: number | null }[] }
 export const yuan = (fen: number) => '¥' + (fen / 100).toFixed(2)
 export const dateTime = (stamp: number | null) => stamp ? new Date(stamp * 1000).toLocaleString('zh-CN', { hour12: false }) : '—'
 export const choices = (labels: Record<string, string>) => Object.entries(labels).map(([value, label]) => ({ value, label }))
 export function change<T>(path: string, adminId: number, body?: unknown, method = 'POST') { return request<T>(path, { method, headers: { 'Content-Type': 'application/json', 'X-Workspace-User': String(adminId) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }) }
 const catalog = '/api/v1/admin/catalog', base = '/api/v1/admin/engagement', commerce = '/api/v1/admin/commerce'
-export const getTags = () => request<{ items: CatalogTag[] }>(catalog + '/tags')
+export const getTags = () => request<{ items: CatalogTag[] }>(optionPath('tags', 'catalogTags', catalog + '/tags'))
 export const saveTag = (admin: number, tag: Omit<CatalogTag, 'id' | 'paper_count'>, id = '') => change<CatalogTag>(catalog + '/tags' + (id ? '/' + encodeURIComponent(id) : ''), admin, tag, id ? 'PUT' : 'POST')
 export const removeTag = (admin: number, item: CatalogTag) => change<void>(catalog + '/tags/' + item.id + '?revision=' + item.revision, admin, undefined, 'DELETE')
 export const assignTags = (admin: number, id: string, revision: number, tag_ids: string[]) => change<{ revision: number; tags: CatalogTag[] }>(catalog + '/papers/' + encodeURIComponent(id) + '/labels', admin, { revision, tag_ids }, 'PUT')
@@ -38,7 +41,7 @@ export const resolveRequest = (admin: number, item: ResourceRequest) => change<R
 export const getClosures = (status = '', offset = 0) => request<Page<Closure>>(base + '/closures?' + new URLSearchParams({ status, offset: String(offset) }))
 export const reviewClosure = (admin: number, item: Closure, action: 'approve' | 'reject', reply: string, confirm_deletion: boolean) => change<Closure>(base + '/closures/' + item.id, admin, { revision: item.revision, action, reply, confirm_deletion }, 'PUT')
 export const getDelivery = () => request<{ available: boolean; template_id: string; delivery_counts: Record<string, number> }>(base + '/delivery-status')
-export const getPlans = () => request<{ items: Plan[]; checkout_enabled: boolean; checkout_channel: PaymentChannel; ios_enabled: boolean; configuration: PaymentConfig; virtual_configuration: VirtualPaymentConfig }>(commerce + '/plans')
+export const getPlans = () => request<{ items: Plan[]; checkout_enabled: boolean; checkout_channel: PaymentChannel; ios_enabled: boolean; configuration: PaymentConfig; virtual_configuration: VirtualPaymentConfig }>(optionPath('payment', 'membershipPlans', commerce + '/plans'))
 export const savePlan = (admin: number, plan: PlanInput, id = '') => change<Plan>(commerce + '/plans' + (id ? '/' + encodeURIComponent(id) : ''), admin, plan, id ? 'PUT' : 'POST')
 export const getCards = (status = '', offset = 0, q = '') => request<{ items: MembershipCard[]; total: number; has_more: boolean }>(commerce + '/cards?' + new URLSearchParams({ status, offset: String(offset), q }))
 export const createCards = (admin: number, days: number, quantity: number, expires_at: number | null) => change<{ items: { code: string; days: number; expires_at: number | null }[] }>(commerce + '/cards', admin, { days, quantity, expires_at })

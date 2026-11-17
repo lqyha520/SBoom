@@ -212,14 +212,32 @@ def _only_live(address, **kwargs):
 class ProviderIpFallback(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         provider_policy._edges.clear()
+        provider_policy._failed_ips.clear()
 
     def tearDown(self):
         provider_policy._edges.clear()
+        provider_policy._failed_ips.clear()
 
     def test_single_address_needs_no_probe(self):
         with patch.object(socket, "create_connection", side_effect=AssertionError("不应发起探测")) as create:
             self.assertEqual(reachable_ip([LIVE_IP], 443), LIVE_IP)
         create.assert_not_called()
+
+    async def test_failed_tls_address_is_skipped_on_next_poll_without_resubmitting(self):
+        sent = []
+        request = httpx.Request("GET", f"https://{DEAD_IP}/tasks", headers={"Host": "provider.invalid"},
+                                extensions={"sni_hostname": "provider.invalid"})
+        provider_policy.record_transport_failure(httpx.ConnectTimeout("TLS timed out", request=request))
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (DEAD_IP, 443)),
+                     (socket.AF_INET, socket.SOCK_STREAM, 6, "", (LIVE_IP, 443))]
+        with patch.object(get_settings(), "provider_allow_private", False), \
+                patch.object(socket, "getaddrinfo", return_value=addresses):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req: sent.append(req) or httpx.Response(200)),
+                                         event_hooks={"request": [pin_provider_request]}) as client:
+                await client.get("https://provider.invalid/tasks")
+        self.assertEqual(sent[0].url.host, LIVE_IP)
+        self.assertEqual(sent[0].headers["host"], "provider.invalid")
+        self.assertEqual(sent[0].extensions["sni_hostname"], "provider.invalid")
 
     def test_unreachable_first_address_falls_back_to_the_next(self):
         with patch.object(socket, "create_connection", side_effect=_probe) as create:
@@ -330,4 +348,5 @@ class AssetDeliveryClassification(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(HTTPException) as error:
                 await service.generate_image(self.CONFIG, "fixture")
         self.assertEqual(error.exception.status_code, 504)
-        self.assertNotIn("code", error.exception.detail)
+        self.assertEqual(error.exception.detail["code"], "image_result_unknown")
+        self.assertIs(error.exception.detail["failover_safe"], False)

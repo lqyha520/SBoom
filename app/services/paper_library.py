@@ -12,9 +12,9 @@ from fastapi import HTTPException
 from app.config import get_settings
 from app.constants import UPLOAD_LEASE
 from app.db import db
-from app.models.library import ArchiveCreate, ArchiveUpdate
+from app.models.library import MAX_MERGED_PAGES, ArchiveCreate, ArchiveUpdate, snapshot_papers
 from app.services.file_retention import enqueue
-from app.services.paper_storage import storage_for, thumbnail, unpack_bundle
+from app.services.paper_storage import MAX_PAGES, storage_for, thumbnail, unpack_bundle
 from app.sql_utils import escape_like
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 SUMMARY_COLUMNS = """a.id, a.source_id, a.version, a.title, a.grade, a.subject, a.keyword,
     a.question_count, a.folder_id, f.name AS folder_name, a.group_id, a.group_name, a.favorite,
     a.file_status, a.file_error, a.upload_started_at, a.page_count, a.created_at, a.updated_at,
+    (SELECT id FROM catalog_papers WHERE paper_id = a.id) AS publication_id,
     (SELECT id FROM paper_assets WHERE paper_id = a.id AND kind IN ('thumbnail', 'page') AND page_number = 1 ORDER BY CASE WHEN kind = 'thumbnail' THEN 0 ELSE 1 END LIMIT 1) AS thumbnail_id"""
 
 
@@ -55,10 +56,12 @@ def _summary(row) -> dict:
 
 def _assets(conn, paper_id: str):
     rows = conn.execute(
-        "SELECT id, kind, page_number, mime_type, byte_size FROM paper_assets WHERE paper_id = ? AND kind <> 'thumbnail' ORDER BY page_number",
+        "SELECT id, kind, page_number, mime_type, byte_size FROM paper_assets WHERE paper_id = ? AND kind <> 'thumbnail' "
+        "ORDER BY page_number, CASE WHEN kind = 'pdf' THEN 0 ELSE 1 END",
         (paper_id,),
     ).fetchall()
-    return [{**dict(row), "url": f"/api/v1/library/assets/{row['id']}"} for row in rows]
+    return [{**dict(row), **({"kind": "pdf", "edition": "answers", "label": "答案 PDF"} if row["kind"] == "answers_pdf" else {}),
+             "url": f"/api/v1/library/assets/{row['id']}"} for row in rows]
 
 
 def get_paper(user_id: int, paper_id: str) -> dict:
@@ -83,9 +86,10 @@ def create_paper(user_id: int, request: ArchiveCreate):
     except (ValueError, TypeError, UnicodeError) as exc:
         raise HTTPException(422, detail={"error": "试卷快照包含无效数据，请检查题目与样式后重试"}) from exc
     if len(encoded) > 2 * 1024 * 1024:
-        raise HTTPException(413, detail={"error": "单份试卷内容不能超过 2 MB"})
+        raise HTTPException(413, detail={"error": "本次归档内容不能超过 2 MB，请减少合并的试卷数量"})
     fingerprint = hashlib.sha256(encoded).hexdigest()
     paper = snapshot["paper"]
+    papers = snapshot_papers(snapshot)
     now = int(time.time())
     with db(content_user=str(user_id)) as conn:
         replay = conn.execute(
@@ -116,8 +120,9 @@ def create_paper(user_id: int, request: ArchiveCreate):
                 "keyword, question_count, snapshot_json, folder_id, group_id, group_name, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (paper_id, user_id, request.source_id, request.request_id, fingerprint, version,
-                 paper["title"].strip() or paper["grade"] + paper["subject"] + "试卷", paper["grade"], paper["subject"],
-                 paper["keyword"], sum(len(section["data"]["questions"]) for section in paper["sections"]), payload,
+                 snapshot.get("collection_title", "").strip() or paper["title"].strip() or paper["grade"] + paper["subject"] + "试卷", paper["grade"], paper["subject"],
+                 "；".join(dict.fromkeys(item["keyword"] for item in papers))[:2000],
+                 sum(len(section["data"]["questions"]) for item in papers for section in item["sections"]), payload,
                  request.folder_id, request.group_id, request.group_name.strip(), now, now),
             )
     return get_paper(user_id, paper_id)
@@ -183,19 +188,65 @@ def _cleanup(files):
     drain()
 
 
+def _deletion_item(conn, user_id: int, paper_id: str):
+    row = conn.execute("SELECT title, file_status, upload_started_at FROM paper_archives WHERE id = ? AND user_id = ?",
+                       (paper_id, user_id)).fetchone()
+    if not row:
+        return {"id": paper_id, "title": None, "reason": "试卷不存在或无权操作", "storage_bytes": 0}
+    reason = None
+    for table, message in (
+        ("catalog_papers", "已关联公共库（含草稿或下架条目）"),
+        ("catalog_versions", "被公共资料的修订历史引用"),
+        ("catalog_print_editions", "被公共资料的打印版本引用"),
+        ("catalog_edition_history", "被公共资料的打印版本历史引用"),
+    ):
+        if conn.execute(f"SELECT 1 FROM {table} WHERE paper_id = ?", (paper_id,)).fetchone():
+            reason = message
+            break
+    if not reason and row["file_status"] == "uploading" and row["upload_started_at"] > time.time() - UPLOAD_LEASE:
+        reason = "文件正在上传，请完成后重试"
+    size = conn.execute("SELECT COALESCE(SUM(byte_size), 0) FROM paper_assets WHERE paper_id = ?", (paper_id,)).fetchone()[0]
+    return {"id": paper_id, "title": row["title"], "reason": reason, "storage_bytes": size}
+
+
+def preview_delete(user_id: int, paper_ids: list[str]):
+    with db(read_only_snapshot=True) as conn:
+        items = [_deletion_item(conn, user_id, paper_id) for paper_id in dict.fromkeys(paper_ids)]
+    removable = [item for item in items if not item["reason"]]
+    return {"items": items, "deletable_count": len(removable),
+            "reclaimable_bytes": sum(item["storage_bytes"] for item in removable)}
+
+
+def _remove_archive(conn, user_id: int, paper_id: str):
+    assets = conn.execute("SELECT storage, storage_key FROM paper_assets WHERE paper_id = ?", (paper_id,)).fetchall()
+    # 与归档删除一同提交回收任务；磁盘暂时不可用时由维护任务重试，不影响容量释放。
+    enqueue(conn, [(row["storage"], row["storage_key"]) for row in assets])
+    conn.execute("DELETE FROM paper_archives WHERE id = ? AND user_id = ?", (paper_id, user_id))
+
+
 def delete_paper(user_id: int, paper_id: str):
     with db(content_user=str(user_id)) as conn:
         _owned(conn, user_id, paper_id)
-        if conn.execute("SELECT id FROM catalog_papers WHERE paper_id = ?", (paper_id,)).fetchone():
-            raise HTTPException(409, detail={"error": "试卷已加入公共库，请先在管理后台删除对应条目"})
-        if conn.execute("SELECT id FROM catalog_versions WHERE paper_id = ?", (paper_id,)).fetchone():
-            raise HTTPException(409, detail={"error": "此原稿属于公共资料的修订历史，请先处理公共条目"})
-        if conn.execute("SELECT 1 FROM catalog_edition_history WHERE paper_id = ?", (paper_id,)).fetchone():
-            raise HTTPException(409, detail={"error": "此原稿属于公共资料的打印版本，请先处理公共条目"})
-        assets = conn.execute("SELECT storage, storage_key FROM paper_assets WHERE paper_id = ?", (paper_id,)).fetchall()
-        enqueue(conn, [(row["storage"], row["storage_key"]) for row in assets])
-        conn.execute("DELETE FROM paper_archives WHERE id = ? AND user_id = ?", (paper_id, user_id))
-    _cleanup([(row["storage"], row["storage_key"]) for row in assets])
+        item = _deletion_item(conn, user_id, paper_id)
+        if item["reason"]:
+            raise HTTPException(409, detail={"error": item["reason"] + "，已保留此试卷"})
+        _remove_archive(conn, user_id, paper_id)
+
+
+def batch_delete(user_id: int, paper_ids: list[str]):
+    deleted, skipped, released = [], [], 0
+    # 用户锁与上传互斥，共享内容锁与公共库发布/修订的独占锁互斥。
+    # 确认时重新检查全部引用，不信任预览或浏览器提供的可删除状态。
+    with db(content_user=str(user_id)) as conn:
+        for paper_id in dict.fromkeys(paper_ids):
+            item = _deletion_item(conn, user_id, paper_id)
+            if item["reason"]:
+                skipped.append(item)
+                continue
+            _remove_archive(conn, user_id, paper_id)
+            deleted.append(paper_id)
+            released += item["storage_bytes"]
+    return {"deleted_ids": deleted, "skipped": skipped, "released_bytes": released}
 
 
 def publish_bundle(user_id: int, paper_id: str, data):
@@ -204,7 +255,9 @@ def publish_bundle(user_id: int, paper_id: str, data):
         ready = current["file_status"] == "ready"
     if ready:
         return get_paper(user_id, paper_id)
-    files = unpack_bundle(data)
+    snapshot = get_paper(user_id, paper_id)["snapshot"]
+    files = unpack_bundle(data, max_pages=MAX_MERGED_PAGES if snapshot.get("schema_version") == 2 else MAX_PAGES,
+                          separate_answers=snapshot["export_options"].get("separate_answers", False))
     files.extend(("thumbnail", page, "image/jpeg", thumbnail(raw))
                  for kind, page, mime, raw in list(files) if kind == "page")
     size = sum(len(content) for _, _, _, content in files)
@@ -238,6 +291,8 @@ def publish_bundle(user_id: int, paper_id: str, data):
         for kind, page, mime, content in files:
             if kind == "pdf":
                 filename = "paper.pdf"
+            elif kind == "answers_pdf":
+                filename = "answers.pdf"
             elif kind == "thumbnail":
                 filename = "thumbnail.jpg" if page == 1 else f"thumbnail-{page}.jpg"
             else:

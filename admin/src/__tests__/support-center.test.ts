@@ -10,7 +10,7 @@ import * as experience from '../experience'
 vi.mock('../experience', async original => ({ ...await original<typeof import('../experience')>(),
   getFeedback: vi.fn(), getFeedbackDetail: vi.fn(), getSupport: vi.fn(), saveFeedback: vi.fn(),
 }))
-const user = { id: 1, username: 'admin', role: 'admin' }
+const user = { id: 1, username: 'admin', role: 'admin', is_super_admin: true }
 const item: experience.Feedback = { id: 'feedback-1', catalog_id: null, paper_title: '', username: 'buyer', nickname: '用户',
   membership: 'regular', is_vip: false, membership_status: 'regular', vip_expires_at: null,
   kind: 'other', body: '需要协助', status: 'pending', reply: '', internal_note: '', revision: 1, updated_at: 1 }

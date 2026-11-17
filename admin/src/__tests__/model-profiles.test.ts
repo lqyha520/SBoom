@@ -5,7 +5,7 @@ describe('多模型草稿与请求', () => {
   it('兼容原配置并沿用密钥绑定 ID', () => {
     const drafts = modelDrafts({ baseUrl: 'https://text.test/v1', model: 'old', timeout: 60, hasKey: true }, 'text')
     expect(drafts).toHaveLength(1)
-    expect(drafts[0]).toMatchObject({ id: 'legacy', apiKey: '', hasKey: true, enabled: true })
+    expect(drafts[0]).toMatchObject({ id: 'legacy', apiKey: '', hasKey: true, enabled: true, thinkingMode: 'default' })
     expect(textPayload(drafts).models[0]).not.toHaveProperty('hasKey')
   })
   it('空列表不恢复旧配置，新模型不复用已有 ID', () => {
@@ -30,10 +30,12 @@ describe('多模型草稿与请求', () => {
     expect(imagePayload([], 'image-revision').revision).toBe('image-revision')
   })
   it('按模型保存兼容参数，图片请求不携带文本采样字段', () => {
-    const profile = { ...newModel('text'), samplingMode: 'omit' as const, tokenParameter: 'max_completion_tokens' as const }
-    expect(textPayload([profile]).models[0]).toMatchObject({ samplingMode: 'omit', tokenParameter: 'max_completion_tokens' })
+    const profile = { ...newModel('text'), samplingMode: 'omit' as const, tokenParameter: 'max_completion_tokens' as const, thinkingMode: 'disabled' as const }
+    expect(textPayload([profile]).models[0]).toMatchObject({ samplingMode: 'omit', tokenParameter: 'max_completion_tokens', thinkingMode: 'disabled' })
+    expect(modelDrafts({ baseUrl: '', model: '', timeout: 60, hasKey: true, models: [profile] }, 'text')[0]?.thinkingMode).toBe('disabled')
     expect(imagePayload([profile]).models[0]).not.toHaveProperty('samplingMode')
     expect(imagePayload([profile]).models[0]).not.toHaveProperty('tokenParameter')
+    expect(imagePayload([profile]).models[0]).not.toHaveProperty('thinkingMode')
   })
   it('校验所有模型的地址、密钥与数值，停用项可以没有密钥', () => {
     const valid = { ...newModel('text'), model: 'm', baseUrl: 'https://example.test/v1', apiKey: 'test-key' }

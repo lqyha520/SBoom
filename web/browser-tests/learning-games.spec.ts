@@ -1,3 +1,4 @@
+import { mockGameCloud } from './game-fixtures'
 import { expect, test, type Page } from '@playwright/test'
 import { idiomById, type IdiomDifficulty } from '../src/games/idiom-fill'
 
@@ -300,6 +301,7 @@ test('英语与数学新游戏：拼写、集市、时钟完整通关与刷新�
 })
 
 test('新游戏：已登录用户刷新后仍写入账号存档', async ({ page }) => {
+  await mockGameCloud(page.context(), 4242)
   await page.addInitScript(() => { try { localStorage.setItem('lc_uid', '4242') } catch { /* 忽略存储限制 */ } })
   const apiRequests: string[] = []
   page.on('request', request => { if (request.url().includes('/api/')) apiRequests.push(request.url()) })
@@ -316,7 +318,8 @@ test('新游戏：已登录用户刷新后仍写入账号存档', async ({ page 
   await expect(page.getByRole('status', { name: '答题反馈' })).toContainText('读对啦')
   expect((await getSave<ClockView>(page, accountKey)).round.answered).toBe(question.answer)
   expect(await page.evaluate(() => localStorage.getItem('lc_game_clock_town_v1_guest'))).toBeNull()
-  expect(apiRequests).toEqual([])
+  expect(apiRequests.some(url => url.includes('/api/v1/me/games'))).toBe(true)
+  expect(apiRequests.some(url => url.includes('/generate'))).toBe(false)
 })
 
 test('手机：翻牌纠错、挑战难度、玩法说明和十款游戏导航', async ({ page }, info) => {

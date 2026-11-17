@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { writeGameSave } from './game-storage'
 import { computed, ref, watch } from 'vue'
 import GameNav from './GameNav.vue'
 import {
@@ -23,7 +24,7 @@ const isCorrect = computed(() => answered.value === source.value.answer)
 const finished = computed(() => round.value.finished)
 const stars = computed(() => idiomStars(round.value))
 const answeredCount = computed(() => finished.value ? IDIOM_QUESTIONS : round.value.index + (answered.value === null ? 0 : 1))
-const blankChar = computed(() => answered.value ?? '？')
+const blankChar = computed(() => answered.value === null ? '？' : source.value.answer)
 const displayChars = computed(() => source.value.text.split('').map((char, index) => ({
   char,
   blank: index === source.value.blank,
@@ -49,7 +50,7 @@ function applyDifficulty() {
   resetDifficulty.value = null
 }
 watch(save, value => {
-  try { localStorage.setItem(props.storageKey, JSON.stringify(value)); saveError.value = false }
+  try { writeGameSave(props.storageKey, value); saveError.value = false }
   catch { saveError.value = true }
 }, { deep: true, immediate: true, flush: 'post' })
 watch(() => props.storageKey, () => { save.value = readSave() || newIdiom() })

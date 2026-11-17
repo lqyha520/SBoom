@@ -38,7 +38,7 @@ describe('披萨分数', () => {
     for (let seed = 1; seed <= 12; seed++) {
       const flight = newFraction(difficulty, seeded(seed)).flight
       expect(flight.questions).toHaveLength(FRACTION_QUESTIONS)
-      expect(new Set(flight.questions.map(question => `${question.mode}:${question.shaded}/${question.total}`)).size).toBe(FRACTION_QUESTIONS)
+      expect(new Set(flight.questions.map(question => `${question.mode}:${question.shaded}/${question.total}:${JSON.stringify(question.other)}`)).size).toBe(FRACTION_QUESTIONS)
       for (const question of flight.questions) {
         expect(question.total).toBeGreaterThanOrEqual(2)
         expect(question.total).toBeLessThanOrEqual(12)
@@ -50,8 +50,17 @@ describe('披萨分数', () => {
           expect(question.total).toBeLessThanOrEqual(5)
         }
         if (difficulty === 'explorer') expect(question.total).toBeLessThanOrEqual(8)
-        if (difficulty === 'master') {
-          expect(question.mode).toBe('simplify')
+        if (question.mode === 'compare') {
+          const other = question.other!
+          expect(other.total).toBeGreaterThanOrEqual(2)
+          expect(other.shaded).toBeGreaterThanOrEqual(1)
+          expect(other.shaded).toBeLessThan(other.total)
+          const delta = question.shaded * other.total - other.shaded * question.total
+          expect(question.answer).toBe(delta === 0 ? '=' : delta > 0 ? '>' : '<')
+          expect([...question.options].sort()).toEqual(['<', '=', '>'])
+          continue
+        }
+        if (question.mode === 'simplify') {
           expect([4, 6, 8, 9, 10, 12]).toContain(question.total)
           expect(gcd(question.shaded, question.total)).toBeGreaterThan(1)
           expect(question.answer).toBe(simplify(question.shaded, question.total))
@@ -59,8 +68,7 @@ describe('披萨分数', () => {
         } else if (question.mode === 'identify') {
           expect(question.answer).toBe(raw)
         } else {
-          expect(question.answer).toBe(simplify(question.shaded, question.total))
-          expect(question.answer).not.toBe(raw)
+          expect(question.answer).toBe(fractionLabel(question.total-question.shaded,question.total))
         }
         expect(question.options).toHaveLength(4)
         expect(new Set(question.options).size).toBe(4)
@@ -73,7 +81,7 @@ describe('披萨分数', () => {
           expect(numerator).toBeGreaterThanOrEqual(1)
           expect(numerator).toBeLessThan(denominator)
         }
-        const target = question.shaded / question.total
+        const target = (question.mode === 'complement' ? question.total-question.shaded : question.shaded) / question.total
         const equivalent = question.options.filter(option => Math.abs(fractionValue(option) - target) < 1e-9)
         expect(equivalent).toEqual([question.answer])
       }
@@ -117,7 +125,7 @@ describe('披萨分数', () => {
     switchFractionDifficulty(save, 'master', seeded(6))
     expect(save.difficulty).toBe('master')
     expect(save.flight.difficulty).toBe('master')
-    expect(save.flight.questions.every(question => question.mode === 'simplify')).toBe(true)
+    expect(new Set(save.flight.questions.map(question=>question.mode))).toEqual(new Set(['identify','simplify','complement','compare']))
     expect(save.best.starter).toBe(3)
     expect(save.best.master).toBe(0)
   })

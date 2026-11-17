@@ -48,6 +48,7 @@ class MiniUser:
     has_password: bool = False
     nickname: str = ""
     has_wechat: bool = False
+    referral_code: str = ''
 
     @property
     def is_vip(self):
@@ -57,13 +58,13 @@ class MiniUser:
         return {"id": self.id, "username": self.username, "nickname": self.nickname or self.username, "avatar": self.avatar,
                 "avatar_url": "/api/v1/mini/me/avatar/" + self.avatar[6:] if self.avatar.startswith("photo:") else None,
                 "has_password": self.has_password, "has_wechat": self.has_wechat, "membership": self.membership,
-                "is_vip": self.is_vip, "vip_expires_at": self.vip_expires_at,
+                "is_vip": self.is_vip, "vip_expires_at": self.vip_expires_at, "referral_code": self.referral_code,
                 "membership_status": "active" if self.is_vip else "expired" if self.membership == "vip" else "regular"}
 
 
 def _row_user(row) -> MiniUser:
     return MiniUser(row["id"], row["username"], row["membership"], row["vip_expires_at"],
-                    row["avatar"] or "", bool(row["password_hash"]), row["nickname"] or row["username"], bool(row["wechat_openid_enc"]))
+                    row["avatar"] or "", bool(row["password_hash"]), row["nickname"] or row["username"], bool(row["wechat_openid_enc"]), row['referral_code'])
 
 
 def digest(token: str) -> str:
@@ -143,7 +144,7 @@ def logout(token: str):
         conn.execute("DELETE FROM mini_user_sessions WHERE token_hash = ?", (digest(token),))
 
 
-def register(username: str, password: str, *, admin=False):
+def register(username: str, password: str, *, admin=False, referral_code='', referral_visit_id=''):
     if not admin and not get_settings().mini_registration_enabled:
         _error("小程序注册暂未开放，请联系管理员", 403)
     if not NEW_USERNAME_PATTERN.fullmatch(username):
@@ -157,6 +158,11 @@ def register(username: str, password: str, *, admin=False):
                                 "ON CONFLICT(username) DO NOTHING RETURNING id", (user_id, username, password_hash, now, now)).fetchone()
         if not inserted:
             _error("小程序用户名已被占用", 409)
+        from app.services.referrals import initialize_user
+        initialize_user(conn, user_id, referral_code if not admin else '')
+        if not admin:
+            from app.services.referral_growth import registered
+            registered(conn, user_id, referral_code, referral_visit_id)
         return _session(conn, user_id)
 
 
@@ -258,7 +264,7 @@ def _wechat_session(conn, account_id, openid, session_key=""):
     return _session(conn, account_id)
 
 
-def login_public_identity(identity: str, openid="", session_key=""):
+def login_public_identity(identity: str, openid="", session_key="", referral_code='', referral_visit_id=''):
     if openid and digest(get_settings().wechat_app_id + ":" + openid) != identity:
         _error("微信身份不一致，请重新登录")
     # 绝大多数登录是老用户：只读自己的账号行 + 签发会话，不需要 accounts 全局锁。
@@ -277,6 +283,10 @@ def login_public_identity(identity: str, openid="", session_key=""):
         user_id, now = uuid.uuid4().hex, int(time.time())
         conn.execute("INSERT INTO mini_users(id, username, nickname, wechat_identity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
                      (user_id, _default_username(conn), secrets.choice(_NICKNAME_SPIRITS), identity, now, now))
+        from app.services.referrals import initialize_user
+        initialize_user(conn, user_id, referral_code)
+        from app.services.referral_growth import registered
+        registered(conn, user_id, referral_code, referral_visit_id)
         return _wechat_session(conn, user_id, openid, session_key)
 
 

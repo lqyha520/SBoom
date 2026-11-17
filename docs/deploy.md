@@ -1,5 +1,7 @@
 # 部署与备份恢复
 
+推广运营与财务中心的六项优化已于 2026-11-12 部署到 WSL 和线上，数据库版本为 `2026111203`，验证结果、备份及兼容回退方案见[最新发布记录](promotion-six-release-2026-11-12.md)。前序财务中心发布见[首轮发布记录](finance-release-2026-11-12.md)。
+
 现有生产环境使用 `docker-compose.server.yml` + `docker-compose.prod.yml`；运维命令再叠加 `docker-compose.ops.yml`。不要用单独的默认 compose 覆盖现有部署，也不要为了发布执行 `down`、重建数据库或网络。此文中的服务器命令需在 `/opt/learn-coach` 执行，路径不同则同步修改 systemd 单元。
 
 ## 1. 核对现有环境
@@ -29,7 +31,7 @@
 docker compose --env-file /etc/learn-coach/release.env -f deploy/docker-compose.server.yml -f deploy/docker-compose.prod.yml -f deploy/docker-compose.ops.yml config --quiet
 ```
 
-`REGISTRATION_ENABLED=false` 默认关闭工作台公开注册，管理员开通教师账号；小程序读者注册独立配置。默认每账号并发 2、全站并发 6、每账号滚动 24 小时 20 次，全站预算 2,000,000 token 和 100 张图片。环境变量为 `GENERATION_USER_CONCURRENCY`、`GENERATION_GLOBAL_CONCURRENCY`、`GENERATION_DAILY_LIMIT`、`GENERATION_GLOBAL_DAILY_TOKENS`、`GENERATION_GLOBAL_DAILY_IMAGES`。token 按输入字节与最大输出保守预留，未知计费和失败调用不退款；后台统计展示的仍是模型实际报告用量。修改上限后重启 app 才生效。
+`REGISTRATION_ENABLED=false` 默认关闭工作台公开注册，管理员开通教师账号；小程序读者注册独立配置。默认每账号并发 2、全站并发 6；每账号成功次数、全站 token 和图片预算默认不限。`GENERATION_DAILY_LIMIT`、`GENERATION_GLOBAL_DAILY_TOKENS`、`GENERATION_GLOBAL_DAILY_IMAGES` 均为 `0` 时关闭对应额度，设置正数可独立开启。已有部署显式配置的正数继续生效；本机 compose override 的旧预算也需同步调整，不能只改 `.env`。`GENERATION_DAILY_FAILURE_LIMIT=0` 可关闭全天失败次数封锁，批量出图推荐使用此配置；未显式设置时兼容旧默认 30。工作台遇到限流或连续 3 张失败会暂停后续图片，模型短时冷却仍有效；`GENERATION_USER_CONCURRENCY`、`GENERATION_GLOBAL_CONCURRENCY` 保留并发限制。关闭额度仍记录用量。启用 token 预算时按输入字节与最大输出保守预留，未知计费和失败调用不退还预算；后台统计展示的仍是模型实际报告用量。修改配置后重启 app 才生效。批量数量、拆分与文件范围见 [生成数量与资源保护](generation-limits.md)。
 
 ## 2. 构建、上传、发布与回滚
 
@@ -51,14 +53,16 @@ sha256sum -c images.tar.sha256
 docker load -i images.tar
 cd /opt/learn-coach
 # 同步该提交的 deploy/ 与 scripts/；首次配置 OPS_IMAGE 为本次运维镜像
-python3 scripts/release/release.py --image learncoach-app:COMMIT前12位
+python3 scripts/release/release.py --image learncoach-app:COMMIT前12位 --manifest /secure/incoming/release.json
 ```
 
 发布脚本将目标标签解析并固定为镜像 ID，先做离线镜像检查和加密异地备份；失败时不会停止现有应用。备份成功后仅停止 app，再单次执行 `python -m app.migrations`，通过后以 `up --no-deps --no-build --pull never --wait --wait-timeout 120 app` 更新应用并检查 `/readyz`。数据库、网络和数据卷不重建。成功后原子更新 `release.env` 中的 APP_IMAGE，在 `/var/lib/learn-coach/releases/current.json` 记录当前与上一镜像 ID。含密钥的临时文件从创建起即为600权限，替换时保留现有文件属主/属组。整个发布窗口只运行一个发布进程。
 
 发布失败时先用旧镜像执行只读的 `python -m app.migrations --check`。只有旧镜像兼容当前数据库，且旧容器启动及 `/readyz` 均通过，才提示“已恢复”。数据库版本不兼容或连接不可用时不自动切回旧镜像；保留新镜像配置并尝试启动它，在 `current.json` 写入 `status=recovery_required`、`reason=compatibility_unverified`。旧镜像回滚后仍不健康则记录 `reason=rollback_unhealthy`。这些情况均返回失败，不能据此认定服务已经恢复；应检查实际容器及数据库，准备兼容版本修复。脚本绝不自动恢复数据库快照或覆盖业务数据。
 
-主动回滚使用同一发布脚本，将 `--image` 换成记录中的 previous 镜像 ID。回滚仅适用于数据库向后兼容的版本；恢复数据库是单独的事故处理流程，不会自动覆盖生产数据。
+2026-11-15 起，按用户要求取消部署前的出题评测与人工评分，不再产生发布验收用的模型调用。完整构建的 `release.json` 仍包含不可变 `image` 和 `build_id`；发布入口核对候选、实际镜像及运行基线，常规功能测试、镜像检查、加密备份、显式迁移、健康检查和兼容回退照常执行。同步发布脚本时须包含 `quality_policy.py`。
+
+主动回滚使用同一发布脚本，将 `--image` 换成记录中的 previous 镜像 ID，并提供该镜像的候选清单。回滚仅适用于数据库向后兼容的版本；恢复数据库是单独的事故处理流程，不会自动覆盖生产数据。`2026111002` 起小红书原始素材转为私有文件，部署前需更新备份工具和运维镜像并验证数据库与文件联合恢复；回滚镜像也必须支持文件引用，禁止仅修改旧代码的 schema 版本号。
 
 ```bash
 python3 scripts/release/prune.py              # 先查看候选，默认保留最新 5 个版本

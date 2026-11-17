@@ -101,6 +101,7 @@ export function createFilePool(download: (key: string, progress: (percent: numbe
       }
     },
     clear() { for (const [key, entry] of entries) discard(key, entry) },
+    evict(matches: (key: string) => boolean) { for (const [key, entry] of entries) if (matches(key)) discard(key, entry) },
     trim() { for (const [key, entry] of idle) discard(key, entry) },
     stats() { return { entries: entries.size, idle: idle.size, idleBytes } },
   }

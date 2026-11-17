@@ -61,18 +61,33 @@ describe('generation controls', () => {
   })
   it('does not truncate an old template silently but blocks invalid generation', () => {
     const store = readyStore()
-    store.sections[0].count = 99
+    store.sections[0].count = 101
     expect(store.canGenerate).toBe(false)
-    expect(store.generationIssue).toContain('30')
-    expect(store.sections[0].count).toBe(99)
+    expect(store.generationIssue).toContain('100')
+    expect(store.sections[0].count).toBe(101)
   })
-  it('blocks more than ten unique types while allowing repeated sections', () => {
+  it('allows more than ten types and keeps the cloud archive section boundary', () => {
     const store = readyStore()
     for (let i = 0; i < 15; i++) store.addSection('fill_blank')
     expect(store.canGenerate).toBe(true)
     for (let i = 0; i < 10; i++) store.addSection('type-' + i)
+    expect(store.canGenerate).toBe(true)
+    for (let i = store.sections.length; i <= 60; i++) store.addSection('fill_blank', 1)
     expect(store.canGenerate).toBe(false)
-    expect(store.generationIssue).toContain('10')
+    expect(store.generationIssue).toContain('60')
+  })
+  it('keeps one reading passage within a request and rejects invalid paper counts', () => {
+    const store = readyStore()
+    store.addSection('reading', 100)
+    expect(store.sections[1].count).toBe(30)
+    store.setSectionCount(store.sections[1].id, 100)
+    expect(store.sections[1].count).toBe(30)
+    store.paperCount = 100
+    expect(store.canGenerate).toBe(true)
+    for (const count of [0, 101, 1.5]) {
+      store.paperCount = count
+      expect(store.canGenerate).toBe(false)
+    }
   })
   it('keeps section IDs and edited questions when sorting', () => {
     const store = readyStore()

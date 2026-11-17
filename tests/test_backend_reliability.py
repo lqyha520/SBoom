@@ -54,7 +54,9 @@ def incomplete_sections(response):
 async def passed_review(_system, user_message, _count):
     """生成链路回归隔离第二次模型调用；复核协议另有专门的集成测试。"""
     payload = json.loads(user_message)
-    return {"reviews": [{"review_id": question["review_id"], "status": "passed", "reason": ""}
+    return {"reviews": [{"review_id": question["review_id"], "status": "passed", "reason": "",
+                         **({"analysis": question.get("analysis") or "根据题目条件求解，核对计算结果和单位。"}
+                            if "本阶段补充解析并核对答案" in _system else {})}
                         for section in payload["sections"] for question in section["questions"]]}
 
 
@@ -116,7 +118,7 @@ class BackendReliability(unittest.TestCase):
         response, _ = self.send({"sections": [{"game_type": "fill_blank", "questions": questions()}]})
         self.assertEqual(response.json()["sections"][0]["missing_count"], 0)
 
-    def test_reading_preserves_passage_without_unrelated_repairs(self):
+    def test_reading_preserves_passage_when_bounded_repairs_are_invalid(self):
         get_settings().generation_repair_limit = 3
         self.body["items"] = [{"section_id": "reading", "game_type": "reading", "question_count": 2}]
         raw = {"sections": [{"section_id": "reading", "game_type": "reading", "passage": "春天来了。小明去公园。",
@@ -125,7 +127,30 @@ class BackendReliability(unittest.TestCase):
         result = incomplete_sections(response)[0]
         self.assertEqual(result["passage"], raw["sections"][0]["passage"])
         self.assertEqual(result["missing_count"], 1)
-        self.assertEqual(mock.await_count, 1)
+        self.assertEqual(mock.await_count, 4)
+        for call in mock.await_args_list[1:]:
+            self.assertIn(raw["sections"][0]["passage"], call.args[0])
+            self.assertEqual(call.args[2], 1)
+
+    def test_reading_initial_format_gap_is_refilled_before_api_returns(self):
+        get_settings().generation_repair_limit = 3
+        self.body.update(subject="语文", keyword="阅读理解")
+        self.body["items"] = [{"section_id": "reading", "game_type": "reading", "question_count": 2}]
+        passage = "春天来了。小明去公园。"
+        original = {"type": "multiple_choice", "stem": "小明去了哪里？", "options": ["公园", "学校"], "answer": 0}
+        replacement = {"type": "reading", "stem": "现在是什么季节？", "answer": "春天"}
+        raw = {"sections": [{"section_id": "reading", "game_type": "reading", "passage": passage,
+                             "questions": [original, {**replacement, "type": "unknown"}]}]}
+        with patch.object(generate, "_call_llm_and_parse", new=AsyncMock(side_effect=[raw, {"questions": [replacement]}])) as model:
+            response = self.client.post("/api/v1/generate-batch", json=self.body, headers={"X-Request-ID": "reading-refill"})
+            self.assertEqual(response.status_code, 200, response.text)
+            replay = self.client.post("/api/v1/generate-batch", json=self.body, headers={"X-Request-ID": "reading-refill"})
+        result = response.json()["sections"][0]
+        self.assertEqual(replay.json(), response.json())
+        self.assertEqual(result["passage"], passage)
+        self.assertEqual(result["missing_count"], 0)
+        self.assertEqual([q["stem"] for q in result["questions"]], [original["stem"], replacement["stem"]])
+        self.assertEqual(model.await_count, 2)
 
     def test_reading_without_passage_is_not_accepted(self):
         self.body["items"] = [{"section_id": "s1", "game_type": "reading", "question_count": 2}]
@@ -157,7 +182,7 @@ class BackendReliability(unittest.TestCase):
         raw = {"sections": [section(count=0)]}
         with patch.object(generate, "_call_llm_and_parse", new=AsyncMock(return_value=raw)) as mock:
             response = self.client.post("/api/v1/generate-batch", json=self.body)
-        self.assertEqual(mock.await_count, 2)
+        self.assertEqual(mock.await_count, 3)  # 一次出题，前置与复核后补题共用两次预算
         self.assertEqual(incomplete_sections(response)[0]["missing_count"], 2)
 
     def test_identical_questions_are_rejected_across_sections(self):
@@ -322,6 +347,31 @@ class BackendReliability(unittest.TestCase):
         self.assertEqual(cap.exception.detail["code"], "generation_failure_quota")
         usage = self.client.get("/api/v1/me/usage").json()
         self.assertEqual((usage["succeeded"], usage["failed"], usage["quota_used"]), (2, 5, 3))
+
+    def test_disabling_daily_failure_cap_admits_after_thirty_upstream_failures(self):
+        """关闭全天封锁后，历史上游故障不影响新生成；成功额度与原请求去重仍生效。"""
+        settings = get_settings()
+        settings.generation_daily_failure_limit = 0
+        settings.generation_daily_limit = 1
+        with database.db() as conn:
+            for index in range(30):
+                conn.execute(
+                    "INSERT INTO generation_requests(user_id,request_id,kind,payload_hash,status,created_at) "
+                    "VALUES (?, ?, 'image', 'old', ?, ?)",
+                    (self.user.id, f"upstream-{index}", "unknown" if index % 2 else "failed", int(time.time())),
+                )
+        response, model = self.send()
+        self.assertEqual(response.status_code, 200)
+        model.assert_awaited_once()
+        replay, model = self.send()
+        self.assertEqual(replay.status_code, 200)
+        model.assert_not_awaited()
+        refused, model = self.send(request_id="after-success-quota")
+        self.assertEqual(refused.status_code, 429)
+        self.assertEqual(refused.json()["detail"]["code"], "generation_quota")
+        model.assert_not_awaited()
+        usage = self.client.get("/api/v1/me/usage").json()
+        self.assertEqual((usage["failed"], usage["unknown"], usage["quota_used"], usage["failure_limit"]), (15, 15, 1, 0))
 
     def test_parallel_admission_is_atomic(self):
         def admit(index):

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from psycopg.errors import UniqueViolation
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,6 +23,29 @@ from app.config import APP_VERSION, get_settings
 from app.deps import require_admin, require_recent_admin
 from app.http_limits import limited_lines
 from app.library_deps import no_store
+from app.models.admin_api_responses import (
+    AdminClearLlmConfigResponse,
+    AdminCreateUserResponse,
+    AdminDeleteUserResponse,
+    AdminGenerationTracesResponse,
+    AdminGetLlmConfigResponse,
+    AdminGetUserTemplateResponse,
+    AdminListFeedbacksResponse,
+    AdminListLlmModelsResponse,
+    AdminListUsersResponse,
+    AdminListUserTemplatesResponse,
+    AdminMenuOptionsResponse,
+    AdminModelHealthResponse,
+    AdminPermissionCatalogResponse,
+    AdminSaveLlmConfigResponse,
+    AdminStatsResponse,
+    AdminTailLogsResponse,
+    AdminTestLlmGenerationResponse,
+    AdminTestLlmResponse,
+    AdminUpdatePermissionsResponse,
+    AdminUpdateUserResponse,
+    AdminUserPermissionsResponse,
+)
 from app.models.model_profiles import TextModelProfiles
 from app.security import encryption_backend, security_warnings
 from app.sensitive_config import SensitiveConfigRoute
@@ -40,9 +63,107 @@ settings = get_settings()
 _LOG_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "logs" / "application.log"
 
 
+class AdminPermissionsUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    revision: int = Field(ge=1)
+    permissions: dict[str, list[str]]
+
+
+@router.get('/options/{menu}/{kind}', dependencies=[Depends(no_store)], response_model=AdminMenuOptionsResponse, response_model_exclude_unset=True)
+def menu_options(menu: str, kind: str, q: str = Query('', max_length=120), offset: int = Query(0, ge=0, le=100000),
+                 dictionary_kind: Literal['', 'grade', 'subject', 'knowledge_point'] = '', admin: CurrentUser = Depends(require_admin)):
+    """业务表单所需的关联选项；不授予配置菜单或任意详情的读取权限。"""
+    from app.services import catalog_discovery, public_catalog, site_content
+    if kind == 'categories':
+        return site_content.list_categories()
+    if kind == 'dictionary':
+        return site_content.list_dictionary(dictionary_kind, '')
+    if kind == 'tags':
+        return catalog_discovery.tags(True)
+    if kind == 'papers':
+        result = public_catalog.list_papers(admin.id, q=q, status='published', admin=True, offset=offset)
+        keys = ('id', 'title', 'grade', 'subject', 'file_status', 'question_count', 'status')
+        return {**result, 'items': [{key: item.get(key) for key in keys} for item in result['items']]}
+    if kind == 'payment':
+        from app.services import mini_orders
+        result = mini_orders.plans(True)
+        return {key: value for key, value in result.items() if key != 'items'}
+    raise HTTPException(404, detail={'error': '未知的关联选项'})
+
+
+@router.get('/access/catalog', dependencies=[Depends(no_store)], response_model=AdminPermissionCatalogResponse, response_model_exclude_unset=True)
+def permission_catalog(admin: CurrentUser = Depends(require_admin)):
+    from app.admin_permissions import ACTION_LABELS, catalog
+    return {'menus': catalog(), 'actions': ACTION_LABELS}
+
+
+@router.get('/access/users/{user_id}', dependencies=[Depends(no_store)], response_model=AdminUserPermissionsResponse, response_model_exclude_unset=True)
+def user_permissions(user_id: int, admin: CurrentUser = Depends(require_admin)):
+    from app.services.admin_access import get_permissions
+    return get_permissions(user_id)
+
+
+@router.put('/access/users/{user_id}', dependencies=[Depends(no_store)], response_model=AdminUpdatePermissionsResponse, response_model_exclude_unset=True)
+def update_permissions(user_id: int, body: AdminPermissionsUpdate, admin: CurrentUser = Depends(require_recent_admin)):
+    from app.services.admin_access import save_permissions
+    return save_permissions(admin.id, user_id, body.revision, body.permissions)
+
+
+@router.get("/generation-traces", dependencies=[Depends(no_store)], summary="最近生成请求的模型与阶段追踪", response_model=AdminGenerationTracesResponse, response_model_exclude_unset=True)
+def generation_traces(request_id: str = Query("", max_length=100), limit: int = Query(30, ge=1, le=100),
+                      admin: CurrentUser = Depends(require_admin)):
+    from app.db import db
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT user_id, request_id, kind, status, created_at, finished_at, model_calls, reported_calls, "
+            "prompt_tokens, completion_tokens, replay_count, trace_json FROM generation_requests "
+            + ("WHERE request_id = ? " if request_id else "")
+            + "ORDER BY created_at DESC, user_id, request_id LIMIT ?",
+            (request_id, limit) if request_id else (limit,),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["trace"] = json.loads(item.pop("trace_json") or "null")
+        result.append(item)
+    return {"requests": result}
+
+
+class AdminSessionResponse(BaseModel):
+    id: str
+    created_at: int
+    last_seen_at: int
+    expires_at: int
+    revoked_at: int
+    user_agent: str
+    client_ip: str
+    current: bool
+
+
+class AdminSessionsResponse(BaseModel):
+    sessions: list[AdminSessionResponse]
+
+
+@router.get('/sessions', response_model=AdminSessionsResponse, dependencies=[Depends(no_store)], summary='当前管理员会话列表')
+def admin_sessions(request: Request, admin: CurrentUser = Depends(require_admin)):
+    from app.deps import SESSION_COOKIE
+    from app.security import parse_token
+    from app.services.workspace_sessions import listing
+    payload = parse_token(request.cookies.get(SESSION_COOKIE, '')) or {}
+    return {'sessions': listing(admin.id, payload.get('sid', ''))}
+
+
+@router.delete('/sessions/{identifier}', status_code=204, summary='撤销一个管理员会话')
+def revoke_admin_session(identifier: str, admin: CurrentUser = Depends(require_recent_admin)):
+    from app.services.workspace_sessions import revoke_for_admin
+    if not revoke_for_admin(identifier, admin.id):
+        raise HTTPException(404, detail={'error': '会话不存在或已撤销'})
+    return Response(status_code=204)
+
+
 # ─── 数据概览 ───
 
-@router.get("/stats", summary="后台概览数据")
+@router.get("/stats", summary="后台概览数据", response_model=AdminStatsResponse, response_model_exclude_unset=True)
 def stats(admin: CurrentUser = Depends(require_admin)):
     from app.db import db
 
@@ -68,7 +189,7 @@ def stats(admin: CurrentUser = Depends(require_admin)):
 
 # ─── 用户反馈查看 ───
 
-@router.get("/feedbacks", summary="用户反馈列表（最新在前）")
+@router.get("/feedbacks", summary="用户反馈列表（最新在前）", response_model=AdminListFeedbacksResponse, response_model_exclude_unset=True)
 def list_feedbacks(
     limit: int = 100,
     oob_only: bool = False,
@@ -88,21 +209,24 @@ def list_feedbacks(
 
 # ─── 用户管理 ───
 
-@router.get("/users", summary="用户列表（可按用户名搜索、按角色筛选）")
+@router.get("/users", summary="用户列表（可按用户名搜索、按角色筛选）", response_model=AdminListUsersResponse, response_model_exclude_unset=True)
 def list_users(query: str = "", role: str = "", limit: int = Query(20, ge=1, le=100),
                offset: int = Query(0, ge=0), admin: CurrentUser = Depends(require_admin)):
     if role and role not in ("user", "admin"):
         raise HTTPException(status_code=400, detail={"error": "role 只能是 user 或 admin"})
+    if not admin.is_super_admin:
+        role = 'user'
     return user_store.list_users(query.strip(), role, limit, offset)
 
 
 class AdminCreateUser(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     username: str
     password: str
     role: str = "user"
 
 
-@router.post("/users", summary="创建用户")
+@router.post("/users", summary="创建用户", response_model=AdminCreateUserResponse, response_model_exclude_unset=True)
 def create_user(req: AdminCreateUser, admin: CurrentUser = Depends(require_recent_admin)):
     import re
     if not re.match(r"^[\w\u4e00-\u9fa5-]{2,32}$", req.username):
@@ -114,7 +238,7 @@ def create_user(req: AdminCreateUser, admin: CurrentUser = Depends(require_recen
     if user_store.get_user_by_username(req.username):
         raise HTTPException(status_code=409, detail={"error": "用户名已被占用"})
     try:
-        user = user_store.create_user(req.username, req.password, role=req.role)
+        user = user_store.create_user(req.username, req.password, role=req.role, actor=admin)
     except UniqueViolation as exc:
         raise HTTPException(409, detail={"error": "用户名已被占用"}) from exc
     logger.info(f"管理员 {admin.username} 创建了用户 {user.username} (role={req.role})")
@@ -122,12 +246,13 @@ def create_user(req: AdminCreateUser, admin: CurrentUser = Depends(require_recen
 
 
 class AdminUpdateUser(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     password: str | None = None
     role: str | None = None
     is_active: bool | None = None
 
 
-@router.put("/users/{user_id}", summary="更新用户（重置密码 / 改角色 / 启用禁用）")
+@router.put("/users/{user_id}", summary="更新用户（重置密码 / 改角色 / 启用禁用）", response_model=AdminUpdateUserResponse, response_model_exclude_unset=True)
 def update_user(user_id: int, req: AdminUpdateUser, admin: CurrentUser = Depends(require_recent_admin)):
     if req.role is not None and req.role not in ("user", "admin"):
         raise HTTPException(status_code=400, detail={"error": "role 只能是 user 或 admin"})
@@ -142,7 +267,7 @@ def update_user(user_id: int, req: AdminUpdateUser, admin: CurrentUser = Depends
             raise HTTPException(status_code=400, detail={"error": "不能禁用自己的账号"})
 
     ok = user_store.update_user(
-        user_id, password=req.password, role=req.role, is_active=req.is_active
+        user_id, password=req.password, role=req.role, is_active=req.is_active, actor=admin
     )
     if not ok:
         raise HTTPException(status_code=404, detail={"error": "用户不存在"})
@@ -153,12 +278,12 @@ def update_user(user_id: int, req: AdminUpdateUser, admin: CurrentUser = Depends
     return {"status": "ok"}
 
 
-@router.delete("/users/{user_id}", summary="删除用户（模板与配置级联删除）")
+@router.delete("/users/{user_id}", summary="删除用户（模板与配置级联删除）", response_model=AdminDeleteUserResponse, response_model_exclude_unset=True)
 def delete_user(user_id: int, admin: CurrentUser = Depends(require_admin)):
     if user_id == admin.id:
         raise HTTPException(status_code=400, detail={"error": "不能删除自己的账号"})
     try:
-        ok = user_store.delete_user(user_id)
+        ok = user_store.delete_user(user_id, actor=admin)
     except user_store.UserHasCatalogPapers as exc:
         raise HTTPException(409, detail={"error": str(exc)}) from exc
     if not ok:
@@ -169,7 +294,7 @@ def delete_user(user_id: int, admin: CurrentUser = Depends(require_admin)):
 
 # ─── 管理端查看用户模板 ───
 
-@router.get("/users/{user_id}/templates", summary="列出指定用户的模板（元信息）")
+@router.get("/users/{user_id}/templates", summary="列出指定用户的模板（元信息）", response_model=AdminListUserTemplatesResponse, response_model_exclude_unset=True)
 def list_user_templates(user_id: int, admin: CurrentUser = Depends(require_admin)):
     if not user_store.get_user_by_id(user_id):
         raise HTTPException(status_code=404, detail={"error": "用户不存在"})
@@ -177,7 +302,7 @@ def list_user_templates(user_id: int, admin: CurrentUser = Depends(require_admin
     return {"templates": templates}
 
 
-@router.get("/users/{user_id}/templates/{tpl_id}", summary="查看指定模板的完整内容")
+@router.get("/users/{user_id}/templates/{tpl_id}", summary="查看指定模板的完整内容", response_model=AdminGetUserTemplateResponse, response_model_exclude_unset=True)
 def get_user_template(user_id: int, tpl_id: int, admin: CurrentUser = Depends(require_admin)):
     """管理端查看模板内容（只读，用于排查/协助；内容含题目文字与配置）"""
     if not user_store.get_user_by_id(user_id):
@@ -193,7 +318,7 @@ def get_user_template(user_id: int, tpl_id: int, admin: CurrentUser = Depends(re
 
 # ─── 日志查看 ───
 
-@router.get("/logs", summary="查看服务日志（尾部 N 行）")
+@router.get("/logs", summary="查看服务日志（尾部 N 行）", response_model=AdminTailLogsResponse, response_model_exclude_unset=True)
 def tail_logs(lines: int = 200, admin: CurrentUser = Depends(require_admin)):
     if not get_settings().log_to_file:
         return {"logs": "日志输出到标准输出，请查看启动终端或 docker compose logs app。单进程本地运行可设置 LOG_TO_FILE=true。"}
@@ -220,6 +345,7 @@ class AdminLlmConfigIn(BaseModel):
     maxTokens: int = Field(default=16384, ge=1024, le=131072)
     samplingMode: Literal["configured", "omit"] = "configured"
     tokenParameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
+    thinkingMode: Literal["default", "disabled"] = "default"
 
 
 class AdminLlmModelsIn(BaseModel):
@@ -232,12 +358,12 @@ class AdminLlmModelsIn(BaseModel):
     kind: Literal["text", "image"] = "text"
 
 
-@router.get("/llm-config", summary="获取全局模型配置（不含密钥明文）")
+@router.get("/llm-config", summary="获取全局模型配置（不含密钥明文）", response_model=AdminGetLlmConfigResponse, response_model_exclude_unset=True)
 def get_llm_config(admin: CurrentUser = Depends(require_admin)):
     return app_config.get_admin_config()
 
 
-@router.put("/llm-config", summary="保存全局模型配置（密钥服务端加密存储，全体用户生效）")
+@router.put("/llm-config", summary="保存全局模型配置（密钥服务端加密存储，全体用户生效）", response_model=AdminSaveLlmConfigResponse, response_model_exclude_unset=True)
 def save_llm_config(req: TextModelProfiles | AdminLlmConfigIn, admin: CurrentUser = Depends(require_recent_admin)):
     from app.provider_policy import validate_endpoint
     if isinstance(req, TextModelProfiles):
@@ -254,13 +380,14 @@ def save_llm_config(req: TextModelProfiles | AdminLlmConfigIn, admin: CurrentUse
         max_tokens=req.maxTokens,
         sampling_mode=req.samplingMode,
         token_parameter=req.tokenParameter,
+        thinking_mode=req.thinkingMode,
     )
     has_key = app_config.get_llm()["hasKey"]
     logger.info("管理员 id=%s 更新了全局模型配置", admin.id)
     return {"status": "ok", "message": "模型配置已保存，全体用户生效", "hasKey": has_key}
 
 
-@router.delete("/llm-config", summary="清除全局模型配置（含已存密钥）")
+@router.delete("/llm-config", summary="清除全局模型配置（含已存密钥）", response_model=AdminClearLlmConfigResponse, response_model_exclude_unset=True)
 def clear_llm_config(admin: CurrentUser = Depends(require_recent_admin), if_match: str | None = Header(None)):
     """删除全部候选与密钥，保留空列表以阻止环境配置重新启用服务。"""
     saved = app_config.save_llm_models([], expected_revision=if_match, require_revision=True)
@@ -332,7 +459,7 @@ def _stream_reasoning(event: str) -> str:
         return ""
 
 
-@router.post("/llm-models", summary="拉取模型服务支持的模型列表（文本与图片候选共用）")
+@router.post("/llm-models", summary="拉取模型服务支持的模型列表（文本与图片候选共用）", response_model=AdminListLlmModelsResponse, response_model_exclude_unset=True)
 async def list_llm_models(req: AdminLlmModelsIn | None = None, admin: CurrentUser = Depends(require_admin)):
     """用当前表单或已保存的地址与密钥请求 OpenAI 兼容的 GET /models。
 
@@ -434,6 +561,7 @@ async def _text_test_config(req: AdminLlmConfigIn | None) -> dict:
               "timeout": (req.timeout if req and "timeout" in req.model_fields_set else g.get("timeout")) or 60}
     for public, internal, default in (("samplingMode", "sampling_mode", "configured"),
                                       ("tokenParameter", "token_parameter", "max_tokens"),
+                                      ("thinkingMode", "thinking_mode", "default"),
                                       ("maxTokens", "max_tokens", 16384)):
         config[internal] = getattr(req, public) if req and public in req.model_fields_set else g.get(public, default)
     if not config["api_key"]:
@@ -448,7 +576,7 @@ async def _text_test_config(req: AdminLlmConfigIn | None) -> dict:
     return config
 
 
-@router.post("/test-llm-generation", summary="用真实生成参数测试小型 JSON 输出（会调用模型并可能计费）")
+@router.post("/test-llm-generation", summary="用真实生成参数测试小型 JSON 输出（会调用模型并可能计费）", response_model=AdminTestLlmGenerationResponse, response_model_exclude_unset=True)
 async def test_llm_generation(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Depends(require_recent_admin)):
     import httpx
 
@@ -479,7 +607,7 @@ async def test_llm_generation(req: AdminLlmConfigIn | None = None, admin: Curren
         raise HTTPException(502, detail={"error": "模型未完成有效的 JSON 输出，请核对调用参数与模型能力"}) from None
 
 
-@router.get("/model-health", summary="按候选配置查询成功率、耗时和冷却状态", dependencies=[Depends(no_store)])
+@router.get("/model-health", summary="按候选配置查询成功率、耗时和冷却状态", dependencies=[Depends(no_store)], response_model=AdminModelHealthResponse, response_model_exclude_unset=True)
 def model_health(kind: Literal["text", "image"] = "text", admin: CurrentUser = Depends(require_admin)):
     from app.routers.generate import _merged_llm_params
     from app.services.generation_policy import current_policy, load_policy
@@ -497,7 +625,7 @@ def model_health(kind: Literal["text", "image"] = "text", admin: CurrentUser = D
         current_policy.reset(token)
 
 
-@router.post("/test-llm", summary="测试模型连通性（流式探测：拿到首个响应即判定成功）")
+@router.post("/test-llm", summary="测试模型连通性（流式探测：拿到首个响应即判定成功）", response_model=AdminTestLlmResponse, response_model_exclude_unset=True)
 async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Depends(require_admin)):
     """连通性测试用流式请求：服务端开始吐第一个 token 就证明链路+鉴权都通。
     超时耐心 = 配置的 timeout（中转站拥堵时首 token 可能 20-60s，不宜截断）。
@@ -537,6 +665,8 @@ async def test_llm(req: AdminLlmConfigIn | None = None, admin: CurrentUser = Dep
                     "messages": [{"role": "user", "content": "回复：ok"}],
                     "max_tokens": 64,
                     "stream": True,
+                    **({"chat_template_kwargs": {"enable_thinking": False}}
+                       if config["thinking_mode"] == "disabled" else {}),
                 },
                 headers=request_headers,
                 extensions=extensions,

@@ -15,6 +15,7 @@ const AdvancedDrawer = lazyComponent(() => import('./components/AdvancedDrawer.v
 const MyTemplatesDialog = lazyComponent(() => import('./components/MyTemplatesDialog.vue'))
 const HistoryDialog = lazyComponent(() => import('./components/HistoryDialog.vue'))
 const CloudLibraryDialog = lazyComponent(() => import('./components/CloudLibraryDialog.vue'))
+const QuestionBank = lazyComponent(() => import('./components/QuestionBank.vue'))
 
 const store = useExamStore()
 const auth = useAuthStore()
@@ -22,6 +23,7 @@ const showAdv = ref(false)
 const showTpl = ref(false)
 const showHistory = ref(false)
 const showCloud = ref(false)
+const showBank = ref(false)
 const imageMode = ref(false)
 const imageOpened = ref(false)
 const localUsage = ref<StorageUsage | null>(null)
@@ -33,7 +35,7 @@ async function openGames() {
     accountError.value = '草稿尚未保存，请稍后再打开游戏'
     return
   }
-  location.hash = '/games/little-shop'
+  location.hash = '/games'
 }
 const accountError = ref('')
 const suggestedKeyword = ref((new URLSearchParams(location.search).get('keyword') || '').slice(0, 100))
@@ -57,6 +59,7 @@ const workspaceTools = computed(() => [
   [{ label: '云端试卷', icon: 'i-lucide-cloud', onSelect: () => { showCloud.value = true } },
     { label: '本机历史', icon: 'i-lucide-history', onSelect: () => { showHistory.value = true } },
     { label: '我的模板', icon: 'i-lucide-folder-open', onSelect: () => { showTpl.value = true } },
+    { label: '我的题库', description: '保存好题，以后直接组卷', icon: 'i-lucide-library', onSelect: () => { showBank.value = true } },
     { label: '卷面设置', icon: 'i-lucide-settings-2', onSelect: () => { showAdv.value = true } }],
 ])
 const workspaceTabs = computed(() => [
@@ -157,6 +160,7 @@ onBeforeUnmount(() => {
           </button>
           <button :disabled="store.layoutMode" :class="{ active: imageMode }" :aria-current="imageMode ? 'page' : undefined" @click="openImages"><UIcon name="i-lucide-image" class="size-4" /><span>图片出题</span></button>
           <button :disabled="store.layoutMode || store.generating" @click="openGames"><UIcon name="i-lucide-gamepad-2" class="size-4" /><span>学习游戏</span></button>
+          <button title="保存好题，以后直接组卷" :disabled="store.layoutMode || store.generating" @click="showBank = true"><UIcon name="i-lucide-library" class="size-4" /><span>我的题库</span></button>
         </nav>
         <div class="topbar-actions">
           <template v-if="!imageMode">
@@ -207,7 +211,7 @@ onBeforeUnmount(() => {
       <UTabs v-if="!imageMode && store.view === 'build'" v-model="sidePanel" :items="workspaceTabs.slice(0, 2)" :content="false" class="workspace-side-tabs no-print" :ui="{ list: 'w-full', trigger: 'flex-1' }" />
       <div v-if="!store.persistenceReady" class="loading-screen" role="status">正在恢复草稿</div>
       <main v-else class="workbench" :class="{ 'result-only': imageMode || store.view === 'result' }" :data-side-panel="sidePanel" :data-panel="imageMode ? 'image' : mobilePanel" @beforeinput.capture="captureEdit">
-        <ImageWorkbench v-if="imageOpened" v-show="imageMode" />
+        <ImageWorkbench v-if="imageOpened" v-show="imageMode" @library="showCloud = true" />
           <LeftPanel v-show="!imageMode && store.view === 'build'" :inert="store.layoutMode || undefined" />
           <MiddleColumn v-show="!imageMode && store.view === 'build'" :inert="store.layoutMode || undefined" @open-templates="showTpl = true" @preview="mobilePanel = 'preview'" />
           <KeepAlive><PreviewPane v-if="!imageMode && store.view === 'build'" @open-settings="showAdv = true" /></KeepAlive>
@@ -217,5 +221,6 @@ onBeforeUnmount(() => {
       <MyTemplatesDialog v-if="showTpl" :open="showTpl" @close="showTpl = false" />
       <HistoryDialog v-if="showHistory" :open="showHistory" @close="showHistory = false" />
       <CloudLibraryDialog v-if="showCloud" :open="showCloud" @close="showCloud = false" />
+      <QuestionBank v-if="showBank" @close="showBank = false" @assembled="imageMode = false" @generate="imageMode = false; store.view = 'build'; mobilePanel = 'conditions'; sidePanel = 'conditions'" />
     </div>
 </template>

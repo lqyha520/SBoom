@@ -48,7 +48,8 @@ def rotate(*, apply: bool = False) -> dict[str, int | bool]:
                 conn.execute("UPDATE app_config SET value = ? WHERE key = ?", (json.dumps(value, ensure_ascii=False), row["key"]))
         # 固定字段白名单，标识符不能由命令行输入。
         for table, key, column in (("mini_users", "id", "wechat_openid_enc"), ("mini_orders", "id", "payer_enc"),
-                                   ("user_llm_configs", "user_id", "api_key_enc")):
+                                   ("referral_payees", "beneficiary", "value_enc"), ("referral_payout_accounts", "statement_id", "value_enc"),
+                                   ("user_llm_configs", "user_id", "api_key_enc"), ("admin_mfa", "user_id", "secret_enc")):
             if not conn.execute("SELECT to_regclass(?)", (table,)).fetchone()[0]:
                 continue
             rows = conn.execute(f"SELECT {key}, {column} FROM {table} WHERE {column} <> '' FOR UPDATE").fetchall()

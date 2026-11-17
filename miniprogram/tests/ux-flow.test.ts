@@ -203,6 +203,82 @@ test('an observer callback queued before unmount cannot start a new file request
   assert.equal(acquired, 0)
 })
 
+test('原图下载及解码等待期间显示缩略图，原图显示后释放缩略图并通知阅读器', async () => {
+  const pending = new Map<string, (file: string) => void>(), released: string[] = []
+  const app = component('components/PrivateImage.vue', { '../services/assets': { acquireAsset: (src: string) => ({
+    ready: new Promise<string>(resolve => pending.set(src, resolve)), release: () => released.push(src), invalidate() {},
+  }) } }, 'source, placeholder, loaded, imageLoaded', { src: '/original', placeholderSrc: '/thumb', priority: 2 }, { uni: { $emit() {} } })
+  try {
+    pending.get('/thumb')!('/thumb-file'); await settle()
+    assert.equal(app.page.placeholder.value, '/thumb-file'); assert.equal(app.page.source.value, '')
+    pending.get('/original')!('/original-file'); await settle()
+    assert.equal(app.page.source.value, '/original-file'); assert.equal(app.page.loaded.value, false)
+    assert.equal(app.page.placeholder.value, '/thumb-file', '文件下载完成后还要等原生图片解码')
+    app.page.imageLoaded()
+    assert.equal(app.page.placeholder.value, ''); assert.deepEqual(released, ['/thumb']); assert.deepEqual(app.events, [['load']])
+  } finally { app.dispose() }
+})
+
+test('切页、关闭及缩略图失败不会显示上一页的缩略图或阻断原图', async () => {
+  const pending = new Map<string, { resolve: (file: string) => void; reject: (cause: Error) => void }>(), released: string[] = []
+  const app = component('components/PrivateImage.vue', { '../services/assets': { acquireAsset: (src: string) => ({
+    ready: new Promise<string>((resolve, reject) => pending.set(src, { resolve, reject })), release: () => released.push(src), invalidate() {},
+  }) } }, 'source, placeholder', { src: '/one', placeholderSrc: '/thumb-one' })
+  app.props.src = '/two'; app.props.placeholderSrc = '/thumb-two'; await settle()
+  pending.get('/thumb-one')!.resolve('/stale'); pending.get('/one')!.resolve('/stale-original'); await settle()
+  assert.equal(app.page.placeholder.value, ''); assert.equal(app.page.source.value, '')
+  pending.get('/thumb-two')!.reject(Error('thumbnail unavailable'))
+  pending.get('/two')!.resolve('/two-file'); await settle()
+  assert.equal(app.page.source.value, '/two-file'); assert.equal(app.page.placeholder.value, '')
+  app.dispose()
+  assert.ok(released.includes('/thumb-one')); assert.ok(released.includes('/two')); assert.ok(released.includes('/thumb-two'))
+})
+
+test('已解码的相邻页成为当前页时复用原图并通知阅读器启动后续预取', async () => {
+  let acquired = 0
+  const app = component('components/PrivateImage.vue', { '../services/assets': { acquireAsset: () => {
+    acquired++; return { ready: Promise.resolve('/file'), release() {}, invalidate() {}, prioritize() {} }
+  } } }, 'imageLoaded', { src: '/original', priority: 0 }, { uni: { $emit() {} } })
+  try {
+    await settle(); app.page.imageLoaded(); app.events.length = 0
+    app.props.priority = 2; await settle()
+    assert.equal(acquired, 1); assert.deepEqual(app.events, [['load']])
+  } finally { app.dispose() }
+})
+
+test('大图等待显示进度，换图忽略旧进度，解码完成或关闭后取消等待提示', async () => {
+  const requests = new Map<string, { resolve: (file: string) => void; progress: (percent: number) => void }>()
+  let timer!: () => void, cancelled = 0
+  const app = component('components/PrivateImage.vue', { '../services/assets': { acquireAsset: (src: string, _priority: number, progress: (percent: number) => void) => ({
+    ready: new Promise<string>(resolve => requests.set(src, { resolve, progress })), release() {}, invalidate() {},
+  }) } }, 'progress, waiting, imageLoaded', { src: '/one', priority: 2 }, {
+    uni: { $emit() {} }, setTimeout: (callback: () => void) => { timer = callback; return 1 }, clearTimeout: () => { cancelled++ },
+  })
+  try {
+    timer(); assert.equal(app.page.waiting.value, true)
+    requests.get('/one')!.progress(38); assert.equal(app.page.progress.value, 35)
+    app.props.src = '/two'; await settle()
+    requests.get('/one')!.progress(100); assert.equal(app.page.progress.value, 0)
+    requests.get('/two')!.progress(100); requests.get('/two')!.resolve('/two-file'); await settle()
+    assert.equal(app.page.progress.value, 100)
+    app.page.imageLoaded(); assert.equal(app.page.waiting.value, false); assert.ok(cancelled > 0)
+  } finally { app.dispose() }
+  timer(); assert.equal(app.page.waiting.value, false)
+})
+
+test('网络恢复只重试当前可见的大图，不重复下载，也不自动重试权限拒绝', async () => {
+  for (const status of [0, 503, 403]) {
+    let reads = 0, reconnect!: () => void, removed = 0
+    const app = component('components/PrivateImage.vue', { '../services/assets': { acquireAsset: () => {
+      reads++; return { ready: reads === 1 ? Promise.reject(Object.assign(Error('unavailable'), { status })) : new Promise<string>(() => {}), release() {}, invalidate() {} }
+    } } }, 'failed', { src: '/image', priority: 2 }, { uni: { $on: (_name: string, callback: () => void) => { reconnect = callback }, $off: () => { removed++ } } })
+    app.mount(); await settle(); assert.equal(app.page.failed.value, true)
+    reconnect(); reconnect(); await settle()
+    assert.equal(reads, status === 403 ? 1 : 2)
+    app.dispose(); reconnect(); assert.equal(reads, status === 403 ? 1 : 2); assert.equal(removed, 1)
+  }
+})
+
 test('native list sharing selects a public paper and cannot leak a private list route', () => {
   assert.equal(catalogShare({ target: { dataset: { paperId: 'paper-1', paperTitle: '分数练习' } } }).path, '/pages/paper/index?id=paper-1')
   assert.equal(catalogShare({ target: { dataset: { paperId: 'paper-1', paperTitle: '分数练习' } } }).title, '分数练习')

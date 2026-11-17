@@ -5,6 +5,7 @@ import json
 import time
 
 from app.db import db
+from app.models.library import snapshot_papers
 from app.services.mini_errors import fail
 from app.sql_utils import escape_like
 
@@ -12,14 +13,29 @@ LABELS = {"original": "原稿 PDF", "student": "练习版", "answers": "答案�
 
 
 def fingerprint(raw):
-    paper = json.loads(raw)["paper"]
-    value = {"grade": paper["grade"], "subject": paper["subject"], "sections": [
+    snapshot = json.loads(raw)
+    values = [{"grade": paper["grade"], "subject": paper["subject"], "sections": [
         {"type": section["type"], "data": section["data"]} for section in paper["sections"]]}
+        for paper in snapshot_papers(snapshot)]
+    value = values[0] if len(values) == 1 else {"papers": values}
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def referenced(conn, paper_id):
     return bool(conn.execute("SELECT 1 FROM catalog_edition_history WHERE paper_id = ?", (paper_id,)).fetchone())
+
+
+def pdf_asset(conn, paper_id, kind="original"):
+    """同一归档可含学生卷和答案；旧归档与额外关联文件仍使用原 PDF。"""
+    rows = conn.execute("SELECT s.id, s.kind, s.page_number, s.mime_type, s.byte_size, a.export_mode "
+                        "FROM paper_assets s JOIN paper_archives a ON a.id = s.paper_id "
+                        "WHERE s.paper_id = ? AND s.kind IN ('pdf', 'answers_pdf') AND a.file_status = 'ready'", (paper_id,)).fetchall()
+    assets = {row["kind"]: dict(row) for row in rows}
+    selected = "answers_pdf" if kind == "answers" and "answers_pdf" in assets else "pdf"
+    asset = assets.get(selected)
+    if asset:
+        asset["export_mode"] = "answersOnly" if selected == "answers_pdf" else "student" if "answers_pdf" in assets else asset["export_mode"]
+    return asset
 
 
 def listing(conn, catalog_id, admin=False, can_download=True):
@@ -28,15 +44,18 @@ def listing(conn, catalog_id, admin=False, can_download=True):
         return []
     originals = [("original", paper[0])]
     originals.extend((row["kind"], row["paper_id"]) for row in conn.execute("SELECT kind, paper_id FROM catalog_print_editions WHERE catalog_id = ? ORDER BY kind", (catalog_id,)) if row["paper_id"] != paper[0])
+    if not any(kind == "answers" for kind, _ in originals) and conn.execute(
+            "SELECT 1 FROM paper_assets WHERE paper_id = ? AND kind = 'answers_pdf'", (paper[0],)).fetchone():
+        originals.append(("answers", paper[0]))
     result = []
     for kind, paper_id in originals:
-        asset = conn.execute("SELECT s.id, s.byte_size, a.export_mode FROM paper_assets s JOIN paper_archives a ON a.id = s.paper_id WHERE s.paper_id = ? AND s.kind = 'pdf' AND a.file_status = 'ready'", (paper_id,)).fetchone()
+        asset = pdf_asset(conn, paper_id, kind)
         if not asset:
             continue
         mode = asset["export_mode"]
         label = LABELS[kind] if kind != "original" else {"student": "练习版", "answersOnly": "答案版", "withAnswers": "习题与答案版"}[mode]
         item = {"kind": kind, "label": label, "byte_size": asset["byte_size"], "mode": mode}
-        if admin:
+        if admin and not (kind == "answers" and paper_id == paper[0]):
             item["paper_id"] = paper_id
         if can_download:
             prefix = "/api/v1/admin/catalog" if admin else "/api/v1/catalog"
@@ -50,6 +69,8 @@ def source_id(conn, catalog_id, original_id, kind):
         return original_id
     row = conn.execute("SELECT e.paper_id FROM catalog_print_editions e JOIN paper_archives a ON a.id = e.paper_id WHERE e.catalog_id = ? AND e.kind = ? AND a.file_status = 'ready'", (catalog_id, kind)).fetchone()
     if not row:
+        if kind == "answers" and conn.execute("SELECT 1 FROM paper_assets WHERE paper_id = ? AND kind = 'answers_pdf'", (original_id,)).fetchone():
+            return original_id
         fail("此版本尚未发布或已更新，请刷新资料", 404)
     return row[0]
 
@@ -61,6 +82,8 @@ def is_import(row) -> bool:
 
 def sources(admin_id, catalog_id, q=""):
     with db() as conn:
+        from app.services.catalog_scope import require_paper
+        require_paper(conn, admin_id, catalog_id)
         target = conn.execute("SELECT a.* FROM catalog_papers c JOIN paper_archives a ON a.id = c.paper_id WHERE c.id = ?", (catalog_id,)).fetchone()
         if not target:
             fail("资料不存在", 404)
@@ -91,6 +114,8 @@ def sources(admin_id, catalog_id, q=""):
 
 def assign(admin_id, catalog_id, body):
     with db(serialized=True) as conn:
+        from app.services.catalog_scope import require_paper
+        require_paper(conn, admin_id, catalog_id)
         target = conn.execute("SELECT c.*, a.snapshot_json, a.source_id AS archive_source_id FROM catalog_papers c JOIN paper_archives a ON a.id = c.paper_id WHERE c.id = ?", (catalog_id,)).fetchone()
         if not target:
             fail("资料不存在", 404)
@@ -107,7 +132,8 @@ def assign(admin_id, catalog_id, body):
             if not (is_import(source) or target["archive_source_id"].startswith("import-")):
                 # 仅工作台产出做内容一致性校验；涉及手动导入的由导入人自行确认内容配套
                 mode = json.loads(source["snapshot_json"])["export_options"]["mode"]
-                if (body.kind == "student" and mode != "student") or (body.kind == "answers" and mode not in ("answersOnly", "withAnswers")):
+                separate = json.loads(source["snapshot_json"])["export_options"].get("separate_answers", False)
+                if (body.kind == "student" and mode != "student" and not separate) or (body.kind == "answers" and mode not in ("answersOnly", "withAnswers")):
                     fail("文件的导出模式与所选打印版本不一致", 422)
                 if fingerprint(source["snapshot_json"]) != fingerprint(target["snapshot_json"]):
                     fail("打印版本必须与当前资料包含相同题目，请从同一份习题保存练习版或答案版", 422)

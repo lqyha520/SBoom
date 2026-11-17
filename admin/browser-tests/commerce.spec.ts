@@ -19,7 +19,7 @@ test('慢配置不阻塞历史订单，配置失败可在订单弹窗内重试�
   let failConfig = false, configReads = 0, listReads = 0
   await context.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname
-    if (path === '/api/v1/auth/me') { await route.fulfill({ json: { id: 1, username: 'admin', role: 'admin' } }); return }
+    if (path === '/api/v1/auth/me') { await route.fulfill({ json: { id: 1, username: 'admin', role: 'admin', is_super_admin: true } }); return }
     if (path === '/api/v1/admin/commerce/plans') {
       if (++configReads === 1) await pending
       await route.fulfill(failConfig ? { status: 503, json: { detail: { error: '配置暂不可用' } } } : { json: plans(true, false) })
@@ -58,7 +58,7 @@ test('对账按微信商户配置启用，虚拟支付就绪与故障均不干�
   let current = plans(false, true), listReads = 0
   await context.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname
-    if (path === '/api/v1/auth/me') { await route.fulfill({ json: { id: 1, username: 'admin', role: 'admin' } }); return }
+    if (path === '/api/v1/auth/me') { await route.fulfill({ json: { id: 1, username: 'admin', role: 'admin', is_super_admin: true } }); return }
     if (path === '/api/v1/admin/commerce/plans') { await route.fulfill({ json: current }); return }
     if (path === '/api/v1/admin/commerce/reconciliations') {
       listReads++
@@ -84,7 +84,7 @@ test('过期用户列表链接直接回有效末页，不连续请求中间空�
   const offsets: number[] = []
   await context.route('**/api/**', async route => {
     const url = new URL(route.request().url())
-    if (url.pathname === '/api/v1/auth/me') { await route.fulfill({ json: { id: 1, username: 'admin', role: 'admin' } }); return }
+    if (url.pathname === '/api/v1/auth/me') { await route.fulfill({ json: { id: 1, username: 'admin', role: 'admin', is_super_admin: true } }); return }
     if (url.pathname === '/api/v1/admin/mini-users') {
       const offset = Number(url.searchParams.get('offset')); offsets.push(offset)
       await route.fulfill({ json: { items: offset === 20 ? [{ id: 'buyer', username: 'buyer', nickname: '末页用户', avatar: '', has_password: true,

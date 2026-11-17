@@ -6,11 +6,13 @@ import { uiConfig } from '../ui/config.mts'
 
 // 后端 FastAPI 默认端口
 const BACKEND = process.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000'
+const gameIcons = ['store', 'bot', 'rocket', 'brain', 'pizza', 'scroll-text', 'book-marked', 'spell-check-2', 'shopping-basket', 'clock-3', 'grid-2x2', 'panels-top-left', 'star', 'layers-3', 'paintbrush', 'waypoints', 'puzzle', 'package', 'shapes', 'route', 'scale', 'flask-conical', 'flip-horizontal-2', 'scan-eye', 'music-2', 'sprout', 'trees', 'palette', 'apple', 'backpack', 'recycle', 'footprints', 'git-branch', 'map', 'mouse-pointer-2', 'notebook-text', 'search', 'shuffle', 'layout-grid', 'maximize-2', 'minimize-2', 'heart', 'arrow-down', 'x'].map(name => `lucide:${name}`)
 
 export default defineConfig(({ command }) => ({
   cacheDir: 'node_modules/.vite-web',
   // Production builds consume tracked declarations without racing to rewrite them.
-  plugins: [vue(), ui({ dts: command === 'serve', router: false, colorMode: false, ui: uiConfig, experimental: { componentDetection: true }, icon: { clientBundle: { scan: true } } })],
+  // 游戏目录中的动态图标显式打包，避免首屏依赖外部图标服务。
+  plugins: [vue(), ui({ dts: command === 'serve', router: false, colorMode: false, ui: uiConfig, experimental: { componentDetection: true }, icon: { clientBundle: { scan: true, icons: gameIcons } } })],
   resolve: {
     dedupe: ['vue'],
     alias: {

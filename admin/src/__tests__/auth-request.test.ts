@@ -59,7 +59,7 @@ it('旧页面显式携带的账号不能被新的公共账号覆盖', async () =
 })
 
 it('登录不携带旧账号校验，成功后绑定新的账号', async () => {
-  const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ id: 2, username: 'new', role: 'admin' }))).mockResolvedValue(new Response('{}'))
+  const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ id: 2, username: 'new', role: 'admin', is_super_admin: true }))).mockResolvedValue(new Response('{}'))
   vi.stubGlobal('fetch', fetchMock)
   await login('new', 'fixture')
   expect(new Headers(fetchMock.mock.calls[0][1].headers).has('X-Workspace-User')).toBe(false)

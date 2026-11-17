@@ -1,21 +1,22 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch, type InputHTMLAttributes } from 'vue'
-import { adminGroups, searchAdminNavigation, type NavItem } from '../admin-navigation'
+import { allowedAdminGroups, searchAdminNavigation, type NavItem } from '../admin-navigation'
 import { adminRoute, navigateAdmin, type AdminTab } from '../navigation'
 
+const adminGroups = computed(() => allowedAdminGroups(true))
 const props = defineProps<{ userId: number; favorites: NavItem[] }>()
 const open = ref(false)
 const query = ref('')
 const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘ K' : 'Ctrl K'
 const searchInput = { 'aria-label': '搜索管理页面', maxlength: 80 } satisfies InputHTMLAttributes
 const storageKey = `lc-admin-recent:${props.userId}`
-const items = adminGroups.flatMap(group => group.items)
+const items = computed(() => adminGroups.value.flatMap(group => group.items))
 const recent = ref<AdminTab[]>(readRecent())
 
 function readRecent(): AdminTab[] {
   try {
     const saved: unknown = JSON.parse(sessionStorage.getItem(storageKey) || '[]')
-    if (Array.isArray(saved)) return [...new Set(saved.filter((id): id is AdminTab => items.some(item => item.id === id)))].slice(0, 5)
+    if (Array.isArray(saved)) return [...new Set(saved.filter((id): id is AdminTab => items.value.some(item => item.id === id)))].slice(0, 5)
   } catch { /* 无法存储时，仍可使用本次页面中的最近访问。 */ }
   return []
 }
@@ -35,24 +36,24 @@ function select(id: AdminTab) {
 function command(item: NavItem) {
   return {
     ...item,
-    description: adminGroups.find(group => group.items.some(entry => entry.id === item.id))?.label,
+    description: adminGroups.value.find(group => group.items.some(entry => entry.id === item.id))?.label,
     active: item.id === adminRoute.tab,
     onSelect: () => select(item.id),
   }
 }
 
 const commandGroups = computed(() => {
-  if (query.value.trim()) return searchAdminNavigation(query.value).map(group => ({
+  if (query.value.trim()) return searchAdminNavigation(query.value, true).map(group => ({
     id: group.id, label: group.label, ignoreFilter: true, items: group.items.map(command),
   }))
-  const recentItems = recent.value.flatMap(id => items.filter(item => item.id === id && id !== adminRoute.tab))
+  const recentItems = recent.value.flatMap(id => items.value.filter(item => item.id === id && id !== adminRoute.tab))
   const seen = new Set(recentItems.map(item => item.id))
   const favorites = props.favorites.filter(item => !seen.has(item.id) && item.id !== adminRoute.tab)
   favorites.forEach(item => seen.add(item.id))
   return [
     { id: 'recent', label: '最近访问', ignoreFilter: true, items: recentItems.map(command) },
     { id: 'favorites', label: '常用入口', ignoreFilter: true, items: favorites.map(command) },
-    { id: 'all', label: '全部页面', ignoreFilter: true, items: items.filter(item => !seen.has(item.id)).map(command) },
+    { id: 'all', label: '全部页面', ignoreFilter: true, items: items.value.filter(item => !seen.has(item.id)).map(command) },
   ].filter(group => group.items.length)
 })
 

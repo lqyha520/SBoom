@@ -8,6 +8,7 @@ import ts from 'typescript'
 import * as vue from 'vue'
 import { parse } from 'vue/compiler-sfc'
 import { clipNickname, nicknameError, registrationAccountError } from '../../shared/mini-profile'
+import { invitationShareCard } from '../src/services/return-route'
 
 function moduleFixture(file: string, modules: Record<string, unknown>, expose = '', globals: Record<string, unknown> = {}) {
   let source = readFileSync(new URL('../src/' + file, import.meta.url), 'utf8')
@@ -21,10 +22,25 @@ function moduleFixture(file: string, modules: Record<string, unknown>, expose = 
 
 const user = () => ({ id: 'reader', username: 'wx1234567890', nickname: '小海豚', avatar: '', avatar_url: null, is_vip: false })
 
+test('个人中心邀请好友返回首页卡片，封面不使用当前账号页面截图', () => {
+  let share!: () => ReturnType<typeof invitationShareCard>
+  moduleFixture('pages/account/index.vue', {
+    '@dcloudio/uni-app': { onShareAppMessage: (callback: typeof share) => { share = callback }, onHide() {}, onShow() {}, onUnload() {}, onPullDownRefresh() {} },
+    '../../services/return-route': { invitationShareCard },
+    '../../services/session': { session: { user: user() } },
+    '../../services/tabbar-overlay': { useTabBarOverlay() {} },
+  }, '', { uni: { $on() {} } })
+  const card = share()
+  assert.equal(card.path, '/pages/home/index')
+  assert.equal(card.imageUrl, '/static/share/home.jpg')
+  assert.ok(!card.title.includes('小海豚'))
+})
+
 test('新注册至少8位，已有6位密码仍可进入登录请求', async () => {
   const calls: string[] = []
   const api = moduleFixture('pages/login/index.vue', {
-    '@dcloudio/uni-app': { onLoad() {}, onShow() {}, onHide() {}, onUnload() {} },
+    '@dcloudio/uni-app': { onLoad() {}, onShareAppMessage() {}, onShow() {}, onHide() {}, onUnload() {} },
+    '../../services/referral': { referralPayload: () => ({}), beginReferralRegistration: async () => {} },
     '../../services/privacy': { hasConsent: () => true, rememberConsent() {} },
     '../../services/api': { errorMessage: String, request: async (path: string) => { calls.push(path); return {} } },
     '../../services/session': { loginMini() {} },
@@ -57,7 +73,7 @@ test('opening a native photo picker keeps the profile draft alive across hide/sh
   const session = vue.reactive({ user: user() })
   let refreshes = 0, summaryRefreshes = 0, pulled = 0
   const page = moduleFixture('pages/account/index.vue', {
-    '@dcloudio/uni-app': { onHide: (fn: () => void) => { hooks.hide = fn }, onShow: (fn: () => void) => { hooks.show = fn }, onUnload: (fn: () => void) => { hooks.unload = fn }, onPullDownRefresh: (fn: () => void) => { hooks.pull = fn } },
+    '@dcloudio/uni-app': { onShareAppMessage() {}, onHide: (fn: () => void) => { hooks.hide = fn }, onShow: (fn: () => void) => { hooks.show = fn }, onUnload: (fn: () => void) => { hooks.unload = fn }, onPullDownRefresh: (fn: () => void) => { hooks.pull = fn } },
     '../../services/session': { session, ensureSession: async () => true, refreshMembership: async () => { refreshes++ } },
     '../../services/api': { errorMessage: String, fetchCatalogSummary: async (options: { force?: boolean }) => { if (options.force) summaryRefreshes++; return {} } },
     '../../services/growth': { refreshUnread: async () => {} },

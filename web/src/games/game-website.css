@@ -1,0 +1,205 @@
+.games-page.has-active-game {
+  padding-bottom: 90px;
+  background: #f8faf7;
+}
+.game-session-tools {
+  position: fixed;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: max-content;
+  max-width: calc(100% - 20px);
+  padding: 5px 8px;
+  border: 1px solid #cedecc;
+  border-radius: 14px;
+  background: #fffffff5;
+  box-shadow: 0 6px 30px #25433420;
+  z-index: 20;
+  color: #46644e;
+  font-family: var(--font-ui);
+}
+.game-session-tools a,
+.game-session-tools button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  padding: 8px 13px;
+  font-size: 13px;
+  border-radius: 9px;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.game-session-tools a:hover,
+.game-session-tools button:hover {
+  background: #edf4e9;
+}
+.game-session-tools button.saved {
+  color: #a34f63;
+  background: #fff2f3;
+}
+.game-session-tools button[aria-pressed="true"]:not(.saved) {
+  background: #e4efde;
+  color: #365b3a;
+}
+.game-session-tools :is(a, button):focus-visible {
+  outline: 3px solid #93b19b;
+  outline-offset: 2px;
+}
+.game-session-tools :is(a, button) > span {
+  width: 17px;
+  height: 17px;
+  flex: none;
+}
+.game-session-notice {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  border: 1px solid #e9d9af;
+  background: #fff8e7;
+  color: #795e2d;
+  font-size: 12px;
+  line-height: 1.7;
+  border-radius: 10px;
+  padding: 10px 14px;
+  white-space: normal;
+}
+.games-page.focused .cloud-bar,
+.games-page.focused .games-nav {
+  display: none;
+}
+.games-loading > span {
+  margin: 0 auto 12px;
+  display: block;
+}
+@media (max-width: 760px) {
+  .games-page.has-active-game .puzzle-layout,
+  .games-page.has-active-game .explore-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .games-page.has-active-game .puzzle-sidebar,
+  .games-page.has-active-game .explore-sidebar {
+    display: contents;
+  }
+  .games-page.has-active-game .board-tools,
+  .games-page.has-active-game .explore-controls {
+    order: 0;
+    position: sticky;
+    top: 8px;
+    z-index: 12;
+    width: 100%;
+    border-radius: 12px;
+    background: #f8faf7ee;
+    padding: 5px;
+    box-shadow: 0 4px 12px #2947310b;
+  }
+  .games-page.has-active-game .board-tools button,
+  .games-page.has-active-game .explore-controls button {
+    min-height: 44px;
+    font-size: 13px;
+    color: #49694e;
+  }
+  .games-page.has-active-game .hint-card,
+  .games-page.has-active-game .explore-feedback {
+    order: 1;
+    width: 100%;
+    font-size: 14px;
+    line-height: 1.8;
+    color: #765f35;
+    scroll-margin-top: 72px;
+    margin: 0;
+  }
+  .games-page.has-active-game .puzzle-stage,
+  .games-page.has-active-game .explore-stage {
+    order: 2;
+    width: 100%;
+  }
+  .games-page.has-active-game .thinking-card,
+  .games-page.has-active-game .explore-rules {
+    order: 3;
+    width: 100%;
+  }
+  .games-page.has-active-game .puzzle-footnote,
+  .games-page.has-active-game .explore-footnote {
+    order: 4;
+  }
+  .games-page.has-active-game .thinking-card p,
+  .games-page.has-active-game .explore-rules p {
+    font-size: 13px;
+    color: #5f745e;
+  }
+  .games-page.has-active-game .puzzle-difficulties button,
+  .games-page.has-active-game .explore-difficulties button {
+    min-height: 44px;
+    font-size: 13px;
+  }
+  .games-page.has-active-game .help-button,
+  .games-page.has-active-game .explore-help {
+    width: 44px;
+    height: 44px;
+  }
+  .games-page.has-active-game .puzzle-feedback,
+  .games-page.has-active-game .brain-caption,
+  .games-page.has-active-game .explore-caption {
+    font-size: 13px;
+    line-height: 1.8;
+  }
+  .games-page.has-active-game .puzzle-feedback {
+    color: #5e7655;
+  }
+  .games-page.has-active-game .night .puzzle-feedback {
+    color: #d7e2ed;
+  }
+}
+@media (max-width: 560px) {
+  .game-session-tools {
+    gap: 2px;
+    padding: 4px;
+    width: calc(100% - 20px);
+  }
+  .game-session-tools a,
+  .game-session-tools button {
+    flex: 1;
+    gap: 5px;
+    font-size: 12px;
+    padding: 8px 5px;
+  }
+  .games-page.has-active-game .cloud-bar {
+    font-size: 11px;
+    line-height: 1.7;
+    padding: 8px 14px;
+  }
+  .games-page.has-active-game .soko-dpad {
+    grid-template-columns: repeat(3, 48px);
+    grid-template-rows: repeat(2, 46px);
+  }
+  .games-page.has-active-game .catch-buttons button {
+    height: 48px;
+  }
+  .games-page.has-active-game .explore-primary,
+  .games-page.has-active-game .primary-button {
+    min-height: 44px;
+  }
+}
+@media (max-width: 350px) {
+  .game-session-tools a,
+  .game-session-tools button {
+    font-size: 11px;
+    gap: 3px;
+  }
+  .game-session-tools :is(a, button) > span {
+    width: 15px;
+    height: 15px;
+  }
+}
+
+@media(max-width:760px){.games-page.has-active-game .art-palette button{width:44px;height:44px}.games-page.has-active-game .piece-controls button,.games-page.has-active-game .mirror-palette button,.games-page.has-active-game .soko-levels button{min-height:44px}}

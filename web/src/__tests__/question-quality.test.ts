@@ -50,6 +50,7 @@ describe('整卷质量提示', () => {
     expect(questionConcerns(reviewed())).toEqual([])
     expect(questionConcerns({ ...reviewed(), quality_status: undefined })).toContain('尚未完成独立复核')
     expect(questionConcerns({ ...reviewed(), analysis: '' })).toContain('缺少解析，请核对解题依据')
+    for (const answer of [undefined, '', []]) expect(questionConcerns({ ...reviewed(), answer })).toContain('缺少答案，请补齐后核对')
     expect(questionConcerns({ ...reviewed(), quality_status: 'unchecked', quality_issues: ['独立复核未完成'] })).toEqual(['独立复核未完成'])
   })
 

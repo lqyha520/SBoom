@@ -8,7 +8,7 @@ async function catalogApi(context: BrowserContext) {
   await context.route('**/api/**', async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname
     let data: unknown
-    if (path === '/api/v1/auth/me') data = { id: 1, username: 'admin', role: 'admin' }
+    if (path === '/api/v1/auth/me') data = { id: 1, username: 'admin', role: 'admin', is_super_admin: true }
     else if (path === '/api/v1/admin/site/categories') data = { items: [{ id: 'practice', name: '随堂练习', is_visible: true }] }
     else if (path === '/api/v1/admin/site/dictionary') data = { items: [{ value: url.searchParams.get('kind') === 'grade' ? '小学三年级' : '数学' }] }
     else if (path === '/api/v1/admin/catalog/sources') data = { items: [{ id: 'source', title: '来源练习', grade: '小学三年级', subject: '数学', version: 1, file_status: 'ready', question_count: 3 }], total: 1, has_more: false }

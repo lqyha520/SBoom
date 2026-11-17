@@ -11,6 +11,14 @@ from pydantic import BaseModel, Field
 
 from app.blocking import run_sync
 from app.deps import require_user
+from app.models.consumer_responses import (
+    GenerationStatusResponse,
+    StatusResponse,
+    TemplateSavedResponse,
+    TemplatesImportedResponse,
+    TemplatesResponse,
+)
+from app.models.responses import GenerationUsageResponse
 from app.services import user_store
 from app.services.generation_control import request_status, usage_summary
 from app.services.user_store import CurrentUser
@@ -19,14 +27,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/me", tags=["个人数据"])
 
 
-@router.get("/usage", summary="最近 24 小时的生成用量")
+@router.get("/usage", response_model=GenerationUsageResponse, summary="最近 24 小时的生成用量")
 async def generation_usage(user: CurrentUser = Depends(require_user)):
     return await run_sync(usage_summary, user.id)
 
 
-@router.get("/generations/{request_id}", summary="查询本人生成请求的状态及结果")
+@router.get("/generations/{request_id}", summary="查询本人生成请求的状态及结果", response_model=GenerationStatusResponse, response_model_exclude_unset=True)
 async def generation_status(request_id: str, user: CurrentUser = Depends(require_user)):
-    return await run_sync(request_status, user.id, request_id)
+    status = await run_sync(request_status, user.id, request_id)
+    if status["kind"] == "image" and status.get("recoverable"):
+        from app.services.image_recovery import schedule
+        await schedule(user.id, request_id)
+        return await run_sync(request_status, user.id, request_id)
+    return status
 
 
 # ─── 每用户模板 ───
@@ -50,12 +63,12 @@ def _check_template_size(template: dict) -> None:
         raise HTTPException(status_code=413, detail={"error": "模板内容过大（上限 512KB）"})
 
 
-@router.get("/templates", summary="列出当前用户的模板")
+@router.get("/templates", summary="列出当前用户的模板", response_model=TemplatesResponse, response_model_exclude_unset=True)
 async def list_templates(user: CurrentUser = Depends(require_user)):
     return {"templates": await run_sync(user_store.list_templates, user.id)}
 
 
-@router.put("/templates", summary="保存/覆盖模板（按 name upsert）")
+@router.put("/templates", summary="保存/覆盖模板（按 name upsert）", response_model=TemplateSavedResponse, response_model_exclude_unset=True)
 async def upsert_template(req: TemplateIn, user: CurrentUser = Depends(require_user)):
     name = (req.template or {}).get("name")
     if not isinstance(name, str) or not name.strip() or len(name) > 120:
@@ -68,7 +81,7 @@ async def upsert_template(req: TemplateIn, user: CurrentUser = Depends(require_u
     return {"status": "ok", "revision": revision}
 
 
-@router.delete("/templates", summary="删除模板")
+@router.delete("/templates", summary="删除模板", response_model=StatusResponse, response_model_exclude_unset=True)
 async def delete_template(name: str, expected_revision: int | None = Query(None, ge=0), user: CurrentUser = Depends(require_user)):
     try:
         ok = await run_sync(user_store.delete_template, user.id, name, expected_revision)
@@ -79,7 +92,7 @@ async def delete_template(name: str, expected_revision: int | None = Query(None,
     return {"status": "ok"}
 
 
-@router.post("/templates/bulk", summary="批量导入模板（本地数据迁移到服务端）")
+@router.post("/templates/bulk", summary="批量导入模板（本地数据迁移到服务端）", response_model=TemplatesImportedResponse, response_model_exclude_unset=True)
 async def bulk_upload(req: BulkTemplatesIn, user: CurrentUser = Depends(require_user)):
     templates = [t for t in (req.templates or []) if isinstance(t, dict) and t.get("name")]
     for t in templates:

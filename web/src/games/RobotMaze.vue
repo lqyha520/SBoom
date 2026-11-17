@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { writeGameSave } from './game-storage'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import GameNav from './GameNav.vue'
 import {
@@ -169,7 +170,7 @@ function restart() {
   hintOpen.value = false; resetOpen.value = false; rewind()
 }
 watch(save, value => {
-  try { localStorage.setItem(props.storageKey, JSON.stringify(value)); saveError.value = false }
+  try { writeGameSave(props.storageKey, value); saveError.value = false }
   catch { saveError.value = true }
 }, { deep: true, immediate: true, flush: 'post' })
 watch(() => props.storageKey, () => {

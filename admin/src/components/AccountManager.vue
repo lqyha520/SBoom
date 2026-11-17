@@ -5,6 +5,10 @@ import { useAdminListRoute } from "../navigation";
 import { computed, onActivated, onDeactivated, ref, watch } from "vue";
 import { lazyComponent } from "../../../shared/async-component";
 import * as api from "../api";
+import { canAdmin } from '../permissions';
+const AdminPermissionsDialog = lazyComponent(() => import('./AdminPermissionsDialog.vue'));
+const permissionUser = ref<api.AdminUser | null>(null);
+const permissionMenu = computed(() => props.role === 'admin' ? 'adminAccounts' : 'users');
 
 const UserTemplatesDialog = lazyComponent(
   () => import("./UserTemplatesDialog.vue"),
@@ -86,52 +90,18 @@ function show(next: Action, user: api.AdminUser | null = null) {
 }
 function actions(user: api.AdminUser) {
   const self = user.id === props.user.id;
-  return [
-    [
-      ...(!isAdmin.value
-        ? [
-            {
-              label: "查看模板",
-              icon: "i-lucide-files",
-              onSelect: () => {
-                templateUser.value = user;
-              },
-            },
-          ]
-        : []),
-      {
-        label: "重置密码",
-        icon: "i-lucide-key-round",
-        onSelect: () => show("password", user),
-      },
-      {
-        label: isAdmin.value ? "取消管理员权限" : "授予管理员权限",
-        icon: "i-lucide-shield-plus",
-        disabled: self,
-        onSelect: () => show("role", user),
-      },
-      {
-        label: user.is_active ? "停用用户" : "启用用户",
-        icon: user.is_active
-          ? "i-lucide-user-round-x"
-          : "i-lucide-user-round-check",
-        disabled: self,
-        onSelect: () => show("active", user),
-      },
-    ],
-    [
-      {
-        label: "删除用户",
-        icon: "i-lucide-trash-2",
-        color: "error" as const,
-        disabled: self,
-        onSelect: () => show("delete", user),
-      },
-    ],
-  ];
+  const menu = permissionMenu.value;
+  return [[
+    ...(!isAdmin.value ? [{ label: '查看模板', icon: 'i-lucide-files', onSelect: () => { templateUser.value = user; } }] : []),
+    ...(isAdmin.value && !user.is_super_admin ? [{ label: '分配权限', icon: 'i-lucide-key-square', onSelect: () => { permissionUser.value = user; } }] : []),
+    ...(canAdmin(menu, 'update') ? [{ label: '重置密码', icon: 'i-lucide-key-round', onSelect: () => show('password', user) },
+      ...(!user.is_super_admin ? [{ label: user.is_active ? '停用用户' : '启用用户', icon: 'i-lucide-user-round-check', disabled: self, onSelect: () => show('active', user) }] : [])] : []),
+    ...(props.user.is_super_admin && !user.is_super_admin ? [{ label: isAdmin.value ? '取消管理员权限' : '授予管理员权限', icon: 'i-lucide-shield-plus', disabled: self, onSelect: () => show('role', user) }] : []),
+    ...(canAdmin(menu, 'delete') && !user.is_super_admin ? [{ label: '删除用户', icon: 'i-lucide-trash-2', color: 'error' as const, disabled: self, onSelect: () => show('delete', user) }] : []),
+  ]];
 }
 async function submit() {
-  if (busy.value || !valid.value) return;
+  if (busy.value || !valid.value || !canAdmin(permissionMenu.value, action.value === 'create' ? 'create' : action.value === 'delete' ? 'delete' : 'update')) return;
   if (target.value?.id === props.user.id && action.value !== "password") return;
   busy.value = true;
   dialogError.value = "";
@@ -232,6 +202,7 @@ const draft = useDialogDraft(dialogOpen, () => form.value, busy, "账号资料")
             :loading="loading"
             @click="load()" /></UTooltip
         ><UButton
+          v-if="canAdmin(permissionMenu, 'create')"
           icon="i-lucide-user-round-plus"
           :label="isAdmin ? '创建管理员' : '创建用户'"
           @click="show('create')"
@@ -241,12 +212,12 @@ const draft = useDialogDraft(dialogOpen, () => form.value, busy, "账号资料")
     <UAlert
       v-if="isAdmin"
       color="warning"
-      title="管理员可访问整个后台，请仅为需要的人员开通独立账号。"
+      title="新管理员默认没有后台菜单权限。创建后请点击“分配权限”，按职责授权菜单和操作。"
       class="notice"
     />
     <p v-else class="text-toned text-xs -mt-1 mb-3">
       此处管理出题用户（普通账号）。后台管理员的账号在「系统设置 ›
-      管理员账号」里单独管理，需要给某人开通后台权限时，用右侧「授予管理员权限」即可。
+      管理员账号」里单独管理，只有超级管理员可以授予管理员角色和分配权限。
     </p>
     <UAlert
       v-if="error"
@@ -292,6 +263,7 @@ const draft = useDialogDraft(dialogOpen, () => form.value, busy, "账号资料")
                 class="ml-2"
                 >我</UBadge
               >
+              <UBadge v-if="item.is_super_admin" color="primary" class="ml-2">超级管理员</UBadge>
               <div class="text-dimmed text-[10px] font-normal mt-1">
                 ID {{ item.id }}
               </div>
@@ -317,7 +289,7 @@ const draft = useDialogDraft(dialogOpen, () => form.value, busy, "账号资料")
             </td>
             <td class="date-cell">{{ item.created_at }}</td>
             <td>
-              <UDropdownMenu :items="actions(item)"
+              <UDropdownMenu v-if="actions(item)[0]?.length" :items="actions(item)"
                 ><UButton
                   icon="i-lucide-ellipsis"
                   color="neutral"
@@ -407,7 +379,7 @@ const draft = useDialogDraft(dialogOpen, () => form.value, busy, "账号资料")
               variant="soft"
               :title="
                 isAdmin
-                  ? '将创建可访问整个后台的管理员账号。'
+                  ? '将创建尚未分配菜单权限的管理员账号。'
                   : '将创建普通出题用户账号。'
               "
           /></template>
@@ -490,5 +462,6 @@ const draft = useDialogDraft(dialogOpen, () => form.value, busy, "账号资料")
       :user="templateUser"
       @close="templateUser = null"
     />
+    <AdminPermissionsDialog v-if="permissionUser" :user="permissionUser" @close="permissionUser = null" @saved="notice = '权限已保存，新的接口授权立即生效'; load()" />
   </section>
 </template>

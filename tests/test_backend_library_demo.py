@@ -205,7 +205,7 @@ class DemoLibraryContracts(unittest.TestCase):
         self.write_manifest()
         with self.assertRaisesRegex(ValueError, "stale or incomplete"):
             seed_public_catalog(publisher, self.reader, self.root, self.assets)
-        self.assertEqual(public_catalog.admin_summary()["total"], 0)
+        self.assertEqual(public_catalog.admin_summary(publisher.id)["total"], 0)
         self.assertEqual(paper_library.library_summary(publisher.id)["papers"], 0)
         self.assertFalse((self.root / "private-papers").exists())
 

@@ -89,7 +89,8 @@ function networkOnce<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' 
         if (!anonymous && epoch !== generation) { reject(new ApiError('登录状态已变化', 409)); return }
         if (response.statusCode >= 200 && response.statusCode < 300) {
           uni.$emit?.('lc-performance', { kind: path.startsWith('/api/v1/catalog/papers?') ? 'catalog_api' : 'api', value: Date.now() - startedAt })
-          if (method !== 'GET' && path !== '/api/v1/catalog/window') invalidatePersonal()
+          // 匿名推广统计不修改当前账号，不能打断会员与个人摘要的缓存复用。
+          if (!anonymous && method !== 'GET' && path !== '/api/v1/catalog/window') invalidatePersonal()
           resolve(response.data as T); return
         }
         const { message, code, requestId } = parseErrorDetail(response.data, `请求失败 (${response.statusCode})`)
@@ -132,7 +133,9 @@ export function request<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELET
   // 冷启动公开内容独立于登录恢复；不携带 token、不复用个人缓存、不触发退出。
   if (options.anonymous) {
     const pathname = path.split('?')[0]
-    if (method !== 'GET' || (!publicPaths.has(pathname) && pathname !== '/api/v1/catalog/papers' && pathname !== '/api/v1/catalog/summary')) {
+    if (method === 'POST' && ['/api/v1/mini/referral-entry', '/api/v1/mini/referral-start'].includes(pathname || '')) return network<T>(path, method, data, options.scope, true)
+    const publicPaper = /^\/api\/v1\/catalog\/papers\/[a-zA-Z0-9_-]{1,64}$/.test(pathname || '')
+    if (method !== 'GET' || (!publicPaths.has(pathname) && pathname !== '/api/v1/catalog/papers' && pathname !== '/api/v1/catalog/summary' && !publicPaper)) {
       return Promise.reject(new ApiError('该接口不支持公开读取'))
     }
     if (!publicPaths.has(path)) return network<T>(path, method, data, options.scope, true)
@@ -215,5 +218,6 @@ export function patchProfile(payload: { nickname?: string; avatar?: string }) {
 export function patchPassword(currentPassword: string, newPassword: string) {
   return request<User>('/api/v1/mini/password', 'POST', { current_password: currentPassword, new_password: newPassword })
 }
+
 
 export const fetchCatalogWindow = (ids: string[], options: ReadOptions = {}) => request<{ items: PaperDetail[] }>('/api/v1/catalog/window', 'POST', { ids }, options)

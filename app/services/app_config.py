@@ -32,7 +32,8 @@ _LLM_KEY = "llm"
 _CACHE_TTL_SECONDS = 60.0
 
 _EMPTY = {"baseUrl": "", "model": "", "timeout": 120, "maxTokens": get_settings().llm_max_tokens,
-          "samplingMode": "configured", "tokenParameter": "max_tokens", "hasKey": False, "api_key": ""}
+          "samplingMode": "configured", "tokenParameter": "max_tokens", "thinkingMode": "default", "imageReview": False,
+          "hasKey": False, "api_key": ""}
 
 # ─── 缓存（进程内；管理员保存时失效，重启即空） ───
 #
@@ -133,15 +134,17 @@ def get_llm(with_key: bool = False, *, fresh: bool = False) -> dict:
         "api_key": decrypt_secret(key_enc) if with_key else "",
         "samplingMode": raw.get("samplingMode", "configured"),
         "tokenParameter": raw.get("tokenParameter", "max_tokens"),
+        "thinkingMode": raw.get("thinkingMode", "default"),
+        "imageReview": raw.get("imageReview", False),
         "revision": revision(raw),
     }
 
 
 def _save_llm_raw(conn, base_url: str, model: str, key_enc: str, timeout: int, max_tokens: int | None = None,
-                  sampling_mode: str = "configured", token_parameter: str = "max_tokens") -> None:
+                  sampling_mode: str = "configured", token_parameter: str = "max_tokens", thinking_mode: str = "default") -> None:
     payload = json.dumps(
         {"baseUrl": base_url, "model": model, "apiKeyEnc": key_enc, "timeout": timeout, "maxTokens": max_tokens or get_settings().llm_max_tokens,
-         "samplingMode": sampling_mode, "tokenParameter": token_parameter},
+         "samplingMode": sampling_mode, "tokenParameter": token_parameter, "thinkingMode": thinking_mode},
         ensure_ascii=False,
     )
     conn.execute(
@@ -156,7 +159,7 @@ def _save_llm_raw(conn, base_url: str, model: str, key_enc: str, timeout: int, m
 
 
 def save_llm(base_url: str, model: str, api_key: str, timeout: int, max_tokens: int | None = None,
-             sampling_mode: str = "configured", token_parameter: str = "max_tokens") -> None:
+             sampling_mode: str = "configured", token_parameter: str = "max_tokens", thinking_mode: str = "default") -> None:
     """保存全局 LLM 配置。api_key 为空字符串表示保留已存密钥不变。
 
     写路径不再持有缓存锁（否则一次 DB 写会卡住所有读请求）；
@@ -175,7 +178,7 @@ def save_llm(base_url: str, model: str, api_key: str, timeout: int, max_tokens: 
         if current.get("apiKeyEnc") or get_settings().llm_api_key:
             require_new_key(current.get("baseUrl") or get_settings().llm_base_url, base_url, api_key)
         key_enc = encrypt_secret(api_key) if api_key else current.get("apiKeyEnc", "")
-        _save_llm_raw(conn, base_url, model, key_enc, timeout, max_tokens, sampling_mode, token_parameter)
+        _save_llm_raw(conn, base_url, model, key_enc, timeout, max_tokens, sampling_mode, token_parameter, thinking_mode)
     _invalidate_cache()
 
 

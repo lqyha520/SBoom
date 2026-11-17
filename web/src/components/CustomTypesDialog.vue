@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useExamStore } from '../stores/exam'
-import { MAX_QUESTIONS_PER_TYPE, TYPE_NAME } from '../constants'
+import { TYPE_NAME } from '../constants'
+import { sectionQuestionLimit } from '../generation-limits'
 
 const open = defineModel<boolean>('open', { default: false })
 const store = useExamStore()
@@ -11,7 +12,7 @@ const count = ref(5)
 const baseTypes = Object.entries(TYPE_NAME).map(([value, label]) => ({ value, label }))
 function add() {
   if (!name.value.trim()) return
-  store.addCustomType(name.value.trim(), base.value, Math.min(MAX_QUESTIONS_PER_TYPE, Math.max(1, count.value || 5)))
+  store.addCustomType(name.value.trim(), base.value, Math.min(sectionQuestionLimit(base.value), Math.max(1, count.value || 5)))
   name.value = ''
   open.value = false
 }
@@ -23,7 +24,7 @@ function add() {
       <form id="custom-type-form" class="field-stack" @submit.prevent="add">
         <UFormField label="题型名称" required><UInput v-model="name" maxlength="10" placeholder="例如：口算天天练" autofocus /></UFormField>
         <UFormField label="基础题型"><USelect v-model="base" :items="baseTypes" /></UFormField>
-        <UFormField label="默认题数"><UInputNumber v-model="count" :min="1" :max="MAX_QUESTIONS_PER_TYPE" class="w-36" /></UFormField>
+        <UFormField label="默认题数"><UInputNumber v-model="count" :min="1" :max="sectionQuestionLimit(base)" class="w-36" /></UFormField>
       </form>
       <div v-if="store.customTypes.length" class="mt-6 border-t border-default pt-4">
         <p class="mb-2 text-xs text-muted">已添加的题型</p>

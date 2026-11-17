@@ -149,13 +149,15 @@ class ModelGenerationAPI(unittest.TestCase):
         with patch.object(generate, "_call_llm_and_parse", new=AsyncMock(side_effect=[
             {"sections": [section(QUESTIONS[0])]},
             {"game_type": "oral_math", "questions": [QUESTIONS[0]]},
+            {"game_type": "oral_math", "questions": [QUESTIONS[0]]},
+            {"game_type": "oral_math", "questions": [QUESTIONS[0]]},
         ])) as model:
             response = self.client.post("/api/v1/generate-batch", json=self.body)
         result = fixtures.incomplete_sections(response)[0]
         self.assertEqual(len(result["questions"]), 1)
         self.assertEqual(result["missing_count"], 1)
         self.assertTrue(result["quality_warnings"])
-        self.assertEqual(model.await_count, 2)
+        self.assertEqual(model.await_count, 4)  # 出题加三次共享预算；重复题始终不会回填
         self.assertIn("本次生成的题目不要重复。", model.call_args.args[0])
 
     def test_six_calculations_and_eight_blanks_remain_complete_with_shared_expressions(self):

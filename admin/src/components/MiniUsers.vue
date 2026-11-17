@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission, canPermission, canAdmin } from '../permissions'
 import { useDialogDraft } from '../dialog-draft'
 import { useAdminListRoute } from '../navigation'
 import { computed, onActivated, onDeactivated, ref, watch } from 'vue'
@@ -46,6 +47,7 @@ const filters = [{ label: '全部用户', value: 'all' }, ...levels, { label: '7
 
 type Action = 'create' | 'profile' | 'password' | 'membership' | 'delete'
 const action = ref<Action>('create')
+const actionPermission = computed(() => 'miniUsers:' + (action.value === 'create' ? 'create' : action.value === 'delete' ? 'delete' : 'update'))
 const title = computed(() => ({
   create: '创建小程序账号', profile: '编辑用户资料',
   password: target.value?.has_password ? '重置登录密码' : '设置登录密码',
@@ -119,7 +121,7 @@ function actions(item: MiniUser) {
     { label: '会员与账号状态', icon: 'i-lucide-user-cog', onSelect: () => show('membership', item) },
   ], [
     { label: '删除账号', icon: 'i-lucide-trash-2', color: 'error' as const, onSelect: () => show('delete', item) },
-  ]]
+  ]].map(group => group.filter(action => canAdmin('miniUsers', action.label === '删除账号' ? 'delete' : action.label === '操作记录' ? 'view' : 'update'))).filter(group => group.length)
 }
 async function save() {
   if (busy.value || !valid.value) return
@@ -164,7 +166,7 @@ const draft = useDialogDraft(dialog, () => [username.value, password.value, leve
 
 <template>
   <section class="admin-section" aria-label="小程序用户管理">
-    <div class="section-toolbar mini-toolbar"><form class="table-search" @submit.prevent="search"><UInput v-model="q" icon="i-lucide-search" placeholder="搜索小程序账号" aria-label="搜索小程序账号" /><UButton type="submit" icon="i-lucide-arrow-right" aria-label="搜索用户" variant="outline" color="neutral" :loading="loading" /></form><div class="actions-row"><USelect v-model="membership" :items="filters" aria-label="会员筛选" /><UTooltip text="刷新"><UButton icon="i-lucide-refresh-cw" aria-label="刷新小程序用户" color="neutral" variant="ghost" :loading="loading" @click="load" /></UTooltip><UButton icon="i-lucide-user-plus" label="创建账号" @click="show('create')" /></div></div>
+    <div class="section-toolbar mini-toolbar"><form class="table-search" @submit.prevent="search"><UInput v-model="q" icon="i-lucide-search" placeholder="搜索小程序账号" aria-label="搜索小程序账号" /><UButton type="submit" icon="i-lucide-arrow-right" aria-label="搜索用户" variant="outline" color="neutral" :loading="loading" /></form><div class="actions-row"><USelect v-model="membership" :items="filters" aria-label="会员筛选" /><UTooltip text="刷新"><UButton icon="i-lucide-refresh-cw" aria-label="刷新小程序用户" color="neutral" variant="ghost" :loading="loading" @click="load" /></UTooltip><UButton v-permission="'miniUsers:create'" icon="i-lucide-user-plus" label="创建账号" @click="show('create')" /></div></div>
     <UAlert v-if="error" :title="error" color="error" variant="soft" class="notice" />
     <UAlert v-if="notice" :title="notice" color="success" variant="soft" close class="notice" @update:open="notice = ''" />
     <div class="data-scroll" :aria-busy="loading"><table class="data-table action-table mini-users-table"><thead><tr><th>小程序账号</th><th>登录方式</th><th>会员身份</th><th>会员有效期</th><th>账号状态</th><th>注册时间</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
@@ -172,8 +174,8 @@ const draft = useDialogDraft(dialog, () => [username.value, password.value, leve
       <tr v-if="!items.length"><td colspan="7"><div class="empty-state"><UIcon :name="loading ? 'i-lucide-loader-circle' : 'i-lucide-users-round'" class="size-7" :class="{ 'animate-spin': loading }" /><h3>{{ loading ? '正在加载' : error ? '用户列表暂不可用' : '暂无小程序用户' }}</h3></div></td></tr>
     </tbody></table></div>
     <div class="table-footer"><span>共 {{ total }} 位小程序用户</span><UPagination v-if="total > 20" v-model:page="page" :total="total" :items-per-page="20" :sibling-count="1" size="sm" /></div>
-    <UModal v-model:open="draft.model.value" :title="title" :dismissible="!busy" :close="!busy"><template #body><form id="mini-user-form" class="field-stack" @submit.prevent="save">
-      <template v-if="action === 'create'"><UFormField label="登录账号" hint="2-32 位英文字母、数字、下划线或短横线，不能使用中文" required><UInput v-model="username" minlength="2" maxlength="32" autocomplete="off" :disabled="busy" required class="w-full" /></UFormField><UFormField label="初始密码" required><UInput v-model="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" :disabled="busy" required class="w-full" /></UFormField></template>
+    <UModal v-model:open="draft.model.value" :title="title" :dismissible="!busy" :close="!busy"><template #body><form id="mini-user-form" class="field-stack" @submit.prevent="canPermission(actionPermission) && (save())">
+      <template v-if="action === 'create'"><UFormField label="登录账号" hint="2-32 位英文字母、数字、下划线或短横线，不能使用中文" required><UInput v-model="username" minlength="2" maxlength="32" autocomplete="off" :disabled="!canPermission(actionPermission) || (busy)" required class="w-full" /></UFormField><UFormField label="初始密码" required><UInput v-model="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" :disabled="!canPermission(actionPermission) || (busy)" required class="w-full" /></UFormField></template>
 
       <template v-else-if="target">
         <div class="member-account"><span class="mini-avatar"><img v-if="target.avatar_url" :src="target.avatar_url" alt="头像" class="avatar-photo" /><span v-else-if="avatarGlyph(target.avatar)" class="mini-avatar-glyph">{{ avatarGlyph(target.avatar) }}</span><span v-else>{{ (target.username || '?').slice(0, 1).toUpperCase() }}</span></span><strong>{{ target.username }}</strong><UBadge size="xs" color="neutral" variant="soft">{{ target.has_password ? '可账号密码登录' : '仅微信登录' }}</UBadge></div>
@@ -183,22 +185,22 @@ const draft = useDialogDraft(dialog, () => [username.value, password.value, leve
             <button v-for="choice in AVATAR_CHOICES" :key="choice.key" type="button" class="avatar-option" :class="{ 'avatar-option-active': profileAvatarKey === choice.key }" :title="choice.label" :aria-label="choice.label" :aria-pressed="profileAvatarKey === choice.key" :disabled="busy" @click="profileAvatarKey = choice.key">{{ choice.glyph }}</button>
           </div></UFormField>
           <p class="avatar-hint"><span class="avatar-preview"><img v-if="profileAvatarKey === target.avatar && target.avatar_url" :src="target.avatar_url" alt="头像" class="avatar-photo" /><span v-else-if="avatarGlyph(profileAvatarKey)">{{ avatarGlyph(profileAvatarKey) }}</span><span v-else>{{ initial }}</span></span>当前：{{ profileAvatarKey ? (AVATAR_CHOICES.find(c => c.key === profileAvatarKey)?.label || '用户自选头像') : '未选择，小程序里显示昵称首字' }}<UButton v-if="profileAvatarKey" label="恢复默认" icon="i-lucide-rotate-ccw" color="neutral" variant="link" size="xs" :disabled="busy" @click="profileAvatarKey = ''" /></p>
-          <UFormField label="展示昵称" required><UInput v-model="profileName" minlength="1" maxlength="64" :disabled="busy" required class="w-full" /><template #hint>1 至 32 个字符，支持微信昵称和表情。登录账号 {{ target.username }} 保持不变，昵称可以重复。</template></UFormField>
+          <UFormField label="展示昵称" required><UInput v-model="profileName" minlength="1" maxlength="64" :disabled="!canPermission(actionPermission) || (busy)" required class="w-full" /><template #hint>1 至 32 个字符，支持微信昵称和表情。登录账号 {{ target.username }} 保持不变，昵称可以重复。</template></UFormField>
           <UAlert v-if="!profileDirty" color="info" variant="soft" title="昵称和头像都没改动，换一个再保存。" />
         </template>
 
-        <template v-else-if="action === 'password'"><UFormField label="新密码" required><UInput v-model="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="至少 8 位" :disabled="busy" required class="w-full" /></UFormField><UAlert :color="target.has_password ? 'warning' : 'info'" variant="soft" :title="target.has_password ? '重置后该账号的全部登录会话立即失效，用户需用新密码重新登录。' : '该账号目前只能用微信登录，设置密码后即可用固定登录账号和密码在 H5 登录。'" /></template>
+        <template v-else-if="action === 'password'"><UFormField label="新密码" required><UInput v-model="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="至少 8 位" :disabled="!canPermission(actionPermission) || (busy)" required class="w-full" /></UFormField><UAlert :color="target.has_password ? 'warning' : 'info'" variant="soft" :title="target.has_password ? '重置后该账号的全部登录会话立即失效，用户需用新密码重新登录。' : '该账号目前只能用微信登录，设置密码后即可用固定登录账号和密码在 H5 登录。'" /></template>
 
-        <template v-else-if="action === 'membership'"><UFormField label="会员身份"><USelect v-model="level" :items="levels" :disabled="busy" class="w-full" /></UFormField><template v-if="level === 'vip'"><USwitch v-model="lifetime" label="长期有效" :disabled="busy" /><UFormField v-if="!lifetime" label="会员到期时间" required><UInput v-model="expires" type="datetime-local" :disabled="busy" required class="w-full" /></UFormField></template><USwitch v-model="active" label="账号启用" :disabled="busy" /><UAlert v-if="!active" title="禁用后，该用户的全部小程序会话将失效。" color="warning" variant="soft" /></template>
+        <template v-else-if="action === 'membership'"><UFormField label="会员身份"><USelect v-model="level" :items="levels" :disabled="!canPermission(actionPermission) || (busy)" class="w-full" /></UFormField><template v-if="level === 'vip'"><USwitch v-model="lifetime" label="长期有效" :disabled="!canPermission(actionPermission) || (busy)" /><UFormField v-if="!lifetime" label="会员到期时间" required><UInput v-model="expires" type="datetime-local" :disabled="!canPermission(actionPermission) || (busy)" required class="w-full" /></UFormField></template><USwitch v-model="active" label="账号启用" :disabled="!canPermission(actionPermission) || (busy)" /><UAlert v-if="!active" title="禁用后，该用户的全部小程序会话将失效。" color="warning" variant="soft" /></template>
 
         <template v-else>
           <UAlert color="error" variant="soft" icon="i-lucide-triangle-alert" :title="'确认删除「' + target.username + '」？此操作不可恢复。'" description="该账号的登录态、收藏与下载记录会一并删除。如果只是想临时停用，请改用「会员与账号状态」里的「账号启用」开关。" />
-          <UCheckbox v-model="deleteConfirmed" label="我已确认，删除后无法找回该账号" :disabled="busy" />
+          <UCheckbox v-model="deleteConfirmed" label="我已确认，删除后无法找回该账号" :disabled="!canPermission(actionPermission) || (busy)" />
         </template>
       </template>
 
       <UAlert v-if="formError" :title="formError" color="error" variant="soft" />
-    </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="draft.setOpen(false)" /><UButton type="submit" form="mini-user-form" :label="submitLabel" :color="action === 'delete' ? 'error' : 'primary'" icon="i-lucide-check" :loading="busy" :disabled="busy || !valid" /></template></UModal>
+    </form></template><template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="busy" @click="draft.setOpen(false)" /><UButton v-permission="actionPermission" type="submit" form="mini-user-form" :label="submitLabel" :color="action === 'delete' ? 'error' : 'primary'" icon="i-lucide-check" :loading="busy" :disabled="busy || !valid" /></template></UModal>
     <MemberTools :open="toolsOpen" :target="toolsTarget" :admin-id="user.id" :initial="toolsInitial" @close="toolsOpen = false" @saved="load" />
   </section>
 </template>

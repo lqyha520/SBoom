@@ -8,7 +8,7 @@ import { createFilePool } from '../src/services/file-pool'
 function fixture() {
   // Exercise the native document lifecycle; H5 download links use a separate branch.
   const source = readFileSync(new URL('../src/services/assets.ts', import.meta.url), 'utf8').replace(/\/\/ #ifdef H5[\s\S]*?\/\/ #endif/g, '')
-  const tasks: { url: string; timeout: number; success: (result: { statusCode: number; tempFilePath: string }) => void; fail: () => void; aborted: number }[] = []
+  const tasks: { url: string; timeout: number; success: (result: { statusCode: number; tempFilePath: string }) => void; fail: () => void; aborted: number; progress?: (event: { progress: number; totalBytesWritten?: number }) => void }[] = []
   const opened: string[] = [], removed: string[] = []
   const performance: { kind: string; value: number }[] = []
   const exports: Record<string, any> = {}
@@ -22,7 +22,7 @@ function fixture() {
       $emit(name: string, event: { kind: string; value: number }) { if (name === 'lc-performance') performance.push(event) },
       downloadFile(options: (typeof tasks)[number]) {
         const task = { ...options, aborted: 0 }; tasks.push(task)
-        return { abort() { task.aborted++; task.fail() }, onProgressUpdate() {} }
+        return { abort() { task.aborted++; task.fail() }, onProgressUpdate(callback: NonNullable<typeof task.progress>) { task.progress = callback } }
       },
       getFileSystemManager: () => ({ unlink({ filePath }: { filePath: string }) { removed.push(filePath) } }),
       openDocument({ filePath, success }: { filePath: string; success: () => void }) { opened.push(filePath); success() },
@@ -86,6 +86,51 @@ test('native downloads abort when the last image consumer leaves', async () => {
   first.release(); assert.equal(tasks[0]!.aborted, 0)
   second.release(); await rejected
   assert.equal(tasks[0]!.aborted, 1)
+})
+
+test('免费观看但需会员下载的资料保留图片，只撤销该资料 PDF，不清除其他资料缓存', async () => {
+  const { api, tasks, removed } = fixture()
+  const a = '/api/v1/catalog/papers/a/assets/', b = '/api/v1/catalog/papers/b/assets/'
+  const imageA = api.acquireAsset(a + 'image'), imageB = api.acquireAsset(b + 'image')
+  await Promise.resolve()
+  tasks[0]!.success({ statusCode: 200, tempFilePath: '/a.jpg' }); tasks[1]!.success({ statusCode: 200, tempFilePath: '/b.jpg' })
+  await Promise.all([imageA.ready, imageB.ready])
+  const pdfA = api.openPdf({ url: a + 'pdf', byte_size: 100 }, 'A'); await Promise.resolve()
+  tasks[2]!.success({ statusCode: 200, tempFilePath: '/a.pdf' }); await pdfA
+  const pdfB = api.openPdf({ url: b + 'pdf', byte_size: 100 }, 'B'); await Promise.resolve()
+  tasks[3]!.success({ statusCode: 200, tempFilePath: '/b.pdf' }); await pdfB
+  api.revalidateCatalogAssetCache('a', true, false)
+  assert.deepEqual(removed, ['/a.pdf'])
+  const reused = api.acquireAsset(a + 'image'); assert.equal(await reused.ready, '/a.jpg'); assert.equal(tasks.length, 4)
+  api.revalidateCatalogAssetCache('a', false, false)
+  assert.deepEqual(removed, ['/a.pdf', '/a.jpg'])
+  assert.equal(await imageB.ready, '/b.jpg')
+  reused.release(); imageA.release(); imageB.release(); api.clearAssetCache()
+})
+
+test('资料观看权限撤销时取消该资料的排队和在途图片，其他资料继续下载', async () => {
+  const { api, tasks } = fixture()
+  const handles = Array.from({ length: 5 }, (_, index) => api.acquireAsset('/api/v1/catalog/papers/' + (index < 4 ? 'a' : 'b') + '/assets/' + index, 0))
+  const rejected = handles.slice(0, 4).map(handle => assert.rejects(handle.ready))
+  await Promise.resolve(); assert.equal(tasks.length, 3)
+  api.revalidateCatalogAssetCache('a', false, true); await Promise.all(rejected)
+  assert.equal(api.assetCacheStats().queued, 0)
+  const other = tasks.find(task => task.url.includes('/papers/b/'))!
+  assert.ok(other); assert.equal(other.aborted, 0)
+  other.success({ statusCode: 200, tempFilePath: '/b.jpg' }); await handles[4].ready
+  handles.forEach(handle => handle.release()); api.clearAssetCache()
+})
+
+test('下载进度订阅共享在途图片，释放一个订阅者后其进度不再更新', async () => {
+  const { api, tasks } = fixture(), first: number[] = [], second: number[] = []
+  const a = api.acquireAsset('/shared', 2, (percent: number) => first.push(percent))
+  await Promise.resolve(); tasks[0]!.progress!({ progress: 20, totalBytesWritten: 100 })
+  const b = api.acquireAsset('/shared', 2, (percent: number) => second.push(percent))
+  assert.deepEqual(second, [20]); a.release()
+  tasks[0]!.progress!({ progress: 80, totalBytesWritten: 400 })
+  assert.deepEqual(first, [20]); assert.deepEqual(second, [20, 80]); assert.equal(tasks.length, 1)
+  tasks[0]!.success({ statusCode: 200, tempFilePath: '/shared.jpg' }); await b.ready
+  b.release(); api.clearAssetCache()
 })
 
 test('PDF asset IDs get a long timeout without changing the API URL; images retain a short timeout', async () => {

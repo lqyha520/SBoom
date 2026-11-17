@@ -3,7 +3,7 @@
 import json
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
 
@@ -19,17 +19,36 @@ class CurrentUser:
     role: str = "user"
     is_active: bool = True
     token_valid_after: int = 0  # 早于该时间签发的会话一律视为失效（改密吊销）
+    is_super_admin: bool = False
+    admin_permissions: dict[str, list[str]] = field(default_factory=dict)
+    permissions_revision: int = 1
+
+
+def user_info(user: CurrentUser) -> dict:
+    return {'id': user.id, 'username': user.username, 'role': user.role,
+            'is_super_admin': user.role == 'admin' and user.is_super_admin,
+            'admin_permissions': user.admin_permissions if user.role == 'admin' else {},
+            'permissions_revision': user.permissions_revision}
+
+
+def from_row(row) -> CurrentUser:
+    return CurrentUser(id=row['id'], username=row['username'], role=row['role'], is_active=bool(row['is_active']),
+                       token_valid_after=int(row['token_valid_after'] or 0), is_super_admin=bool(row['is_super_admin']),
+                       admin_permissions=row['admin_permissions'], permissions_revision=row['permissions_revision'])
 
 
 # ─── 账号 ───
 
-def create_user(username: str, password: str, role: str = "user") -> CurrentUser:
-    with db() as conn:
+def create_user(username: str, password: str, role: str = "user", *, is_super_admin: bool = False,
+                actor: CurrentUser | None = None) -> CurrentUser:
+    with db(serialized='accounts') as conn:
+        if actor:
+            authorize_account(conn, actor, None, 'create', role)
         row = conn.execute(
-            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?) RETURNING id",
-            (username, hash_password(password), role),
+            "INSERT INTO users (username, password_hash, role, is_super_admin) VALUES (?, ?, ?, ?) RETURNING id",
+            (username, hash_password(password), role, is_super_admin and role == 'admin'),
         ).fetchone()
-        return CurrentUser(id=row[0], username=username, role=role)
+        return CurrentUser(id=row[0], username=username, role=role, is_super_admin=is_super_admin and role == 'admin')
 
 
 def get_user_by_username(username: str) -> Any | None:
@@ -42,15 +61,11 @@ def get_user_by_username(username: str) -> Any | None:
 def get_user_by_id(user_id: int) -> CurrentUser | None:
     with db() as conn:
         row = conn.execute(
-            "SELECT id, username, role, is_active, token_valid_after FROM users WHERE id = ?", (user_id,)
+            "SELECT * FROM users WHERE id = ?", (user_id,)
         ).fetchone()
     if not row:
         return None
-    return CurrentUser(
-        id=row["id"], username=row["username"],
-        role=row["role"], is_active=bool(row["is_active"]),
-        token_valid_after=int(row["token_valid_after"] or 0),
-    )
+    return from_row(row)
 
 
 @lru_cache(maxsize=1)
@@ -104,19 +119,21 @@ def count_admins() -> int:
 
 def ensure_admin(username: str, password: str, *, reset: bool = False) -> None:
     """首次创建种子账号；只有显式应急重置才修改已有账号并吊销旧会话。"""
+    from app.config import get_settings
+    bootstrap_super = username == get_settings().super_admin_username
     with db(serialized="accounts") as conn:
         row = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         if row:
             if reset:
                 conn.execute(
-                    "UPDATE users SET role = 'admin', is_active = 1, password_hash = ?, token_valid_after = ? WHERE id = ?",
-                    (hash_password(password), int(time.time()) + 1, row["id"]),
+                    "UPDATE users SET role = 'admin', is_active = 1, password_hash = ?, token_valid_after = ?, is_super_admin=? WHERE id = ?",
+                    (hash_password(password), int(time.time()) + 1, bootstrap_super, row["id"]),
                 )
                 conn.execute("DELETE FROM workspace_sessions WHERE user_id = ?", (row["id"],))
         else:
             conn.execute(
-                "INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')",
-                (username, hash_password(password)),
+                "INSERT INTO users (username, password_hash, role, is_super_admin) VALUES (?, ?, 'admin', ?)",
+                (username, hash_password(password), bootstrap_super),
             )
 
 
@@ -136,7 +153,7 @@ def list_users(query: str = "", role: str = "", limit: int = 20, offset: int = 0
         total = conn.execute(f"SELECT COUNT(*) FROM users u WHERE {where}", args).fetchone()[0]
         rows = conn.execute(
             f"""
-            SELECT u.id, u.username, u.role, u.is_active, u.created_at,
+            SELECT u.id, u.username, u.role, u.is_active, u.created_at, u.is_super_admin, u.permissions_revision,
                    (SELECT COUNT(*) FROM user_templates t WHERE t.user_id = u.id) AS template_count
             FROM users u
             WHERE {where}
@@ -152,11 +169,18 @@ def update_user(
     password: str | None = None,
     role: str | None = None,
     is_active: bool | None = None,
+    *, actor: CurrentUser | None = None,
 ) -> bool:
     """管理端更新用户（重置密码/改角色/启停）。返回是否命中。"""
-    with db() as conn:
-        if not conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
+    with db(serialized='accounts') as conn:
+        target = conn.execute("SELECT * FROM users WHERE id = ? FOR UPDATE", (user_id,)).fetchone()
+        if not target:
             return False
+        if actor:
+            authorize_account(conn, actor, target, 'update', role)
+        if target['is_super_admin'] and (role == 'user' or is_active is False):
+            from fastapi import HTTPException
+            raise HTTPException(400, detail={'error': '不能降级或停用超级管理员'})
         if password is not None:
             # 重置密码即吊销该用户所有旧会话（早于此刻签发的令牌全部失效）
             conn.execute(
@@ -166,6 +190,9 @@ def update_user(
             conn.execute("DELETE FROM workspace_sessions WHERE user_id = ?", (user_id,))
         if role is not None:
             conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+            if role != target['role']:
+                conn.execute("UPDATE users SET admin_permissions='{}'::jsonb, permissions_revision=permissions_revision+1 WHERE id=?", (user_id,))
+                conn.execute('DELETE FROM workspace_sessions WHERE user_id=?', (user_id,))
         if is_active is not None:
             conn.execute(
                 "UPDATE users SET is_active = ? WHERE id = ?",
@@ -178,9 +205,14 @@ class UserHasCatalogPapers(ValueError):
     pass
 
 
-def delete_user(user_id: int) -> bool:
+def delete_user(user_id: int, *, actor: CurrentUser | None = None) -> bool:
     """删除用户（模板、LLM 配置级联删除）。"""
     with db(serialized=("content", "accounts", "generation")) as conn:
+        target = conn.execute('SELECT * FROM users WHERE id=? FOR UPDATE', (user_id,)).fetchone()
+        if not target:
+            return False
+        if actor:
+            authorize_account(conn, actor, target, 'delete')
         if conn.execute("SELECT c.id FROM catalog_papers c JOIN paper_archives a ON a.id = c.paper_id WHERE a.user_id = ? LIMIT 1",
                         (user_id,)).fetchone():
             raise UserHasCatalogPapers("该用户的试卷仍在公共库中，请先在公共试卷管理中处理对应条目")
@@ -189,11 +221,26 @@ def delete_user(user_id: int) -> bool:
             raise UserHasCatalogPapers("该用户的原稿仍被公共资料的修订历史引用，请先处理公共条目")
         if conn.execute("SELECT 1 FROM catalog_edition_history e JOIN paper_archives a ON a.id = e.paper_id WHERE a.user_id = ? LIMIT 1", (user_id,)).fetchone():
             raise UserHasCatalogPapers("该用户的原稿仍被公共资料的打印版本引用，请先处理公共条目")
+        if target['is_super_admin']:
+            from fastapi import HTTPException
+            raise HTTPException(400, detail={'error': '不能删除超级管理员'})
         from app.services.file_retention import enqueue
         files = conn.execute("SELECT s.storage, s.storage_key FROM paper_assets s JOIN paper_archives a ON a.id = s.paper_id WHERE a.user_id = ? UNION SELECT storage, storage_key FROM image_assets WHERE user_id = ?", (user_id, user_id)).fetchall()
         enqueue(conn, [(row["storage"], row["storage_key"]) for row in files])
         cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         return int(cur.rowcount) > 0
+
+
+def authorize_account(conn, actor: CurrentUser, target, action: str, role: str | None = None):
+    """账号事务内重新检查操作者和目标角色，防止授权/改角色并发导致提权。"""
+    from app.admin_permissions import require
+    row = conn.execute('SELECT * FROM users WHERE id=?', (actor.id,)).fetchone()
+    if not row:
+        from fastapi import HTTPException
+        raise HTTPException(403, detail={'error': '账号权限已变化', 'code': 'permission_denied'})
+    current = from_row(row)
+    menu = 'adminAccounts' if role == 'admin' or target and target['role'] == 'admin' else 'users'
+    require(current, menu, action)
 
 
 def admin_stats() -> dict:

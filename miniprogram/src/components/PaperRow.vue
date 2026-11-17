@@ -55,7 +55,7 @@ function favorite() { if (!swipe.value?.blocksClick()) emit('favorite') }
         </view>
       </button>
       <view v-if="selectable" class="row-controls"><button class="bare-icon" role="checkbox" :aria-checked="selected" :aria-label="(selected ? '取消选择：' : '选择：') + exerciseText(paper.title)" :disabled="busy" @click="emit('select')"><view class="row-check" :class="{ checked: selected }"><wd-icon v-if="selected" name="check" size="15px" /></view></button></view>
-      <view v-else class="row-controls"><button class="favorite-control bare-icon" :class="{ 'is-favorite': paper.favorite, 'favorite-pop': popping }" hover-class="control-pressed" :disabled="busy" role="button" :aria-pressed="paper.favorite" :aria-label="paper.favorite ? '取消收藏' : '收藏习题'" :title="paper.favorite ? '取消收藏' : '收藏习题'" @click="favorite"><wd-icon :name="paper.favorite ? 'heart-fill' : 'heart'" size="22px" /></button><button role="button" class="bare-icon row-more" :disabled="busy" :aria-expanded="expanded" aria-label="更多资料操作" hover-class="control-pressed" @click="emit('expand', !expanded)"><wd-icon name="more" size="20px" /></button></view>
+      <view v-else class="row-controls"><button class="favorite-control bare-icon" :class="{ 'is-favorite': paper.favorite, 'favorite-pop': popping }" hover-class="control-pressed" :disabled="busy" role="button" :aria-busy="busy" :aria-pressed="paper.favorite" :aria-label="paper.favorite ? '取消收藏' : '收藏习题'" :title="paper.favorite ? '取消收藏' : '收藏习题'" @click="favorite"><wd-loading v-if="busy" size="18px" /><wd-icon v-else :name="paper.favorite ? 'heart-fill' : 'heart'" size="22px" /></button><button role="button" class="bare-icon row-more" :class="{ 'is-expanded': expanded }" :disabled="busy" :aria-expanded="expanded" aria-label="更多资料操作" :title="expanded ? '收起操作' : '更多资料操作'" hover-class="control-pressed" @click="emit('expand', !expanded)"><wd-icon :name="expanded ? 'close' : 'more'" size="18px" /></button></view>
     </view>
   </SwipeAction>
 </template>
@@ -63,8 +63,9 @@ function favorite() { if (!swipe.value?.blocksClick()) emit('favorite') }
 <style scoped>
 .paper-name { margin-top:0; }.paper-labels { margin-top:5px;gap:2px 8px;font-size:12px;line-height:1.6; }.paper-meta { margin-top:5px;gap:4px; }
 .paper-main { transition:opacity .12s ease; }.paper-main.row-pressed { opacity:.82; }.paper-main.row-pressed .paper-name { color:var(--lc-primary); }
-.row-controls { display:flex;flex-direction:column;align-items:center;flex:none; }
-.row-more { height:44px; }.is-favorite { color:var(--lc-coral); }
+.row-controls { display:flex;flex-direction:column;align-items:center;gap:2px;flex:none;margin-left:4px; }
+.row-more { height:44px;border-radius:12px;background:#f3f6f4; }.row-more.is-expanded { background:var(--lc-primary-soft);color:var(--lc-primary); }.is-favorite { color:var(--lc-coral); }
+.favorite-control.is-favorite { background:#faf0ed; }
 .row-vip-cover { display: flex; align-items: center; justify-content: center; width: 100%; color: var(--subject-color); }
 .row-selected { background:var(--lc-primary-soft); }.row-check { width:22px;height:22px;border:1px solid var(--lc-muted);border-radius:4px;display:flex;align-items:center;justify-content:center; }.row-check.checked { border-color:var(--lc-primary);background:var(--lc-primary);color:#fff; }
 </style>

@@ -36,12 +36,12 @@ def test_task_timeout_follows_config_and_includes_repairs_review_and_transport(c
         result = case.client.get("/api/v1/generation/options?kind=text")
     assert result.status_code == 200
     assert "no-store" in result.headers["Cache-Control"]
-    assert result.json()["task_timeout_seconds"] == 180
-    assert result.json()["timeout_ms"] == 210000
+    assert result.json()["task_timeout_seconds"] == 300
+    assert result.json()["timeout_ms"] == 330000
     assert "secret" not in result.text and "provider.invalid" not in result.text
     app_config.save_llm_models([fixtures.profile("first", timeout=600)])
     with patch.object(get_settings(), "generation_repair_limit", 3):
-        assert load_policy("text").timeout_seconds == 2550
+        assert load_policy("text").timeout_seconds == 3030
     with patch.object(get_settings(), "generation_lease_seconds", 60):
         assert load_policy("text").timeout_seconds == 55
 

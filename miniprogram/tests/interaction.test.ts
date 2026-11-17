@@ -16,7 +16,7 @@ function fixture(file: string, modules: Record<string, unknown>, expose: string,
   const source = parse(readFileSync(new URL('../src/' + file, import.meta.url), 'utf8')).descriptor.scriptSetup!.content
   const exports: Record<string, any> = {}
   vm.runInNewContext(ts.transpileModule(source + '\n' + expose, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, {
-    exports, require: (id: string) => id === 'vue' ? { ...vue, onMounted() {}, onBeforeUnmount() {} } : modules[id] || (id.endsWith('/paper-intent') ? paperIntents : id.endsWith('/page-lifecycle') ? { usePageLifecycle, captureScroll: (save: (top: number) => void) => save(600) } : id.endsWith('/catalog-rows') ? { reconcileRows } : id.endsWith('/page-navigation') ? { navigatePage: (options: unknown) => (globals.uni as any)?.navigateTo?.(options) } : {}),
+    exports, require: (id: string) => id === 'vue' ? { ...vue, onMounted() {}, onBeforeUnmount() {} } : modules[id] || (id.endsWith('/referral') ? { cancelReferralLanding() {}, takeReferralLanding: async () => '' } : id.endsWith('/paper-intent') ? paperIntents : id.endsWith('/page-lifecycle') ? { usePageLifecycle, captureScroll: (save: (top: number) => void) => save(600) } : id.endsWith('/catalog-rows') ? { reconcileRows } : id.endsWith('/page-navigation') ? { navigatePage: (options: unknown) => (globals.uni as any)?.navigateTo?.(options) } : {}),
     setTimeout, clearTimeout, defineExpose() {}, defineProps: () => ({}), withDefaults: (_props: unknown, defaults: unknown) => defaults, ...globals,
   })
   return exports
@@ -64,7 +64,7 @@ test('目录游标连续翻页、换组与返回保留窗口，失效游标从�
 })
 
 test('guest login restores the selected download version and resumes a favorite only once', async () => {
-  const session = vue.reactive<{ user: { id: string } | null }>({ user: null })
+  const session = vue.reactive<{ user: { id: string } | null; ready: boolean }>({ user: null, ready: true })
   const callbacks: Record<string, (...args: any[]) => any> = {}, downloads: string[] = [], favorites: boolean[] = []
   let failRead = false, saved = false
   const scope = vue.effectScope()
@@ -81,7 +81,7 @@ test('guest login restores the selected download version and resumes a favorite 
       favoriteCatalogPaper: async (_id: string, next: boolean) => { favorites.push(next); saved = next; return { favorite: next } },
       requestCatalogDownload: async (_id: string, edition: string) => { downloads.push(edition); return { url: '/pdf' } },
     },
-    '../../services/assets': { clearAssetCache() {}, cancelPdfDownload() {}, openPdf: async () => {} },
+    '../../services/assets': { clearAssetCache() {}, revalidateCatalogAssetCache() {}, cancelPdfDownload() {}, openPdf: async () => {} },
     '../../services/experience': { recordView: async () => {}, recordEvent: async () => {} },
     '../../presentation': { exerciseText: (value: string) => value },
   }, 'exports.page = { load, edition, download, favorite, actionLabel, resumeAction, error }', {
@@ -114,7 +114,7 @@ test('首页隐藏后关闭图片并响应内存警告，重新进入恢复加�
   const scope = vue.effectScope()
   const page = scope.run(() => fixture('pages/home/index.vue', {
     '@dcloudio/uni-app': Object.fromEntries(['onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onShareTimeline'].map(name => [name, (fn: (...args: any[]) => any) => { hooks[name] = fn }])),
-    '../../services/session': { session: vue.reactive({ user: null }), ensureSession: async () => false },
+    '../../services/session': { session: vue.reactive({ user: null, ready: true, error: "" }), ensureSession: async () => false },
     '../../services/latest-request': { createLatestRequest },
     '../../services/api': { fetchCatalog: async () => ({ items: [{ id: 'paper' }], total: 1 }), fetchCatalogSummary: async () => ({}), fetchSiteHome: async () => ({ banners: [{ id: 'banner' }] }) },
     '../../services/experience': { fetchTopics: async () => ({ items: [{ id: 'topic' }] }) },
@@ -133,7 +133,7 @@ test('首页隐藏后关闭图片并响应内存警告，重新进入恢复加�
 
 function boundedCatalog(duplicates = false) {
   const scope = vue.effectScope(), offsets: number[] = [], windows: number[] = [], scroll: number[] = []
-  const session = vue.reactive({ user: { id: 'reader' } })
+  const session = vue.reactive({ user: { id: 'reader' }, ready: true, error: '' })
   let count = 1400
   const row = (id: number) => ({ id: String(id), revision: 1, favorite: false })
   const page = scope.run(() => fixture('components/CatalogList.vue', {
@@ -271,9 +271,9 @@ test('detail return retains metadata, cancels old reads, and withholds private c
       if (++calls === 1) return detail
       return new Promise(resolve => { finish = resolve })
     } },
-    '../../services/session': { session: vue.reactive({ user: null }), ensureSession: async () => false, requireLogin: () => false },
+    '../../services/session': { session: vue.reactive({ user: null, ready: true, error: "" }), ensureSession: async () => false, requireLogin: () => false },
     '../../services/latest-request': { createLatestRequest },
-    '../../services/assets': { cancelPdfDownload() {}, clearAssetCache() {} },
+    '../../services/assets': { cancelPdfDownload() {}, clearAssetCache() {}, revalidateCatalogAssetCache() {} },
   }, 'exports.page = { load, paper, pages, cover, verified }', { uni: { stopPullDownRefresh() {}, pageScrollTo() {} } }))!.page
   try {
     callbacks.onLoad!({ id: 'paper' }); await page.load()
@@ -306,7 +306,7 @@ test('favorite updates a loaded row without replacing pages; returning restores 
       fetchCatalog: async ({ offset }: { offset: number }) => { calls.push(offset); return { items: Array.from({ length: 20 }, (_, index) => ({ id: String(offset + index), favorite: false })), total: 60, has_more: offset < 40 } },
       fetchCatalogWindow: async (ids: string[]) => ({ items: ids.map(id => ({ id, favorite: id === '25' })) }),
       fetchCatalogSummary: async () => ({ subjects: [], categories: [] }) },
-    '../services/session': { session: vue.reactive({ user: { id: 'reader' } }), ensureSession: async () => true, requireLogin: () => true },
+    '../services/session': { session: vue.reactive({ user: { id: 'reader' }, ready: true, error: '' }), ensureSession: async () => true, requireLogin: () => true },
     '../services/preferences': { readPreferences: () => ({ grade: '', subject: '', history: [] }), writePreferences() {} },
     '../services/latest-request': { createLatestRequest },
     '../services/navigation': { catalogSelection: vue.reactive({ revision: 0 }) },
@@ -341,9 +341,9 @@ test('预览内下载保留所选版本，失败后可原地重试并显示进�
     '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onShareTimeline', 'onPageScroll'].map(key => [key, (callback: (...args: any[]) => void) => { callbacks[key] = callback }])),
     '../../services/api': { ApiError, errorMessage: String, fetchCatalogPaper: async () => detail,
       requestCatalogDownload: async (_id: string, edition: string) => { calls.push(edition); return { url: '/pdf' } } },
-    '../../services/session': { session: vue.reactive({ user: { id: 'reader' } }), ensureSession: async () => true, requireLogin: () => true },
+    '../../services/session': { session: vue.reactive({ user: { id: 'reader' }, ready: true, error: '' }), ensureSession: async () => true, requireLogin: () => true },
     '../../services/latest-request': { createLatestRequest },
-    '../../services/assets': { cancelPdfDownload() {}, clearAssetCache() {}, openPdf: async (_asset: unknown, _title: string, progress: (percent: number) => void) => {
+    '../../services/assets': { cancelPdfDownload() {}, clearAssetCache() {}, revalidateCatalogAssetCache() {}, openPdf: async (_asset: unknown, _title: string, progress: (percent: number) => void) => {
       progress(48); assert.equal(page.downloadProgress.value, 48)
       if (++attempt === 1) throw new Error('网络断开')
     } },
@@ -385,10 +385,10 @@ test('网盘资料不依赖 PDF，获取后展示链接，复制失败可重试�
     '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onShareTimeline', 'onPageScroll'].map(key => [key, (cb: (...args: any[]) => void) => { callbacks[key] = cb }])),
     '../../services/api': { errorMessage: String, fetchCatalogPaper: async () => ({ id: 'link', title: '资料', can_view: true, can_download: true, download_mode: 'external', assets: [] }),
       requestCatalogDownload: async () => ({ kind: 'external', url: 'https://pan.example.com/a', extraction_code: 'Ab12' }) },
-    '../../services/session': { session: vue.reactive({ user: { id: 'reader' } }), ensureSession: async () => true, requireLogin: () => true },
+    '../../services/session': { session: vue.reactive({ user: { id: 'reader' }, ready: true, error: '' }), ensureSession: async () => true, requireLogin: () => true },
     '../../services/privacy': { copyWithPrivacy: (options: any) => { copied.push(options.data); if (copied.length === 1) options.fail(); else options.success(); options.complete() } },
     '../../services/latest-request': { createLatestRequest },
-    '../../services/assets': { cancelPdfDownload() {}, clearAssetCache() {}, openPdf: async () => { pdfOpened = true } },
+    '../../services/assets': { cancelPdfDownload() {}, clearAssetCache() {}, revalidateCatalogAssetCache() {}, openPdf: async () => { pdfOpened = true } },
     '../../presentation': { exerciseText: (title: string) => title },
     '../../services/experience': { recordView: async () => {}, recordEvent: async () => {} },
   }, 'exports.page = { load, download, copyLink, linkTarget, linkOpen, linkError, downloading }', {
@@ -415,8 +415,8 @@ test('网盘下载权限不足时显示会员入口，离开页面后迟到的�
     '@dcloudio/uni-app': Object.fromEntries(['onLoad', 'onShow', 'onHide', 'onUnload', 'onPullDownRefresh', 'onShareAppMessage', 'onShareTimeline', 'onPageScroll'].map(key => [key, (cb: (...args: any[]) => void) => { callbacks[key] = cb }])),
     '../../services/api': { errorMessage: String, fetchCatalogPaper: async () => ({ id: 'link', title: '资料', can_view: true, can_download: entitled, download_mode: 'external', assets: [] }),
       requestCatalogDownload: async () => { requests++; return new Promise(resolve => { finish = resolve }) } },
-    '../../services/session': { session: vue.reactive({ user: { id: 'reader' } }), ensureSession: async () => true, requireLogin: () => true },
-    '../../services/latest-request': { createLatestRequest }, '../../services/assets': { cancelPdfDownload() {}, clearAssetCache() {} },
+    '../../services/session': { session: vue.reactive({ user: { id: 'reader' }, ready: true, error: '' }), ensureSession: async () => true, requireLogin: () => true },
+    '../../services/latest-request': { createLatestRequest }, '../../services/assets': { cancelPdfDownload() {}, clearAssetCache() {}, revalidateCatalogAssetCache() {} },
     '../../presentation': { exerciseText: (title: string) => title },
     '../../services/experience': { recordView: async () => {} },
   }, 'exports.page = { load, downloadFromPreview, previewOpen, membershipOpen, linkTarget, linkOpen }', { uni: { stopPullDownRefresh() {} } }))!.page
@@ -441,7 +441,7 @@ for (const retainedCount of [20, 200]) test(`returning to ${retainedCount} catal
       fetchCatalog: async () => { reads++; return { items: rows.slice(0, 20), total: retainedCount, has_more: retainedCount > 20 } },
       fetchCatalogWindow: async (ids: string[]) => { reads++; return { items: ids.map(id => rows[Number(id)]) } },
       fetchCatalogSummary: async () => ({ subjects: [], categories: [] }) },
-    '../services/session': { session: vue.reactive({ user: { id: 'reader' } }), ensureSession: async () => true },
+    '../services/session': { session: vue.reactive({ user: { id: 'reader' }, ready: true, error: '' }), ensureSession: async () => true },
     '../services/preferences': { readPreferences: () => ({ grade: '', subject: '', history: [] }), writePreferences() {} },
     '../services/latest-request': { createLatestRequest },
     '../services/navigation': { catalogSelection: vue.reactive({ revision: 0 }) },

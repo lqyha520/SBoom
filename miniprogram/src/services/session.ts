@@ -1,4 +1,5 @@
 import { navigatePage } from './page-navigation'
+import { bindReferralUser } from './referral'
 import { reactive } from 'vue'
 import type { Authenticated, User } from '../types'
 import { authGeneration, configureSession, errorMessage, patchPassword, patchProfile, request, TOKEN_KEY, unauthorizedHandler, type ReadOptions } from './api'
@@ -27,7 +28,9 @@ function markActive() {
   void recordEvent('active').catch(() => { if (activeKey === key) activeKey = '' })
 }
 
-export function clearSession() {
+export function clearSession(preserveReferralEntry = true) {
+  // 冷启动遇到过期登录凭证时，保留本次扫码入口，供重新登录中的首次注册使用。
+  bindReferralUser(null, preserveReferralEntry)
   clearPaperIntent()
   inboxState.unread = 0; inboxState.pending = 0
   configureSession('')
@@ -39,7 +42,8 @@ export function clearSession() {
 }
 unauthorizedHandler(clearSession)
 
-export function acceptSession(user: User, token = '') {
+export function acceptSession(user: User, token = '', preserveReferralLanding = false) {
+  bindReferralUser(user, false, preserveReferralLanding)
   if (session.user && session.user.id !== user.id) clearPaperIntent()
   bindPaperIntent(user.id)
   if (configureSession(token, String(user.id))) {
@@ -68,7 +72,7 @@ export function ensureSession(): Promise<boolean> {
       epoch = authGeneration()
       const user = await request<User>('/api/v1/mini/me')
       if (epoch !== authGeneration()) return !!session.user
-      acceptSession(user, token)
+      acceptSession(user, token, true)
       return true
     } catch (error) {
       // Explicit authorization failures are handled by the API's unauthorized handler.
@@ -112,6 +116,6 @@ export async function savePassword(current: string, next: string) {
 
 export async function logout() {
   const revoke = request<void>('/api/v1/mini/logout', 'POST')
-  clearSession()
+  clearSession(false)
   void revoke.catch(() => {})
 }

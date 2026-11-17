@@ -113,16 +113,23 @@ function downloadAsset(path: string, progress: (percent: number) => void, regist
   })
 }
 
-const files = createFilePool(downloadAsset, release, { maxIdleBytes: 12 * 1024 * 1024 })
+// 做题停留可能超过一分钟；保留三分钟回看窗口，文件数量和字节上限继续约束空闲缓存。
+const files = createFilePool(downloadAsset, release, { graceMs: 180_000, maxIdleBytes: 12 * 1024 * 1024 })
 const pdfFiles = createFilePool(downloadAsset, release, { maxIdle: 1, graceMs: 10_000, maxIdleBytes: 32 * 1024 * 1024 })
 uni.$on?.('lc-memory-warning', () => { files.trim(); pdfFiles.trim() })
-export function acquireAsset(path: string, priority = 1) {
-  const handle = files.acquire(path, undefined, priority)
+export function acquireAsset(path: string, priority = 1, progress?: (percent: number) => void) {
+  const handle = files.acquire(path, progress, priority)
   // 同一 URL 从预取变成当前页时提升优先级，复用在途下载。
   pumpDownloads()
   return { ...handle, prioritize(value: number) { handle.prioritize?.(value); pumpDownloads() } }
 }
 export function assetCacheStats() { return { images: files.stats(), pdf: pdfFiles.stats(), activeDownloads, queued: downloadWaiters.length } }
+export function revalidateCatalogAssetCache(id: string, canView: boolean, canDownload: boolean) {
+  const prefix = '/api/v1/catalog/papers/' + encodeURIComponent(id) + '/assets/'
+  // 观看和下载分别失效；免费可看的原图不会因为 PDF 需会员而被反复删除。
+  if (!canView) files.evict(key => key.startsWith(prefix))
+  if (!canDownload) pdfFiles.evict(key => key.slice(key.indexOf(':', 4) + 1).startsWith(prefix))
+}
 
 export function pdfTimeout(bytes: number) {
   // 按 64 KiB/s 预留传输时间和握手余量，最大允许 10 分钟。

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission } from '../permissions'
 import { reactive } from 'vue'
 import DownloadSettings from './DownloadSettings.vue'
 import { importRowIssue, type CatalogImportQueue, type ImportRow } from '../catalog-import-queue'
@@ -62,7 +63,7 @@ function status(row: ImportRow) {
           <p v-if="importRowIssue(row)" class="text-sm text-error" role="alert">{{ importRowIssue(row) }}</p>
           <p v-if="row.error" class="text-sm text-error" role="alert">{{ row.error }}</p>
         </template>
-        <template v-else><p class="text-sm">{{ row.created.title }}</p><div class="actions-row"><UButton label="预览并发布" size="sm" variant="outline" :disabled="queue.busy" @click="emit('preview', row.created)" /><UButton label="补充教学标签" size="sm" variant="outline" :disabled="queue.busy" @click="emit('metadata', row.created)" /></div></template>
+        <template v-else><p class="text-sm">{{ row.created.title }}</p><div class="actions-row"><UButton label="预览并发布" size="sm" variant="outline" :disabled="queue.busy" @click="emit('preview', row.created)" /><UButton v-permission="'papers:update'" label="补充教学标签" size="sm" variant="outline" :disabled="queue.busy" @click="emit('metadata', row.created)" /></div></template>
         <details v-if="row.answerState !== 'succeeded' || row.answer" class="answer-section">
           <summary>答案 PDF（可选）{{ row.answer ? ' · ' + row.answer.name : '' }}{{ row.answerState === 'failed' ? ' · 关联失败' : row.answerState === 'succeeded' ? ' · 已关联' : '' }}</summary>
           <p class="text-xs text-muted">附上与本卷配套的答案，关联为“答案解析版”。</p>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import GenerationTraces from './GenerationTraces.vue'
 import { useAdminRefresh } from '../admin-page'
 import { useAdminListRoute } from '../navigation'
 import { onMounted, ref, watch } from 'vue'
@@ -27,6 +28,7 @@ const routeState = useAdminListRoute('logs', { lines }, () => { void load() })
 </script>
 
 <template>
+  <GenerationTraces />
   <section class="admin-section" aria-label="系统日志">
     <div class="section-toolbar"><h2 class="font-mono">server.log</h2><div class="actions-row"><USelect v-model="lines" :items="choices" aria-label="日志行数" class="w-28" /><UTooltip text="刷新日志"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="loading" aria-label="刷新日志" @click="load" /></UTooltip></div></div>
     <UAlert v-if="error" :title="error" color="error" variant="soft" class="notice" role="alert" />

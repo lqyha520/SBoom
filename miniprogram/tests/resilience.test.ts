@@ -33,6 +33,7 @@ function sessionFixture(token = 'saved-token') {
   let response: () => Promise<unknown> = async () => { throw Error('offline') }
   const app = fixture('services/session.ts', {
     './paper-intent': paperIntents,
+    './referral': { bindReferralUser() {} },
     './api': { TOKEN_KEY: 'token', authGeneration: () => generation, configureSession: () => { generation++ }, errorMessage: String,
       unauthorizedHandler: (callback: () => void) => { unauthorized = callback }, request: () => { calls++; return response() } },
     './assets': { clearAssetCache() {} }, './growth': { inboxState: { unread: 0 } }, './experience': { recordEvent: async () => {} },

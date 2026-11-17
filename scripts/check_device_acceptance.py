@@ -14,13 +14,21 @@ SCENARIOS = {
     "foreground_resume": ("home_warm", 3000),
 }
 PROFILES = ("android-low-weak", "ios-weak")
+FUNCTIONAL_CHECKS = {
+    "sharing": ("private_timeline_hidden", "public_paper_friend", "public_paper_timeline", "cancel_and_share_again"),
+    "membership_recovery": ("support_failure_preserves_capability", "plans_failure_can_retry", "contact_remains_available"),
+    "referral_landing": ("prompt_landing", "late_response_no_jump", "interaction_cancels_jump", "leave_and_return_no_jump"),
+    "feedback_draft": ("reopen_restores", "account_isolation", "submission_clears", "storage_failure_can_retry"),
+    "payment_return": ("native_return_confirmed", "background_return_confirmed", "no_duplicate_payment", "membership_updated"),
+}
 
 
 def template() -> dict:
-    return {"version": 1, "build_commit": "", "records": [
+    return {"version": 2, "build_commit": "", "records": [
         {"profile": profile, "scenario": scenario, "device": "", "os": "", "wechat": "", "network": "",
-         "tested_at": "", "functional_pass": None, "evidence": [], "diagnostics": []}
-        for profile in PROFILES for scenario in SCENARIOS
+         "tested_at": "", "functional_pass": None, "evidence": [], "diagnostics": [],
+         **({"checks": {name: None for name in FUNCTIONAL_CHECKS[scenario]}} if scenario in FUNCTIONAL_CHECKS else {})}
+        for profile in PROFILES for scenario in (*SCENARIOS, *FUNCTIONAL_CHECKS)
     ]}
 
 
@@ -39,16 +47,19 @@ def file_digest(path: Path) -> str:
 
 
 def check(data: dict, root: Path) -> dict:
-    errors, rows = [], []
+    errors: list[str] = []
+    rows: list[dict[str, object]] = []
     if not isinstance(data, dict):
         return {"passed": False, "errors": ["验收记录必须为对象"], "records": []}
-    if data.get("version") != 1 or not isinstance(data.get("build_commit"), str) or not data["build_commit"].strip():
+    if data.get("version") != 2:
+        errors.append("请使用新版验收模板，包含分享、会员、推广、反馈和支付返回场景")
+    if not isinstance(data.get("build_commit"), str) or not data["build_commit"].strip():
         errors.append("缺少构建版本")
     records = data.get("records", [])
     if not isinstance(records, list) or any(not isinstance(record, dict) for record in records):
         return {"passed": False, "errors": [*errors, "records必须为数组"], "records": []}
     for profile in PROFILES:
-        for scenario, (metric, limit) in SCENARIOS.items():
+        for scenario in (*SCENARIOS, *FUNCTIONAL_CHECKS):
             matching = [record for record in records if record.get("profile") == profile and record.get("scenario") == scenario]
             label = profile + "/" + scenario
             if len(matching) != 1:
@@ -63,6 +74,14 @@ def check(data: dict, root: Path) -> dict:
                 if not isinstance(record.get("evidence"), list) or not record["evidence"]:
                     raise ValueError("缺少真机录像或性能trace")
                 files = [evidence_path(root, value) for value in record["evidence"]]
+                if scenario in FUNCTIONAL_CHECKS:
+                    checks = record.get("checks")
+                    if not isinstance(checks, dict) or any(checks.get(name) is not True for name in FUNCTIONAL_CHECKS[scenario]):
+                        raise ValueError("尚未逐项确认本场景操作通过")
+                    rows.append({"profile": profile, "scenario": scenario, "checks": list(FUNCTIONAL_CHECKS[scenario]),
+                                 "evidence_sha256": [file_digest(path) for path in files]})
+                    continue
+                metric, limit = SCENARIOS[scenario]
                 if not isinstance(record.get("diagnostics"), list) or not record["diagnostics"]:
                     raise ValueError("缺少复制的故障记录")
                 count, p95 = 0, 0.0

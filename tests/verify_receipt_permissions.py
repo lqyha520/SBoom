@@ -22,11 +22,16 @@ def main():
         status.chmod(0o2750)
         receipt = status / "backup.json"
         writer = """
-import sys, types
+import json, sys, types
 sys.path.insert(0, sys.argv[1])
 sys.modules['backup_restore'] = types.SimpleNamespace(backup=lambda _: None)
 import ops_backup
-ops_backup.run = lambda *args: b''
+def run(*args):
+    if args[:2] == ('restic', 'snapshots'):
+        return json.dumps([{'id': f'{int(sys.argv[2]):064x}'}]).encode()
+    assert args[:2] in (('restic', 'backup'), ('restic', 'forget'), ('restic', 'check'))
+    return b''
+ops_backup.run = run
 ops_backup.time.time = lambda: int(sys.argv[2])
 ops_backup.execute('backup')
 """
@@ -51,6 +56,9 @@ else:
                            user=10001, group=10001, extra_groups=[10002], env=env, check=True)
             stat = receipt.stat()
             assert (stat.st_uid, stat.st_gid, stat.st_mode & 0o777) == (10001, 10002, 0o640)
+            payload = json.loads(receipt.read_text(encoding="utf-8"))
+            assert payload == {"completed_at": timestamp, "verified": True, "offsite": True,
+                               "snapshot_id": f"{timestamp:064x}"}
             subprocess.run([sys.executable, "-c", reader, str(ROOT / "scripts"), str(receipt)],
                            user=10003, group=10002, extra_groups=[], check=True)
         outsider = subprocess.run([sys.executable, "-c", "from pathlib import Path; import sys; Path(sys.argv[1]).read_text()", str(receipt)],

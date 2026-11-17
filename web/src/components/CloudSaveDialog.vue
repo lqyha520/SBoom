@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useExamStore } from '../stores/exam'
 import { captureWorkspaceGuard } from '../api'
-import { captureSnapshot, completeArchive, createArchive, createArchiveFolder, fetchArchiveFolders } from '../library'
+import { captureCollection, captureSnapshot, completeArchive, createArchive, createArchiveFolder, fetchArchiveFolders } from '../library'
 import type { ArchiveDetail, ArchiveFolder, ArchiveRequest, ArchiveSnapshot } from '../library'
 // crypto.randomUUID 是 [SecureContext] 限定 API，http://内网IP 下不存在
 import { randomId } from '../../../shared/webcrypto'
@@ -10,13 +10,14 @@ import { randomId } from '../../../shared/webcrypto'
 const props = defineProps<{ open: boolean; selected: number }>()
 const emit = defineEmits<{ close: []; busy: [value: boolean]; library: [] }>()
 const store = useExamStore()
-const scope = ref('current')
+const scope = ref(store.papers.length > 1 ? 'all' : 'current')
+const saveMode = ref('merged')
 const folder = ref('unfiled')
 const folders = ref<ArchiveFolder[]>([])
 const newFolder = ref('')
 const addingFolder = ref(false)
 const groupName = ref('')
-const mode = ref<ArchiveSnapshot['export_options']['mode']>('student')
+const mode = ref<ArchiveSnapshot['export_options']['mode']>('withAnswers')
 const error = ref('')
 const busy = ref(false)
 const progress = ref('')
@@ -28,7 +29,8 @@ let saveController: AbortController | undefined
 const folderOptions = computed(() => [{ label: '未分类', value: 'unfiled' }, ...folders.value.map(value => ({ label: value.name, value: value.id }))])
 const options = computed(() => [{ label: '当前试卷', value: 'current' }, { label: `全部 ${store.papers.length} 份`, value: 'all' }])
 const allReady = computed(() => jobs.value.length > 0 && jobs.value.every(job => job.state === 'ready'))
-const modes = [{ label: '学生卷', value: 'student' }, { label: '试卷与答案', value: 'withAnswers' }, { label: '仅答案', value: 'answersOnly' }]
+const modes = [{ label: '学生卷和答案（分开为两个 PDF）', value: 'withAnswers' }, { label: '仅学生卷', value: 'student' }, { label: '仅答案', value: 'answersOnly' }]
+const saveModes = [{ label: '合并为一套', value: 'merged' }, { label: '逐份保存', value: 'separate' }]
 async function loadFolders() {
   loadingFolders.value = true; error.value = ''
   try { folders.value = (await fetchArchiveFolders()).items }
@@ -42,25 +44,33 @@ async function addFolder() {
   catch (cause) { error.value = cause instanceof Error ? cause.message : '文件夹创建失败' }
   finally { busy.value = false }
 }
-function prepare() {
-  const papers = scope.value === 'all' ? store.papers : [store.papers[props.selected] || store.papers[0]]
+async function prepare() {
+  const papers = (scope.value === 'all' ? store.papers : [store.papers[props.selected] || store.papers[0]]).filter(Boolean)
+  if (!papers.length) throw new Error('请先生成试卷')
+  if (papers.length > 1 && saveMode.value === 'merged') {
+    const collection = await captureCollection(papers, store.template, store.style, mode.value, store.addDayLabel, groupName.value, true)
+    jobs.value = [{ request: { request_id: randomId(), ...collection,
+      folder_id: folder.value === 'unfiled' ? null : folder.value, group_id: '', group_name: '' }, state: 'pending', error: '' }]
+    return
+  }
   const groupId = papers.length > 1 ? randomId() : ''
   jobs.value = papers.filter(Boolean).map(paper => {
     paper.archiveSourceId ||= randomId()
     return { request: { request_id: randomId(), source_id: paper.archiveSourceId,
-      snapshot: captureSnapshot(paper, store.template, store.style, mode.value, store.addDayLabel),
+      snapshot: captureSnapshot(paper, store.template, store.style, mode.value, store.addDayLabel, true),
       folder_id: folder.value === 'unfiled' ? null : folder.value,
       group_id: groupId, group_name: papers.length > 1 ? groupName.value.trim() : '' }, state: 'pending', error: '' }
   })
 }
 async function save() {
   if (busy.value || store.accountChanged || store.generating || store.layoutMode) return
-  if (!jobs.value.length) prepare()
   busy.value = true; emit('busy', true); error.value = ''
   saveController = new AbortController()
   const assertOwner = captureWorkspaceGuard()
   const canContinue = () => active && !store.accountChanged && !saveController?.signal.aborted
   try {
+    if (!jobs.value.length) await prepare()
+    assertOwner()
     for (const [index, job] of jobs.value.entries()) {
       if (!canContinue()) break
       if (job.state === 'ready') continue
@@ -78,7 +88,8 @@ async function save() {
         job.state = 'ready'
       } catch (cause) { job.state = 'failed'; job.error = cause instanceof Error ? cause.message : '保存失败，请重试' }
     }
-  } finally { if (saveController.signal.aborted) error.value = '保存已取消，已完成内容仍在云端；可重试未完成项'; busy.value = false; progress.value = ''; emit('busy', false) }
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : '保存失败，请重试' }
+  finally { if (saveController.signal.aborted) error.value = '保存已取消，已完成内容仍在云端；可重试未完成项'; busy.value = false; progress.value = ''; emit('busy', false) }
 }
 function close() { if (!busy.value) emit('close') }
 function warnOnExit(event: BeforeUnloadEvent) { if (busy.value) { event.preventDefault(); event.returnValue = '' } }
@@ -92,12 +103,17 @@ onBeforeUnmount(() => { active = false; saveController?.abort(); emit('busy', fa
       <div class="space-y-5">
         <UAlert v-if="error" :title="error" color="error" variant="soft"><template #actions><UButton label="重试" color="error" variant="soft" @click="loadFolders" /></template></UAlert>
         <UFormField v-if="store.papers.length > 1" label="保存范围"><URadioGroup v-model="scope" :items="options" orientation="horizontal" :disabled="busy || !!jobs.length" /></UFormField>
+        <template v-if="scope === 'all' && store.papers.length > 1">
+          <UFormField label="保存方式"><URadioGroup v-model="saveMode" :items="saveModes" orientation="horizontal" :disabled="busy || !!jobs.length" /></UFormField>
+          <p class="text-sm text-muted">{{ saveMode === 'merged' ? `将 ${store.papers.length} 份试卷保存为同一套，云端只显示一条记录。每份保持原有标题和内容；合计最多 120 页，每个 PDF 最大 32 MB。` : `云端将显示 ${store.papers.length} 条记录，每份单独下载。` }}</p>
+        </template>
         <UFormField label="文件夹"><div class="flex items-center gap-2"><USelect v-model="folder" :items="folderOptions" aria-label="归档文件夹" class="flex-1" :loading="loadingFolders" :disabled="busy || !!jobs.length" /><UTooltip text="新建文件夹"><UButton icon="i-lucide-folder-plus" color="neutral" variant="outline" aria-label="新建文件夹" :disabled="busy || !!jobs.length" @click="addingFolder = !addingFolder" /></UTooltip></div></UFormField>
         <div v-if="addingFolder" class="flex gap-2"><UInput v-model="newFolder" placeholder="文件夹名称" aria-label="新文件夹名称" maxlength="60" class="flex-1" :disabled="busy" @keydown.enter="addFolder" /><UButton label="创建" :loading="busy" :disabled="!newFolder.trim()" @click="addFolder" /></div>
-        <UFormField v-if="scope === 'all' && store.papers.length > 1" label="分组名称（可选）"><UInput v-model="groupName" placeholder="例如：本周数学练习" aria-label="试卷分组名称" maxlength="120" class="w-full" :disabled="busy || !!jobs.length" /></UFormField>
+        <UFormField v-if="scope === 'all' && store.papers.length > 1" :label="saveMode === 'merged' ? '合并文件名称（可选）' : '分组名称（可选）'"><UInput v-model="groupName" placeholder="例如：本周数学练习" aria-label="试卷归档名称" maxlength="120" class="w-full" :disabled="busy || !!jobs.length" /></UFormField>
         <UFormField label="PDF 内容"><USelect v-model="mode" :items="modes" aria-label="归档 PDF 内容" class="w-full" :disabled="busy || !!jobs.length" /></UFormField>
+        <p v-if="mode === 'withAnswers'" class="text-sm text-muted">学生卷与答案分别保存为两个 PDF，放在同一套资料里。预览显示学生卷，下载时可选择学生卷或答案。</p>
         <div v-if="jobs.length" class="save-results" role="status">
-          <div v-for="(job, index) in jobs" :key="job.request.request_id" class="save-job"><UIcon :name="job.state === 'ready' ? 'i-lucide-circle-check' : job.state === 'failed' ? 'i-lucide-circle-alert' : 'i-lucide-loader-circle'" :class="['size-5 shrink-0', job.state === 'ready' ? 'text-primary' : job.state === 'failed' ? 'text-warning' : 'text-muted animate-spin']" /><div class="min-w-0"><p class="text-sm break-words">{{ job.request.snapshot.paper.title || '第 ' + (index + 1) + ' 份试卷' }}</p><p class="mt-1 text-xs text-muted break-words">{{ job.state === 'ready' ? '已归档 · v' + job.record?.version + ' · ' + (job.record?.folder_name || '未分类') : job.record ? '内容已保存，文件未完成' : job.state === 'failed' ? '内容未保存' : '正在保存' }}</p><p v-if="job.error" class="mt-1 text-xs text-warning break-words">{{ job.error }}</p></div></div>
+          <div v-for="(job, index) in jobs" :key="job.request.request_id" class="save-job"><UIcon :name="job.state === 'ready' ? 'i-lucide-circle-check' : job.state === 'failed' ? 'i-lucide-circle-alert' : 'i-lucide-loader-circle'" :class="['size-5 shrink-0', job.state === 'ready' ? 'text-primary' : job.state === 'failed' ? 'text-warning' : 'text-muted animate-spin']" /><div class="min-w-0"><p class="text-sm break-words">{{ job.request.snapshot.collection_title || job.request.snapshot.paper.title || '第 ' + (index + 1) + ' 份试卷' }}</p><p class="mt-1 text-xs text-muted break-words">{{ job.state === 'ready' ? '已归档 · v' + job.record?.version + ' · ' + (job.record?.folder_name || '未分类') : job.record ? '内容已保存，文件未完成' : job.state === 'failed' ? '内容未保存' : '正在保存' }}</p><p v-if="job.error" class="mt-1 text-xs text-warning break-words">{{ job.error }}</p></div></div>
         </div>
         <p v-if="progress" class="text-xs text-primary" role="status">{{ progress }}</p>
       </div>

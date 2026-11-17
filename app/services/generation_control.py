@@ -20,6 +20,7 @@ from app.blocking import run_sync
 from app.config import get_settings
 from app.db import db
 from app.metrics import generation_requests_total, llm_attempts_total, llm_tokens_total, provider_model
+from app.services import generation_trace
 from app.services.generation_policy import current_policy, load_policy
 
 
@@ -30,6 +31,7 @@ class Usage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     repairs: int = 0
+    trace: generation_trace.GenerationTrace | None = None
 
 
 _INSTANCE = uuid.uuid4().hex
@@ -49,6 +51,8 @@ async def finish(*args):
 
 
 async def shutdown_generation():
+    from app.services.image_recovery import shutdown
+    await shutdown()
     if _finishes:
         await asyncio.gather(*list(_finishes), return_exceptions=True)
 
@@ -64,6 +68,7 @@ async def heartbeat(user_id, request_id):
         await asyncio.sleep(get_settings().generation_heartbeat_seconds / 3)
         try:
             await run_sync(_renew, user_id, request_id)
+            await generation_trace.flush()
         except Exception:
             # 暂时数据库不可用时继续尝试；过期记录不会永久占满准入。
             logger.warning("生成任务续租失败，将在下个心跳重试", exc_info=False)
@@ -89,6 +94,7 @@ current_usage: ContextVar[Usage | None] = ContextVar("generation_usage", default
 
 def record_attempt() -> None:
     llm_attempts_total.labels(provider_model.get()).inc()
+    generation_trace.attempt(provider_model.get())
     usage = current_usage.get()
     if usage is not None:
         usage.model_calls += 1
@@ -101,6 +107,7 @@ def record_usage(value) -> None:
     prompt, completion = value.get("prompt_tokens"), value.get("completion_tokens")
     if type(prompt) is not int or type(completion) is not int or min(prompt, completion) < 0:
         return
+    generation_trace.tokens(prompt, completion)
     llm_tokens_total.labels(provider_model.get(), "prompt").inc(prompt)
     llm_tokens_total.labels(provider_model.get(), "completion").inc(completion)
     if usage is None:
@@ -147,6 +154,8 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict,
             if row["status"] == "succeeded":
                 if row["result_json"] and row["finished_at"] >= now - settings.generation_result_days * 86400:
                     # 缓存由 _finish 用 json.dumps 写入，必然是对象；cast 只补类型、不改行为
+                    conn.execute("UPDATE generation_requests SET replay_count = replay_count + 1 WHERE user_id = ? AND request_id = ?",
+                                 (user_id, request_id))
                     return cast(dict, json.loads(row["result_json"]))
                 raise HTTPException(410, detail={"error": "该请求已完成，结果缓存已过期或不支持重放，不会再次调用模型"})
             if row["error_status"]:
@@ -155,6 +164,8 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict,
                 "error": "该请求仍在处理或结果尚不确定，不会重复调用模型",
                 "code": "generation_pending", "request_id": request_id,
             })
+        from app.services.generation_drain import require_open
+        require_open(conn)
         if expected_revision is not None and expected_revision != config_revision:
             raise HTTPException(409, detail={"code": "model_config_changed",
                                             "error": "模型配置刚刚更新，本次未调用模型；请重新尝试"})
@@ -195,16 +206,19 @@ def _begin(user_id: int, request_id: str, kind: str, payload: dict,
 
 def _finish(user_id: int, request_id: str, usage: Usage, status: str, result=None, error=None) -> None:
     error_status, detail = error if error else (0, {})
+    if usage.trace:
+        usage.trace.phase = status
+    trace_json = json.dumps(usage.trace.snapshot(), ensure_ascii=False) if usage.trace else ""
     with db() as conn:
         # 仅原实例可补交清理任务标记为未知的结果，真实终态不会被覆盖。
         completed = conn.execute(
-            "UPDATE generation_requests SET status = ?, finished_at = ?, result_json = ?, "
+            "UPDATE generation_requests SET status = ?, finished_at = ?, result_json = CASE WHEN ? = 'succeeded' THEN ? ELSE result_json END, "
             "error_json = ?, error_status = ?, model_calls = ?, reported_calls = ?, "
-            "prompt_tokens = ?, completion_tokens = ? WHERE user_id = ? AND request_id = ? AND instance_id = ? "
+            "prompt_tokens = ?, completion_tokens = ?, trace_json = ? WHERE user_id = ? AND request_id = ? AND instance_id = ? "
             "AND (status = 'running' OR (status = 'unknown' AND error_status = 0 AND error_json = ?)) RETURNING kind",
-            (status, int(time.time()), json.dumps(result, ensure_ascii=False) if result is not None else "",
+            (status, int(time.time()), status, json.dumps(result, ensure_ascii=False) if result is not None else "",
              json.dumps(detail, ensure_ascii=False), error_status, usage.model_calls, usage.reported_calls,
-             usage.prompt_tokens, usage.completion_tokens, user_id, request_id, _INSTANCE, LEASE_EXPIRED_ERROR),
+             usage.prompt_tokens, usage.completion_tokens, trace_json, user_id, request_id, _INSTANCE, LEASE_EXPIRED_ERROR),
         ).fetchone()
     if completed:
         generation_requests_total.labels(completed["kind"], status).inc()
@@ -230,11 +244,16 @@ def metered(kind: str):
             if cached is not None:
                 generation_requests_total.labels(kind, "replayed").inc()
                 return cached
-            usage = Usage()
+            trace = generation_trace.GenerationTrace(user.id, request_id, _INSTANCE, str(policy.config["revision"]))
+            usage = Usage(trace=trace)
+            trace_token = generation_trace.current_trace.set(trace)
             token = current_usage.set(usage)
             policy_token = current_policy.set(policy)
+            from app.services.image_recovery import current_request as image_request
+            image_token = image_request.set((user.id, request_id) if kind == "image" else None)
             lease_task = asyncio.create_task(heartbeat(user.id, request_id))
             deadline = asyncio.get_running_loop().time() + policy.timeout_seconds
+            policy.deadline = deadline
             try:
                 async with asyncio.timeout_at(deadline):
                     result = await handler(*args, **kwargs)
@@ -242,6 +261,7 @@ def metered(kind: str):
                     original = result.body_iterator
 
                     async def tracked_stream():
+                        stream_trace_token = generation_trace.current_trace.set(trace)
                         stream_token = current_usage.set(usage)
                         stream_policy_token = current_policy.set(policy)
                         stream_lease = asyncio.create_task(heartbeat(user.id, request_id))
@@ -263,7 +283,10 @@ def metered(kind: str):
                             stream_lease.cancel()
                             with contextlib.suppress(asyncio.CancelledError):
                                 await stream_lease
-                            await finish(user.id, request_id, usage, outcome)
+                            try:
+                                await finish(user.id, request_id, usage, outcome)
+                            finally:
+                                generation_trace.current_trace.reset(stream_trace_token)
 
                     result.body_iterator = tracked_stream()
                     result.headers["X-Request-ID"] = request_id
@@ -296,6 +319,8 @@ def metered(kind: str):
                 )
                 raise
             finally:
+                generation_trace.current_trace.reset(trace_token)
+                image_request.reset(image_token)
                 current_usage.reset(token)
                 current_policy.reset(policy_token)
                 lease_task.cancel()
@@ -333,7 +358,7 @@ def request_status(user_id: int, request_id: str) -> dict:
     with db() as conn:
         row = conn.execute(
             "SELECT request_id, kind, status, created_at, lease_expires_at, finished_at, result_json, error_json, error_status, "
-            "model_calls, reported_calls, prompt_tokens, completion_tokens "
+            "model_calls, reported_calls, prompt_tokens, completion_tokens, trace_json, replay_count "
             "FROM generation_requests "
             "WHERE user_id = ? AND request_id = ?", (user_id, request_id),
         ).fetchone()
@@ -344,8 +369,12 @@ def request_status(user_id: int, request_id: str) -> dict:
     if status == "running" and (row["lease_expires_at"] or row["created_at"] + settings.generation_heartbeat_seconds) < now:
         status = "unknown"
     expired = bool(row["finished_at"] and row["finished_at"] < now - settings.generation_result_days * 86400)
+    from app.services.image_recovery import available
     return {"request_id": row["request_id"], "kind": row["kind"], "status": status,
-            "result": json.loads(row["result_json"]) if row["result_json"] and not expired else None,
+            "result": json.loads(row["result_json"]) if status == "succeeded" and row["result_json"] and not expired else None,
+            "recoverable": available(dict(row)),
             "error": json.loads(row["error_json"]) if row["error_json"] else None,
             "error_status": row["error_status"], "cache_expired": expired,
+            "trace": json.loads(row["trace_json"]) if row["trace_json"] else None,
+            "replay_count": row["replay_count"],
             "usage": {key: row[key] for key in ("model_calls", "reported_calls", "prompt_tokens", "completion_tokens")}}

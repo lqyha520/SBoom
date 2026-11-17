@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import { writeGameSave } from './game-storage'
 import { computed, ref, watch } from 'vue'
 import GameNav from './GameNav.vue'
 import {
-  advanceSpell, checkSpell, clearSpellSelection, newSpell, restoreSpell, selectSpellTile,
+  moveSpellTile, advanceSpell, checkSpell, clearSpellSelection, newSpell, restoreSpell, selectSpellTile,
   SPELL_QUESTIONS, spellDifficulties, spellHint, spellStars, restartSpell, switchSpellDifficulty,
   type SpellDifficulty, type SpellTile,
 } from './word-spell'
@@ -16,7 +17,7 @@ const resetDifficulty = ref<SpellDifficulty | null>(null)
 const helpOpen = ref(false)
 const saveError = ref(false)
 const feedback = ref('')
-const hintLetter = ref('')
+const hintLetter = ref(''), hintPosition = ref(1)
 const round = computed(() => save.value.round)
 const question = computed(() => round.value.questions[round.value.index])
 const difficulty = computed(() => spellDifficulties.find(item => item.id === save.value.difficulty)!)
@@ -44,13 +45,15 @@ function check() {
   }
   const result = checkSpell(save.value)
   if (result === null) return
-  feedback.value = result ? '' : '字母都在，顺序还不对。听一听开头，再排一次。'
+  const wrong = question.value.word.split('').findIndex((letter,index)=>selectedTiles.value[index]?.letter!==letter)
+  feedback.value = result ? '' : `第 ${wrong+1} 个字母的位置需要调整。正确的开头可以保留，只交换后面的字母。`
 }
 function clearAll() {
   clearSpellSelection(save.value)
   feedback.value = ''
 }
 function showHint() {
+  hintPosition.value=question.value.word.split('').findIndex((letter,index)=>selectedTiles.value[index]?.letter!==letter)+1
   const letter = spellHint(save.value)
   if (letter) hintLetter.value = letter
 }
@@ -86,7 +89,7 @@ function applyDifficulty() {
   hintLetter.value = ''
 }
 watch(save, value => {
-  try { localStorage.setItem(props.storageKey, JSON.stringify(value)); saveError.value = false }
+  try { writeGameSave(props.storageKey, value); saveError.value = false }
   catch { saveError.value = true }
 }, { deep: true, immediate: true, flush: 'post' })
 watch(() => props.storageKey, () => {
@@ -142,7 +145,7 @@ watch(() => props.storageKey, () => {
           <div class="letter-bank" role="group" aria-label="字母卡片">
             <button v-for="tile in question.tiles" :key="tile.id" class="letter-tile" :class="{ picked: round.selected.includes(tile.id), hinted: !solved && hintLetter && tile.letter === hintLetter }" :data-tile-id="tile.id" :aria-pressed="round.selected.includes(tile.id)" :aria-label="`字母 ${tile.letter}`" :disabled="solved" @click="pick(tile.id)">{{ tile.letter }}<small v-if="round.selected.includes(tile.id)">{{ round.selected.indexOf(tile.id) + 1 }}</small></button>
           </div>
-          <div v-if="hintLetter && !solved" class="spell-hint" role="status"><UIcon name="i-lucide-lightbulb" />第一个字母是「{{ firstLetter }}」</div>
+          <div v-if="hintLetter && !solved" class="spell-hint" role="status"><UIcon name="i-lucide-lightbulb" />第 {{ hintPosition }} 个字母是「{{ hintLetter }}」</div>
           <div v-if="solved" class="solved-card" role="status" aria-label="答题反馈">
             <span class="solved-icon"><UIcon name="i-lucide-circle-check" /></span>
             <div><strong>拼对啦！</strong><p>{{ question.word }} · {{ question.meaning }}</p></div>
@@ -150,13 +153,15 @@ watch(() => props.storageKey, () => {
           </div>
           <div v-else-if="feedback" class="spell-feedback" role="status" aria-label="答题反馈"><UIcon name="i-lucide-message-circle" />{{ feedback }}</div>
           <div v-else class="spell-tip"><UIcon name="i-lucide-mouse-pointer-2" />点字母卡片放进上面的格子里，点错了再点一次取回。</div>
-          <div class="panel-actions"><button class="ghost-button" :disabled="!round.selected.length || solved" @click="clearAll"><UIcon name="i-lucide-undo-2" />清空</button><button class="hint-button" :disabled="solved" @click="showHint"><UIcon name="i-lucide-lightbulb" />{{ hintLetter ? '再提示一次' : '第一个字母' }}</button></div>
+          <div class="panel-actions"><button class="ghost-button" :disabled="!round.selected.length || solved" @click="clearAll"><UIcon name="i-lucide-undo-2" />清空</button><button class="hint-button" :disabled="solved" @click="showHint"><UIcon name="i-lucide-lightbulb" />{{ hintLetter ? '再提示一次' : '下一处提示' }}</button></div>
           <button v-if="!solved" class="primary-action" :disabled="round.selected.length !== question.word.length" @click="check"><UIcon name="i-lucide-spell-check-2" />检查拼写<UIcon name="i-lucide-arrow-right" /></button>
           <button v-else class="primary-action" @click="next">{{ round.index === SPELL_QUESTIONS - 1 ? '查看拼词报告' : '下一个单词' }}<UIcon name="i-lucide-arrow-right" /></button>
         </div>
       </section>
 
-      <section v-else class="spell-report">
+      <details v-if="!finished && selectedTiles.length>1 && !round.solved" class="sequence-adjust"><summary>调整字母顺序</summary><div v-for="(tile,index) in selectedTiles" :key="tile.id"><span>{{ index+1 }} · {{ tile.letter }}</span><button :disabled="index===0" :aria-label="`第 ${index+1} 个字母前移`" @click="moveSpellTile(save,index,-1);feedback=''">前移</button><button :disabled="index===selectedTiles.length-1" :aria-label="`第 ${index+1} 个字母后移`" @click="moveSpellTile(save,index,1);feedback=''">后移</button></div></details>
+
+      <section v-if="finished" class="spell-report">
         <div class="report-stars" :aria-label="`本局获得${stars}颗星`"><UIcon v-for="n in 3" :key="n" name="i-lucide-star" :class="{ earned: n <= stars }" /></div>
         <span class="eyebrow">第 {{ save.rounds }} 次拼词 · {{ difficulty.name }}</span>
         <h2>{{ stars === 3 ? '字母排得整整齐齐，拼词小能手！' : '单词都拼好啦，再读一遍会更熟！' }}</h2>
@@ -179,6 +184,7 @@ watch(() => props.storageKey, () => {
 </template>
 
 <style scoped>
+.sequence-adjust{margin:16px 0;padding:14px;border:1px solid #dfdfcf;border-radius:9px;background:white;font-size:12px}.sequence-adjust summary{cursor:pointer}.sequence-adjust>div{display:flex;gap:8px;align-items:center;margin-top:10px}.sequence-adjust span{flex:1;min-width:0}.sequence-adjust button{padding:8px;border:1px solid #ddd;border-radius:6px}.sequence-adjust button:disabled{opacity:.4}
 .spell-game { --spell-ink: #2f4748; --spell-muted: #84999a; --spell-teal: #3f8580; --spell-border: #dceae7; min-height: 100dvh; background: #f4faf9; color: var(--spell-ink); font-family: var(--font-ui); letter-spacing: 0; }
 .spell-game button { cursor: pointer; transition: background .16s, transform .16s, box-shadow .16s; }
 .spell-game button:disabled { cursor: default; }

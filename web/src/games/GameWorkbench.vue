@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { writeGameSave } from './game-storage'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import FruitSprite from './FruitSprite.vue'
 import ShopScene from './ShopScene.vue'
@@ -97,7 +98,7 @@ function restart() {
   clearFeedback()
 }
 watch(state, value => {
-  try { localStorage.setItem(props.storageKey, JSON.stringify(value)); saveError.value = false }
+  try { writeGameSave(props.storageKey, value); saveError.value = false }
   catch { saveError.value = true }
 }, { deep: true, flush: 'post', immediate: true })
 watch(() => props.storageKey, () => {

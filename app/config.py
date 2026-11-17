@@ -32,15 +32,15 @@ class Settings(BaseSettings):
     # 题目生成
     default_question_count: int = 5
     max_question_count: int = 30
-    generation_daily_limit: int = Field(20, ge=0, le=100000)  # 0 关闭每用户每日成功生成额度（失败与结果未知不再占用）
+    generation_daily_limit: int = Field(0, ge=0, le=100000)  # 默认不限成功次数；正数启用滚动 24 小时额度
     generation_daily_failure_limit: int = Field(30, ge=0, le=100000)  # 0 关闭失败次数上限；失败仍消耗全站预算，所以要有独立闸
     generation_user_concurrency: int = Field(2, ge=1, le=100)
     generation_global_concurrency: int = Field(6, ge=1, le=1000)
     generation_repair_limit: int = Field(3, ge=0, le=10)
     generation_lease_seconds: int = Field(3600, ge=60, le=86400)
     generation_heartbeat_seconds: int = Field(90, ge=30, le=300)
-    generation_global_daily_tokens: int = Field(2_000_000, ge=10000)
-    generation_global_daily_images: int = Field(100, ge=1)
+    generation_global_daily_tokens: int = Field(0, ge=0)  # 0 不限；正数启用全站预算
+    generation_global_daily_images: int = Field(0, ge=0)
     generation_result_days: int = Field(7, ge=1, le=365)
 
     # 服务
@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     metrics_host: str = "127.0.0.1"
     metrics_port: int = Field(9090, ge=1, le=65535)
     maintenance_enabled: bool = True
+    teaching_jobs_enabled: bool = True
     import_default_view_access: Literal["free", "vip"] = "free"
     import_default_download_access: Literal["free", "vip"] = "free"
     image_storage_mb: int = Field(512, ge=16, le=102400)
@@ -123,6 +124,7 @@ class Settings(BaseSettings):
     # 后台管理
     admin_username: str = ""  # 种子管理员用户名（可选；设置后启动时自动创建/对齐）
     admin_password: str = ""  # 种子管理员密码（需与 ADMIN_USERNAME 同时设置）
+    super_admin_username: str = "lqyha"  # 首次权限迁移指定的超级管理员，不自动提升其他管理员
     admin_reset_on_start: bool = False  # 应急重置开关；使用后关闭，同时吊销旧会话
     api_docs_enabled: bool | None = None  # 未指定时 HTTPS 生产环境关闭
     db_auto_migrate: bool = True  # 生产发布先执行 python -m app.migrations，再设为 false

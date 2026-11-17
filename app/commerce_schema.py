@@ -82,9 +82,15 @@ def init_commerce_schema(conn):
         ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS virtual_order_id TEXT NOT NULL DEFAULT '';
         ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS virtual_order_type INTEGER NOT NULL DEFAULT 0;
         ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS delivered_at BIGINT;
+        ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS delivery_attempts INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS delivery_next_at BIGINT NOT NULL DEFAULT 0;
+        ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS delivery_lease_key TEXT NOT NULL DEFAULT '';
+        ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS delivery_lease_until BIGINT NOT NULL DEFAULT 0;
         ALTER TABLE mini_membership_plans ADD COLUMN IF NOT EXISTS price_fen_ios INTEGER NOT NULL DEFAULT 0;
         ALTER TABLE mini_membership_plans ADD COLUMN IF NOT EXISTS virtual_product_id_ios TEXT NOT NULL DEFAULT '';
         ALTER TABLE mini_orders ADD COLUMN IF NOT EXISTS device_platform TEXT NOT NULL DEFAULT '';
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mini_orders_virtual_order ON mini_orders(virtual_order_id) WHERE virtual_order_id <> '';
         CREATE INDEX IF NOT EXISTS idx_mini_orders_channel_status ON mini_orders(payment_channel, status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_mini_orders_delivery_due ON mini_orders(delivery_next_at, id)
+            WHERE payment_channel = 'virtual' AND paid_at IS NOT NULL AND delivered_at IS NULL;
     """)

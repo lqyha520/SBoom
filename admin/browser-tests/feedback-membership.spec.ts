@@ -14,7 +14,8 @@ for (const width of [1440, 390]) test(`会员身份与回复流程 ${width}px`, 
   await context.route('**/api/**', async route => {
     const req = route.request(), path = new URL(req.url()).pathname
     let data
-    if (path === '/api/v1/auth/me') data = { id: 1, username: 'admin', role: 'admin' }
+    if (path === '/api/v1/auth/me') data = { id: 1, username: 'admin', role: 'admin', is_super_admin: true, admin_permissions: {}, permissions_revision: 1 }
+    else if (path === '/api/v1/auth/mfa/status') data = { enabled: false, recovery_codes_remaining: 0 }
     else if (path === '/api/v1/admin/experience/support') data = { revision: 1, wechat: '', phone: '', email: '', hours: '', benefits: '' }
     else if (path === '/api/v1/admin/experience/feedback') data = { items, total: items.length }
     else if (path.startsWith('/api/v1/admin/experience/feedback/')) {

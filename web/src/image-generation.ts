@@ -23,10 +23,25 @@ export interface WorksheetImage {
   width: number
   height: number
   prompt: string
+  quality_review?: ImageQualityReview
 }
-export type ImageGenerationStatus = Omit<GenerationStatus, 'result'> & { kind: string; result: WorksheetImage | null }
+export interface ImageQualityReview {
+  status: 'passed' | 'issues' | 'unavailable' | 'not_configured'
+  human_status: 'pending'
+  reason?: string
+  issues: { question: string; message: string }[]
+  checks: Record<string, 'pass' | 'fail' | 'uncertain'>
+  counts: { game_type: string; count: number }[]
+}
+export type ImageGenerationStatus = Omit<GenerationStatus, 'result'> & { kind: string; result: WorksheetImage | null; recoverable?: boolean }
 const jsonHeaders = { 'Content-Type': 'application/json' }
-export const fetchImageOptions = () => request<{ configured: boolean }>('/api/v1/image-generation/options')
+export interface ImageGenerationOptions {
+  configured: boolean
+  // Older servers omit these fields; the workbench then uses one request.
+  max_concurrency?: number
+  default_concurrency?: number
+}
+export const fetchImageOptions = () => request<ImageGenerationOptions>('/api/v1/image-generation/options')
 export const previewImagePrompt = (params: ImageWorksheetParams) => request<{ prompt: string }>('/api/v1/image-generation/prompt', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(params) })
 export const generateWorksheetImage = (params: ImageWorksheetParams, requestId: string) => request<WorksheetImage>('/api/v1/generate-image', {
   method: 'POST', headers: { ...jsonHeaders, 'X-Request-ID': requestId }, body: JSON.stringify(params),

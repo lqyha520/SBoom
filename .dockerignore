@@ -2,6 +2,7 @@
 math-question-bank/
 artifacts/
 data/
+outputs/
 node_modules/
 .git/
 .github/

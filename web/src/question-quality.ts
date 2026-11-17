@@ -39,6 +39,7 @@ export function questionConcerns(question: Question, passage = ''): string[] {
   const issues = manual ? [] : [...(question.quality_issues || [])]
   if (question._manualReview && !manual) issues.push('题目或阅读正文已变化，请重新核对')
   if (!manual && question.quality_status !== 'passed' && !issues.length) issues.push('尚未完成独立复核')
+  if (question.answer == null || String(question.answer).trim() === '') issues.push('缺少答案，请补齐后核对')
   if (!question.analysis?.trim()) issues.push('缺少解析，请核对解题依据')
   return [...new Set(issues)]
 }

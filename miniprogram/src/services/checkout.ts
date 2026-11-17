@@ -45,7 +45,8 @@ export function confirmCheckout(id: string): Promise<Order | null> {
   return promise
 }
 export async function resumeCheckouts() {
-  await Promise.allSettled([...checkoutState.keys()].map(confirmCheckout))
+  const results = await Promise.allSettled([...checkoutState.keys()].map(confirmCheckout))
+  return results.some(result => result.status === 'fulfilled' && result.value !== null)
 }
 
 export function iosRestricted(iosEnabled: boolean) {

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission } from '../permissions'
+import { canAdmin } from '../permissions'
 import { computed } from 'vue'
 import type { CatalogPaper } from '../catalog'
 import { publicationLabels as labels } from '../publication-editor'
@@ -10,6 +12,7 @@ const props = defineProps<{
   loading: boolean
   error: string
   highlighted: string
+  showPublisher?: boolean
 }>()
 const emit = defineEmits<{
   select: [id: string]
@@ -54,7 +57,7 @@ const moreActions = (item: CatalogPaper) => [
       onSelect: () => emit('remove', item),
     },
   ],
-]
+].map((group, index) => group.filter(() => canAdmin('papers', index === 0 ? 'update' : 'delete'))).filter(group => group.length)
 </script>
 
 <template>
@@ -133,6 +136,7 @@ const moreActions = (item: CatalogPaper) => [
                   {{ item.favorite_count || 0 }} · 下载
                   {{ item.download_users || 0 }}
                 </div>
+                <div v-if="showPublisher" class="catalog-meta">创建人：{{ item.publisher_name || '已删除账号' }}</div>
                 <div
                   v-if="
                     item.download_mode !== 'external' &&
@@ -185,14 +189,14 @@ const moreActions = (item: CatalogPaper) => [
                 :aria-label="'预览 ' + item.title"
                 @click="emit('preview', item)"
               /></UTooltip>
-              <UTooltip text="编辑"><UButton
+              <UTooltip text="编辑"><UButton v-permission="'papers:update'"
                 icon="i-lucide-square-pen"
                 color="neutral"
                 variant="ghost"
                 :aria-label="'编辑 ' + item.title"
                 @click="emit('edit', item)"
               /></UTooltip>
-              <UDropdownMenu :items="moreActions(item)"
+              <UDropdownMenu v-if="moreActions(item).length" :items="moreActions(item)"
                 ><UButton
                   icon="i-lucide-ellipsis"
                   color="neutral"

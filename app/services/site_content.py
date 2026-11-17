@@ -76,7 +76,7 @@ def list_categories(include_hidden: bool = True) -> dict:
 def create_category(body: CategoryInput) -> dict:
     now = _now()
     name = _clean(body.name)
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         if conn.execute("SELECT 1 FROM site_categories WHERE name = ?", (name,)).fetchone():
             raise _conflict("已存在同名分类")
         order = body.sort_order or (conn.execute("SELECT COALESCE(MAX(sort_order), 0) + 10 FROM site_categories").fetchone()[0])
@@ -92,7 +92,7 @@ def create_category(body: CategoryInput) -> dict:
 def update_category(category_id: str, body: CategoryUpdate) -> dict:
     now = _now()
     name = _clean(body.name)
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         row = conn.execute("SELECT revision FROM site_categories WHERE id = ?", (category_id,)).fetchone()
         if not row:
             raise _missing("分类不存在")
@@ -112,7 +112,7 @@ def update_category(category_id: str, body: CategoryUpdate) -> dict:
 
 
 def delete_category(category_id: str, revision: int) -> None:
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         row = conn.execute("SELECT revision FROM site_categories WHERE id = ?", (category_id,)).fetchone()
         if not row:
             raise _missing("分类不存在")
@@ -135,7 +135,7 @@ def _one_category(category_id: str) -> dict:
 
 def reorder_categories(ids: list[str]) -> dict:
     now = _now()
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         known = {row["id"] for row in conn.execute("SELECT id FROM site_categories")}
         unknown = [item for item in ids if item not in known]
         if unknown:
@@ -154,7 +154,7 @@ def home_settings() -> dict:
 
 
 def save_home_settings(body: HomeSettings) -> dict:
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         row = conn.execute("SELECT value FROM app_config WHERE key = 'home_settings'").fetchone()
         previous = json.loads(row[0]) if row else {"revision": 0}
         if previous["revision"] != body.revision:
@@ -187,7 +187,7 @@ def _one_banner(banner_id: str) -> dict:
 
 def create_banner(body: BannerInput) -> dict:
     now = _now()
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         order = body.sort_order or (conn.execute("SELECT COALESCE(MAX(sort_order), 0) + 10 FROM site_banners").fetchone()[0])
         banner_id = uuid.uuid4().hex
         conn.execute(
@@ -201,7 +201,7 @@ def create_banner(body: BannerInput) -> dict:
 
 def update_banner(banner_id: str, body: BannerUpdate) -> dict:
     now = _now()
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         row = conn.execute("SELECT revision FROM site_banners WHERE id = ?", (banner_id,)).fetchone()
         if not row:
             raise _missing("Banner 不存在")
@@ -217,7 +217,7 @@ def update_banner(banner_id: str, body: BannerUpdate) -> dict:
 
 
 def delete_banner(banner_id: str, revision: int) -> None:
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         row = conn.execute("SELECT revision, image_key, image_storage FROM site_banners WHERE id = ?", (banner_id,)).fetchone()
         if not row:
             raise _missing("Banner 不存在")
@@ -263,7 +263,7 @@ def save_banner_image(banner_id: str, content_type: str, data: bytes, revision: 
     except Exception as exc:
         raise HTTPException(503, detail={"error": "图片存储不可用，请稍后重试"}) from exc
     try:
-        with db(serialized=True) as conn:
+        with db(serialized=True, invalidate_public=True) as conn:
             row = conn.execute("SELECT revision, image_key, image_storage FROM site_banners WHERE id = ?", (banner_id,)).fetchone()
             if not row:
                 raise _missing("Banner 不存在")
@@ -280,7 +280,7 @@ def save_banner_image(banner_id: str, content_type: str, data: bytes, revision: 
 
 
 def clear_banner_image(banner_id: str, revision: int) -> dict:
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         row = conn.execute("SELECT revision, image_key, image_storage FROM site_banners WHERE id = ?", (banner_id,)).fetchone()
         if not row:
             raise _missing("Banner 不存在")
@@ -341,7 +341,7 @@ def _one_notice(notice_id: str) -> dict:
 def create_notice(body: NoticeInput) -> dict:
     now = _now()
     notice_id = uuid.uuid4().hex
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         conn.execute(
             "INSERT INTO site_notices(id, title, body, placement, level, starts_at, ends_at, is_visible, revision, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
@@ -353,7 +353,7 @@ def create_notice(body: NoticeInput) -> dict:
 
 def update_notice(notice_id: str, body: NoticeUpdate) -> dict:
     now = _now()
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         row = conn.execute("SELECT revision FROM site_notices WHERE id = ?", (notice_id,)).fetchone()
         if not row:
             raise _missing("公告不存在")
@@ -369,7 +369,7 @@ def update_notice(notice_id: str, body: NoticeUpdate) -> dict:
 
 
 def delete_notice(notice_id: str, revision: int) -> None:
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         row = conn.execute("SELECT revision FROM site_notices WHERE id = ?", (notice_id,)).fetchone()
         if not row:
             raise _missing("公告不存在")
@@ -393,7 +393,11 @@ def get_document(key: str) -> dict:
         row = conn.execute("SELECT * FROM site_documents WHERE key = ?", (key,)).fetchone()
     if not row:
         raise _missing("文档尚未初始化")
-    return dict(row)
+    result = dict(row)
+    if key == 'privacy':
+        # 仅移除本功能自动添加的旧说明，保留管理员其他正文与数据库原记录。
+        result['body'] = result['body'].replace('你主动设置的教材关注（年级、学科、教材和上新提醒开关）保存在账号中，供跨设备推荐资料和发送上新提醒；取消关注后删除相应设置。', '')
+    return result
 
 
 def update_document(key: str, body: DocumentUpdate) -> dict:
@@ -438,7 +442,7 @@ def reorder_dictionary(body) -> dict:
     identifiers = [item.id for item in body.items]
     if len(set(identifiers)) != len(identifiers):
         raise HTTPException(422, detail={"error": "排序列表不能包含重复条目"})
-    with db(serialized="content") as conn:
+    with db(serialized="content", invalidate_public=True) as conn:
         current = conn.execute("SELECT id, revision FROM site_dictionary WHERE kind = ? AND parent = ?", (body.kind, body.parent)).fetchall()
         versions = {row["id"]: row["revision"] for row in current}
         if set(versions) != set(identifiers) or any(versions.get(item.id) != item.revision for item in body.items):
@@ -454,7 +458,7 @@ def create_dictionary(body: DictionaryInput) -> dict:
     now = _now()
     value = _clean(body.value)
     parent = body.parent.strip()
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         if conn.execute("SELECT 1 FROM site_dictionary WHERE kind = ? AND parent = ? AND value = ?",
                         (body.kind, parent, value)).fetchone():
             raise _conflict("该取值已在字典中")
@@ -493,7 +497,7 @@ def _one_dictionary(item_id: str) -> dict:
 def update_dictionary(item_id: str, body: DictionaryUpdate) -> dict:
     now = _now()
     value = _clean(body.value)
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         row = conn.execute("SELECT kind, parent, revision FROM site_dictionary WHERE id = ?", (item_id,)).fetchone()
         if not row:
             raise _missing("字典条目不存在")
@@ -512,7 +516,7 @@ def update_dictionary(item_id: str, body: DictionaryUpdate) -> dict:
 
 
 def delete_dictionary(item_id: str, revision: int) -> None:
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         row = conn.execute("SELECT revision FROM site_dictionary WHERE id = ?", (item_id,)).fetchone()
         if not row:
             raise _missing("字典条目不存在")
@@ -536,7 +540,7 @@ def list_dictionary_links() -> dict:
 def set_dictionary_links(grade_id: str, subject_ids: list[str]) -> dict:
     """整体替换某年级关联的科目集合（前端一次提交完整勾选结果）。"""
     wanted = list(dict.fromkeys(subject_ids))  # 去重且保序
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         grade = conn.execute("SELECT id FROM site_dictionary WHERE id = ? AND kind = 'grade'", (grade_id,)).fetchone()
         if not grade:
             raise _missing("年级不存在")
@@ -565,7 +569,7 @@ def unlisted_dictionary() -> dict:
 
 
 def adopt_dictionary(kind: str, values: list[str]) -> dict:
-    with db(serialized=True) as conn:
+    with db(serialized=True, invalidate_public=True) as conn:
         order = conn.execute("SELECT COALESCE(MAX(sort_order), 0) FROM site_dictionary WHERE kind = ?", (kind,)).fetchone()[0]
         existing = {row[0] for row in conn.execute("SELECT value FROM site_dictionary WHERE kind = ?", (kind,))}
         now = _now()
@@ -579,7 +583,7 @@ def adopt_dictionary(kind: str, values: list[str]) -> dict:
             rows.append((uuid.uuid4().hex, kind, value, order, now, now))
         conn.executemany(
             "INSERT INTO site_dictionary(id, kind, value, label, sort_order, is_visible, revision, created_at, updated_at) "
-            "VALUES (?, ?, ?, '', ?, 1, 1, ?, ?) ON CONFLICT(kind, value) DO NOTHING",
+            "VALUES (?, ?, ?, '', ?, 1, 1, ?, ?) ON CONFLICT(kind, parent, value) DO NOTHING",
             rows,
         )
     return {"added": len(rows), **list_dictionary(kind)}

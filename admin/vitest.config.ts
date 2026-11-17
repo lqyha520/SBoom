@@ -3,5 +3,5 @@ import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
   plugins: [vue()],
-  test: { environment: 'happy-dom', include: ['src/**/*.test.ts'], clearMocks: true, restoreMocks: true },
+  test: { setupFiles: ['src/__tests__/setup.ts'], environment: 'happy-dom', include: ['src/**/*.test.ts'], clearMocks: true, restoreMocks: true },
 })

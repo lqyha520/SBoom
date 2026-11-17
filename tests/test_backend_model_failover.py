@@ -46,7 +46,7 @@ class ModelFailover(unittest.TestCase):
         self.stack.enter_context(patch.object(get_settings(), "provider_failure_threshold", 1000))
         self.client.app.include_router(admin.router)
         self.client.app.include_router(image_generation.router)
-        self.admin = user_store.create_user("model-admin", "test-password", role="admin")
+        self.admin = user_store.create_user("model-admin", "test-password", role="admin", is_super_admin=True)
         self.profiles = [profile("first"), profile("off", enabled=False), profile("second")]
         app_config.save_llm_models(self.profiles)
         self.calls = []

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { permissionDirective as vPermission, canPermission } from '../permissions'
 import { computed, onActivated, onDeactivated, ref } from 'vue'
 import { useAdminLeaveGuard } from '../navigation'
 import { useAdminRefresh } from '../admin-page'
@@ -25,6 +26,7 @@ const taskTimeout = ref<number>()
 let healthSequence = 0
 const samplingModes = [{ label: '使用系统采样参数', value: 'configured' }, { label: '省略采样参数（模型默认值）', value: 'omit' }]
 const tokenParameters = [{ label: 'max_tokens', value: 'max_tokens' }, { label: 'max_completion_tokens', value: 'max_completion_tokens' }]
+const thinkingModes = [{ label: '使用模型默认设置', value: 'default' }, { label: '关闭深度思考（兼容模型）', value: 'disabled' }]
 const healthLabels = { unknown: '暂无调用记录', healthy: '调用正常', degraded: '最近调用失败', cooling: '故障冷却中', probing: '恢复探测中', recovering: '等待恢复探测' }
 function modelHealth(id: string) { return health.value.find(value => value.id === id) }
 async function refreshHealth() {
@@ -147,7 +149,7 @@ async function execute(action: 'save' | 'test' | 'generation-test' | 'clear') {
       accept(result); message.value = '模型配置已保存'
     } else if ((action === 'test' || action === 'generation-test') && selected.value) {
       const model = selected.value
-      const payload = { id: model.id, baseUrl: model.baseUrl.trim(), model: model.model.trim(), apiKey: model.apiKey.trim(), timeout: model.timeout, maxTokens: model.maxTokens, samplingMode: model.samplingMode, tokenParameter: model.tokenParameter }
+      const payload = { id: model.id, baseUrl: model.baseUrl.trim(), model: model.model.trim(), apiKey: model.apiKey.trim(), timeout: model.timeout, maxTokens: model.maxTokens, samplingMode: model.samplingMode, tokenParameter: model.tokenParameter, thinkingMode: model.thinkingMode }
       const result = await (action === 'test' ? api.testLlm(payload) : api.testLlmGeneration(payload))
       message.value = (action === 'test' ? '连接成功：' : '真实调用成功：') + result.reply
     } else if (action === 'clear') {
@@ -182,7 +184,7 @@ useAdminRefresh(load, () => { loadSequence++; healthSequence++; loading.value = 
     <template v-else-if="!loadError">
       <div class="model-layout">
         <div class="model-list">
-          <div class="list-heading"><h3>调用优先级</h3><UTooltip text="添加模型"><UButton icon="i-lucide-plus" aria-label="添加模型" color="neutral" variant="outline" :disabled="!!busy || models.length >= 8" @click="add" /></UTooltip></div>
+          <div class="list-heading"><h3>调用优先级</h3><UTooltip text="添加模型"><UButton v-permission="'llm:update'" icon="i-lucide-plus" aria-label="添加模型" color="neutral" variant="outline" :disabled="!!busy || models.length >= 8" @click="add" /></UTooltip></div>
           <ol class="priority-list">
             <li v-for="(model, index) in models" :key="model.id" :class="{ selected: model.id === selectedId }">
               <button type="button" class="model-select" :aria-pressed="model.id === selectedId" :disabled="!!busy" @click="selectModel(model.id)">
@@ -193,44 +195,46 @@ useAdminRefresh(load, () => { loadSequence++; healthSequence++; loading.value = 
                 </span>
               </button>
               <div class="model-tools">
-                <UTooltip text="提高优先级"><UButton icon="i-lucide-arrow-up" :aria-label="`上移模型 ${index + 1}`" size="xs" color="neutral" variant="ghost" :disabled="!!busy || index === 0" @click="move(index, -1)" /></UTooltip>
-                <UTooltip text="降低优先级"><UButton icon="i-lucide-arrow-down" :aria-label="`下移模型 ${index + 1}`" size="xs" color="neutral" variant="ghost" :disabled="!!busy || index === models.length - 1" @click="move(index, 1)" /></UTooltip>
-                <UTooltip text="移除模型"><UButton icon="i-lucide-trash-2" :aria-label="`移除模型 ${index + 1}`" size="xs" color="error" variant="ghost" :disabled="!!busy" @click="removeId = model.id" /></UTooltip>
+                <UTooltip text="提高优先级"><UButton v-permission="'llm:update'" icon="i-lucide-arrow-up" :aria-label="`上移模型 ${index + 1}`" size="xs" color="neutral" variant="ghost" :disabled="!!busy || index === 0" @click="move(index, -1)" /></UTooltip>
+                <UTooltip text="降低优先级"><UButton v-permission="'llm:update'" icon="i-lucide-arrow-down" :aria-label="`下移模型 ${index + 1}`" size="xs" color="neutral" variant="ghost" :disabled="!!busy || index === models.length - 1" @click="move(index, 1)" /></UTooltip>
+                <UTooltip text="移除模型"><UButton v-permission="'llm:update'" icon="i-lucide-trash-2" :aria-label="`移除模型 ${index + 1}`" size="xs" color="error" variant="ghost" :disabled="!!busy" @click="removeId = model.id" /></UTooltip>
               </div>
             </li>
           </ol>
-          <div v-if="!models.length" class="empty-models"><UIcon name="i-lucide-server" class="size-8" /><p>暂无模型</p><UButton icon="i-lucide-plus" label="添加模型" :disabled="!!busy" @click="add" /></div>
+          <div v-if="!models.length" class="empty-models"><UIcon name="i-lucide-server" class="size-8" /><p>暂无模型</p><UButton v-permission="'llm:update'" icon="i-lucide-plus" label="添加模型" :disabled="!!busy" @click="add" /></div>
         </div>
-        <form v-if="selectedId" class="settings-form model-form" @submit.prevent="execute('save')">
-          <div class="profile-heading"><h3>模型 {{ models.indexOf(selected) + 1 }}</h3><USwitch v-model="selected.enabled" label="启用" :disabled="!!busy" /></div>
-          <UFormField label="备注名称"><UInput v-model="selected.name" :disabled="!!busy" maxlength="80" placeholder="可选" /></UFormField>
-          <UFormField :label="isImage ? '生图接口地址' : '接口地址'" required><UInput v-model="selected.baseUrl" type="url" placeholder="https://api.example.com/v1" :disabled="!!busy" required maxlength="500" icon="i-lucide-globe" @update:model-value="forgetFetched(selected.id)" /></UFormField>
+        <form v-if="selectedId" class="settings-form model-form" @submit.prevent="canPermission('llm:update') && (execute('save'))">
+          <div class="profile-heading"><h3>模型 {{ models.indexOf(selected) + 1 }}</h3><USwitch v-model="selected.enabled" label="启用" :disabled="!canPermission('llm:update') || (!!busy)" /></div>
+          <UFormField label="备注名称"><UInput v-model="selected.name" :disabled="!canPermission('llm:update') || (!!busy)" maxlength="80" placeholder="可选" /></UFormField>
+          <UFormField :label="isImage ? '生图接口地址' : '接口地址'" required><UInput v-model="selected.baseUrl" type="url" placeholder="https://api.example.com/v1" :disabled="!canPermission('llm:update') || (!!busy)" required maxlength="500" icon="i-lucide-globe" @update:model-value="forgetFetched(selected.id)" /></UFormField>
           <div class="field-grid">
             <UFormField :label="isImage ? '生图模型名称' : '模型名称'" required>
               <div class="model-name-row">
-                <UInput v-model="selected.model" placeholder="模型 ID" :disabled="!!busy" required maxlength="120" />
-                <UButton label="拉取模型" icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="busy === 'models'" :disabled="!!busy" @click="fetchModels" />
+                <UInput v-model="selected.model" placeholder="模型 ID" :disabled="!canPermission('llm:update') || (!!busy)" required maxlength="120" />
+                <UButton v-permission="'llm:run'" label="拉取模型" icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="busy === 'models'" :disabled="!!busy" @click="fetchModels" />
               </div>
             </UFormField>
             <UFormField :label="isImage ? '生图超时（秒）' : '超时时间（秒）'" description="每个候选的最长等待时间；前台等待时限由后台自动计算。"><UInputNumber v-model="selected.timeout" :min="isImage ? 30 : 10" :max="600" :step="10" :disabled="!!busy" /></UFormField>
           </div>
           <UFormField v-if="fetchedModels[selected.id]?.length" label="从拉取结果选择" :description="`已拉取 ${fetchedModels[selected.id]?.length ?? 0} 个模型，选择后会覆盖上方模型名称。`">
-            <USelect v-model="selected.model" :items="fetchedModels[selected.id] ?? []" placeholder="选择模型" :disabled="!!busy" aria-label="从拉取结果选择" />
+            <USelect v-model="selected.model" :items="fetchedModels[selected.id] ?? []" placeholder="选择模型" :disabled="!canPermission('llm:update') || (!!busy)" aria-label="从拉取结果选择" />
           </UFormField>
           <UAlert v-if="listError" :title="listError" color="error" variant="soft" />
           <div v-if="isImage" class="field-grid">
-            <UFormField label="图片尺寸"><UInput v-model="selected.size" :disabled="!!busy" required maxlength="30" /></UFormField>
-            <UFormField label="图片返回格式"><USelect v-model="selected.responseFormat" :items="formats" :disabled="!!busy" /></UFormField>
+            <UFormField label="图片尺寸"><UInput v-model="selected.size" :disabled="!canPermission('llm:update') || (!!busy)" required maxlength="30" /></UFormField>
+            <UFormField label="图片返回格式"><USelect v-model="selected.responseFormat" :items="formats" :disabled="!canPermission('llm:update') || (!!busy)" /></UFormField>
           </div>
           <UFormField v-else label="模型最大输出 token"><UInputNumber v-model="selected.maxTokens" :min="1024" :max="131072" :step="1024" :disabled="!!busy" /></UFormField>
           <div v-if="!isImage" class="field-grid">
-            <UFormField label="采样参数兼容性" description="不支持 temperature 或 top_p 的模型请选择省略。"><USelect v-model="selected.samplingMode" :items="samplingModes" :disabled="!!busy" /></UFormField>
-            <UFormField label="输出 token 参数"><USelect v-model="selected.tokenParameter" :items="tokenParameters" :disabled="!!busy" /></UFormField>
+            <UFormField label="采样参数兼容性" description="不支持 temperature 或 top_p 的模型请选择省略。"><USelect v-model="selected.samplingMode" :items="samplingModes" :disabled="!canPermission('llm:update') || (!!busy)" /></UFormField>
+            <UFormField label="输出 token 参数"><USelect v-model="selected.tokenParameter" :items="tokenParameters" :disabled="!canPermission('llm:update') || (!!busy)" /></UFormField>
           </div>
-          <UFormField v-if="isImage" label="生图调用方式" description="服务商要求提交任务后查询结果时，选择异步任务。"><USelect v-model="selected.requestMode" :items="requestModes" :disabled="!!busy" /></UFormField>
-          <UFormField :label="isImage ? '生图 API 密钥' : 'API 密钥'"><UInput v-model="selected.apiKey" type="password" autocomplete="new-password" :placeholder="selected.hasKey ? '留空保留已保存的密钥' : 'sk-...'" :required="selected.enabled && !selected.hasKey" :disabled="!!busy" maxlength="4000" icon="i-lucide-key-round" /></UFormField>
-          <div class="actions-row"><UBadge :color="selected.hasKey ? 'success' : 'warning'" variant="subtle" icon="i-lucide-key-round">{{ selected.hasKey ? '密钥已保存' : '未配置密钥' }}</UBadge><UButton v-if="!isImage" label="测试连接" icon="i-lucide-plug" color="neutral" variant="outline" :loading="busy === 'test'" :disabled="!!busy" @click="execute('test')" /></div>
-          <UButton v-if="!isImage" label="测试真实 JSON 调用" icon="i-lucide-flask-conical" color="neutral" variant="outline" :loading="busy === 'generation-test'" :disabled="!!busy" @click="execute('generation-test')" />
+          <UFormField v-if="!isImage" label="深度思考" description="Sage、Qwen 等兼容接口可关闭深度思考，避免推理耗尽输出额度；仍会生成答案解析。其他模型保留默认设置，修改后可测试真实 JSON 调用。"><USelect v-model="selected.thinkingMode" :items="thinkingModes" :disabled="!canPermission('llm:update') || (!!busy)" aria-label="深度思考" /></UFormField>
+          <UFormField v-if="!isImage" label="图片内容检查" description="仅为已验证支持图片输入的模型开启。使用首个启用此项的模型，每张图片额外检查一次，最多等待90秒；检查失败保留原图，发布前仍需人工核对。"><USwitch v-model="selected.imageReview" label="用于图片内容检查" :disabled="!canPermission('llm:update') || (!!busy)" /></UFormField>
+          <UFormField v-if="isImage" label="生图调用方式" description="服务商要求提交任务后查询结果时，选择异步任务。"><USelect v-model="selected.requestMode" :items="requestModes" :disabled="!canPermission('llm:update') || (!!busy)" /></UFormField>
+          <UFormField :label="isImage ? '生图 API 密钥' : 'API 密钥'"><UInput v-model="selected.apiKey" type="password" autocomplete="new-password" :placeholder="selected.hasKey ? '留空保留已保存的密钥' : 'sk-...'" :required="selected.enabled && !selected.hasKey" :disabled="!canPermission('llm:update') || (!!busy)" maxlength="4000" icon="i-lucide-key-round" /></UFormField>
+          <div class="actions-row"><UBadge :color="selected.hasKey ? 'success' : 'warning'" variant="subtle" icon="i-lucide-key-round">{{ selected.hasKey ? '密钥已保存' : '未配置密钥' }}</UBadge><UButton v-permission="'llm:run'" v-if="!isImage" label="测试连接" icon="i-lucide-plug" color="neutral" variant="outline" :loading="busy === 'test'" :disabled="!!busy" @click="execute('test')" /></div>
+          <UButton v-permission="'llm:run'" v-if="!isImage" label="测试真实 JSON 调用" icon="i-lucide-flask-conical" color="neutral" variant="outline" :loading="busy === 'generation-test'" :disabled="!!busy" @click="execute('generation-test')" />
           <p v-if="!isImage" class="text-sm">连接测试只检查连通性；真实调用按当前参数验证 JSON 输出，最多输出 1024 token，可能产生费用。</p>
           <button type="submit" hidden tabindex="-1" aria-hidden="true" />
         </form>
@@ -239,18 +243,18 @@ useAdminRefresh(load, () => { loadSequence++; healthSequence++; loading.value = 
       <UAlert v-if="message && !clearOpen" :color="ok ? 'success' : 'error'" :title="message" variant="soft" class="mt-5" role="status" />
       <UAlert v-if="conflict" title="本地修改已保留，服务器配置未被覆盖。" color="warning" variant="soft" class="mt-3" :actions="[{ label: '载入最新配置', disabled: !!busy, onClick: () => { reloadOpen = true } }]" />
       <div class="actions-row model-actions">
-        <UButton :label="isImage ? '保存生图配置' : '保存配置'" icon="i-lucide-save" :loading="busy === 'save'" :disabled="!!busy || !dirty" @click="execute('save')" />
+        <UButton v-permission="'llm:update'" :label="isImage ? '保存生图配置' : '保存配置'" icon="i-lucide-save" :loading="busy === 'save'" :disabled="!!busy || !dirty" @click="execute('save')" />
         <UBadge v-if="dirty" color="warning" variant="subtle">未保存</UBadge>
-        <UButton :label="isImage ? '清除生图配置' : '清除全局配置'" icon="i-lucide-trash-2" color="error" variant="outline" :disabled="!!busy || !models.length" @click="clearOpen = true; message = ''" />
+        <UButton v-permission="'llm:delete'" :label="isImage ? '清除生图配置' : '清除全局配置'" icon="i-lucide-trash-2" color="error" variant="outline" :disabled="!!busy || !models.length" @click="clearOpen = true; message = ''" />
       </div>
     </template>
     <UModal v-model:open="clearOpen" :title="isImage ? '清除生图配置' : '清除全局模型配置'" :dismissible="!busy" :close="!busy">
       <template #body><UAlert title="所有模型及已保存密钥将被删除，此类生成服务将停用。" color="warning" variant="soft" /><UAlert v-if="message && !ok" :title="message" color="error" class="mt-3" /></template>
-      <template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="!!busy" @click="clearOpen = false" /><UButton label="确认清除" color="error" :loading="busy === 'clear'" :disabled="!!busy" @click="execute('clear')" /></template>
+      <template #footer><UButton label="取消" color="neutral" variant="outline" :disabled="!!busy" @click="clearOpen = false" /><UButton v-permission="'llm:delete'" label="确认清除" color="error" :loading="busy === 'clear'" :disabled="!!busy" @click="execute('clear')" /></template>
     </UModal>
     <UModal v-model:open="removeOpen" title="移除模型">
       <template #body><p>保存配置后，此模型及其已保存密钥将被删除。</p></template>
-      <template #footer><UButton label="取消" color="neutral" variant="outline" @click="removeId = ''" /><UButton label="确认移除" color="error" @click="remove" /></template>
+      <template #footer><UButton v-permission="'llm:update'" label="取消" color="neutral" variant="outline" @click="removeId = ''" /><UButton v-permission="'llm:update'" label="确认移除" color="error" @click="remove" /></template>
     </UModal>
     <UModal v-model:open="reloadOpen" title="载入最新配置" :dismissible="!busy" :close="!busy">
       <template #body><p>当前列表的未保存修改将被放弃，替换为服务器上的最新模型配置。</p><UAlert v-if="message && !ok" :title="message" color="error" class="mt-3" /></template>

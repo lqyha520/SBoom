@@ -15,7 +15,7 @@ async function fixture(context: BrowserContext, summaryGate = Promise.resolve())
     const request = route.request(), url = new URL(request.url()), path = url.pathname, method = request.method()
     let data: unknown
     if (method !== 'GET') writes.push({ path, body: request.postDataJSON() })
-    if (path === '/api/v1/auth/me') data = { id: 1, username: 'admin', role: 'admin' }
+    if (path === '/api/v1/auth/me') data = { id: 1, username: 'admin', role: 'admin', is_super_admin: true }
     else if (path === '/api/v1/admin/site/categories') {
       if (method === 'POST') { const item = { id: 'new-category', ...request.postDataJSON() }; categories.push(item); data = item }
       else data = { items: categories }
@@ -388,9 +388,10 @@ test('导航分组默认收起并保存选择，当前页面所在组始终展�
   await fixture(context)
   await context.route('https://**', route => route.abort())
   await page.goto('/admin/#papers')
-  await expect(page.locator('.nav-group-caption > .iconify')).toHaveCount(12)
+  await expect(page.locator('.nav-group-caption > .iconify')).toHaveCount(18)
   const group = (name: string) => page.getByRole('navigation').getByRole('button', { name, exact: true })
   await expect(group('内容资料')).toHaveAttribute('aria-expanded', 'true')
+  await expect(group('小红书工作台')).toHaveAttribute('aria-expanded', 'false')
   await expect(group('系统设置')).toHaveAttribute('aria-expanded', 'false')
   await group('系统设置').click()
   await page.reload()

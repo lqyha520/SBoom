@@ -22,6 +22,8 @@ class TextModelProfile(ProfileIdentity):
     maxTokens: int = Field(16384, ge=1024, le=131072)
     samplingMode: Literal["configured", "omit"] = "configured"
     tokenParameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
+    thinkingMode: Literal["default", "disabled"] = "default"
+    imageReview: bool = False
 
 
 class ImageModelProfile(ImageModelConfig, ProfileIdentity):

@@ -3,7 +3,8 @@ import { navigatePage } from '../../services/page-navigation'
 
 import { copyWithPrivacy } from '../../services/privacy'
 import { reactive, ref, watch } from 'vue'
-import { onHide, onPullDownRefresh, onShow, onUnload } from '@dcloudio/uni-app'
+import { onHide, onPullDownRefresh, onShow, onUnload, onShareAppMessage } from '@dcloudio/uni-app'
+import { invitationShareCard } from '../../services/return-route'
 import AuthGate from '../../components/AuthGate.vue'
 import AppTabBar from '../../components/AppTabBar.vue'
 import PageChrome from '../../components/PageChrome.vue'
@@ -21,6 +22,7 @@ import type { CatalogSummary } from '../../types'
 import { inboxState, refreshUnread, openRequests } from '../../services/growth'
 
 const summary = ref<CatalogSummary | null>(null)
+onShareAppMessage(invitationShareCard)
 const error = ref('')
 const busy = ref(false)
 const sections = [{ key: 'summary', label: '收藏与下载统计' }, { key: 'messages', label: '消息提醒' }, { key: 'membership', label: '会员状态' }] as const
@@ -126,10 +128,12 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
         <view v-if="sectionErrors[section.key]" class="error-strip" role="status"><text class="grow">{{ section.label }}：{{ sectionErrors[section.key] }}</text><wd-button icon="refresh" role="button" variant="text" :aria-label="'重试' + section.label" :loading="sectionLoading[section.key]" :disabled="sectionLoading[section.key]" @click="load(section.key, true)">重试</wd-button></view>
       </view>
       <view class="content-width dashboard">
-        <view class="quick-grid" aria-role="group" role="group" aria-label="个人数据快捷入口">
-          <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="quick-card" role="button" @click="favorites"><view class="quick-icon favorite"><wd-icon name="heart" size="20px" /></view><text class="quick-value">{{ summary ? summary.favorites : '—' }}</text><text class="quick-label">我的收藏</text></button>
-          <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="quick-card" role="button" @click="downloads"><view class="quick-icon download"><wd-icon name="download" size="20px" /></view><text class="quick-value">{{ summary ? summary.downloads : '—' }}</text><text class="quick-label">下载记录</text></button>
-          <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="quick-card" role="button" @click="recent"><view class="quick-icon recent"><wd-icon name="history" size="20px" /></view><text class="quick-value small">继续学习</text><text class="quick-label">最近浏览</text></button>
+        <view class="learning-card">
+          <view class="quick-grid" aria-role="group" role="group" aria-label="个人数据快捷入口">
+            <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="quick-card" role="button" @click="favorites"><view class="quick-icon favorite"><wd-icon name="heart" size="20px" /></view><text class="quick-value">{{ summary ? summary.favorites : '—' }}</text><text class="quick-label">我的收藏</text></button>
+            <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="quick-card" role="button" @click="downloads"><view class="quick-icon download"><wd-icon name="download" size="20px" /></view><text class="quick-value">{{ summary ? summary.downloads : '—' }}</text><text class="quick-label">下载记录</text></button>
+            <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="quick-card" role="button" @click="recent"><view class="quick-icon recent"><wd-icon name="history" size="20px" /></view><text class="quick-value small">继续学习</text><text class="quick-label">最近浏览</text></button>
+          </view>
         </view>
         <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="membership-card" :class="{ active: session.user.is_vip }" role="button" aria-label="查看会员服务" @click="membership">
           <view class="membership-top"><view class="membership-mark"><wd-icon name="star-fill" size="19px" /></view><view class="grow"><text class="membership-title">{{ session.user.is_vip ? 'VIP 会员' : '会员服务' }}</text><text class="membership-caption">{{ session.user.is_vip || session.user.membership_status === 'expired' ? membershipExpiry(session.user) : '好资料，陪你每天进步' }}</text></view><view class="membership-action"><text>{{ session.user.is_vip ? '查看权益' : '去看看' }}</text><wd-icon name="arrow-right" size="13px" /></view></view>
@@ -137,16 +141,20 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
         </button>
         <view class="section-head"><text>常用服务</text></view>
         <view class="service-grid">
-          <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="service-item" role="button" :aria-label="inboxState.unread ? '消息中心，' + inboxState.unread + ' 条未读' : '消息中心'" @click="messages"><view class="service-icon message"><wd-icon name="notification" size="22px" /><text v-if="inboxState.unread" class="unread-badge">{{ inboxState.unread > 99 ? '99+' : inboxState.unread }}</text></view><text>消息中心</text></button>
+          <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="service-item" role="button" :aria-label="inboxState.unread ? '消息中心，' + inboxState.unread + ' 条未读' : '消息中心'" @click="messages"><view class="message-icon-slot"><view class="service-icon message"><wd-icon name="notification" size="22px" /></view><text v-if="inboxState.unread" class="unread-badge">{{ inboxState.unread > 99 ? '99+' : inboxState.unread }}</text></view><text>消息中心</text></button>
           <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="service-item" role="button" @click="openRequests()"><view class="service-icon request"><wd-icon name="list" size="22px" /></view><text>资料需求</text></button>
           <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="service-item" role="button" @click="orders"><view class="service-icon order"><wd-icon name="file" size="22px" /></view><text>会员订单</text></button>
           <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" class="service-item" role="button" @click="openSupport()"><view class="service-icon support"><wd-icon name="headset" size="22px" /></view><text>联系客服</text></button>
         </view>
         <view class="section-head compact"><text>账号与帮助</text></view>
         <view class="more-card">
-          <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" aria-label="账号与安全" @click="settingsOpen = true"><view class="more-icon"><wd-icon name="lock" size="18px" /></view><view class="grow"><text>账号与安全</text></view><wd-icon name="arrow-right" size="15px" /></button>
+          <!-- #ifdef MP-WEIXIN -->
+          <button open-type="share" hover-class="control-pressed" role="button"><view class="more-icon invitation-icon"><wd-icon name="link" size="18px" /></view><view class="grow more-copy"><text class="more-title">邀请好友</text><text class="more-description">分享习题库，一起找到好资料</text></view><wd-icon name="arrow-right" size="15px" /></button>
           <view class="more-divider" />
-          <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" @click="privacy"><view class="more-icon privacy"><wd-icon name="safe" size="18px" /></view><view class="grow"><text>隐私与服务</text></view><wd-icon name="arrow-right" size="15px" /></button>
+          <!-- #endif -->
+          <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" aria-label="账号与安全" @click="settingsOpen = true"><view class="more-icon security-icon"><wd-icon name="lock" size="18px" /></view><view class="grow more-copy"><text class="more-title">账号与安全</text><text class="more-description">头像昵称、密码与账号注销</text></view><wd-icon name="arrow-right" size="15px" /></button>
+          <view class="more-divider" />
+          <button hover-class="control-pressed" :hover-start-time="0" :hover-stay-time="80" role="button" @click="privacy"><view class="more-icon privacy"><wd-icon name="safe" size="18px" /></view><view class="grow more-copy"><text class="more-title">隐私与服务</text><text class="more-description">用户协议与个人信息保护说明</text></view><wd-icon name="arrow-right" size="15px" /></button>
         </view>
       </view>
       <text class="account-foot">每天一点进步 · 让学习更有方向</text>
@@ -154,11 +162,14 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
     <view v-if="!session.user" class="content-width guest-services">
       <text class="section-title">先了解，再开始</text>
       <view class="more-card">
-        <button hover-class="control-pressed" role="button" aria-label="使用帮助" :aria-expanded="helpOpen" @click="helpOpen = !helpOpen"><view class="more-icon"><wd-icon name="book" size="18px" /></view><text class="grow">使用帮助</text><wd-icon :name="helpOpen ? 'arrow-up' : 'arrow-down'" size="15px" /></button>
+        <button hover-class="control-pressed" role="button" aria-label="使用帮助" :aria-expanded="helpOpen" @click="helpOpen = !helpOpen"><view class="more-icon"><wd-icon name="book" size="18px" /></view><view class="grow more-copy"><text class="more-title">使用帮助</text><text class="more-description">了解浏览、收藏与下载方式</text></view><wd-icon :name="helpOpen ? 'arrow-up' : 'arrow-down'" size="15px" /></button>
         <view v-if="helpOpen" class="guest-help"><text>1. 选年级、学科，也可以直接搜索知识点。</text><text>2. 打开资料查看原稿，先确认是否含答案。</text><text>3. 登录后可收藏资料，按标注权限下载；下载时可选择已有的文件版本。</text></view>
-        <button hover-class="control-pressed" role="button" aria-label="联系客服" @click="openSupport()"><view class="more-icon"><wd-icon name="headset" size="18px" /></view><text class="grow">联系客服</text><wd-icon name="arrow-right" size="15px" /></button>
-        <button hover-class="control-pressed" role="button" aria-label="会员介绍" @click="membership"><view class="more-icon"><wd-icon name="star" size="18px" /></view><text class="grow">会员介绍</text><wd-icon name="arrow-right" size="15px" /></button>
-        <button hover-class="control-pressed" role="button" @click="privacy"><view class="more-icon"><wd-icon name="safe" size="18px" /></view><text class="grow">隐私与服务</text><wd-icon name="arrow-right" size="15px" /></button>
+        <view class="more-divider" />
+        <button hover-class="control-pressed" role="button" aria-label="联系客服" @click="openSupport()"><view class="more-icon privacy"><wd-icon name="headset" size="18px" /></view><view class="grow more-copy"><text class="more-title">联系客服</text><text class="more-description">资料、账号与订单问题</text></view><wd-icon name="arrow-right" size="15px" /></button>
+        <view class="more-divider" />
+        <button hover-class="control-pressed" role="button" aria-label="会员介绍" @click="membership"><view class="more-icon security-icon"><wd-icon name="star" size="18px" /></view><view class="grow more-copy"><text class="more-title">会员介绍</text><text class="more-description">查看会员权益与开通方式</text></view><wd-icon name="arrow-right" size="15px" /></button>
+        <view class="more-divider" />
+        <button hover-class="control-pressed" role="button" @click="privacy"><view class="more-icon privacy"><wd-icon name="safe" size="18px" /></view><view class="grow more-copy"><text class="more-title">隐私与服务</text><text class="more-description">用户协议与个人信息保护说明</text></view><wd-icon name="arrow-right" size="15px" /></button>
       </view>
     </view>
     <AppTabBar current="account" />
@@ -192,7 +203,7 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
 <style scoped>
 .guest-login :deep(.state-block) { min-height:180px;padding:22px 24px; }
 .guest-services { padding-bottom:24px; }.guest-services .section-title { margin-bottom:12px; }
-.guest-help { padding:0 16px 14px;font-size:13px;line-height:1.8;color:var(--lc-secondary); }
+.guest-help { padding:0 0 14px 48px;font-size:13px;line-height:1.8;color:var(--lc-secondary); }
 .guest-help text { display:block;margin-top:8px; }
 .profile-hero { padding-bottom:34px;background:radial-gradient(ellipse at 95% 0,#cce6d5 0,transparent 65%),linear-gradient(160deg,#e8f4eb,#f3f8f4); }
 .profile-hero.guest { padding-bottom: 28px; }
@@ -213,7 +224,8 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
 .membership-chip.vip { color:#9a691e;background:#fff4d8; }
 .edit-button { display:flex;align-items:center;gap:2px;flex:none;min-height:44px;margin:0;padding:7px 0;color:var(--lc-primary);background:transparent;font-size: 12px;line-height:1.4; }
 .dashboard { position:relative;z-index:2;margin-top:-20px;padding-bottom:18px; }
-.quick-grid { display:grid;grid-template-columns:repeat(3,1fr);padding:12px 0;border:1px solid var(--lc-card-line);border-radius:18px;background:var(--lc-card);box-shadow:var(--lc-card-shadow-soft); }
+.learning-card { overflow:hidden;border:1px solid var(--lc-card-line);border-radius:18px;background:var(--lc-card);box-shadow:var(--lc-card-shadow-soft); }
+.quick-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:16px 0; }
 .quick-card { display:flex;flex-direction:column;align-items:center;min-width:0;margin:0;padding:0 5px;border-radius:0;background:transparent; }.quick-card+.quick-card { border-left:1px solid var(--lc-border); }
 .quick-card:active,.service-item:active,.membership-card:active,.more-card button:active { transform:scale(.98); }
 .quick-icon { display:flex;align-items:center;justify-content:center;width:30px;height:30px;margin-bottom:5px;border-radius:10px; }
@@ -231,19 +243,24 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
 .membership-action { display:flex;align-items:center;gap:2px;flex:none;color:#f8d88d;font-size: 12px; }
 .perk-row { display:flex;justify-content:space-between;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid #ffffff1f; }
 .perk-row > view { display:flex;align-items:center;gap:4px;color:#ffffffc7;font-size: 12px; }
-.section-head { display:flex;align-items:flex-end;justify-content:space-between;margin:20px 2px 11px; }
-.section-head > text:first-child { color:var(--lc-text);font-size:16px;font-weight:650; }.section-head > text+text { color:var(--lc-muted);font-size: 12px; }.section-head.compact { margin-top:20px; }
-.service-grid { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;padding:8px 7px 16px;border:1px solid var(--lc-card-line);border-radius:18px;background:var(--lc-card);box-shadow:var(--lc-card-shadow-soft); }
-.service-item { display:flex;flex-direction:column;align-items:center;min-width:0;margin:0;padding:8px 0 0;background:transparent; }
+.section-head { display:flex;align-items:flex-end;justify-content:space-between;margin:22px 2px 10px; }
+.section-head > text:first-child { color:var(--lc-text);font-size:15px;font-weight:650; }.section-head > text+text { color:var(--lc-muted);font-size: 12px; }
+.service-grid { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;padding:16px 7px;border:1px solid var(--lc-card-line);border-radius:18px;background:var(--lc-card);box-shadow:var(--lc-card-shadow-soft); }
+.service-item { display:flex;flex-direction:column;align-items:center;min-width:0;margin:0;padding:8px 0 0;background:transparent;overflow:visible; }
 .service-icon { position:relative;display:flex;align-items:center;justify-content:center;width:40px;height:40px;margin-bottom:9px;border-radius:13px; }
 .service-icon.message { color:#526eac;background:#e9effb; }.service-icon.request { color:#8b6b36;background:#f7efdf; }.service-icon.order { color:#397761;background:#e5f2eb; }.service-icon.support { color:#92699f;background:#f2eaf5; }
 .service-item > text { overflow:hidden;color:var(--lc-text);font-size:12px;font-weight:600;line-height:1.5;text-overflow:ellipsis;white-space:nowrap; }
-.unread-badge { position:absolute;right:-9px;top:-8px;min-width:18px;height:18px;padding:0 3px;border:2px solid #fff;border-radius:12px;color:#fff;background:#a94e47;font-size:12px;line-height:18px;text-align:center;box-sizing:content-box; }
-.more-card { overflow:hidden;padding:0 15px;border:1px solid var(--lc-card-line);border-radius:16px;background:var(--lc-card);box-shadow:var(--lc-card-shadow-soft); }
-.more-card button { display:flex;align-items:center;gap:11px;width:100%;min-height:60px;margin:0;padding:10px 0;text-align:left;background:transparent; }
-.more-card button > .grow > text { display:block;color:var(--lc-text);font-size:13px;line-height:1.5; }
+.message-icon-slot { position:relative;flex:none;width:52px;height:48px;margin-top:-8px;margin-bottom:9px; }
+.message-icon-slot .service-icon { position:absolute;left:6px;bottom:0;margin:0; }
+.unread-badge { position:absolute;right:0;top:0;z-index:1;min-width:22px;height:22px;padding:0 3px;border:2px solid #fff;border-radius:12px;color:#fff;background:#a94e47;font-size:12px;line-height:18px;text-align:center;box-sizing:border-box; }
+.more-card { overflow:hidden;padding:0 15px;border:1px solid var(--lc-card-line);border-radius:18px;background:var(--lc-card);box-shadow:var(--lc-card-shadow-soft); }
+.more-card button { display:flex;align-items:center;gap:12px;width:100%;min-height:72px;margin:0;padding:14px 0;text-align:left;background:transparent; }
+.more-copy { display:flex;flex-direction:column;gap:4px;min-width:0; }
+.more-title { display:block;color:var(--lc-text);font-size:14px;font-weight:600;line-height:1.5; }
+.more-description { display:block;color:var(--lc-secondary);font-size:12px;line-height:1.6; }
 .more-icon { display:flex;align-items:center;justify-content:center;width:36px;height:36px;flex:none;border-radius:12px;color:#397761;background:#e5f2eb; }.more-icon.privacy { color:#92699f;background:#f2eaf5; }
-.more-card button > :deep(.wd-icon):last-child { color:var(--lc-muted); }.more-divider { height:1px;margin-left:47px;background:var(--lc-border); }
+.more-icon.security-icon { color:#8b6b36;background:#f7efdf; }.more-icon.invitation-icon { color:#526eac;background:#e9effb; }
+.more-card button > :deep(.wd-icon):last-child { color:var(--lc-muted);flex:none; }.more-divider { height:1px;margin-left:48px;background:var(--lc-border); }
 .menu-symbol { display:flex;align-items:center;justify-content:center;width:42px;height:42px;margin-right:14px;border-radius:50%;flex:none; }
 .profile-symbol { color: var(--lc-primary); background: var(--lc-primary-soft); }
 .lock-symbol { color: #8a6a3f; background: #f6efe4; }
@@ -259,9 +276,10 @@ onUnload(() => { suspend(); profileOpen.value = false; uni.$off?.('lc-network-re
 }
 @media (max-width:359px) {
   .service-grid { grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 12px;padding:10px 12px 18px; }
-  .service-item { display:grid;grid-template-columns:36px minmax(0,1fr);column-gap:8px;min-height:44px;text-align:left; }
+  .service-item { display:grid;grid-template-columns:48px minmax(0,1fr);column-gap:8px;min-height:44px;padding:0;text-align:left; }
   .service-icon { width:36px;height:36px;margin:0; }
-  .unread-badge { right:-3px; }
+  .message-icon-slot { width:48px;height:44px;margin:0; }
+  .message-icon-slot .service-icon { left:0; }
   .service-item > text { justify-self:start;max-width:100%; }
 }
 </style>

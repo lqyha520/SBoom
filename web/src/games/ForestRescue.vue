@@ -1,0 +1,26 @@
+<script setup lang="ts">
+import { computed,onBeforeUnmount,ref } from 'vue'
+import ExploreFrame from './ExploreFrame.vue'
+import { useExperience } from './use-experience'
+import { forestChoose,forestScene,forestStops } from './forest-rescue'
+const props=defineProps<{storageKey?:string}>()
+const {save,frame,feedback,resetOpen,act,undo,requestReset,reset,hint,onStop}=useExperience(props,'forest-rescue')
+const round=computed(()=>save.value.round),scene=computed(()=>forestScene(round.value)),stops=computed(()=>forestStops(round.value))
+const reading=ref(false),readError=ref('')
+function stopReading(){if('speechSynthesis' in window)window.speechSynthesis.cancel();reading.value=false}
+function readStory(){stopReading();if(!('speechSynthesis' in window)){readError.value='浏览器暂不支持朗读，可以和大人一起读故事。';return}try{const voice=new SpeechSynthesisUtterance(scene.value.title+'。'+scene.value.text);voice.lang='zh-CN';voice.rate=.85;voice.onend=()=>{reading.value=false};voice.onerror=()=>{reading.value=false;readError.value='朗读暂时不可用，故事文字仍可阅读。'};reading.value=true;window.speechSynthesis.speak(voice)}catch{readError.value='朗读暂时不可用，故事文字仍可阅读。'}}
+onStop(stopReading)
+onBeforeUnmount(stopReading)
+const rules=['和护林员一起进入森林，阅读场景并选择下一步行动。','地图、观察台、岸边清理会带来不同的故事；每次选择都会留下小队记录。','给动物留出空间，请同行的护林员处理需要专业帮助的情况，完成三个动物故事后返回营地。']
+function choose(index:number){stopReading();const message=act(()=>forestChoose(round.value,index));if(message)feedback.value=message}
+</script>
+<template>
+  <ExploreFrame v-bind="frame" :progress="`动物故事 ${round.rescued.length} / 3`" :rules="rules" @difficulty="requestReset" @undo="undo" @restart="requestReset()" @reset="reset" @cancel="resetOpen=false" @hint="hint('先观察、保持距离，再和护林员一起行动。两种合适的办法都可能推进故事，可以试试不同路线。')">
+    <div class="forest-map" aria-label="森林路线"><svg viewBox="0 0 600 230" aria-hidden="true"><rect width="600" height="230" fill="#e2ecd9" /><path d="M-20 150Q100 245 240 130T600 110" fill="none" stroke="#c0d7de" stroke-width="28" /><path d="M55 170Q110 20 235 72T450 171T565 53" fill="none" stroke="#d1bd8e" stroke-width="8" stroke-dasharray="9 8" /><g fill="#9bb591"><path v-for="(x,index) in [70,130,310,370,540]" :key="x" :d="`M${x} ${index%2?25:90}l-22 40h44Z`" /></g></svg><span class="forest-stop stop-camp">🏕️<small>护林站</small></span><span v-for="(stop,index) in stops" :key="stop.id" :class="['forest-stop',['stop-bird','stop-turtle','stop-rabbit'][index],{helped:round.rescued.includes(stop.id)}]">{{ stop.animal }}<small>{{ stop.place }}</small></span></div>
+    <article class="forest-story"><div class="forest-place"><span>{{ scene.place }}</span><span>小队探索日记</span></div><span class="forest-animal" aria-hidden="true">{{ scene.animal }}</span><h2>{{ scene.title }}</h2><p>{{ scene.text }}</p><button class="explore-secondary" @click="reading?stopReading():readStory()">{{ reading?'停止朗读':'听一听故事' }}</button><p v-if="readError" role="status">{{ readError }}</p><div class="forest-options"><button v-for="(choice,index) in scene.choices" :key="choice.id" :data-choice="choice.id" :disabled="round.finished" @click="choose(index)">{{ choice.label }} <UIcon name="i-lucide-arrow-right" /></button></div></article>
+    <div v-if="round.log.length" class="forest-log" role="status" aria-label="小队记录"><h2>小队记录</h2><p v-for="(entry,index) in round.log.slice(-3)" :key="index">{{ entry.text }}</p></div>
+  </ExploreFrame>
+</template>
+<style scoped>
+.forest-map{position:relative;border:1px solid #d0e0c8;border-radius:17px;overflow:hidden;margin-bottom:20px}.forest-map svg{width:100%;display:block}.forest-stop{position:absolute;display:flex;flex-direction:column;align-items:center;font-size:27px;width:55px;height:58px;justify-content:center;border-radius:50%;background:#fff9}.forest-stop small{font-size:9px;color:#7b946c}.forest-stop.helped{box-shadow:0 0 0 3px #98b982}.stop-camp{left:4%;top:48%}.stop-bird{left:34%;top:12%}.stop-turtle{left:60%;top:46%}.stop-rabbit{right:4%;top:8%}.forest-story{border:1px solid #dce5d2;background:#fefdf4;border-radius:16px;padding:22px;text-align:center}.forest-place{display:flex;justify-content:space-between;gap:10px;font-size:10px;letter-spacing:1px;color:#9aa384;text-align:left}.forest-animal{display:block;font-size:61px;margin:24px auto 15px}.forest-story h2{font-size:23px;font-weight:650;color:#637d56}.forest-story p{font-size:14px;line-height:2;color:#8d957a;max-width:490px;margin:15px auto 24px}.forest-options{display:flex;flex-direction:column;gap:10px;max-width:420px;margin:auto}.forest-options button{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 17px;border:1px solid #d6e3c9;border-radius:10px;background:#fff;color:#718a62;font-size:13px;text-align:left}.forest-log{padding:20px;border:1px solid #d5e3cb;border-radius:13px;margin-top:20px;color:#859574;line-height:1.9;font-size:12px;background:#e6eddc}.forest-log h2{font-size:13px;font-weight:650;margin-bottom:10px}.forest-log p+p{margin-top:10px}@media(max-width:560px){.forest-stop{font-size:21px;width:41px;height:43px}.forest-stop small{font-size:8px}.forest-story{padding:17px 14px}.forest-story h2{font-size:20px}.forest-story p{font-size:13px}.forest-options button{font-size:12px;padding:13px 12px}.forest-log{font-size:11px;padding:17px 13px}.forest-animal{font-size:53px}}
+</style>

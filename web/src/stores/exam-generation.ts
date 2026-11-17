@@ -1,6 +1,9 @@
 /** 整卷、单大题和单题生成任务，以及原请求恢复。 */
 import type { ExamWorkspace } from './exam-context'
 import * as api from '../api'
+import { randomId } from '../../../shared/webcrypto'
+import { applyAnalysis } from '../analysis-retry'
+import type { GenerationJob } from '../generation'
 import { deepClone } from '../utils'
 import { questionKey } from '../question-quality'
 import type { Difficulty, Question, Section } from '../types'
@@ -41,6 +44,56 @@ function preserveQuestionEdits(questions: Question[], previous: Question[] = [])
 }
 
 export const generationActions = {
+  async retryJobAnalysis(this: ExamWorkspace, job: GenerationJob) {
+    if (this.generating || this.accountChanged) return
+    this.generating = true
+    const owner = this.ownerId
+    try {
+      for (const chunk of job.chunks) {
+        if (!chunk.result?.some(section => section.questions.some(q => q.quality_status !== 'passed' || !q.analysis?.trim()))) continue
+        let result: { sections: api.BatchRespSection[] } | undefined
+        if (chunk.analysisRequestId) {
+          const status = await api.fetchGenerationStatus(chunk.analysisRequestId).catch(error => {
+            if (error instanceof api.ApiError && error.status === 404) return null
+            throw error
+          })
+          if (status?.status === 'running' || status?.status === 'unknown') throw new Error('补解析请求尚未结束，请稍后查询')
+          if (status?.result) result = status.result
+          else if (status?.status === 'failed') chunk.analysisRequestId = undefined
+          else if (status) throw new Error('补解析结果已过期，请联系管理员核对')
+        }
+        if (!result) {
+          chunk.analysisRequestId ||= randomId()
+          await ensureRequestRecorded(this)
+          result = await api.retryAnalysis(chunk.analysisSourceId || chunk.requestId, chunk.analysisRequestId)
+        }
+        if (this.accountChanged || this.ownerId !== owner) return
+        const targets = [...this.sections.flatMap(s => s.data ? [s.data] : []), ...this.papers.flatMap(p => p.sections.map(s => s.data))]
+        let updated = 0
+        for (let si = 0; si < chunk.result.length; si++) {
+          const original = chunk.result[si], reviewed = result.sections[si]
+          if (!reviewed || reviewed.section_id !== original.section_id || reviewed.questions.length !== original.questions.length) continue
+          for (let qi = 0; qi < original.questions.length; qi++) {
+            for (const data of targets) {
+              if ((data.passage || '') !== (original.passage || '')) continue
+              for (const target of data.questions) if (applyAnalysis(target, original.questions[qi], reviewed.questions[qi])) updated++
+            }
+          }
+          chunk.result[si] = { ...reviewed, questions: reviewed.questions.map((q, index) => ({ ...q, _qid: original.questions[index]._qid })) }
+        }
+        chunk.analysisSourceId = chunk.analysisRequestId
+        chunk.analysisRequestId = undefined
+        this.generateProgress = `已补全 ${updated} 处解析；已编辑或锁定的题目保持原样`
+        if (this.persistenceReady) await this.flushDraft()
+      }
+    } catch (error) {
+      this.generateProgress = error instanceof Error ? error.message : '补解析未完成，请稍后重试'
+    } finally {
+      this.generating = false
+      if (this.persistenceReady && this.ownerId === owner && !this.accountChanged) await this.flushDraft()
+      void this.refreshUsage()
+    }
+  },
   async replaceQuestion(this: ExamWorkspace, id: string, qid: string, paperIndex?: number) {
     if (this.generating || this.accountChanged) return
     const section = this.questionSection(id, paperIndex)
@@ -125,7 +178,13 @@ export const generationActions = {
       section.error = '原请求的条件已变化，请恢复原草稿或重新生成整卷'
       return
     }
-    const run = existing || createGenerationRun(context)
+    let run: ReturnType<typeof createGenerationRun>
+    try { run = existing || createGenerationRun(context) }
+    catch (error) {
+      section.status = 'error'
+      section.error = error instanceof Error ? error.message : '题量设置无效，请调整后重试'
+      return
+    }
     if (!run.jobs[0].chunks.length) {
       section.error = new NoGenerationNeeded().message
       section.status = 'error'
@@ -182,7 +241,7 @@ export const generationActions = {
         titleHtml: this.titleHtml || undefined,
         difficulty: this.difficulty,
         hiddenElements: [...this.hiddenElements],
-        count: Math.max(1, Math.min(20, Math.round(this.paperCount) || 1)),
+        count: this.paperCount,
         sections: generationSections(this.sections),
       }
       const run = createGenerationRun(context)

@@ -12,7 +12,7 @@ beforeEach(() => {
   vi.mocked(growth.getCards).mockResolvedValue({ items: [{ id: 'card', code_hint: 'ABCD', days: 30, status: 'active', expires_at: null } as any], total: 80, has_more: true })
 })
 afterEach(() => vi.unstubAllGlobals())
-function mountCards() { return mount(Cards, { props: { user: { id: 1, username: 'admin', role: 'admin' } }, global: { stubs: uiStubs } }) }
+function mountCards() { return mount(Cards, { props: { user: { id: 1, username: 'admin', role: 'admin', is_super_admin: true } }, global: { stubs: uiStubs } }) }
 it('filters and pagination reload data and status change resets the page', async () => {
   const wrapper = mountCards(); await flushPromises()
   await wrapper.findAll('button').find(button => button.text() === '下一页')!.trigger('click'); await flushPromises()

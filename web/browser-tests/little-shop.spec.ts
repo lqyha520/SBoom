@@ -1,3 +1,4 @@
+import { mockGameCloud } from './game-fixtures'
 import { expect, test, type Page } from '@playwright/test'
 
 const storageKey = 'lc_game_little_shop_v1_guest'
@@ -81,7 +82,7 @@ test('手机试玩：提示、移除商品、暂停和难度切换', async ({ pa
   await expect(page.getByRole('dialog')).toBeVisible()
   await page.getByRole('button', { name: '继续营业', exact: true }).click()
   await page.getByRole('button', { name: '给我一点提示', exact: true }).click()
-  await expect(page.getByRole('status')).toContainText('苹果 2 个')
+  await expect(page.locator('.task-hint[role="status"]')).toContainText('苹果 2 个')
   await page.getByRole('button', { name: '装入一个橙子', exact: true }).click()
   await page.getByRole('button', { name: '从购物袋取出一个橙子', exact: true }).click()
   expect((await getState(page)).bag.orange).toBe(0)
@@ -112,10 +113,13 @@ test('工作台进入游戏前保存草稿，返回后仍能编辑保存；账�
     else throw new Error('未声明的请求：' + path)
     await route.fulfill({ json })
   })
+  await mockGameCloud(context)
   await page.goto('/')
   const title = page.getByRole('textbox', { name: '试卷标题', exact: true })
   await title.fill('游戏前的草稿')
   await page.getByRole('button', { name: '学习游戏', exact: true }).click()
+  await expect(page.getByRole('heading', { name: /学习游戏中心/ })).toBeVisible()
+  await page.locator('.game-grid').getByRole('link', { name: /(?:开始|继续)小小店长/ }).click()
   await expect(page.getByRole('heading', { name: '小小店长.' })).toBeVisible()
   await page.getByRole('button', { name: '装入一个苹果', exact: true }).click()
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lc_u7_game_little_shop_v1')!).bag.apple)).toBe(1)
@@ -124,6 +128,8 @@ test('工作台进入游戏前保存草稿，返回后仍能编辑保存；账�
   await expect(title).toHaveValue('游戏前的草稿')
   await title.fill('游戏后的草稿')
   await page.getByRole('button', { name: '学习游戏', exact: true }).click()
+  await expect(page.getByRole('heading', { name: /学习游戏中心/ })).toBeVisible()
+  await page.locator('.game-grid').getByRole('link', { name: /(?:开始|继续)小小店长/ }).click()
   await expect(page.getByRole('heading', { name: '小小店长.' })).toBeVisible()
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lc_u7_game_little_shop_v1')!).bag.apple)).toBe(1)
   await page.getByRole('link', { name: '返回工作台', exact: true }).click()

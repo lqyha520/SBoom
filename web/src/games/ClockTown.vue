@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import { writeGameSave } from './game-storage'
 import { computed, ref, watch } from 'vue'
 import GameNav from './GameNav.vue'
 import {
   advanceClock, answerClock, CLOCK_QUESTIONS, clockDifficulties, clockExplanation, clockStars,
-  formatClock, newClock, restartClock, restoreClock, switchClockDifficulty, type ClockDifficulty,
+  formatClock, submitClockDial, turnClock, newClock, restartClock, restoreClock, switchClockDifficulty, type ClockDifficulty,
 } from './clock-town'
 
 const props = withDefaults(defineProps<{ storageKey?: string }>(), { storageKey: 'lc_game_clock_town_v1_guest' })
@@ -24,8 +25,11 @@ const stars = computed(() => clockStars(round.value))
 const answeredCount = computed(() => finished.value ? CLOCK_QUESTIONS : round.value.index + (answered.value === null ? 0 : 1))
 const explanation = computed(() => clockExplanation(question.value))
 const digital = computed(() => formatClock(question.value.hour, question.value.minute))
-const hourAngle = computed(() => (question.value.hour % 12) * 30 + question.value.minute * .5)
-const minuteAngle = computed(() => question.value.minute * 6)
+const setting = computed(()=>save.value.mode === 'set')
+const dial = computed(()=>setting.value ? round.value.dial || [12,0] : [question.value.hour,question.value.minute])
+const dialFeedback = ref('')
+const hourAngle = computed(() => (dial.value[0] % 12) * 30 + dial.value[1] * .5)
+const minuteAngle = computed(() => dial.value[1] * 6)
 const ticks = Array.from({ length: 60 }, (_, index) => index)
 const numbers = Array.from({ length: 12 }, (_, index) => {
   const value = index + 1
@@ -36,6 +40,8 @@ const numbers = Array.from({ length: 12 }, (_, index) => {
 function choose(value: string) {
   answerClock(save.value, value)
 }
+function submitDial() { dialFeedback.value = submitClockDial(save.value) === false ? '还没拨对，看看时针和分针，再调整一下。' : '' }
+watch(()=>[round.value.index,save.value.mode,save.value.difficulty],()=>{dialFeedback.value=''})
 function next() {
   advanceClock(save.value)
 }
@@ -52,7 +58,7 @@ function applyDifficulty() {
   resetDifficulty.value = null
 }
 watch(save, value => {
-  try { localStorage.setItem(props.storageKey, JSON.stringify(value)); saveError.value = false }
+  try { writeGameSave(props.storageKey, value); saveError.value = false }
   catch { saveError.value = true }
 }, { deep: true, immediate: true, flush: 'post' })
 watch(() => props.storageKey, () => { save.value = readSave() || newClock() })
@@ -79,10 +85,11 @@ watch(() => props.storageKey, () => { save.value = readSave() || newClock() })
           <div class="progress-rail" aria-hidden="true"><i v-for="n in CLOCK_QUESTIONS" :key="n" :class="{ done: n <= answeredCount, current: !finished && answered === null && n === round.index + 1 }" /></div>
         </div>
         <div class="status-stat"><span><UIcon name="i-lucide-circle-check" />答对</span><strong>{{ round.correct }}</strong></div>
-        <div class="status-stat"><span><UIcon name="i-lucide-rotate-ccw" />再看</span><strong>{{ round.mistakes }}</strong></div>
+        <div class="status-stat"><span><UIcon name="i-lucide-rotate-ccw" />再看</span><strong>{{ round.mistakes + (round.dialMistakes || 0) }}</strong></div>
         <div class="status-best"><span><UIcon name="i-lucide-star" />最佳</span><div class="mini-stars" :aria-label="`${difficulty.name}最佳${save.best[save.difficulty]}颗星`"><UIcon v-for="n in 3" :key="n" name="i-lucide-star" :class="{ earned: n <= save.best[save.difficulty] }" /></div></div>
       </section>
 
+      <div v-if="!finished" class="clock-mode" role="group" aria-label="时钟玩法"><button :aria-pressed="!setting" @click="save.mode='read'">看钟认时间</button><button :aria-pressed="setting" @click="save.mode='set'">动手拨时钟</button></div>
       <section v-if="!finished" class="clock-board">
         <div class="clock-scene" aria-label="小镇钟楼">
           <span class="sun" aria-hidden="true" /><span class="cloud cloud-one" aria-hidden="true" /><span class="cloud cloud-two" aria-hidden="true" />
@@ -112,20 +119,21 @@ watch(() => props.storageKey, () => { save.value = readSave() || newClock() })
 
         <div class="clock-panel">
           <div class="panel-meta"><span class="question-count">第 {{ round.index + 1 }} / {{ CLOCK_QUESTIONS }} 题</span><span class="time-badge"><UIcon name="i-lucide-sun" />{{ difficulty.name }}</span></div>
-          <h2>现在是几点？</h2>
+          <h2>{{ setting ? `请拨到 ${question.answer}` : '现在是几点？' }}</h2>
           <p class="panel-prompt">{{ difficulty.id === 'starter' ? '分针指向 12 时，看看时针指向几。' : difficulty.id === 'explorer' ? '看看分针走过了一刻、半点还是一刻钟。' : '先看分针指向数字几，再看时针在哪里。' }}</p>
-          <div class="time-options" role="group" aria-label="时间选项">
+          <div v-if="!setting" class="time-options" role="group" aria-label="时间选项">
             <button v-for="option in question.options" :key="option" :data-time="option" :class="{ right: answered !== null && option === question.answer, wrong: answered === option && option !== question.answer }" :disabled="answered !== null" :aria-label="`选择时间 ${option}`" @click="choose(option)">
               <UIcon name="i-lucide-clock" />
               <strong>{{ option }}</strong>
               <small>{{ option.endsWith(':00') ? '整点' : option.endsWith(':30') ? '半点' : option.endsWith(':15') || option.endsWith(':45') ? '一刻' : '五分' }}</small>
             </button>
           </div>
+          <div v-else class="dial-controls"><div v-for="hand in (['hour','minute'] as const)" :key="hand"><span>{{ hand==='hour'?'时针':'分针' }}</span><button :aria-label="`向后拨${hand==='hour'?'时针':'分针'}`" :disabled="answered!==null" @click="turnClock(save,hand,-1)">−</button><button :aria-label="`向前拨${hand==='hour'?'时针':'分针'}`" :disabled="answered!==null" @click="turnClock(save,hand,1)">＋</button></div><button class="primary-action" :disabled="answered!==null" @click="submitDial">拨好了，检查一下</button><p role="status">{{ dialFeedback }}</p></div>
           <div v-if="answered !== null" class="clock-feedback" :class="{ good: isCorrect }" role="status" aria-label="答题反馈">
             <span class="feedback-mark"><UIcon :name="isCorrect ? 'i-lucide-circle-check' : 'i-lucide-lightbulb'" /></span>
             <div><strong>{{ isCorrect ? '读对啦，钟楼为你亮灯！' : '再看看时针和分针的位置。' }}</strong><p>{{ explanation }}</p></div>
           </div>
-          <p v-else class="clock-tip"><UIcon name="i-lucide-mouse-pointer-2" />读一读钟面，再选出下面的电子时间。</p>
+          <p v-else-if="!setting" class="clock-tip"><UIcon name="i-lucide-mouse-pointer-2" />读一读钟面，再选出下面的电子时间。</p>
           <button v-if="answered !== null" class="primary-action" @click="next">{{ round.index === CLOCK_QUESTIONS - 1 ? '查看读时成绩' : '下一个时间' }}<UIcon name="i-lucide-arrow-right" /></button>
         </div>
       </section>
@@ -137,7 +145,7 @@ watch(() => props.storageKey, () => { save.value = readSave() || newClock() })
         <p>{{ round.mistakes === 0 ? '八个时间一次读对，时针和分针都看得很仔细。' : `这次有 ${round.mistakes} 个时间需要再看一看，记住短针是时针、长针是分针。` }}</p>
         <div class="report-stats">
           <div><span>读对时间</span><strong>{{ round.correct }}<small> / {{ CLOCK_QUESTIONS }}</small></strong></div>
-          <div><span>再看一次</span><strong>{{ round.mistakes }}<small> 个</small></strong></div>
+          <div><span>再看一次</span><strong>{{ round.mistakes + (round.dialMistakes || 0) }}<small> 个</small></strong></div>
           <div><span>累计读时</span><strong>{{ save.totalCorrect }}<small> 个</small></strong></div>
         </div>
         <div class="report-best"><span>最佳记录</span><div v-for="item in clockDifficulties" :key="item.id" :class="{ active: item.id === save.difficulty }"><span>{{ item.name }}</span><i><UIcon v-for="n in 3" :key="n" name="i-lucide-star" :class="{ earned: n <= save.best[item.id] }" /></i></div></div>
@@ -147,12 +155,14 @@ watch(() => props.storageKey, () => { save.value = readSave() || newClock() })
       <footer class="clock-footer"><span><UIcon name="i-lucide-heart" />每一次尝试，都是成长</span><span role="status" aria-label="进度保存状态"><UIcon :name="saveError ? 'i-lucide-cloud-off' : 'i-lucide-cloud-check'" />{{ saveError ? '本机暂时无法保存进度' : '进度已保存在本机' }}</span></footer>
     </main>
 
-    <UModal :open="helpOpen" title="看钟面，认时间" description="短针是时针，长针是分针。" :close="{ 'aria-label': '关闭玩法说明' }" :ui="{ content: 'game-modal' }" @update:open="helpOpen = $event"><template #body><ol class="help-list"><li>短而粗的针是时针，长而细的针是分针。</li><li>分针指向 12 是整点，指向 6 是半点，指向 3 是一刻，指向 9 是三刻。</li><li>分针每走一个数字是 5 分钟。先读分针，再读时针。</li><li>在整点时，时针正好指向数字；其他时间，时针会在两个数字之间。</li><li>选出对应的电子时间，答对后还能看到读时的解释。</li></ol><button class="primary-action" @click="helpOpen = false">明白了，去读时间<UIcon name="i-lucide-clock-3" /></button></template></UModal>
+    <UModal :open="helpOpen" title="看钟面，认时间" description="短针是时针，长针是分针。" :close="{ 'aria-label': '关闭玩法说明' }" :ui="{ content: 'game-modal' }" @update:open="helpOpen = $event"><template #body><ol class="help-list"><li>短而粗的针是时针，长而细的针是分针。</li><li>分针指向 12 是整点，指向 6 是半点，指向 3 是一刻，指向 9 是三刻。</li><li>分针每走一个数字是 5 分钟。先读分针，再读时针。</li><li>在整点时，时针正好指向数字；其他时间，时针会在两个数字之间。</li><li>“动手拨时钟”里，用加减按钮拨动指针，再检查是否达到目标；分针跨过整点时，时针也会跟着走。</li><li>选出对应的电子时间，答对后还能看到读时的解释。</li></ol><button class="primary-action" @click="helpOpen = false">明白了，去读时间<UIcon name="i-lucide-clock-3" /></button></template></UModal>
     <UModal :open="resetDifficulty !== null" :title="resetDifficulty === save.difficulty ? '重新开始读时间？' : '切换游戏难度？'" description="新的一轮会从第一个时间开始，当前进度会清空，最佳记录会保留。" :close="{ 'aria-label': '关闭难度确认' }" :ui="{ content: 'game-modal' }" @update:open="!$event && (resetDifficulty = null)"><template #body><div class="modal-actions"><button class="secondary-action" @click="resetDifficulty = null">继续当前读时</button><button class="primary-action" @click="applyDifficulty">{{ resetDifficulty === save.difficulty ? '重新开始' : '切换并开始' }}<UIcon name="i-lucide-arrow-right" /></button></div></template></UModal>
   </div>
 </template>
 
 <style scoped>
+.clock-mode{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}.clock-mode button{padding:10px 15px;border:1px solid #cbdfe8;border-radius:8px;background:#fff;font-size:13px}.clock-mode button[aria-pressed=true]{background:#4f83a3;color:white}.dial-controls{display:grid;gap:14px;margin:10px 0}.dial-controls>div{display:flex;align-items:center;gap:12px}.dial-controls>div>span{min-width:45px}.dial-controls>div>button{width:50px;height:44px;background:#e7f1f5;border-radius:8px;font-size:22px}.dial-controls>p{font-size:12px;color:#a77e5d;min-height:20px}
+
 .clock-game { --clock-ink: #314a58; --clock-muted: #879ca7; --clock-blue: #4f83a3; --clock-border: #dce9ee; min-height: 100dvh; background: #f3f9fb; color: var(--clock-ink); font-family: var(--font-ui); letter-spacing: 0; }
 .clock-game button { cursor: pointer; transition: background .16s, transform .16s, box-shadow .16s; }
 .clock-game button:disabled { cursor: default; }

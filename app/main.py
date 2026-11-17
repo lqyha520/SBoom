@@ -20,22 +20,32 @@ from app.db import close_pg_pool, init_db
 from app.db_admission import DatabaseBusy
 from app.logging_config import configure_logging
 from app.metrics import RequestMetrics
+from app.public_cache_sync import PublicCacheListener
 from app.request_context import RequestContext
 from app.routers.admin import router as admin_router
+from app.routers.admin_local_access import router as admin_local_access_router
 from app.routers.auth import router as auth_router
 from app.routers.catalog import admin_router as catalog_admin_router
 from app.routers.catalog import router as catalog_router
 from app.routers.commerce import router as commerce_router
 from app.routers.engagement import router as engagement_router
 from app.routers.experience import router as experience_router
+from app.routers.finance_ledger import router as finance_ledger_router
+from app.routers.games import router as games_router
 from app.routers.generate import router as generate_router
 from app.routers.health import router as health_router
 from app.routers.image_generation import router as image_generation_router
 from app.routers.library import router as library_router
 from app.routers.me import router as me_router
 from app.routers.mini import router as mini_router
+from app.routers.referrals import router as referrals_router
+from app.routers.settlements import router as settlements_router
 from app.routers.site import admin_router as site_admin_router
 from app.routers.site import router as site_router
+from app.routers.teaching import router as teaching_router
+from app.routers.xhs_research import router as xhs_research_router
+from app.routers.xhs_workflow import router as xhs_workflow_router
+from app.routers.xhs_workspace import router as xhs_workspace_router
 from app.security import security_warnings
 from app.services import user_store
 from app.services.llm_client import llm_client
@@ -73,8 +83,11 @@ async def lifespan(app: FastAPI):
     maintenance_stop = None
     maintenance_task = None
     sampler_task = None
+    cache_listener = None
     try:
         init_db()
+        cache_listener = PublicCacheListener(settings.database_url)
+        cache_listener.start()
         from app.services.generation_control import reclaim_expired
         reclaim_expired()  # 用户库建表 + 迁移（幂等）
         for warning in security_warnings():
@@ -98,6 +111,8 @@ async def lifespan(app: FastAPI):
         sampler_task = asyncio.create_task(sample_limiters())
         yield
     finally:
+        if cache_listener:
+            await asyncio.to_thread(cache_listener.close)
         if sampler_task:
             sampler_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -178,8 +193,12 @@ for busy_error in (DatabaseBusy, PoolTimeout, TooManyRequests, LockNotAvailable)
 @app.exception_handler(Exception)
 async def unhandled_error(request, exc):
     # ServerErrorMiddleware 位于用户中间件之外，500 也必须声明缓存边界。
-    return JSONResponse({"error": "服务暂时不可用，请稍后重试"}, status_code=500,
-                        headers={"Cache-Control": "no-store", "Vary": "Cookie, Authorization"})
+    identifier = getattr(request.state, "request_id", "")
+    logger.error("Unhandled request error", exc_info=(type(exc), exc, exc.__traceback__),
+                 extra={"request_id": identifier or "-"})
+    return JSONResponse({"error": "服务暂时不可用，请稍后重试", "request_id": identifier}, status_code=500,
+                        headers={"Cache-Control": "no-store", "Vary": "Cookie, Authorization",
+                                 "X-Correlation-ID": identifier})
 
 
 # ─── 前端目录 ───
@@ -195,16 +214,25 @@ app.include_router(health_router)
 app.include_router(me_router)
 app.include_router(library_router)
 app.include_router(mini_router)
+app.include_router(referrals_router)
+app.include_router(settlements_router)
 app.include_router(catalog_router)
 app.include_router(catalog_admin_router)
+app.include_router(teaching_router)
+app.include_router(games_router)
 app.include_router(site_router)
 app.include_router(site_admin_router)
 app.include_router(experience_router)
 app.include_router(engagement_router)
 app.include_router(commerce_router)
 app.include_router(generate_router)
+app.include_router(xhs_workflow_router)
+app.include_router(xhs_workspace_router)
 app.include_router(image_generation_router)
 app.include_router(admin_router)
+app.include_router(admin_local_access_router)
+app.include_router(xhs_research_router)
+app.include_router(finance_ledger_router)
 
 
 @app.get("/", tags=["系统"], include_in_schema=False)

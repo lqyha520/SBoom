@@ -39,6 +39,26 @@ POOL_TIMEOUT = 10.0
 CLIENT_LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10)
 
 
+def prompt_budget(messages: list[dict]) -> int:
+    """文本沿用保守字节预算；图片按视觉输入预留，不把 Base64 当作数百万文本 token。"""
+    simplified = []
+    visual_tokens = 0
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    visual_tokens += 16384
+                    parts.append({"type": "image_url"})
+                else:
+                    parts.append(part)
+            simplified.append({**message, "content": parts})
+        else:
+            simplified.append(message)
+    return len(json.dumps(simplified, ensure_ascii=False).encode()) + visual_tokens
+
+
 def _should_retry(e: Exception) -> bool:
     """只有确定请求未到达服务端的错误才值得重试（不产生二次计费）。"""
     return isinstance(e, RETRYABLE)
@@ -55,12 +75,14 @@ def _check_text_completion(message: dict, reason: str | None) -> None:
 class OutputTruncated(HTTPException):
     """保留原始残片供服务端校验；错误响应只公开已验证的大题。"""
 
-    def __init__(self, partial_text: str):
+    def __init__(self, partial_text: str, *, reasoning_only: bool = False):
         super().__init__(422, detail={
             "code": "generation_truncated",
-            "error": "生成内容达到模型输出上限，请减少单次题量后重试；查询原请求不会再次调用模型",
+            "error": ("模型在推理阶段耗尽输出额度，未生成题目正文；请管理员核对模型的深度思考与输出配置；查询原请求不会再次调用模型"
+                      if reasoning_only else "生成内容达到模型输出上限，请减少单次题量后重试；查询原请求不会再次调用模型"),
         })
         self.partial_text = partial_text
+        self.reasoning_only = reasoning_only and not partial_text.strip()
 
 
 def parse_stream_chunk(text: str, *, on_usage: Callable[[dict], None] | None = None) -> tuple[str, str | None, dict | None]:
@@ -190,6 +212,7 @@ class LLMClient:
         max_attempts: int | None = None,
         sampling_mode: str = "configured",
         token_parameter: str = "max_tokens",
+        thinking_mode: str = "default",
     ) -> str:
         """非流式调用，返回完整响应文本。可选传入 base_url/model/api_key/timeout 覆盖默认配置。"""
         url = base_url or settings.llm_base_url
@@ -210,6 +233,8 @@ class LLMClient:
             payload.pop("top_p")
         if token_parameter == "max_completion_tokens":
             payload["max_completion_tokens"] = payload.pop("max_tokens")
+        if thinking_mode == "disabled":
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
 
         async with self._borrow_client(url, key) as client:
             response_content: bytearray | None = None
@@ -217,7 +242,7 @@ class LLMClient:
             for attempt in range(1, attempts + 1):
                 try:
                     if current_usage.get() is not None:
-                        await run_sync(reserve, tokens=len(json.dumps(messages, ensure_ascii=False).encode()) + (max_tokens if max_tokens is not None else settings.llm_max_tokens) + 2048)
+                        await run_sync(reserve, tokens=prompt_budget(messages) + (max_tokens if max_tokens is not None else settings.llm_max_tokens) + 2048)
                     record_attempt()
                     async with client.stream("POST", "/chat/completions", json=payload, timeout=self._req_timeout(timeout)) as streamed:
                         streamed.raise_for_status()
@@ -255,9 +280,29 @@ class LLMClient:
                     raise ValueError("模型消息格式错误")
                 _check_text_completion(message, choice.get("finish_reason"))
                 content = message.get("content")
+                reasoning = message.get("reasoning_content")
+                reasoning_chars = len(reasoning) if isinstance(reasoning, str) else 0
+                usage = data.get("usage")
+                details = usage.get("completion_tokens_details") if isinstance(usage, dict) else None
+                reasoning_tokens = usage.get("reasoning_tokens") if isinstance(usage, dict) else None
+                if reasoning_tokens is None and isinstance(details, dict):
+                    reasoning_tokens = details.get("reasoning_tokens")
+                if type(reasoning_tokens) is not int or reasoning_tokens < 0:
+                    reasoning_tokens = None
+                # 只记录协议元数据，解析失败时也能判断是否命中输出上限；正文和凭证不写日志。
+                logger.info("模型文本响应已接收", extra={
+                    "finish_reason": choice.get("finish_reason"),
+                    "response_chars": len(content) if isinstance(content, str) else 0,
+                    "output_limit": payload.get("max_tokens", payload.get("max_completion_tokens")),
+                    "reasoning_chars": reasoning_chars, "reasoning_tokens": reasoning_tokens,
+                    "thinking_mode": thinking_mode,
+                })
                 if choice.get("finish_reason") == "length":
-                    raise OutputTruncated(content if isinstance(content, str) else "")
+                    partial = content if isinstance(content, str) else ""
+                    raise OutputTruncated(partial, reasoning_only=not partial.strip() and bool(reasoning_chars or reasoning_tokens))
                 if not isinstance(content, str) or not content.strip():
+                    if choice.get('finish_reason') == 'stop' and reasoning_chars:
+                        raise HTTPException(502, detail={'code': 'provider_empty_text', 'error': '模型已结束思考但未返回题目正文'})
                     raise ValueError("模型未返回文本")
                 return content
             except (ValueError, KeyError, IndexError, TypeError, AttributeError, RecursionError) as e:
@@ -278,6 +323,7 @@ class LLMClient:
         timeout: float | None = None,
         sampling_mode: str = "configured",
         token_parameter: str = "max_tokens",
+        thinking_mode: str = "default",
     ) -> AsyncGenerator[str, None]:
         """流式调用，逐 token 产出文本。可选传入 base_url/model/api_key/timeout 覆盖默认配置。"""
         url = base_url or settings.llm_base_url
@@ -297,10 +343,12 @@ class LLMClient:
             payload.pop("top_p")
         if token_parameter == "max_completion_tokens":
             payload["max_completion_tokens"] = payload.pop("max_tokens")
+        if thinking_mode == "disabled":
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
 
         async with self._borrow_client(url, key) as client:
             if current_usage.get() is not None:
-                await run_sync(reserve, tokens=len(json.dumps(messages, ensure_ascii=False).encode()) + (max_tokens if max_tokens is not None else settings.llm_max_tokens) + 2048)
+                await run_sync(reserve, tokens=prompt_budget(messages) + (max_tokens if max_tokens is not None else settings.llm_max_tokens) + 2048)
             record_attempt()
             final_usage = None
 
