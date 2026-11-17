@@ -118,6 +118,8 @@ test('财务默认进入申请待办，奖励入口和规则草稿保留，手�
   await expect(page.getByRole('button', { name: '结算申请与处理', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await page.getByRole('button', { name: '首付奖励', exact: true }).click()
   const row = page.getByRole('row').filter({ has: page.getByRole('checkbox', { name: '选择订单order-first-1234' }) })
+  // 汇总和筛选区的高度受字体影响，先滚动到奖励明细，再检查整行没有被裁切。
+  await row.scrollIntoViewIfNeeded()
   await expect(row).toBeInViewport({ ratio: 1 })
   await page.screenshot({ path: '../artifacts/settlement-workspace-redesign.png', animations: 'disabled' })
   await page.evaluate(() => { location.hash = '#referralRules' })
